@@ -117,6 +117,7 @@ Not declared as deps, but referenced in skill bodies:
 - **`gh` CLI** — system-level requirement of the `babysit` skill and the Babysit / Shipping playbooks. Install via [`brew install gh`](https://cli.github.com) and authenticate with `gh auth login`.
 - **`bun`** — runs the vendored `skills/poteto-mode/scripts/` tooling (`watch-pr`, `orch`). Install via [`brew install oven-sh/bun/bun`](https://bun.sh). Only the playbooks that call those scripts need it; `bootstrap.ts` installs the script dependencies on first run.
 - **`gt` (Graphite CLI)** — only for the stack playbooks (Shipping, Orchestrate, the autopilots). Everything else works without it.
+- **`jq` and `rg` (ripgrep)** — only for `scripts/worktree-audit.sh` (the Worktree cleanup playbook). Without them the audit still runs but blanks its PR and LAST_CHAT columns, so it warns on stderr rather than returning a table that looks complete.
 
 No third-party plugins. The harsher-critique escape hatch lives in the bundled `thermo-nuclear-code-quality-review` skill (imported from cursor-team-kit), not in an external plugin.
 
@@ -193,7 +194,7 @@ The port is editorial, not mechanical. Anywhere upstream pstack assumed Cursor-s
 | MCP discovery via Cursor's `mcps/` directory | Tool list at top of system prompt (`mcp__<server>__<name>` entries), or `.mcp.json`, or `claude mcp list` |
 | Cursor cloud agents (`environment: "cloud"`, `cloud_base_branch`) | Local background subagents (`run_in_background: true`), isolated by git worktree |
 | Cursor's `/goal` (standing objective across turns) | The program objective written into the run's standing orders and restated in the todolist |
-| The Cursor agent store (path in the system prompt) | The session's scratchpad directory, else `~/.claude/orchestrate/<project-slug>/` |
+| The Cursor agent store (path in the system prompt) | `~/.claude/orchestrate/<project-slug>/`, which survives the session restarts a multi-day program expects |
 | Model rule `~/.cursor/rules/pstack-models.mdc` | Override sheet `~/.claude/pstack-models.md`, included from `CLAUDE.md` |
 | Model `composer-2.5-fast` (Cursor) | `claude-sonnet-4-6` |
 | Model `claude-opus-4-X-thinking-xhigh` (Cursor UI variant) | `claude-opus-4-8` (extended thinking configured separately) |
