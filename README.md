@@ -1,6 +1,6 @@
 # pstack for Claude Code, Codex, and Prime Agent
 
-Claude Code port of [poteto](https://x.com/poteto)'s [pstack](https://github.com/cursor/plugins/tree/main/pstack) plugin (skill tree synced against upstream `e46364b`, pstack v0.9.2; upstream reviewed through `0452e08`, v0.10.0 — see [What's deliberately not ported](#whats-deliberately-not-ported)). The same `skills/` tree also ships as a Codex plugin (see [Running on Codex](#running-on-codex)) and is discovered as-is by [Prime Agent](https://github.com/PrimeIntellect-ai/prime-agent) (see [Prime Agent](#prime-agent)). Original by Lauren Tan; ships MIT. Imports seven skills from [cursor-team-kit](https://github.com/cursor/plugins/tree/main/cursor-team-kit) (also MIT): `deslop`, `thermo-nuclear-code-quality-review`, `make-pr-easy-to-review`, `fix-ci`, `fix-merge-conflicts`, `get-pr-comments`, `what-did-i-get-done`.
+Claude Code port of [poteto](https://x.com/poteto)'s [pstack](https://github.com/cursor/plugins/tree/main/pstack) plugin (skill tree synced against upstream `4612556`, pstack v0.14.2 — see [What's deliberately not ported](#whats-deliberately-not-ported)). The same `skills/` tree also ships as a Codex plugin (see [Running on Codex](#running-on-codex)) and is discovered as-is by [Prime Agent](https://github.com/PrimeIntellect-ai/prime-agent) (see [Prime Agent](#prime-agent)). Original by Lauren Tan; ships MIT. Imports seven skills from [cursor-team-kit](https://github.com/cursor/plugins/tree/main/cursor-team-kit) (also MIT): `deslop`, `thermo-nuclear-code-quality-review`, `make-pr-easy-to-review`, `fix-ci`, `fix-merge-conflicts`, `get-pr-comments`, `what-did-i-get-done`.
 
 > if you want to go fast, go deep first. pstack helps you write less, but higher quality code. rigorous agent workflows you can parallelize with confidence.
 
@@ -68,11 +68,12 @@ Unverified relative to Codex: the Codex path above is confirmed on a live sessio
 ├── plugins/pstack/                   # the plugin itself
 │   ├── .claude-plugin/plugin.json    # Claude Code manifest
 │   ├── .codex-plugin/plugin.json     # Codex manifest (skills: ./skills/)
-│   ├── skills/                       # 48 skills (shared by all three runtimes)
-│   │   └── poteto-mode/references/codex-tools.md  # Claude→Codex tool/model/skill map
-│   ├── commands/                     # 27 slash command stubs (Codex-compatible; link into ~/.codex/prompts)
+│   ├── skills/                       # 52 skills (shared by all three runtimes)
+│   │   ├── poteto-mode/references/codex-tools.md  # Claude→Codex tool/model/skill map
+│   │   └── poteto-mode/scripts/      # vendored bun/bash tooling: watch-pr, orch, worktree-audit.sh
+│   ├── commands/                     # 31 slash command stubs (Codex-compatible; link into ~/.codex/prompts)
 │   ├── hooks/                        # SessionStart auto-fire: injects the poteto-mode mandate (Claude Code only)
-│   └── agents/poteto-agent.md        # Claude subagent (Codex routes via codex-tools.md)
+│   └── agents/                       # Claude subagents: poteto-agent, comment-sicko (Codex routes via codex-tools.md)
 ├── tests/skill-collision-repro.sh    # manual repro for the 0.9.7/0.9.8 flag invariants (needs claude CLI)
 ├── LICENSE                           # pstack upstream MIT
 ├── LICENSE-cursor-team-kit           # cursor-team-kit upstream MIT
@@ -89,7 +90,7 @@ Plugin-internal path references in the docs below (`skills/<name>/`, `commands/<
 The Codex build shares one `skills/` tree with the Claude Code build. Nothing is forked or generated. One mapping file does the translation. That single-mapping-file spine is the one `superpowers` ships for Codex. pstack diverges in one respect. superpowers writes its skills in tool-neutral language, so no skill names a runtime tool. pstack keeps the upstream Claude-native prose and adds a one-line Platform note to each skill that names a Claude primitive, so the port stays in lockstep with upstream sync.
 
 - **Skill invocation.** Codex loads `SKILL.md` natively. There is no `Skill` tool. You invoke a skill by name (ask for it, or pick `pstack:poteto-mode` from the list).
-- **Commands.** The 24 `commands/*.md` files are Codex-compatible as written. Codex reads their `description` frontmatter and the filename and ignores the keys it doesn't know (`name`, `disable-model-invocation`), and each body invokes its skill. They surface as slash commands when the full plugin is installed, or you can link them into `~/.codex/prompts/` for `/name` shortcuts (see [Install on Codex](#codex)). The `disable-model-invocation: true` flag exists for Claude Code, where a command and a skill sharing a name collide: the Skill tool resolved the name to the command trampoline, which told the model to invoke the skill, which resolved to the trampoline again — the skill never loaded (see CHANGES 0.9.7). With the flag, the model's Skill tool reaches only the skill; user-typed `/pstack:<name>` still runs the command. The mirror rule: a skill with a same-named command must **not** carry the flag — on a skill it makes the Skill tool refuse the invocation entirely, which broke the SessionStart mandate and every trampoline body until CHANGES 0.9.8 removed it from the 12 skills that had it. Only the command-less `principle-*` leaves keep the flag.
+- **Commands.** The 31 `commands/*.md` files are Codex-compatible as written. Codex reads their `description` frontmatter and the filename and ignores the keys it doesn't know (`name`, `disable-model-invocation`), and each body invokes its skill. They surface as slash commands when the full plugin is installed, or you can link them into `~/.codex/prompts/` for `/name` shortcuts (see [Install on Codex](#codex)). The `disable-model-invocation: true` flag exists for Claude Code, where a command and a skill sharing a name collide: the Skill tool resolved the name to the command trampoline, which told the model to invoke the skill, which resolved to the trampoline again — the skill never loaded (see CHANGES 0.9.7). With the flag, the model's Skill tool reaches only the skill; user-typed `/pstack:<name>` still runs the command. The mirror rule: a skill with a same-named command must **not** carry the flag — on a skill it makes the Skill tool refuse the invocation entirely, which broke the SessionStart mandate and every trampoline body until CHANGES 0.9.8 removed it from the 12 skills that had it. Only the command-less `principle-*` leaves keep the flag.
 - **Tool, model, and built-in mapping.** When a skill names a Claude tool (the `Agent` tool, `AskUserQuestion`), a `claude-*` model slug, or a Claude built-in skill (`run`, `verify`, `loop`, `plugin-dev:skill-development`), it resolves through [`skills/poteto-mode/references/codex-tools.md`](plugins/pstack/skills/poteto-mode/references/codex-tools.md). `poteto-mode` and every skill that names one of those carries a one-line **Platform note** pointing there.
 - **Subagents.** The `Agent` tool maps to Codex `spawn_agent` / `wait_agent` / `close_agent`, enabled by `multi_agent = true`. Parallel fan-out is multiple `spawn_agent` calls in one turn. Without the flag, `interrogate`, `arena`, `how`, `why`, `reflect`, and `architect` degrade to a single sequential pass. There is no `poteto-agent` subagent type on Codex; route ad-hoc subagents by dispatching a `spawn_agent` told to read `poteto-mode` first.
 - **Auto-fire.** The `hooks/` SessionStart injection is Claude Code-only; Codex has no plugin hook runtime. Enter `pstack:poteto-mode` by name, or add a standing instruction to `~/.codex/AGENTS.md` if you want the same always-on routing.
@@ -113,7 +114,9 @@ Nothing is declared in `plugin.json`. Install the one companion plugin yourself:
 Not declared as deps, but referenced in skill bodies:
 
 - **`run`, `verify`, `loop`** — Claude Code CLI built-ins (ship with the binary, always available).
-- **`gh` CLI** — system-level requirement of the `babysit` skill. Install via [`brew install gh`](https://cli.github.com) and authenticate with `gh auth login`.
+- **`gh` CLI** — system-level requirement of the `babysit` skill and the Babysit / Shipping playbooks. Install via [`brew install gh`](https://cli.github.com) and authenticate with `gh auth login`.
+- **`bun`** — runs the vendored `skills/poteto-mode/scripts/` tooling (`watch-pr`, `orch`). Install via [`brew install oven-sh/bun/bun`](https://bun.sh). Only the playbooks that call those scripts need it; `bootstrap.ts` installs the script dependencies on first run.
+- **`gt` (Graphite CLI)** — only for the stack playbooks (Shipping, Orchestrate, the autopilots). Everything else works without it.
 
 No third-party plugins. The harsher-critique escape hatch lives in the bundled `thermo-nuclear-code-quality-review` skill (imported from cursor-team-kit), not in an external plugin.
 
@@ -131,12 +134,19 @@ No third-party plugins. The harsher-critique escape hatch lives in the bundled `
 | `/reflect` | capture a long task's lessons as a skill edit |
 | `/tdd` | fix a bug by writing the failing test first, then the fix |
 | `/typescript-best-practices` | ground type-system discipline in TypeScript syntax |
+| `/teach` | understand a change or subsystem for real: `how` + `why` woven into one plain explanation |
+| `/swarm` | fan out N parallel workers across slices or races, then one aggregated report |
+| `/technical-writing` | write docs, RFCs, readmes, PR descriptions, and commit messages to one layered standard |
+| `/bro` | restate the last message in plain human language, no jargon |
 | `/figure-it-out` | design a rigorous, auditable playbook for a task no bundled playbook fits |
 | `/show-me-your-work` | log decisions to a reviewable tsv decision trail |
 | `/blast-radius` | find what a change could break beyond the diff and prove safety by running code |
 | `/recall` | catch up on recent working context from chat history, live state, and the shared record |
 | `/setup-pstack` | configure pstack per-role model choices |
 | `/unslop` | clean up writing by removing AI tells |
+| `/no-comments` | strip comments before review via the `comment-sicko` subagent, then fix what it finds |
+| `/create-verification-skill` | generate a project-local verification skill and feature map |
+| `/maintain-verification-skill` | re-sync a drifted verification skill and its feature map |
 | `/deslop` | deslop a diff before commit |
 | `/babysit` | monitor an open PR, fix CI/comments, keep it merge-ready |
 | `/thermo-nuclear-code-quality-review` | extremely strict maintainability audit |
@@ -146,9 +156,11 @@ No third-party plugins. The harsher-critique escape hatch lives in the bundled `
 | `/get-pr-comments` | fetch and summarize review comments from the active PR |
 | `/what-did-i-get-done` | summarize authored commits over a user-chosen period |
 
-## Subagent
+## Subagents
 
 `poteto-agent` ships unchanged. Spawn from a parent with `subagent_type: "poteto-agent"`.
+
+`comment-sicko` is the read-only comment reviewer the `no-comments` skill spawns. Upstream names it `Comment Sicko`; the port renames it to `comment-sicko` so the name is a valid `subagent_type`. Invoke it through `/no-comments`, not directly.
 
 ## Differences from upstream
 
@@ -156,7 +168,7 @@ The port is editorial, not mechanical. Anywhere upstream pstack assumed Cursor-s
 
 ### What's added
 
-- **`skills/babysit/`** — Claude Code analog of Cursor's closed-source `/babysit` built-in. Wraps `gh pr view` / `gh pr checks` / `gh run view --log-failed` plus the `loop` skill for pacing. Independently authored; workflow informed by Cursor's public `/babysit` behavior — not a copy of Cursor's implementation.
+- **`skills/babysit/`** — Claude Code analog of Cursor's closed-source `/babysit` built-in. Wraps `gh pr view` / `gh pr checks` / `gh run view --log-failed` plus the `loop` skill for pacing. Independently authored; workflow informed by Cursor's public `/babysit` behavior — not a copy of Cursor's implementation. Since the v0.14.2 sync, poteto-mode routes PR-status requests to the ported `playbooks/babysit.md` instead, and this skill is the standalone `/babysit` entry point.
 - **`skills/deslop/`** — imported verbatim from `cursor-team-kit`. Cleans AI tells out of diffs before commit.
 - **`skills/thermo-nuclear-code-quality-review/`** — imported verbatim from `cursor-team-kit`. Used as the harsher-critique escape hatch in `arena`, `interrogate`, `architect`, and `how` (replaces the Cursor-original cross-vendor bridge).
 - **`skills/make-pr-easy-to-review/`** — imported verbatim from `cursor-team-kit`. Composes with `opening-a-pr` and `babysit`.
@@ -172,13 +184,17 @@ The port is editorial, not mechanical. Anywhere upstream pstack assumed Cursor-s
 | `Task` tool, `subagent_type: generalPurpose`, `readonly: false/true` | `Agent` tool, `subagent_type: "general-purpose"`, no readonly flag (subagent_type controls MCP access) |
 | `AskQuestion` tool | `AskUserQuestion` tool |
 | Cursor's built-in `/loop` | Claude Code's built-in `loop` skill |
-| Cursor's built-in `/babysit` | `babysit` skill bundled in this plugin |
+| Cursor's built-in `/babysit` | `babysit` skill bundled in this plugin. From v0.14.0 upstream routes PR-status requests inside poteto-mode to `playbooks/babysit.md` instead; the port does the same, and `/babysit` stays the standalone entry point |
 | Cursor's built-in `/create-skill` | `plugin-dev:skill-development` skill |
 | `cursor-team-kit` `control-cli` (CLI/TUI driver) | Claude Code's `run` skill |
 | `cursor-team-kit` `control-ui` (browser/Electron driver) | Claude Code's `verify` skill |
 | Transcripts at `~/.cursor/projects/*/` or `agent-transcripts/` | `~/.claude/projects/<encoded-cwd>/*.jsonl` (where `<encoded-cwd>` is the workspace cwd with `/` → `-`) |
 | Skill paths `.cursor/skills/`, `~/.cursor/plugins/` | `.claude/skills/`, `~/.claude/plugins/` |
 | MCP discovery via Cursor's `mcps/` directory | Tool list at top of system prompt (`mcp__<server>__<name>` entries), or `.mcp.json`, or `claude mcp list` |
+| Cursor cloud agents (`environment: "cloud"`, `cloud_base_branch`) | Local background subagents (`run_in_background: true`), isolated by git worktree |
+| Cursor's `/goal` (standing objective across turns) | The program objective written into the run's standing orders and restated in the todolist |
+| The Cursor agent store (path in the system prompt) | The session's scratchpad directory, else `~/.claude/orchestrate/<project-slug>/` |
+| Model rule `~/.cursor/rules/pstack-models.mdc` | Override sheet `~/.claude/pstack-models.md`, included from `CLAUDE.md` |
 | Model `composer-2.5-fast` (Cursor) | `claude-sonnet-4-6` |
 | Model `claude-opus-4-X-thinking-xhigh` (Cursor UI variant) | `claude-opus-4-8` (extended thinking configured separately) |
 | Models `gpt-5.3-codex-high-fast`, `gpt-5.5-high-fast` (via Cursor) | `claude-sonnet-4-6`, `claude-haiku-4-5` (Claude family) |
@@ -198,6 +214,9 @@ The port is editorial, not mechanical. Anywhere upstream pstack assumed Cursor-s
 ### What's deliberately not ported
 
 - **`automations/benny/`** (upstream `0452e08`, the only pstack change between `e46364b` and v0.10.0) — a dormant Slack issue-triage and reproduce-and-fix automation pack built on Cursor's event-triggered automations. It registers no slash skills even upstream, so excluding it changes nothing about the ported plugin's behavior. Porting it would mean translating Cursor's event-trigger runtime to Claude Code's polling-based scheduled agents plus Slack and tracker plumbing — speculative infrastructure with no local user. Revisit if an unattended issue-intake stream materialises; the likely first step is porting the triage skill onto a single Claude scheduled agent, not the whole pack.
+- **`docs/guide/`** (upstream `02c03a9`, `0b7ef5b`, `424829e`) — the ten-chapter usage tutorial and its six screenshots (2.3 MB). It teaches pstack through Cursor's UI, sticky mode, and cloud agents, so a faithful port would be a rewrite rather than a sync, and none of it ships as skill content. Read it upstream at [cursor/plugins/pstack/docs/guide](https://github.com/cursor/plugins/tree/main/pstack/docs/guide); the concepts map through the substitution table above. Revisit if the port grows its own tutorial.
+- **Sticky mode** (upstream `#144`) — Cursor-only `mode`/`icon`/`color`/`reminder` frontmatter with no Claude Code equivalent. The port's 0.9.5 SessionStart hook is the analog and already carries the non-trivial / trivial / opt-out logic.
+- **`is_background: true` on `poteto-agent`** (upstream `99559f2`) — Cursor subagent frontmatter. Claude Code's agent frontmatter has no such key, and `run_in_background: true` on the spawning `Agent` call already covers it.
 - **`cursor-team-kit` beyond the seven imported skills** — the rest either duplicate Claude Code built-ins (`verify-this` → the `verify` skill and built-in verification discipline; `check-compiler-errors` → LSP diagnostics; `control-cli`/`control-ui` → `run`/`verify`, already the substitution targets) or overlap skills this port ships (`loop-on-ci`, `review-and-ship`, `weekly-review` vs `babysit`, `fix-ci`, `make-pr-easy-to-review`, `what-did-i-get-done`). `pr-review-canvas` is Cursor-UI-specific.
 
 ### Forking note

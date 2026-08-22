@@ -91,17 +91,24 @@ quad_of() { { grep -oE 'claude-[a-z0-9-]+' || true; } | tr '\n' ' ' | sed 's/ $/
 canon_quad="$(grep -m1 '^arena runners:' "$setup" | quad_of || true)"
 quad_bad=""
 [ -n "$canon_quad" ] || quad_bad="could not read the canonical quad from $setup (arena runners row)"$'\n'
-# Each panel skill states the quad on its one line naming the fourth slug.
-for name in arena architect how interrogate; do
+# Anchor on the quad's last slug rather than a hard-coded one, so a model swap in
+# setup-pstack cannot leave this check hunting for a slug nobody ships any more.
+anchor="${canon_quad##* }"
+# arena, architect, and how each state the quad on one line; interrogate lists it
+# as one slug per row of its Reviewer A/B/C/D table (upstream #167).
+for name in arena architect how; do
   skill="$repo/plugins/pstack/skills/$name/SKILL.md"
-  n="$(grep -Fc 'claude-sonnet-4-6' "$skill" || true)"
+  n="$(grep -Fc "$anchor" "$skill" || true)"
   if [ "$n" != "1" ]; then
     quad_bad="$quad_bad$skill: expected exactly 1 default-quad line, found $n"$'\n'
     continue
   fi
-  got="$(grep -F 'claude-sonnet-4-6' "$skill" | quad_of)"
+  got="$(grep -F "$anchor" "$skill" | quad_of)"
   [ "$got" = "$canon_quad" ] || quad_bad="$quad_bad$skill: [$got] != [$canon_quad]"$'\n'
 done
+interrogate="$repo/plugins/pstack/skills/interrogate/SKILL.md"
+got="$(grep -E '^\| Reviewer [A-Z] \|' "$interrogate" | quad_of)"
+[ "$got" = "$canon_quad" ] || quad_bad="$quad_bad$interrogate reviewer table: [$got] != [$canon_quad]"$'\n'
 # The setup-pstack role rows must all carry the same quad (excludes the line 24
 # "currently available" enumeration, which is a different, longer list by design).
 while IFS= read -r line; do
