@@ -9,10 +9,12 @@ Claude Code analog of Cursor's built-in `/babysit`. The implementation is a loop
 
 **Platform note.** On Codex or another non-Claude runtime, the Claude tool names and Claude built-in skills named below (`loop`, `AskUserQuestion`) are Claude defaults. Resolve them via [`codex-tools.md`](../poteto-mode/references/codex-tools.md).
 
+Inside poteto-mode, the **Babysit** playbook ([`../poteto-mode/playbooks/babysit.md`](../poteto-mode/playbooks/babysit.md)) supersedes this skill: it owns mode declaration, the merge frontier, stack safety, and the `watch-pr` watcher. This skill stays the standalone `/babysit` entry point for a single PR outside a poteto-mode run.
+
 ## When to use
 
-- There's an open PR and the user explicitly wants it kept green.
-- The poteto-mode opening-a-pr playbook routes here after `gh pr create`.
+- There's an open PR and the user explicitly wants it kept green, and you are not already inside a poteto-mode run (the playbook owns that case).
+- The user invokes `/babysit` directly.
 - A subagent that opens a PR does NOT babysit — return to the parent and let the parent decide.
 
 ## Steps
