@@ -123,6 +123,10 @@ else
   note "ok: default model quad identical across provider dispatch + 4 panel skills + setup-pstack ($canon_quad)"
 fi
 
+if [ "${PSTACK_STATIC_ONLY:-0}" = "1" ]; then
+  exit "$fail"
+fi
+
 # Behavioral checks against a minimal colliding plugin.
 scratch="$(mktemp -d)"
 trap 'rm -rf "$scratch"' EXIT
