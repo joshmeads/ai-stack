@@ -1,19 +1,19 @@
 {
-  "name": "pstack-claude",
+  "name": "open-pstack",
   "owner": {
-    "name": "Michael Denyer"
+    "name": "Eric Litman"
   },
-  "description": "Claude Code port of poteto's pstack. Rigorous agent workflows with Cursor primitives translated to Claude Code equivalents.",
+  "description": "Pstack for Claude Code and Codex, tracking Cursor's upstream pstack.",
   "plugins": [
     {
       "name": "pstack",
       "source": "./plugins/pstack",
       "description": "if you want to go fast, go deep first. pstack helps you write less, but higher quality code. rigorous agent workflows you can parallelize with confidence.",
-      "version": "0.9.12",
+      "version": "1.0.0",
       "author": {
         "name": "Lauren Tan (original)"
       },
-      "homepage": "https://github.com/michael-denyer/pstack-claude",
+      "homepage": "https://github.com/ericlitman/open-pstack",
       "license": "MIT",
       "keywords": [
         "pstack",

@@ -2,6 +2,12 @@
 
 This port applies the Cursor → Claude Code substitutions in skill bodies. Earlier drafts left them flagged; this revision resolves them. A later pass added a Codex build that shares the same skills; see [Codex port](#codex-port) below.
 
+## 1.0.0 — establish open-pstack
+
+`ericlitman/open-pstack` becomes the canonical cross-harness distribution. Its imported baseline is `053ed78732e3b71826933170eafe7f7782dda844`, synchronized to Cursor pstack v0.14.2 at `46125561306434d8a1d7745d540d8932ab0cd2a2`. The repository preserves the existing history and attribution while moving marketplace identity, links, and the private tooling package to open-pstack.
+
+Claude Code and Codex continue to share one skill tree. The parent-owned Claude/Codex/Grok provider dispatch, explicit failure receipts, no-fallback rule, and lack of an implicit runtime timeout are unchanged. `UPSTREAM.md` records the review-first sync procedure, and ordinary pull requests run the Bun tests, typecheck, manifest parse, and static maintenance invariants in GitHub Actions. Live provider behavior remains a release gate because CI cannot substitute for subscribed CLI execution.
+
 ## 0.9.12 — restore the upstream frontier panel across Claude Code and Codex
 
 The v0.14.2 sync kept pstack's workflow structure but replaced upstream's Fable 5 / GPT-5.6 Sol / Grok 4.6 / Opus 5 panel with Claude-only choices. This release restores the upstream frontier panel from either supported parent harness without adding another orchestrator.
