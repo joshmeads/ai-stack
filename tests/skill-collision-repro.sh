@@ -8,10 +8,11 @@
 #
 # Beyond the collision repro, this enforces the static maintenance invariants from
 # CHANGES.md: the command/skill/leaf flags, version parity across the three manifests,
-# and the default model quad's identity across the panel skills and setup-pstack. The
+# and the default model quad's identity across provider dispatch, the panel skills,
+# and setup-pstack. The
 # static checks need no CLI; only the behavioral legs below do.
 #
-# Manual test: the behavioral legs need the claude CLI and API access; four haiku calls.
+# Manual test: the behavioral legs need the claude CLI and API access; four Fable calls.
 set -euo pipefail
 
 repo="$(cd "$(dirname "$0")/.." && pwd)"
@@ -80,17 +81,16 @@ else
   fail=1
 fi
 
-# Static invariant (CHANGES maintenance note): the default model quad is duplicated
-# verbatim across the four panel skills and the setup-pstack sheet, "kept grep-identical
-# when models change." Derive the canonical ordered quad from setup-pstack's arena-runners
-# row and assert every other copy matches, so a partial model bump fails here instead of
-# drifting silently. (This copy in the test is the assertion anchor; a single generated
-# source for the quad would retire all of them, this check included.)
+# Static invariant (CHANGES maintenance note): provider-dispatch owns the default
+# provider/model quad and the four panel skills plus setup-pstack copy it verbatim.
+# Derive the canonical ordered quad from provider-dispatch and assert every copy
+# matches, so a partial model bump fails here instead of drifting silently.
 setup="$repo/plugins/pstack/skills/setup-pstack/SKILL.md"
-quad_of() { { grep -oE 'claude-[a-z0-9-]+' || true; } | tr '\n' ' ' | sed 's/ $//'; }
-canon_quad="$(grep -m1 '^arena runners:' "$setup" | quad_of || true)"
+dispatch="$repo/plugins/pstack/skills/poteto-mode/references/provider-dispatch.md"
+quad_of() { { grep -oE '(claude|codex|grok):[a-z0-9.-]+@(low|medium|high|xhigh|max)' || true; } | tr '\n' ' ' | sed 's/ $//'; }
+canon_quad="$(sed -n '/^The frontier defaults are:/,/^## /p' "$dispatch" | quad_of || true)"
 quad_bad=""
-[ -n "$canon_quad" ] || quad_bad="could not read the canonical quad from $setup (arena runners row)"$'\n'
+[ -n "$canon_quad" ] || quad_bad="could not read the canonical quad from $dispatch"$'\n'
 # Anchor on the quad's last slug rather than a hard-coded one, so a model swap in
 # setup-pstack cannot leave this check hunting for a slug nobody ships any more.
 anchor="${canon_quad##* }"
@@ -114,13 +114,13 @@ got="$(grep -E '^\| Reviewer [A-Z] \|' "$interrogate" | quad_of)"
 while IFS= read -r line; do
   got="$(printf '%s\n' "$line" | quad_of)"
   [ "$got" = "$canon_quad" ] || quad_bad="$quad_bad$setup role row: [$got] != [$canon_quad]"$'\n'
-done < <(grep -E '^(arena runners|architect runners|interrogate reviewers|how critics):' "$setup")
+done < <(grep -E '^(arena runners|arena cross-judge pool|architect runners|interrogate reviewers|how critics):' "$setup")
 if [ -n "$quad_bad" ]; then
-  note "FAIL: the default model quad is not identical across the panel skills and setup-pstack:"
+  note "FAIL: the default model quad is not identical across provider dispatch, the panel skills, and setup-pstack:"
   note "$quad_bad"
   fail=1
 else
-  note "ok: default model quad identical across 4 panel skills + setup-pstack ($canon_quad)"
+  note "ok: default model quad identical across provider dispatch + 4 panel skills + setup-pstack ($canon_quad)"
 fi
 
 # Behavioral checks against a minimal colliding plugin.
@@ -148,7 +148,7 @@ write_command() { # $1 = extra frontmatter line ("" for none)
 }
 
 run() {
-  claude -p --plugin-dir "$scratch" --model haiku --max-turns 3 "$1" < /dev/null 2>&1
+  claude -p --plugin-dir "$scratch" --model claude-fable-5 --effort max --max-turns 3 "$1" < /dev/null 2>&1
 }
 
 check() { # $1 label, $2 expected marker, $3 output

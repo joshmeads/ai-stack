@@ -1,72 +1,88 @@
 ---
 name: setup-pstack
-description: Configure which models pstack uses per role. Detects your available Claude models and writes a per-role override file that the user can include from their CLAUDE.md. Use for /setup-pstack, "configure pstack models", or changing pstack's model choices.
+description: Configure pstack's provider-qualified models and parent-owned routes per role. Verifies native and external Claude, Codex, and Grok lanes before writing the override sheet. Use for /setup-pstack, "configure pstack models", or changing pstack's model choices.
 ---
 
 # Setup pstack
 
-Write `~/.claude/pstack-models.md`, a per-role model override sheet you include from your global `CLAUDE.md`. Each pstack skill names a default model inline; the override sheet is the layer that adapts those defaults to the models you actually have access to.
+Configure one portable model sheet for the current parent harness. Read [`provider-dispatch.md`](../poteto-mode/references/provider-dispatch.md) before probing or writing anything. Its descriptor grammar and route table are the contract.
 
-**Platform note.** On Codex or another non-Claude runtime, the override sheet is `~/.codex/pstack-models.md`, the slugs are your Codex models (for example `gpt-5.5`) not `claude-*`, and you load it by adding the sheet's contents to `~/.codex/AGENTS.md` (Codex has no `@`-include into a rules file). The role rows in step 5 are identical; only the slugs, the file path, and the load mechanism change. Detect Codex slugs from `~/.codex/config.toml` (`model = ...`) plus whatever the user confirms. See [`codex-tools.md`](../poteto-mode/references/codex-tools.md).
-
-Claude Code has no auto-applied "rules" mechanism like Cursor's `.mdc`. Inclusion is explicit: the user adds a line to `~/.claude/CLAUDE.md` (or their project `CLAUDE.md`) such as:
+Claude Code writes `~/.claude/pstack-models.md` and loads it from `~/.claude/CLAUDE.md` with:
 
 ```text
 @~/.claude/pstack-models.md
 ```
 
-so the file is loaded as context for every session.
+Codex writes `~/.codex/pstack-models.md`. Codex has no `@` include, so add the sheet's routing block to `~/.codex/AGENTS.md` and retain the sheet as the editable source of truth.
 
 ## Steps
 
-### 1. Detect available models
+### 1. Establish the parent
 
-Enumerate the model slugs you can pass to an `Agent` subagent in this session — that is the dependable source. Claude family currently available: Opus 5 (`claude-opus-5`), Opus 4.8 (`claude-opus-4-8`), Opus 4.6 (`claude-opus-4-6`), Fable 5 (`claude-fable-5`), Sonnet 5 (`claude-sonnet-5`), Sonnet 4.6 (`claude-sonnet-4-6`), Haiku 4.5 (`claude-haiku-4-5`). The default panels run Opus 5 (`claude-opus-5`), Fable 5 (`claude-fable-5`), Opus 4.6 (`claude-opus-4-6`), and Sonnet 5 (`claude-sonnet-5`) for cross-family, cross-tier diversity. Opus 4.8 stays out of the panels because it is already the single-role default across the skills. Ask the user to confirm or paste any additional slugs they want available. Never write a real slug you have not confirmed is available. The aliases `inherit-parent` and `auto` are always valid even though they are not detected slugs; both mean the role runs on the parent session's model, which the `Agent` call expresses by omitting `model`.
+Use the harness and tool surface running this skill: Claude Code or Codex. Environment markers may corroborate that top-level answer, but do not launch a child and ask it to detect where it came from. Record the parent because the same descriptor takes a different route in each harness.
 
-### 2. Load current state
+### 2. Probe each frontier lane
 
-The default role-to-model mapping is the rule shape shown in step 5 below. If `~/.claude/pstack-models.md` already exists, read it and treat its values as the current choices. Otherwise start from those defaults.
+Check the four current frontier choices before presenting configuration. Do not enumerate or offer older models as substitutes.
 
-### 3. Map and confirm
+| Descriptor | Claude parent route | Codex parent route | Availability proof |
+|---|---|---|---|
+| `claude:claude-fable-5@max` | native `pstack-fable-max` Agent | Claude CLI | native schema/one-turn probe or `claude auth status --json` plus one-turn probe |
+| `codex:gpt-5.6-sol@max` | `codex exec` | native `spawn_agent` | `codex login status` plus one-turn probe or native schema/one-turn probe |
+| `grok:grok-4.6@xhigh` | Grok CLI | Grok CLI | `grok models` must list `grok-4.6`; one-turn probe |
+| `claude:claude-opus-5@xhigh` | native `pstack-opus-xhigh` Agent | Claude CLI | native schema/one-turn probe or `claude auth status --json` plus one-turn probe |
 
-Show every role with its current model, marking any real slug not in the detected set as needing a choice. Ask whether to accept as-is or change specific roles, offering the detected models plus `inherit-parent` and `auto` as the options. Prefer `AskUserQuestion` over free text. For panel roles (how critics, arena runners, architect runners, interrogate reviewers) the value is a list, and one subagent runs per entry, alias entries included, so the list length sets the count. `arena cross-judge pool` is also a list, but Arena selects one value from it whose model family differs from the parent's when possible. `swarm workers` is the default model for every worker unless a race or comparison assigns another model per arm.
+Use a tiny read-only probe that returns a unique marker. A login-status command alone proves credentials, not that the requested model runs. Record native and external results separately. Never call the external launcher for the parent's own provider.
 
-### 4. Validate
+### 3. Load current state
 
-Every real slug written must be in the detected set; `inherit-parent` and `auto` always pass. If a chosen real slug is not available, stop and ask again. An override pointing at a model the user cannot use breaks every delegation that reads it.
+Read the current parent-specific sheet when it exists. Treat its values as current choices. Otherwise start from the upstream frontier defaults in step 5. A bare host-native slug from an older sheet is invalid here because it does not say which provider owns it.
 
-### 5. Write the override sheet
+### 4. Show exactly what will run and confirm
 
-Write `~/.claude/pstack-models.md` with the shape below. Overwrite the whole file so re-runs stay idempotent.
+Show the route table for this parent, then show every role and descriptor. Ask whether to use the upstream frontier stack as-is or change named roles. The question must name the four choices, not abstract them into tiers:
+
+> Use Fable 5 at max, GPT-5.6 Sol at max, Grok 4.6 at xhigh, and Opus 5 at xhigh for the multi-model panels, with the upstream single-role assignments below?
+
+Offer only descriptors that passed their actual model probe, plus `inherit-parent` and `auto`. For panel roles, one lane runs per entry. The list length is the fan-out count. `arena cross-judge pool` is a list from which Arena chooses a provider different from the parent and base candidate when possible. `swarm workers` is the default for every worker unless a race explicitly assigns another descriptor.
+
+### 5. Validate and write the sheet
+
+Every non-alias value must match `<provider>:<model>@<effort>` and must have passed step 2. Refuse an unqualified slug, an unavailable route, a model other than the current frontier four, or a provider/model mismatch. `inherit-parent` and `auto` always validate, but say when they reduce a panel's provider diversity.
+
+Why and Reflect require the parent's live MCP surface. Keep their investigator, reviewer, and synthesizer roles on `inherit-parent` or `auto`; the bounded external runner deliberately omits ambient MCPs.
+
+After the operator confirms, overwrite the whole parent-specific sheet so reruns are idempotent:
 
 ```markdown
 # pstack model configuration
 
-Per-role model overrides for pstack skills. Each pstack SKILL.md names a default model inline; the values here override those defaults. Delete a line to fall back to the skill default. A value of `inherit-parent` or `auto` runs that role on the parent session's model (the `Agent` call omits `model`); an alias entry in a panel list still counts toward that panel's fan-out.
+Provider-qualified per-role choices. Read the installed pstack provider-dispatch reference before dispatching a configured role. Delete a line to use the skill default. `inherit-parent` and `auto` use the parent model natively and still count as one panel lane.
 
-feature, refactoring: claude-opus-4-8
-bug-fix: claude-opus-4-8
-perf-issue: claude-opus-4-8
-hillclimb: claude-opus-4-8
-judgment and prose: claude-opus-4-8
-how explorer: claude-opus-4-8
-how explainer: claude-opus-4-8
-how critics: claude-opus-5, claude-fable-5, claude-opus-4-6, claude-sonnet-5
-why investigators: claude-opus-4-8
-why synthesizer: claude-opus-4-8
-reflect tooling: claude-opus-4-8
-reflect judgment, divergent, synthesizer: claude-opus-4-8
-arena runners: claude-opus-5, claude-fable-5, claude-opus-4-6, claude-sonnet-5
-arena cross-judge pool: claude-opus-5, claude-fable-5, claude-sonnet-5
-swarm workers: claude-opus-4-8
-architect runners: claude-opus-5, claude-fable-5, claude-opus-4-6, claude-sonnet-5
-interrogate reviewers: claude-opus-5, claude-fable-5, claude-opus-4-6, claude-sonnet-5
+feature, refactoring: grok:grok-4.6@xhigh
+bug-fix: codex:gpt-5.6-sol@max
+perf-issue: codex:gpt-5.6-sol@max
+hillclimb: codex:gpt-5.6-sol@max
+judgment and prose: claude:claude-fable-5@max
+hardest tasks: claude:claude-fable-5@max
+how explorer: grok:grok-4.6@xhigh
+how explainer: claude:claude-fable-5@max
+how critics: claude:claude-fable-5@max, codex:gpt-5.6-sol@max, grok:grok-4.6@xhigh, claude:claude-opus-5@xhigh
+why investigators, synthesizer: inherit-parent
+reflect tooling, judgment, divergent, synthesizer: inherit-parent
+arena runners: claude:claude-fable-5@max, codex:gpt-5.6-sol@max, grok:grok-4.6@xhigh, claude:claude-opus-5@xhigh
+arena cross-judge pool: claude:claude-fable-5@max, codex:gpt-5.6-sol@max, grok:grok-4.6@xhigh, claude:claude-opus-5@xhigh
+swarm workers: grok:grok-4.6@xhigh
+architect runners: claude:claude-fable-5@max, codex:gpt-5.6-sol@max, grok:grok-4.6@xhigh, claude:claude-opus-5@xhigh
+interrogate reviewers: claude:claude-fable-5@max, codex:gpt-5.6-sol@max, grok:grok-4.6@xhigh, claude:claude-opus-5@xhigh
 ```
 
 ### 6. Wire it in
 
-If `~/.claude/CLAUDE.md` does not already include `~/.claude/pstack-models.md`, append the `@~/.claude/pstack-models.md` line so it loads on every session. If the user prefers project scope, add the include to the project's `CLAUDE.md` instead.
+On Claude, add the `@~/.claude/pstack-models.md` include only if absent. On Codex, update the existing pstack routing block in `~/.codex/AGENTS.md` rather than appending duplicates. Do not copy the model sheet between harnesses without rerunning the parent-specific probes; route availability can differ even on the same host.
 
-### 7. Confirm
+### 7. Behavioral smoke
 
-Tell the user where the override was written and how it loads (via the `@` include in CLAUDE.md). Re-running this skill updates the override sheet.
+Before declaring setup complete, run one small read-only mixed panel from this parent: all four descriptors, distinct output/receipt paths, and an independent cross-judge. Launch Claude-native agents and every external process in the background with retained handles, then drain them. Verify the native transcript entries and every external receipt. A structural config check or unit test is not a substitute.
+
+Report the sheet path, parent route table, model-probe results, smoke results, and external elapsed/token/cost receipts. Re-running this skill re-probes and updates the same sheet.
