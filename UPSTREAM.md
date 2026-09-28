@@ -8,17 +8,19 @@ open-pstack tracks [Cursor's pstack](https://github.com/cursor/plugins/tree/main
 | --- | --- |
 | Repository | `https://github.com/cursor/plugins.git` |
 | Path | `pstack/` |
-| Commit | `f8abeddd1862dc73704e3d719dd73df0d51b8c71` |
-| Upstream version | `0.15.1` |
+| Commit | `adf3218ca2f5b9971eedc07a76bef22df7701539` |
+| Upstream version | `0.15.5` |
 | open-pstack version | `1.4.1` |
 
-The table above is the current Cursor sync point. Open Pstack 1.4.1 imports this 0.15.1 sync. `README-UPSTREAM.md` preserves the upstream pstack README verbatim. `CHANGES.md` and `NOTICE.md` describe the adaptations and provenance.
+The table above is the current Cursor sync point for this personal fork source sync. Package metadata stays at Open Pstack 1.4.1; this is not a new tagged release. The last pstack change in the target tree is `12d587dfb207`. The previous baseline was `f8abeddd1862dc73704e3d719dd73df0d51b8c71` (0.15.1). `README-UPSTREAM.md` preserves the upstream pstack README verbatim. `CHANGES.md` and `NOTICE.md` describe the adaptations and provenance.
 
 ## Upstream-only exclusions
 
 - Commits `799151d` and `6fecddb` add and relocate `make-bot-ui`. It depends on Cursor routines, webhook events, and UI primitives that Claude Code and Codex do not share.
 - Four `disable-model-invocation: true` lines from `73f8be4` are not applied to `how`, `why`, `unslop`, or `typescript-best-practices`. Poteto-mode invokes those skills by name, and the flag blocks that route on Claude Code.
-- The `23a56e2` default-model hunks for `bug-fix`, `perf-issue`, and `hillclimb` are not applied. Those frequent code-writing roles stay on `codex:gpt-5.6-sol@max` for cost.
+- The model-default changes in `889ec4b` and `70b2dc8`, and closest-model fallback rules in `12d587d`, are not imported. Explicit task-discipline policy takes precedence: architecture/review use Astra high, with Fable high only if unavailable; implementation uses Opus 5.5 high, then Astra medium, then Sol high after recorded unavailability. Mixed-model review panels are not used under that policy. The older provider-qualified runner matrix and its example defaults remain unchanged because the runner does not support the new selectors; they do not override user policy. No runner expansion or silent fallback is part of this sync.
+- Setup's reasoning budget is translated to the existing per-family `@effort` flow. Unsupported efforts require an explicit choice rather than a closest-slug downgrade. Retired rows are removed in memory and shown at confirmation; failed probes leave both files untouched. Setup refuses to overwrite an explicit policy its legacy matrix cannot encode.
+- The plan checker already resolves the configured `swarm workers` role and retains its stronger structural checks; it does not adopt Cursor's raw model-slug regex. Runtime supervision retains affirmative failure evidence instead of elapsed-time cancellation. Forge identity, explicit leases, expected-head merges, fork ancestry, and installed live-evidence gates remain port adaptations.
 - The Claude manifest does not take the logo field from `efa2a53` because Claude Code has no schema for it. The shared asset is exposed through the Codex manifest instead.
 
 ## Check for changes
@@ -33,8 +35,8 @@ Fetch and inspect only commits that touched pstack after the recorded sync point
 
 ```shell
 git fetch cursor main
-git log --oneline f8abeddd1862dc73704e3d719dd73df0d51b8c71..cursor/main -- pstack
-git diff --stat f8abeddd1862dc73704e3d719dd73df0d51b8c71..cursor/main -- pstack
+git log --oneline adf3218ca2f5b9971eedc07a76bef22df7701539..cursor/main -- pstack
+git diff --stat adf3218ca2f5b9971eedc07a76bef22df7701539..cursor/main -- pstack
 ```
 
 No output means the tracked pstack tree has not changed. This comparison does not need a polling service or generated mirror branch.

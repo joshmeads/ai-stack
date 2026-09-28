@@ -9,7 +9,7 @@ Investigate the motivation and intent behind code.
 
 Companion to the `how` skill. `how` answers what the code does and how it works. `why` answers what forces led to its shape.
 
-**Dispatch contract.** Resolve every configured role through [`provider-dispatch.md`](../poteto-mode/references/provider-dispatch.md). Investigators require the parent's live MCP surface, so the default and supported portable route is `inherit-parent` (or its `auto` alias). Pass the code anchor by path. On Codex, resolve remaining Claude tool names via [`codex-tools.md`](../poteto-mode/references/codex-tools.md).
+**Dispatch contract.** Resolve every configured role through [`provider-dispatch.md`](../poteto-mode/references/provider-dispatch.md). Investigators require the parent's live MCP surface, so the default and supported portable route is `inherit-parent` (or its `auto` alias). Pass the code anchor by path. On Codex, resolve remaining Claude tool names via [`codex-tools.md`](../poteto-mode/references/codex-tools.md). Read the named role line using the model-rule resolution and explicit-policy precedence in that reference. A missing line uses the documented default; an invalid or rejected entry remains a dropout, with no closest-model fallback.
 
 ## Operating Posture
 
@@ -76,7 +76,7 @@ Source control is always available through git and `gh`. For the other six, clas
 
 Aim for a complete **coverage map**, not a minimal one. Document the null, don't skip the search.
 
-Launch all matching investigators in one fan-out phase so they run concurrently. Don't ask one agent to cover multiple MCPs. Route each through your configured why-investigators descriptor (default `inherit-parent`) with the assigned MCP available. Investigators still do not write files; that is a posture even when the MCP-capable execution mode is not mechanically read-only.
+Launch all matching investigators in one fan-out phase so they run concurrently. Don't ask one agent to cover multiple MCPs. Route each through the `why investigators, synthesizer` descriptor (default `inherit-parent`) with the assigned MCP available. Investigators still do not write files; that is a posture even when the MCP-capable execution mode is not mechanically read-only.
 
 Each investigator gets:
 1. The base prompt from `references/investigator-prompt.md`
@@ -116,7 +116,7 @@ If your scope assessment suggests a single-commit trivial target where the PR de
 
 ## Step 4. Synthesize
 
-Dispatch one synthesizer through your configured why-synthesizer descriptor (default `inherit-parent`). Preserve relevant MCP access because the synthesizer's quality check spot-verifies citations. It does not write files.
+Dispatch one synthesizer through the `why investigators, synthesizer` descriptor (default `inherit-parent`). Preserve relevant MCP access because the synthesizer's quality check spot-verifies citations. It does not write files.
 
 The synthesizer gets:
 1. The investigator findings, including any null results and any categories skipped with justification

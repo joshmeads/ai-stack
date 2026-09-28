@@ -7,7 +7,7 @@ description: Spawn three parallel review subagents over the active transcript, s
 
 Mine the current conversation for durable learnings, then route them into skill edits.
 
-**Dispatch contract.** Resolve every configured role through [`provider-dispatch.md`](../poteto-mode/references/provider-dispatch.md). Reviewers need the parent's live MCP surface, so the default and supported portable route is `inherit-parent` (or its `auto` alias). Pass the transcript or digest plus any required evidence paths. On Codex, resolve remaining Claude tool names via [`codex-tools.md`](../poteto-mode/references/codex-tools.md).
+**Dispatch contract.** Resolve every configured role through [`provider-dispatch.md`](../poteto-mode/references/provider-dispatch.md). Reviewers need the parent's live MCP surface, so the default and supported portable route is `inherit-parent` (or its `auto` alias). Pass the transcript or digest plus any required evidence paths. On Codex, resolve remaining Claude tool names via [`codex-tools.md`](../poteto-mode/references/codex-tools.md). Read the named role line using the model-rule resolution and explicit-policy precedence in that reference. A missing line uses the documented default; an invalid or rejected entry remains a dropout, with no closest-model fallback.
 
 ## When to invoke
 
@@ -33,15 +33,15 @@ Start all three read-only lanes in one fan-out phase through provider dispatch. 
 
 | Lens | Model descriptor | Prompt template |
 |---|---|---|
-| Judgment | your configured reflect-judgment choice (default `inherit-parent`) | `references/judgment-reviewer.md` |
-| Tooling | your configured reflect-tooling choice (default `inherit-parent`) | `references/tooling-reviewer.md` |
-| Divergent | your configured reflect-judgment choice (default `inherit-parent`) | `references/divergent-reviewer.md` |
+| Judgment | the `reflect tooling, judgment, divergent, synthesizer` line (default `inherit-parent`) | `references/judgment-reviewer.md` |
+| Tooling | the `reflect tooling, judgment, divergent, synthesizer` line (default `inherit-parent`) | `references/tooling-reviewer.md` |
+| Divergent | the `reflect tooling, judgment, divergent, synthesizer` line (default `inherit-parent`) | `references/divergent-reviewer.md` |
 
 Pass each template verbatim, substituting the transcript path or digest where marked. Reviewers return findings in the `Agent` response body.
 
 ### 3. Synthesize
 
-Dispatch one lane using your configured reflect-judgment descriptor (default `inherit-parent`). Preserve relevant MCP access because the synthesizer spot-verifies citations. Use `references/synthesizer.md` verbatim, with each reviewer's full output inlined where marked. The synthesizer returns a structured Accepted / Rejected / Backlog list.
+Dispatch one lane using the `reflect tooling, judgment, divergent, synthesizer` descriptor (default `inherit-parent`). Preserve relevant MCP access because the synthesizer spot-verifies citations. Use `references/synthesizer.md` verbatim, with each reviewer's full output inlined where marked. The synthesizer returns a structured Accepted / Rejected / Backlog list.
 
 ### 4. Structural enforcement check
 
