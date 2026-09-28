@@ -26,6 +26,8 @@ The shared [`task-discipline`](skills/task-discipline/SKILL.md) skill defines co
 
 Review and architecture use Astra, with Fable only if Astra is unavailable. Both default to high effort. Implementation uses Opus 5.5 high, with Astra medium then Sol high as explicit availability fallbacks. These instructions take precedence over pstack's older model defaults. They guide future dispatch; they do not change an active conversation's model or add models to an interface that lacks them.
 
+The shared [`try-to-break-it`](skills/try-to-break-it/SKILL.md) skill complements `prove-it-works` with focused adversarial checks of features and integrations across application platforms. It exercises plausible logic, security, state, and failure scenarios, reports reproducible evidence and coverage gaps, and limits repairs to already-authorized implementation scope.
+
 ## Upstream sources
 
 | Remote | Repository | Purpose |
