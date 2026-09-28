@@ -233,6 +233,7 @@ if grep -Fq 'origin pr merge "$pr" --squash' "$shipping"; then
 fi
 grep -Fq '<verdict-sha>' "$shipping" || shipping_safety_bad="${shipping_safety_bad}Shipping does not preserve the independent verdict head"$'\n'
 grep -Fq 'set `<landing-sha>` to `<current-head>`' "$shipping" || shipping_safety_bad="${shipping_safety_bad}Shipping does not capture the post-rewrite landing head"$'\n'
+grep -Fq 'Only after every required lane passes at `<current-head>` or qualifies for reuse under the rules above, and fresh review, checks/CI, and mergeability checks pass at that head, set `<landing-sha>` to `<current-head>`.' "$shipping" || shipping_safety_bad="${shipping_safety_bad}Shipping does not advance the landing head after all lanes pass or qualify for reuse and fresh checks pass"$'\n'
 grep -Fq 'require the local branch tip to match it' "$shipping" || shipping_safety_bad="${shipping_safety_bad}Shipping compares or merges a published head that the local patch calculation did not inspect"$'\n'
 if grep -Fq '<verified-sha>' "$shipping"; then
   shipping_safety_bad="${shipping_safety_bad}Shipping still conflates the verdict head with the current landing head"$'\n'

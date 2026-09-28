@@ -279,7 +279,7 @@ describe("model matrix", () => {
     const sheet = firstRunSheet(setup);
     const roles = sheet
       .split("\n")
-      .filter((line) => line.includes(": "))
+      .filter((line) => !line.startsWith("#") && line.includes(": "))
       .map((line) => line.slice(0, line.indexOf(": ")));
     expect(roles).toEqual([...SHEET_ROLES]);
     const byFamily = new Map<string, MatrixRow>(

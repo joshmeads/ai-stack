@@ -7,7 +7,7 @@ description: "Spawn N parallel candidates at the same task, pick a base, graft t
 
 Fan out N parallel attempts at the same task. Read every candidate end to end. Pick the strongest as the base. Graft the best ideas from the others into it. Verify the synthesized result.
 
-**Dispatch contract.** Read [`provider-dispatch.md`](../poteto-mode/references/provider-dispatch.md) before fan-out. Configured values are provider-qualified descriptors, not host-native model slugs. The parent starts native and external lanes directly; children never route themselves. On Codex, resolve the remaining Claude tool names via [`codex-tools.md`](../poteto-mode/references/codex-tools.md).
+**Dispatch contract.** Read [`provider-dispatch.md`](../poteto-mode/references/provider-dispatch.md) before fan-out. Configured values are provider-qualified descriptors, not host-native model slugs. The parent starts native and external lanes directly; children never route themselves. On Codex, resolve the remaining Claude tool names via [`codex-tools.md`](../poteto-mode/references/codex-tools.md). Apply the explicit model policy and model-rule resolution there before any defaults below. Under task-discipline, use the approved role model, not a mixed-model review panel.
 
 ## Start
 
@@ -26,7 +26,7 @@ The N candidates will receive the same prompt, so the prompt is the contract.
 
 1. State the artifact each candidate is producing.
 2. Derive the rubric. State what success looks like for *this* task, then turn it into 3-6 concrete gradeable criteria. The rubric is the picker's tool in Phase D. Candidates only see the task.
-3. Pick the runners. Use `arena runners` from the current harness's pstack model sheet when present. Otherwise default to one each on `claude:fable@max`, `codex:gpt-5.6-sol@max`, `grok:grok-4.6@xhigh`, `claude:opus@xhigh`. Spawn more when the arena covers multiple design directions. Same descriptor N times when the work is generation-bound rather than judgment-sensitive.
+3. Pick the runners. Use `arena runners` from the current harness's pstack model sheet when that role line is present. Otherwise default to one each on `claude:fable@max`, `codex:gpt-5.6-sol@max`, `grok:grok-4.6@xhigh`, `claude:opus@xhigh`. Spawn more when the arena covers multiple design directions. Same descriptor N times when the work is generation-bound rather than judgment-sensitive.
 4. Assign output paths. Each candidate writes to its own location (a git worktree where possible, otherwise `/tmp/arena-<slug>/candidate-<n>/`), per the **separate-before-serializing-shared-state** principle skill.
 
 ## Phase B: Fan out
@@ -39,7 +39,7 @@ An external lane counts only when its receipt says `complete` and carries either
 
 ## Phase C: Cross-judge
 
-After all Phase B candidates complete, choose the judge descriptor from `arena cross-judge pool` in the current harness's pstack model sheet when present, otherwise from the runner defaults above. Prefer a provider different from the parent and the likely base candidate. Dispatch one read-only judge through the provider contract. It sees the rubric and completed candidates by path label, scores each criterion, and recommends a base with rationale. It runs in parallel with the parent's reading in Phase D, not with the candidates themselves. Don't dispatch the judge while candidates are still writing.
+After all Phase B candidates complete, choose the judge descriptor from `arena cross-judge pool` in the current harness's pstack model sheet when that role line is present, otherwise from the runner defaults above. Prefer a provider different from the parent and the likely base candidate. Dispatch one read-only judge through the provider contract. It sees the rubric and completed candidates by path label, scores each criterion, and recommends a base with rationale. It runs in parallel with the parent's reading in Phase D, not with the candidates themselves. Don't dispatch the judge while candidates are still writing.
 
 ## Phase D: Pick a base
 
