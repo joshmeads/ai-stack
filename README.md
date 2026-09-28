@@ -20,6 +20,12 @@ python3 scripts/install-local.py --update
 
 The existing installation remains at `~/.local/share/open-pstack` to preserve its links. Both `~/.local/bin/update-ai-stack` and the original `update-open-pstack` command update this fork. The default `main` tracking branch is `origin/main` at `joshmeads/ai-stack`. Updates use `git pull --ff-only`; they never merge other upstream sources automatically.
 
+## Task and subagent defaults
+
+The shared [`task-discipline`](skills/task-discipline/SKILL.md) skill defines complete delivery within scope, plain prose, targeted edits, proportionate tests, and autonomous execution. Questions and problem descriptions receive an assessment without an unrequested fix. The installer links it into all three apps, adds Claude session/subagent hooks, adds startup instructions to Claude and Codex, and installs an always-applied Cursor rule. Parents must include the skill in each child assignment; Codex and Cursor use that instruction rather than a Claude hook.
+
+Review and architecture use Astra, with Fable only if Astra is unavailable. Both default to high effort. Implementation uses Opus 5.5 high, with Astra medium then Sol high as explicit availability fallbacks. These instructions take precedence over pstack's older model defaults. They guide future dispatch; they do not change an active conversation's model or add models to an interface that lacks them.
+
 ## Upstream sources
 
 | Remote | Repository | Purpose |
