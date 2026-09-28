@@ -1,3 +1,64 @@
+# ai-stack
+
+Personal stack for Claude Code, Codex, and Cursor, maintained at [joshmeads/ai-stack](https://github.com/joshmeads/ai-stack). This fork retains [Open Pstack](https://github.com/ericlitman/open-pstack) for Claude/Codex and imports the original [Cursor pstack](https://github.com/cursor/plugins/tree/main/pstack) plus its companion Cursor Team Kit as Git subtrees. Native Cursor files retain their upstream licenses and content.
+
+## Local installation and updates
+
+No marketplace installation is needed. Clone this repository, then run:
+
+```sh
+python3 scripts/install-local.py
+```
+
+The installer links Claude/Codex skills from `plugins/pstack`, Cursor skills and agents from `vendor/cursor-pstack`, and companion skills from `vendor/cursor-team-kit`. It preserves other skills and adds Claude's startup hook. Restart your agent sessions after installing. Use `/poteto-mode` in Claude and Cursor, or `pstack:poteto-mode` in Codex. Model selection remains a separate `setup-pstack` step in each app.
+
+Pull the checkout's tracking branch and refresh links with:
+
+```sh
+python3 scripts/install-local.py --update
+```
+
+The existing installation remains at `~/.local/share/open-pstack` to preserve its links. Both `~/.local/bin/update-ai-stack` and the original `update-open-pstack` command update this fork. The default `main` tracking branch is `origin/main` at `joshmeads/ai-stack`. Updates use `git pull --ff-only`; they never merge other upstream sources automatically.
+
+## Upstream sources
+
+| Remote | Repository | Purpose |
+| --- | --- | --- |
+| `origin` | `joshmeads/ai-stack` | Default fetch, pull, and push |
+| `upstream` | `ericlitman/open-pstack` | Claude/Codex port updates |
+| `cursor` | `cursor/plugins` | Original Cursor pstack and companion skills |
+
+For a fresh clone, add the two source remotes once:
+
+```sh
+git remote add upstream https://github.com/ericlitman/open-pstack.git
+git remote add cursor https://github.com/cursor/plugins.git
+```
+
+Merge Open Pstack updates explicitly:
+
+```sh
+git fetch upstream main
+git merge upstream/main
+```
+
+Cursor pstack 0.15.5 and Cursor Team Kit were imported from `adf3218ca2f5b9971eedc07a76bef22df7701539`. To merge later Cursor changes, start with a clean working tree and split the two source directories in a temporary checkout:
+
+```sh
+git fetch cursor main
+cursor_checkout=$(mktemp -d)
+git worktree add --detach "$cursor_checkout" cursor/main
+pstack_commit=$(git -C "$cursor_checkout" subtree split --quiet --prefix=pstack HEAD)
+kit_commit=$(git -C "$cursor_checkout" subtree split --quiet --prefix=cursor-team-kit HEAD)
+git worktree remove "$cursor_checkout"
+git subtree merge --prefix=vendor/cursor-pstack --squash "$pstack_commit"
+git subtree merge --prefix=vendor/cursor-team-kit --squash "$kit_commit"
+```
+
+Stop and resolve any merge conflicts before proceeding to the next merge. Review and verify the changes, push `main` to `origin`, and rerun the local installer. The Open Pstack sync record below describes its separate Claude/Codex adaptation baseline; importing native Cursor files does not advance that baseline.
+
+---
+
 # open-pstack
 
 [![CI](https://github.com/ericlitman/open-pstack/actions/workflows/ci.yml/badge.svg)](https://github.com/ericlitman/open-pstack/actions/workflows/ci.yml)
