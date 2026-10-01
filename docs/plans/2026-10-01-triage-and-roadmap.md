@@ -133,7 +133,7 @@ Each issue goes through these steps:
 2. Claude moves the card to Planning with `factory-run`.
 3. The planner posts a plan.
 4. `factory-adjudicate` judges the plan with a different model.
-5. Build runs on the Factory branch, and the builder opens the PR as a draft.
+5. Build runs on the Factory branch. Before opening the PR, the builder runs the checks AGENTS.md requires: Bun tests, strict typecheck, static invariants, and plugin validation. Then it opens the PR as a draft. If the build host lacks Bun, as the triage sandbox did, fix the host before the first run. Don't skip the checks.
 6. Claude runs the live gate on the Mac (A3) against the draft head, records the evidence in the PR, and sets the `live-gate` status on that exact head. Only then is the PR marked ready, as AGENTS.md requires.
 7. Unfret reviews the ready PR. The builder fixes the findings. Each new head needs a fresh `live-gate` status, because the status is bound to the head SHA.
 8. Mergify queues the PR once `verify`, `Unfret`, and `live-gate` pass on the same head.
