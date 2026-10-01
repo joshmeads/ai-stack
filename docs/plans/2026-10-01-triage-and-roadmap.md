@@ -8,7 +8,7 @@ Snapshot: `main` at `1c91e65` (Open Pstack 1.5.0, Cursor pstack 0.15.5). Cursor 
 
 | Item | Disposition |
 |---|---|
-| #100 / PR #101 Mergify queue | Add a required `live-gate` check first (section 6). The draft convention can't hold the queue, because Unfret doesn't review drafts. Then land it, record the first queue-merged PR on #100, and close MASTRA-455, which duplicates it. |
+| #100 / PR #101 Mergify queue | Add a required `live-gate` status first (section 6). The draft convention alone can't hold the queue, because Unfret reviews only ready PRs. Then land it, record the first queue-merged PR on #100, and close MASTRA-455, which duplicates it. |
 | factory-run GitHub sources (MASTRA-737) | `begin` requires a Linear issue (`factory-ops.mjs` around line 1463), and `closeout` throws `Delivery item has no Linear issue source`. open-pstack cards have been GitHub-sourced since MASTRA-450. Add a GitHub issue source to `begin` (post prior findings as an issue comment) and to `closeout` (confirm the merged PR closed the issue, or close it with the evidence link). |
 | Live-gate skill (#90, reopened) | #90 was closed as completed, but there's no project verification skill on `main` or in the main checkout. Factory sandboxes have no `bun`, `claude`, `codex`, or `grok` (see the factory triage comments), so the AGENTS.md installed-candidate gate has to run on the Mac. The skill should install a PR head into Claude Code and Codex, run the changed behavior, and write the PR template's evidence block. |
 | Factory reachability | Resolved: `FACTORY_API_URL=https://studio2.tail062eee.ts.net:8444` reaches the API. The open-pstack project is `9af4ac1d-64a8-49d7-9d84-aa8d0e43c347`. |
@@ -102,7 +102,7 @@ Of the 124 upstream-mapped files, 79 differ from Cursor 0.15.5 and 45 are identi
 
 Changes, in order:
 
-1. **Model registry (#103).** One port-owned table lists the families, defaults, efforts, optional entries, and native agent stems. It lives in `provider-dispatch.md`, with a machine-readable copy that the tests read. Upstream-derived files name roles ("`arena runners`; defaults in provider-dispatch.md") instead of slugs, and the tests derive counts from the registry. After this change, GPT-6.1 Sol is one row and a default change touches one file.
+1. **Model registry (#103).** One port-owned table lists the families, efforts, optional entries, native agent stems, and the first-run role defaults (role to model). Users' sheets still override roles. It lives in `provider-dispatch.md`, with a machine-readable copy that the tests read. Upstream-derived files name roles ("`arena runners`; defaults in provider-dispatch.md") instead of slugs, and the tests derive counts from the registry. After this change, GPT-6.1 Sol is one row and a default change touches one file.
 2. **Provider adapter registry (#103).** Each provider gets a `runner/providers/<name>.ts` that implements one interface:
    - preflight and auth classification
    - argv for each access mode
@@ -119,7 +119,9 @@ Changes, in order:
    3. Probe.
    4. Check the ledger.
    5. Update `CHANGES.md`, `NOTICE.md`, and `UPSTREAM.md`.
-   6. Run the live gate.
+   6. Run the CI-equivalent checks locally: Bun tests, strict typecheck, static invariants, plugin validation.
+   7. Run the live gate.
+   8. Merge the reviewed PR before tagging the release.
 
    A sync then becomes an ordinary factory ticket.
 
@@ -131,10 +133,10 @@ Each issue goes through these steps:
 2. Claude moves the card to Planning with `factory-run`.
 3. The planner posts a plan.
 4. `factory-adjudicate` judges the plan with a different model.
-5. Build runs on the Factory branch, and the builder opens the PR.
-6. Unfret reviews, and the builder fixes the findings.
-7. Claude runs the live gate on the Mac (A3), posts the evidence, and sets the `live-gate` check.
-8. Mergify queues the PR once `verify`, `Unfret`, and `live-gate` pass.
+5. Build runs on the Factory branch, and the builder opens the PR as a draft.
+6. Claude runs the live gate on the Mac (A3) against the draft head, records the evidence in the PR, and sets the `live-gate` status on that exact head. Only then is the PR marked ready, as AGENTS.md requires.
+7. Unfret reviews the ready PR. The builder fixes the findings. Each new head needs a fresh `live-gate` status, because the status is bound to the head SHA.
+8. Mergify queues the PR once `verify`, `Unfret`, and `live-gate` pass on the same head.
 9. The builder verifies the merged result and moves the card to Done.
 10. `closeout` closes the GitHub issue (A2) and records findings.
 
@@ -162,4 +164,4 @@ Waves:
 - The installed `factory-ops.mjs`, factory-adjudicate, and babysit-pr match mastra-pilot `main`. factory-run's `SKILL.md` is one paragraph behind MASTRA-735 (the merge notice now comes from the deployment's `pullRequestMerged` override). Reinstall it from `main`.
 - `begin` and `closeout` accept only Linear sources (MASTRA-737). This blocks every open-pstack run.
 - #101 gap: Unfret doesn't review drafts, so a PR has to be non-draft to get `Unfret`. Once it's non-draft, #101 queues it when `verify` and `Unfret` pass, which can happen before the live test. Fix: a required live-gate commit status, posted by the #90 skill for the exact head, listed in `merge_conditions` and in the protection's `success_conditions`. A correction is posted on the #101 Greptile thread.
-- Order: MASTRA-737, then the live-gate check in #101 and its merge, then #90. After that, Wave 1.
+- Order: MASTRA-737, then the live-gate check in #101 and its merge, then #90. After that, Wave 1. Until #90 exists, the operator posts `live-gate` by hand on each PR head, after running the installed-harness test, with a link to the evidence. #101 is merged that way as well.
