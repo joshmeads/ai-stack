@@ -8,7 +8,7 @@ Snapshot: `main` at `1c91e65` (Open Pstack 1.5.0, Cursor pstack 0.15.5). Cursor 
 
 | Item | Disposition |
 |---|---|
-| #100 / PR #101 Mergify queue | Land it. `verify` and `Unfret` pass. Answer Greptile's P1 ("queues before live verdict"): AGENTS.md keeps a PR in draft until live evidence exists, and Mergify does not queue drafts. Record the first queue-merged PR on #100. Then close MASTRA-455, which duplicates it. |
+| #100 / PR #101 Mergify queue | Add a required `live-gate` check first (section 6). The draft convention can't hold the queue, because Unfret doesn't review drafts. Then land it, record the first queue-merged PR on #100, and close MASTRA-455, which duplicates it. |
 | factory-run GitHub sources (MASTRA-737) | `begin` requires a Linear issue (`factory-ops.mjs` around line 1463), and `closeout` throws `Delivery item has no Linear issue source`. open-pstack cards have been GitHub-sourced since MASTRA-450. Add a GitHub issue source to `begin` (post prior findings as an issue comment) and to `closeout` (confirm the merged PR closed the issue, or close it with the evidence link). |
 | Live-gate skill (#90, reopened) | #90 was closed as completed, but there's no project verification skill on `main` or in the main checkout. Factory sandboxes have no `bun`, `claude`, `codex`, or `grok` (see the factory triage comments), so the AGENTS.md installed-candidate gate has to run on the Mac. The skill should install a PR head into Claude Code and Codex, run the changed behavior, and write the PR template's evidence block. |
 | Factory reachability | Resolved: `FACTORY_API_URL=https://studio2.tail062eee.ts.net:8444` reaches the API. The open-pstack project is `9af4ac1d-64a8-49d7-9d84-aa8d0e43c347`. |
@@ -131,10 +131,10 @@ Each issue goes through these steps:
 2. Claude moves the card to Planning with `factory-run`.
 3. The planner posts a plan.
 4. `factory-adjudicate` judges the plan with a different model.
-5. Build runs on the Factory branch, and the builder opens a draft PR.
+5. Build runs on the Factory branch, and the builder opens the PR.
 6. Unfret reviews, and the builder fixes the findings.
-7. Claude runs the live gate on the Mac (A3), posts the evidence, and marks the PR ready.
-8. Mergify queues the PR once `verify` and `Unfret` pass.
+7. Claude runs the live gate on the Mac (A3), posts the evidence, and sets the `live-gate` check.
+8. Mergify queues the PR once `verify`, `Unfret`, and `live-gate` pass.
 9. The builder verifies the merged result and moves the card to Done.
 10. `closeout` closes the GitHub issue (A2) and records findings.
 
