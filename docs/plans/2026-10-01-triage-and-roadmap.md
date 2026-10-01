@@ -111,9 +111,9 @@ Changes, in order:
    - environment stripping
 
    `PROVIDERS`, the route table, and the setup probe rows are derived from this registry, and the tests are table-driven. After this change, Devin needs one adapter, one fixture, and one registry row.
-3. **Port-patch ledger.** A checked-in file lists every intentional divergence with its file, anchor, reason, and issue. Examples: the `disable-model-invocation` flag removed from four skills, the dispatch-contract preface, the sheet-path substitution, and the excluded upstream hunks. `upstream-merge-probe.py` checks that each entry still holds after a merge, and the exclusion list in `UPSTREAM.md` is generated from the ledger.
+3. **Port-patch ledger (#105).** A checked-in file lists every intentional divergence with its file, anchor, reason, and issue. Examples: the `disable-model-invocation` flag removed from four skills, the dispatch-contract preface, the sheet-path substitution, and the excluded upstream hunks. `upstream-merge-probe.py` checks that each entry still holds after a merge, and the exclusion list in `UPSTREAM.md` is generated from the ledger.
 4. **Upstream first for general content.** Skill-body improvements that aren't harness adaptations go to `cursor/plugins`. Local divergence is only for harness adaptation.
-5. **Sync runbook.** Turn the "Incorporate a change" section of `UPSTREAM.md` into a runbook that the factory planner can follow:
+5. **Sync runbook (#106).** Turn the "Incorporate a change" section of `UPSTREAM.md` into a runbook that the factory planner can follow:
    1. Audit.
    2. Merge.
    3. Probe.
@@ -144,7 +144,7 @@ Waves:
 
 - **Wave 0:** #101, the contributor replies, factory-run GitHub sources (A2), and the live-gate skill (A3).
 - **Wave 1, sequential:** #25, then #34 with #78, then #58 with #94, then #56.
-- **Wave 2:** the model registry, then the provider adapter registry, then the port-patch ledger.
+- **Wave 2:** the model registry and provider adapter registry (#103), then the port-patch ledger (#105) and the sync runbook (#106).
 - **Wave 3, parallel after Wave 2:** the models tracking issue (GPT-6.1 Sol, #85, #54), the providers (#71, #69, #37, #68), and #49, #46, and #80.
 - **Wave 4:** upstream proposals for #41, #42, #45, and #47.
 - **Parked:** #13.
@@ -163,5 +163,5 @@ Waves:
 
 - The installed `factory-ops.mjs`, factory-adjudicate, and babysit-pr match mastra-pilot `main`. factory-run's `SKILL.md` is one paragraph behind MASTRA-735 (the merge notice now comes from the deployment's `pullRequestMerged` override). Reinstall it from `main`.
 - `begin` and `closeout` accept only Linear sources (MASTRA-737). This blocks every open-pstack run.
-- #101 gap: Unfret doesn't review drafts, so a PR has to be non-draft to get `Unfret`. Once it's non-draft, #101 queues it when `verify` and `Unfret` pass, which can happen before the live test. Fix: a required `live-gate` commit status, posted by the #90 skill on the exact PR head. It gates queue entry only: list it in the protection's `success_conditions` and the queue's `queue_conditions`, not in `merge_conditions`. Mergify validates a temporary queue head that the installed-harness test never sees, so `live-gate` there could never be satisfied (and `checks_timeout: null` would wait forever). `merge_conditions` keep `verify` and `Unfret` for the queue head. With `batch_size: 1`, the queue head is the tested PR head merged onto current `main`. A PR whose live run predates a `main` change that touches the plugin is rebased and re-tested before it queues. A correction is posted on the #101 Greptile thread.
+- #101 gap: Unfret doesn't review drafts, so a PR has to be non-draft to get `Unfret`. Once it's non-draft, #101 queues it when `verify` and `Unfret` pass, which can happen before the live test. Fix requirement: the commit that merges must be the commit the installed-harness test ran on, and the queue must never wait on a check that nothing can post. The likely shape, to be confirmed in the #101 session against Mergify's docs: in-place queue checks (empty `merge_conditions`, `batch_size: 1`, so Mergify creates no draft batch PR), and `queue_conditions` that require `-draft`, `verify`, `Unfret`, `live-gate` (a commit status that the #90 skill posts on the exact head), and the branch being up to date with `main`. With the merge-commit method and an up-to-date branch, the merged tree is the tested tree. Any `main` change forces a rebase, which creates a new head that needs fresh `verify`, `Unfret`, and `live-gate`. Corrections are posted on the #101 Greptile thread.
 - Order: MASTRA-737, then the live-gate check in #101 and its merge, then #90. After that, Wave 1. Until #90 exists, the operator posts `live-gate` by hand on each PR head, after running the installed-harness test, with a link to the evidence. #101 is merged that way as well.
