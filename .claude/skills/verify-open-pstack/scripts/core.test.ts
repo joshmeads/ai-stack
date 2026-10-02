@@ -16,7 +16,7 @@ export function evidence(r: Receipt): void {
   for (const harness of HARNESSES) {
     r.installations.push({ harness, sha: r.sha, cliVersion: 'test', pluginVersion: '1.5.0',
       location: '/tmp/candidate/plugin', home: `/tmp/${harness}`, treeHash: 'c'.repeat(64) });
-    for (const feature of [...r.selection.features, ...(r.selfTest ? ['project-skill'] : [])]) {
+    for (const feature of new Set([...r.selection.features, ...(r.selfTest ? ['project-skill'] : [])])) {
       r.observations.push({ harness, feature, surface: 'native skill', action: 'invoke', observed: 'fixture changed',
         transcript: '/tmp/log', transcriptHash: 'c'.repeat(64), reviewer: 'operator',
         artifacts: [{ path: '/tmp/artifact', sha256: 'd'.repeat(64) }] });
@@ -61,6 +61,14 @@ describe('registry and ownership', () => {
     for (const filename of ['plugins/pstack/new.ts', 'plugins/pstack/skills/architect/scripts/new.ts', '/absolute', '../escape', 'plugins/pstack/skills/new/SKILL.md']) {
       expect(() => classify([{ filename }], registry)).toThrow();
     }
+  });
+  test('project-local verification changes cannot bypass their native self-test', () => {
+    const r = receipt(true);
+    r.selection = classify([{ filename: '.claude/skills/verify-open-pstack/scripts/verify.ts' }], registry);
+    expect(r.selection.noRuntime).toBe(false);
+    expect(r.selection.features).toEqual(['project-skill']);
+    evidence(r);
+    expect(() => completeEvidence(r)).not.toThrow();
   });
   test('docs and CI only select no harnesses', () => {
     const s = classify([{ filename: 'README.md' }, { filename: '.github/workflows/ci.yml' }], registry);

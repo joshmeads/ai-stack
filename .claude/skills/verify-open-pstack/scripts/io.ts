@@ -1,5 +1,5 @@
 import { createHash } from 'node:crypto';
-import { lstat, mkdir, readFile, readdir, realpath, writeFile } from 'node:fs/promises';
+import { lstat, mkdir, readFile, readdir, realpath, rename, writeFile } from 'node:fs/promises';
 import { isAbsolute, join, relative, resolve } from 'node:path';
 
 export type Command = (args: string[], options?: { cwd?: string; env?: Record<string, string>; interactive?: boolean }) => Promise<string>;
@@ -28,7 +28,8 @@ export function isolatedEnv(home: string, harness?: 'claude' | 'codex', credenti
   return env;
 }
 export async function save(path: string, value: unknown): Promise<void> {
-  await writeFile(path, JSON.stringify(value, null, 2) + '\n', { mode: 0o600 });
+  await writeFile(path + '.tmp', redact(JSON.stringify(value, null, 2)) + '\n', { mode: 0o600 });
+  await rename(path + '.tmp', path);
 }
 export async function freshRoot(path: string, repository: string): Promise<string> {
   if (!isAbsolute(path)) throw new Error('Output must be an absolute fresh directory outside the repository');

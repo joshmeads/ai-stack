@@ -3,7 +3,7 @@ import { HARNESSES, REPO, type ChangedFile, type Receipt, type Registry, type Se
 export function validateRegistry(value: unknown): Registry {
   if (!value || typeof value !== 'object') throw new Error('Invalid feature registry');
   const r = value as Registry;
-  for (const key of ['skills', 'shared', 'setup', 'runner', 'tools', 'nonRuntime'] as const) {
+  for (const key of ['skills', 'shared', 'setup', 'runner', 'tools', 'project', 'nonRuntime'] as const) {
     if (!Array.isArray(r[key]) || r[key].some(v => typeof v !== 'string' || !v || v.includes('..'))) {
       throw new Error(`Invalid registry.${key}`);
     }
@@ -29,7 +29,7 @@ export function classify(files: ChangedFile[], registry: Registry): Selection {
       ['setup', 'runner', 'shipped-tools'].forEach(f => features.add(f));
       covered = true;
     }
-    for (const [key, feature] of [['setup', 'setup'], ['runner', 'runner'], ['tools', 'shipped-tools']] as const) {
+    for (const [key, feature] of [['setup', 'setup'], ['runner', 'runner'], ['tools', 'shipped-tools'], ['project', 'project-skill']] as const) {
       if (registry[key].some(p => matches(path, p))) { features.add(feature); covered = true; }
     }
     const skill = /^plugins\/pstack\/skills\/([^/]+)\/(.+)$/.exec(path);
@@ -54,7 +54,7 @@ export function newReceipt(pr: number, sha: string, base: string, selfTest: bool
 }
 
 export function requiredFeatures(receipt: Receipt): string[] {
-  return [...receipt.selection.features, ...(receipt.selfTest ? ['project-skill'] : [])];
+  return [...new Set([...receipt.selection.features, ...(receipt.selfTest ? ['project-skill'] : [])])];
 }
 
 export function completeEvidence(receipt: Receipt): void {
@@ -62,7 +62,7 @@ export function completeEvidence(receipt: Receipt): void {
   if (!features.length && !receipt.selection.noRuntime) throw new Error('No classification');
   for (const harness of features.length ? HARNESSES : []) {
     const installs = receipt.installations.filter(i => i.harness === harness && i.sha === receipt.sha);
-    if (installs.length !== 1 || !installs[0]!.location || !installs[0]!.treeHash) throw new Error(`Missing installation: ${harness}`);
+    if (installs.length !== 1 || !installs[0]!.location || !/^[a-f0-9]{64}$/.test(installs[0]!.treeHash) || !installs[0]!.cliVersion || !installs[0]!.pluginVersion || !installs[0]!.home) throw new Error(`Missing installation: ${harness}`);
     for (const feature of features) {
       const records = receipt.observations.filter(o => o.harness === harness && o.feature === feature);
       if (records.length !== 1) throw new Error(`Missing/duplicate evidence: ${harness}/${feature}`);
@@ -72,5 +72,6 @@ export function completeEvidence(receipt: Receipt): void {
           o.artifacts.some(a => !a.path || !/^[a-f0-9]{64}$/.test(a.sha256))) throw new Error(`Incomplete evidence: ${harness}/${feature}`);
     }
   }
+  if (receipt.installations.length !== (features.length ? HARNESSES.length : 0) || receipt.observations.length !== features.length * HARNESSES.length) throw new Error('Extra installation or evidence');
   if (receipt.failure) throw new Error(receipt.failure);
 }

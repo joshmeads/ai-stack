@@ -12,8 +12,9 @@ This is a repository-local, non-shipped skill shared with Codex through `.agents
 ```sh
 (cd .claude/skills/verify-open-pstack && bun install --frozen-lockfile)
 PR=123 # supplied delivery PR number
-EVIDENCE="$(mktemp -d "${TMPDIR:-/tmp}/open-pstack-evidence.XXXXXX")"
-.claude/skills/verify-open-pstack/scripts/verify.sh doctor --output "$EVIDENCE"
+SESSION="$(mktemp -d "${TMPDIR:-/tmp}/open-pstack-evidence.XXXXXX")"
+EVIDENCE="$SESSION/live" # must not exist yet
+.claude/skills/verify-open-pstack/scripts/verify.sh doctor --output "$SESSION/probe"
 .claude/skills/verify-open-pstack/scripts/verify.sh run --pr "$PR" --self-test --output "$EVIDENCE"
 ```
 

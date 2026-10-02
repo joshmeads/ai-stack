@@ -9,6 +9,7 @@
 | `setup` | Installed setup/model configuration |
 | `runner` | Installed parent invoking real configured provider lanes |
 | `tools` | Installed parent invoking the changed shipped CLI |
+| `project` | Native discovery/invocation of this verifier in both harnesses |
 | `nonRuntime` | Explicit repository documentation/CI/assets/tests; no plugin harness launch |
 
 Skill-owned `SKILL.md`, `references/**`, and `playbooks/**` select their skill. Additional executable paths must be registered explicitly. Shared consumed mappings select every dependent skill conservatively. The coverage test inventories all tracked plugin files; new unmapped files block CI and runs. Deleted skill surfaces cannot silently disappear from evidence: choose a surviving documented entry point demonstrating the intended removal, or report blocked.
@@ -20,4 +21,4 @@ The four documents below define sub-features, user entry points, driving instruc
 - `runner.md`: parent-to-child provider dispatch and receipts.
 - `shipped-tools.md`: orchestration, watch, plan checks, audit, and evidence logging.
 
-An ordinary repository-only change is `no runtime change`. `--self-test` adds a separate `project-skill` exercise in each harness without changing that classification. It is mandatory for this skill's delivery PR. Plugin-runtime proof and local CLI proof remain separate.
+Explicit non-runtime repository changes are `no runtime change`. Changes to this verifier always select `project-skill`; they cannot bypass native proof. `--self-test` also selects that exercise, deduplicated in each harness, and is mandatory for this skill's delivery PR. Plugin-runtime proof and local CLI proof remain separate.

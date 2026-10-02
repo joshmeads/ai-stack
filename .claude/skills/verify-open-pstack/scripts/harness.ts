@@ -72,7 +72,7 @@ export class MacDriver implements Driver {
       const env = isolatedEnv(home, harness, true);
       const request = { sha: receipt.sha, harness, workspace, features: requiredFeatures(receipt),
         featureMap: join(workspace, '.claude/skills/verify-open-pstack/features'),
-        selfTest: receipt.selfTest ? 'Invoke the project skill natively; run only doctor with fresh output outside workspace. Do not invoke run or publish recursively.' : false };
+        selfTest: requiredFeatures(receipt).includes('project-skill') ? 'Invoke the project skill natively; run only doctor with fresh output outside workspace. Do not invoke run or publish recursively.' : false };
       await save(join(receipt.artifactRoot, `${harness}-request.json`), request);
       console.log(JSON.stringify(request, null, 2));
       const login = await this.review(`Authenticate only in this isolated ${harness} home if needed. Launch an unrecorded login session now? Type LOGIN or SKIP (API key already supplied).`);

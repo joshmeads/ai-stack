@@ -39,10 +39,11 @@
     "plugins/pstack/skills/poteto-mode/scripts/check-plan.tsconfig.json",
     "plugins/pstack/skills/show-me-your-work/scripts/log.sh"
   ],
+  "project": [".claude/skills/verify-open-pstack/**", ".agents/skills/verify-open-pstack"],
   "nonRuntime": [
     "README.md", "AGENTS.md", "CLAUDE.md", "CHANGES.md", "LICENSE", "LICENSE.md", "UPSTREAM.md",
     ".gitignore", ".mergify.yml", ".github/**", "docs/**", "assets/**", "tests/**",
-    "scripts/**", ".claude/skills/verify-open-pstack/**", ".agents/skills/verify-open-pstack",
+    "scripts/**",
     "plugins/pstack/assets/**", "plugins/pstack/skills/poteto-mode/scripts/bootstrap.test.ts",
     "plugins/pstack/skills/poteto-mode/scripts/check-plan.test.ts"
   ]

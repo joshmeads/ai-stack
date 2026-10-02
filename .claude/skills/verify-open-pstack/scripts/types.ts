@@ -13,6 +13,7 @@ export interface Registry {
   setup: string[];
   runner: string[];
   tools: string[];
+  project: string[];
   nonRuntime: string[];
 }
 export interface Selection { paths: string[]; skills: string[]; features: string[]; noRuntime: boolean }
