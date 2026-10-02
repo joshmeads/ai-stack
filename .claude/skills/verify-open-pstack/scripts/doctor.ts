@@ -1,9 +1,9 @@
-import { mkdir } from 'node:fs/promises';
+import { mkdir, realpath } from 'node:fs/promises';
 import { join } from 'node:path';
 import { command, isolatedEnv, save, type Command } from './io.ts';
 
 export async function doctor(root: string, run: Command = command, platform = process.platform): Promise<void> {
-  const report: Record<string, unknown> = { platform, date: new Date().toISOString(), skill: import.meta.dir + '/..', checks: {} };
+  const report: Record<string, unknown> = { platform, date: new Date().toISOString(), skill: await realpath(join(import.meta.dir, '..')), checks: {} };
   const checks = report.checks as Record<string, string>;
   try {
     if (platform !== 'darwin') throw new Error('Live gate requires an operator Mac (Darwin)');

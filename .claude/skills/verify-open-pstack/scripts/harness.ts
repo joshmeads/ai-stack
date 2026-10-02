@@ -32,6 +32,16 @@ export function verifyCodexEnabled(output: string): void {
   const plugins = Array.isArray(result.installed) ? result.installed.filter((p: Record<string, unknown>) => p.name === 'pstack' && p.marketplaceName === 'open-pstack') : [];
   if (plugins.length !== 1 || plugins[0].installed !== true || plugins[0].enabled !== true) throw new Error('Isolated Codex plugin is not installed and enabled');
 }
+export async function verifyProjectDoctor(texts: string[], workspace: string): Promise<void> {
+  const expected = await realpath(join(workspace, '.claude/skills/verify-open-pstack'));
+  for (const text of texts) {
+    try {
+      const d = JSON.parse(text);
+      if (d.result === 'pass' && typeof d.skill === 'string' && await realpath(d.skill) === expected) return;
+    } catch { /* Other reviewed artifacts need not be doctor reports. */ }
+  }
+  throw new Error('Self-test requires the pinned project skill\'s passing child doctor.json');
+}
 export class MacDriver implements Driver {
   constructor(private run: Command = command, private review: Ask = ask) {}
   async prepare(receipt: Receipt): Promise<Installation[]> {
@@ -95,9 +105,7 @@ export class MacDriver implements Driver {
         }
         if (feature === 'project-skill') {
           const doctors = await Promise.all(artifacts.map(a => readFile(join(receipt.artifactRoot, a.path), 'utf8')));
-          if (!doctors.some(text => { try { const d = JSON.parse(text); return d.result === 'pass' && d.skill === join(workspace, '.claude/skills/verify-open-pstack/scripts/..'); } catch { return false; } })) {
-            throw new Error('Self-test requires the pinned project skill\'s passing child doctor.json');
-          }
+          await verifyProjectDoctor(doctors, workspace);
         }
         if (await this.review(`Operator: type PASS ${feature} only after reviewing the native transcript and artifacts; anything else fails.`) !== `PASS ${feature}`) {
           throw new Error(`Operator rejected ${harness}/${feature}`);

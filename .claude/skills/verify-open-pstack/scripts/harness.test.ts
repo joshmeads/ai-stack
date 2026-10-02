@@ -1,9 +1,9 @@
 import { afterEach, describe, expect, test } from 'bun:test';
-import { mkdtemp, mkdir, readFile, rm, symlink, writeFile } from 'node:fs/promises';
+import { mkdtemp, mkdir, readFile, realpath, rm, symlink, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { doctor } from './doctor.ts';
-import { codexInstallation, launch, verifyCodexEnabled } from './harness.ts';
+import { codexInstallation, launch, verifyCodexEnabled, verifyProjectDoctor } from './harness.ts';
 import { freshRoot, isolatedEnv, redact, retainedFile, treeHash, type Command } from './io.ts';
 const roots: string[] = [];
 async function fixture(): Promise<string> { const root = await mkdtemp(join(tmpdir(), 'pstack-test-')); roots.push(root); return root; }
@@ -44,6 +44,24 @@ describe('isolated harness boundaries', () => {
     await doctor(root, run, 'darwin');
     expect(JSON.parse(await readFile(join(root, 'doctor.json'), 'utf8')).result).toBe('pass');
     expect(calls.every(c => c.includes('--help') || c.includes('--version'))).toBe(true);
+  });
+  test('project self-test accepts real doctor output through canonical workspace paths', async () => {
+    const root = await fixture(), workspace = join(root, 'workspace');
+    const skill = await realpath(join(import.meta.dir, '..'));
+    await mkdir(join(workspace, '.claude/skills'), { recursive: true });
+    await symlink(skill, join(workspace, '.claude/skills/verify-open-pstack'));
+    const alias = join(root, 'workspace-alias'); await symlink(workspace, alias);
+    const run: Command = async args => args.includes('--version') ? 'version' : '--plugin-dir --settings --setting-sources --json local path';
+    await doctor(root, run, 'darwin');
+    const text = await readFile(join(root, 'doctor.json'), 'utf8');
+    expect(JSON.parse(text).skill).toBe(skill);
+    await verifyProjectDoctor(['not JSON', text], workspace);
+    await verifyProjectDoctor([text], alias);
+    const other = join(root, 'other-workspace');
+    await mkdir(join(other, '.claude/skills/verify-open-pstack'), { recursive: true });
+    await expect(verifyProjectDoctor([text], other)).rejects.toThrow('passing child doctor');
+    await expect(verifyProjectDoctor(['{}'], workspace)).rejects.toThrow('passing child doctor');
+    await expect(verifyProjectDoctor([JSON.stringify({ ...JSON.parse(text), result: 'blocked' })], workspace)).rejects.toThrow('passing child doctor');
   });
   test('Codex exact installed tree and enabled listing are required', async () => {
     const root = await fixture(), plugin = join(root, 'config/plugins/pstack');
