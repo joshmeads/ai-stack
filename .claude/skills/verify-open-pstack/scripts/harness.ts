@@ -69,13 +69,13 @@ export class MacDriver implements Driver {
     const observations: Observation[] = [];
     for (const installation of receipt.installations) {
       const { harness, home } = installation, workspace = join(home, 'workspace');
-      const env = isolatedEnv(home, harness, true);
+      const env = isolatedEnv(home, harness);
       const request = { sha: receipt.sha, harness, workspace, features: requiredFeatures(receipt),
         featureMap: join(workspace, '.claude/skills/verify-open-pstack/features'),
         selfTest: requiredFeatures(receipt).includes('project-skill') ? 'Invoke the project skill natively; run only doctor with fresh output outside workspace. Do not invoke run or publish recursively.' : false };
       await save(join(receipt.artifactRoot, `${harness}-request.json`), request);
       console.log(JSON.stringify(request, null, 2));
-      const login = await this.review(`Authenticate only in this isolated ${harness} home if needed. Launch an unrecorded login session now? Type LOGIN or SKIP (API key already supplied).`);
+      const login = await this.review(`Authenticate only in this isolated ${harness} home if needed. Launch an unrecorded login session now? Type LOGIN or SKIP (already authenticated in this isolated home).`);
       if (login === 'LOGIN') await this.run(harness === 'claude' ? ['claude', 'auth', 'login'] : ['codex', 'login'], { cwd: workspace, env, interactive: true });
       else if (login !== 'SKIP') throw new Error('Expected LOGIN or SKIP');
       const raw = join(home, 'surface.raw');

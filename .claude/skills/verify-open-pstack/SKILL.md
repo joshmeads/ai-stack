@@ -44,7 +44,7 @@ Retain `doctor.json`, `receipt.json`, installed provenance, redacted transcripts
 
 Only complete evidence publishes `live-gate=success` on the pinned SHA, targeting the evidence-comment URL; only then may this run mark a draft ready. Failure records its reason and, where possible, publishes failure against that same SHA. A changed head aborts; detected post-write races withdraw old-head success and restore draft if this run made it ready. GitHub mutations are not atomic; failed compensation is recorded prominently. Never attach the old run to a new head.
 
-The builder opens this delivery as a draft and does **not** run publication. The Mac operator supplies live evidence. Workflow changes require explicit operator queue submission. If Mergify creates another head, rerun on it; never hand-post a replacement status or reuse an old receipt. Queue policy/recovery is outside this skill.
+The builder opens this delivery as a draft and does **not** run publication. The Mac operator supplies live evidence. For this delivery, Mergify queues automatically once `verify`, `Unfret`, and `live-gate` pass and the PR is ready; no manual queue submission is required. If Mergify creates another head, rerun on it; never hand-post a replacement status or reuse an old receipt. Queue policy/recovery is outside this skill.
 
 ## Cleanup
 

@@ -16,15 +16,12 @@ export const command: Command = async (args, options = {}) => {
 export function redact(text: string): string {
   return text.replace(/(?:gh[pousr]_[\w]+|github_pat_[\w]+|sk-[\w-]+|Bearer\s+\S+)/gi, '[REDACTED]');
 }
-export function isolatedEnv(home: string, harness?: 'claude' | 'codex', credentials = false): Record<string, string> {
+export function isolatedEnv(home: string, harness?: 'claude' | 'codex'): Record<string, string> {
   const env: Record<string, string> = { PATH: (process.env.PATH ?? '').split(':').filter(isAbsolute).join(':'),
     HOME: home, TMPDIR: join(home, 'tmp'), TERM: process.env.TERM ?? 'xterm-256color',
     GIT_CONFIG_GLOBAL: '/dev/null', GIT_CONFIG_SYSTEM: '/dev/null' };
   if (harness === 'claude') env.CLAUDE_CONFIG_DIR = join(home, 'config');
   if (harness === 'codex') env.CODEX_HOME = join(home, 'config');
-  if (credentials) for (const name of ['ANTHROPIC_API_KEY', 'OPENAI_API_KEY']) {
-    if (process.env[name]) env[name] = process.env[name]!;
-  }
   return env;
 }
 export async function save(path: string, value: unknown): Promise<void> {

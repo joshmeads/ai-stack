@@ -13,16 +13,23 @@ describe('isolated harness boundaries', () => {
   test('candidate environment never carries publisher credentials or daily config', () => {
     process.env.GH_TOKEN = 'test-publisher-token'; process.env.CODEX_HOME = '/daily/codex';
     process.env.CLAUDE_CONFIG_DIR = '/daily/claude';
+    const oldAnthropic = process.env.ANTHROPIC_API_KEY, oldOpenai = process.env.OPENAI_API_KEY;
+    process.env.ANTHROPIC_API_KEY = 'daily-anthropic'; process.env.OPENAI_API_KEY = 'daily-openai';
     try {
       for (const harness of ['claude', 'codex'] as const) {
         const env = isolatedEnv('/run/home', harness);
         expect(env.GH_TOKEN).toBeUndefined(); expect(env.GITHUB_TOKEN).toBeUndefined();
+        expect(env.ANTHROPIC_API_KEY).toBeUndefined(); expect(env.OPENAI_API_KEY).toBeUndefined();
         expect(env.HOME).toBe('/run/home'); expect(env.GIT_CONFIG_GLOBAL).toBe('/dev/null');
         expect(JSON.stringify(env)).not.toContain('/daily/');
       }
       expect(launch('claude', '/run/home', '/candidate')).toEqual(['claude', '--plugin-dir', '/candidate/plugins/pstack', '--settings', '/run/home/settings.json', '--setting-sources', '']);
       expect(launch('codex', '/run/home', '/candidate')).toEqual(['codex']);
-    } finally { delete process.env.GH_TOKEN; delete process.env.CODEX_HOME; delete process.env.CLAUDE_CONFIG_DIR; }
+    } finally {
+      delete process.env.GH_TOKEN; delete process.env.CODEX_HOME; delete process.env.CLAUDE_CONFIG_DIR;
+      if (oldAnthropic === undefined) delete process.env.ANTHROPIC_API_KEY; else process.env.ANTHROPIC_API_KEY = oldAnthropic;
+      if (oldOpenai === undefined) delete process.env.OPENAI_API_KEY; else process.env.OPENAI_API_KEY = oldOpenai;
+    }
   });
   test('doctor blocks non-Mac and missing isolation interfaces, retaining reasons', async () => {
     const root = await fixture();
