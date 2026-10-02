@@ -1,5 +1,6 @@
 # CHANGES — applied substitutions
 
+Mergify auto-queue is live: ready PRs to main require passing verify, Unfret and exact-head live-gate; workflow changes require operator queueing.
 This port applies the Cursor → Claude Code substitutions in skill bodies. Earlier drafts left them flagged; this revision resolves them. A later pass added a Codex build that shares the same skills; see [Codex port](#codex-port) below.
 
 ## 1.5.0 syncs to Cursor pstack 0.15.5
