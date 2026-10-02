@@ -1,0 +1,70 @@
+import { afterEach, describe, expect, test } from 'bun:test';
+import { mkdtemp, mkdir, readFile, rm, symlink, writeFile } from 'node:fs/promises';
+import { tmpdir } from 'node:os';
+import { join } from 'node:path';
+import { doctor } from './doctor.ts';
+import { codexInstallation, launch, verifyCodexEnabled } from './harness.ts';
+import { freshRoot, isolatedEnv, redact, retainedFile, treeHash, type Command } from './io.ts';
+const roots: string[] = [];
+async function fixture(): Promise<string> { const root = await mkdtemp(join(tmpdir(), 'pstack-test-')); roots.push(root); return root; }
+afterEach(async () => { for (const root of roots.splice(0)) await rm(root, { recursive: true, force: true }); });
+
+describe('isolated harness boundaries', () => {
+  test('candidate environment never carries publisher credentials or daily config', () => {
+    process.env.GH_TOKEN = 'test-publisher-token'; process.env.CODEX_HOME = '/daily/codex';
+    process.env.CLAUDE_CONFIG_DIR = '/daily/claude';
+    try {
+      for (const harness of ['claude', 'codex'] as const) {
+        const env = isolatedEnv('/run/home', harness);
+        expect(env.GH_TOKEN).toBeUndefined(); expect(env.GITHUB_TOKEN).toBeUndefined();
+        expect(env.HOME).toBe('/run/home'); expect(env.GIT_CONFIG_GLOBAL).toBe('/dev/null');
+        expect(JSON.stringify(env)).not.toContain('/daily/');
+      }
+      expect(launch('claude', '/run/home', '/candidate')).toEqual(['claude', '--plugin-dir', '/candidate/plugins/pstack', '--settings', '/run/home/settings.json', '--setting-sources', '']);
+      expect(launch('codex', '/run/home', '/candidate')).toEqual(['codex']);
+    } finally { delete process.env.GH_TOKEN; delete process.env.CODEX_HOME; delete process.env.CLAUDE_CONFIG_DIR; }
+  });
+  test('doctor blocks non-Mac and missing isolation interfaces, retaining reasons', async () => {
+    const root = await fixture();
+    const run: Command = async args => args.includes('--version') ? 'version' : '';
+    await expect(doctor(root, run, 'linux')).rejects.toThrow('operator Mac');
+    expect(JSON.parse(await readFile(join(root, 'doctor.json'), 'utf8')).result).toBe('blocked');
+    await expect(doctor(root, run, 'darwin')).rejects.toThrow('isolation missing');
+  });
+  test('doctor probes without installing or reading daily authentication', async () => {
+    const calls: string[][] = [], root = await fixture();
+    const run: Command = async args => { calls.push(args); return args.includes('--version') ? 'version' : '--plugin-dir --settings --setting-sources --json local path'; };
+    await doctor(root, run, 'darwin');
+    expect(JSON.parse(await readFile(join(root, 'doctor.json'), 'utf8')).result).toBe('pass');
+    expect(calls.every(c => c.includes('--help') || c.includes('--version'))).toBe(true);
+  });
+  test('Codex exact installed tree and enabled listing are required', async () => {
+    const root = await fixture(), plugin = join(root, 'config/plugins/pstack');
+    await mkdir(plugin, { recursive: true }); await writeFile(join(plugin, 'SKILL.md'), 'candidate');
+    const hash = await treeHash(plugin), receipt = JSON.stringify({ name: 'pstack', marketplaceName: 'open-pstack', installedPath: plugin });
+    expect(await codexInstallation(receipt, root, hash)).toBe(plugin);
+    await expect(codexInstallation(receipt, root, 'bad')).rejects.toThrow('differs');
+    await expect(codexInstallation('{}', root, hash)).rejects.toThrow('Unrecognized');
+    expect(() => verifyCodexEnabled(JSON.stringify({ installed: [{ name: 'pstack', marketplaceName: 'open-pstack', installed: true, enabled: true }] }))).not.toThrow();
+    expect(() => verifyCodexEnabled(JSON.stringify({ installed: [{ name: 'pstack', marketplaceName: 'open-pstack', installed: true, enabled: false }] }))).toThrow('enabled');
+    const outside = await fixture(); await writeFile(join(outside, 'SKILL.md'), 'candidate');
+    await expect(codexInstallation(JSON.stringify({ name: 'pstack', marketplaceName: 'open-pstack', installedPath: outside }), root, hash)).rejects.toThrow('escaped');
+  });
+  test('plugin symlinks and evidence outside retained root are rejected', async () => {
+    const root = await fixture(), outside = await fixture();
+    await writeFile(join(outside, 'secret'), 'outside'); await symlink(join(outside, 'secret'), join(root, 'escape'));
+    await expect(treeHash(root)).rejects.toThrow('symlink');
+    await expect(retainedFile(root, 'escape')).rejects.toThrow('within output');
+    await writeFile(join(root, 'reviewed.txt'), 'native surface');
+    expect((await retainedFile(root, 'reviewed.txt')).sha256).toMatch(/^[a-f0-9]{64}$/);
+    await mkdir(join(root, 'state')); await writeFile(join(root, 'state/raw'), 'raw');
+    await expect(retainedFile(root, 'state/raw')).rejects.toThrow('outside isolated state');
+  });
+  test('output must be fresh and outside the repository', async () => {
+    const root = await fixture(), repo = join(root, 'repo'); await mkdir(repo);
+    await expect(freshRoot(join(repo, 'output'), repo)).rejects.toThrow('outside');
+    await expect(freshRoot(root, repo)).rejects.toThrow();
+    expect(await freshRoot(join(root, 'output'), repo)).toBe(join(root, 'output'));
+    expect(redact('ghp_testsecret sk-providersecret Bearer abc')).toBe('[REDACTED] [REDACTED] [REDACTED]');
+  });
+});

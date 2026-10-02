@@ -7,6 +7,8 @@ Selected interfaces:
 - Codex: a fresh `HOME` and `CODEX_HOME`; add the pinned checkout as a local marketplace with `codex plugin marketplace add <checkout> --json`, then `codex plugin add pstack@open-pstack --json`. Start a new interactive task after installation. Do not use the daily profile.
 - Both: a fresh candidate checkout, run-owned state, minimal inherited environment, interactive login inside isolated state or operator-provided provider credentials, and fresh native sessions. The publisher's GitHub credentials are never passed to the candidate or either harness.
 
+The Codex JSON contract was checked against OpenAI's `codex-rs/cli/src/plugin_cmd.rs` at tag `rust-v0.160.0`: `JsonPluginAddOutput` uses camelCase `name`, `marketplaceName`, and `installedPath`; `JsonPluginListOutput.installed` contains `installed` and `enabled`. Unknown schemas fail closed rather than searching arbitrary caches for a plausible tree.
+
 Phase 3 checks these CLI flags at runtime and verifies the installed plugin file tree against the pinned checkout. If either interface is absent or its installed tree cannot be established, stop. A help probe cannot substitute for actual installation/discovery. The build sandbox cannot supply the required Mac surface proof; delivery remains a draft for the operator's doctor and self-test.
 
 `doctor` records versions/help without installing or reading daily credentials. `run` uses the approved interfaces only after a passing doctor and an exact-head pin. Evidence remains outside the checkout. Cleanup is explicit operator removal of the named run-owned state after reviewing the receipt; never clean up a daily home.
