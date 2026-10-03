@@ -443,7 +443,7 @@ preloaded_agent_output="$(
     --effort max \
     --max-turns 5 \
     --tools Agent \
-    < /dev/null 2>&1
+    < /dev/null 2>&1 || true
 )"
 check "poteto-agent preloaded skill" "Laziness Protocol" "$preloaded_agent_output"
 
