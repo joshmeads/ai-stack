@@ -37,7 +37,7 @@ Then ask whether to keep these role-to-family assignments or change named roles.
 
 ### 3. Parse per-family efforts
 
-Read the model matrix. Every non-alias value must match `<provider>:<model>@<effort>`. Map it to exactly one matrix family by `(provider, model)`, require its effort to appear in that row's Selectable efforts cell, and collect the effort. Reject `ultra` for every row whose Selectable efforts cell does not list it. `inherit-parent` and `auto` rows carry no family effort.
+Read the model matrix. Every non-alias value must match `<provider>:<model>@<effort>`. Map it to exactly one matrix family by `(provider, model)`, matching a kept `codex:gpt-5.6-sol` to the Sol row, require its effort to appear in that row's Selectable efforts cell, and collect the effort. Reject `ultra` for every row whose Selectable efforts cell does not list it. `inherit-parent` and `auto` rows carry no family effort.
 
 An unmatched provider/model, out-of-domain effort, or duplicate role is inconsistent state. Stop, show the conflicting rows verbatim, and ask for an explicit matrix family or alias replacement. If one or more families have mixed efforts, show every conflicting family and role row, then ask for one normalized effort per family from its Selectable efforts cell. Do not invent a precedence rule. Do not probe or write while any inconsistency is unresolved.
 
@@ -69,7 +69,7 @@ Build the new sheet in memory. Do not write it yet.
 - First run: start from the complete role assignments in step 7, with the step 2 role changes applied.
 - Rerun: start from the normalized complete role map from step 2, with the step 2 role changes applied, preserving each loaded row's lane order and family (or alias) per lane.
 
-Rewrite every matrix-family descriptor to `provider:model@<requested effort for that family>`, using the Sol model chosen in step 2. Leave `inherit-parent` and `auto` unchanged. An effort-only rerun cannot change a role's family. Changing Grok's effort updates every Grok occurrence and does not move a Sol role onto Grok. Refuse an unqualified slug, an unavailable route, a model outside the model matrix, or a provider/model mismatch.
+Rewrite every matrix-family descriptor to `provider:model@<requested effort for that family>`, using the Sol model chosen in step 2. Leave `inherit-parent` and `auto` unchanged. An effort-only rerun cannot change a role's family. Changing Grok's effort updates every Grok occurrence and does not move a Sol role onto Grok. Refuse an unqualified slug, an unavailable route, a model outside the model matrix other than a kept `gpt-5.6-sol`, or a provider/model mismatch.
 
 ### 7. Confirm and commit
 

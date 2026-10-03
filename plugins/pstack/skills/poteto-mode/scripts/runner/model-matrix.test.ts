@@ -259,6 +259,8 @@ describe("model matrix", () => {
     expect(setup).toContain(
       "Reject `ultra` for every row whose Selectable efforts cell does not list it."
     );
+    expect(setup).toContain("matching a kept `codex:gpt-5.6-sol` to the Sol row");
+    expect(setup).toContain("other than a kept `gpt-5.6-sol`");
   });
 
   it("ships exactly the declared Claude-native frontier agents", () => {
