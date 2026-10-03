@@ -272,6 +272,62 @@ afterEach(() => {
 });
 
 describe("runLane", () => {
+  for (const startup of ["dotenv", "bunfig", "bun-options", "node-options", "combined"]) {
+    it(`shipped launcher startup isolation: ${startup}`, async () => {
+      const input = options("codex", startup);
+      const captured = join(scratch, "provider-env.txt");
+      const bunPreload = join(scratch, "bun-preload.ran");
+      const nodePreload = join(scratch, "node-preload.ran");
+      const env: Record<string, string> = {
+        PATH: process.env.PATH!,
+        PSTACK_ENV_CAPTURE: captured,
+        PSTACK_INHERITED_ENV_SENTINEL: "inherited-from-parent",
+      };
+      if (startup === "dotenv" || startup === "combined") {
+        writeFileSync(join(scratch, ".env"), "PSTACK_PROJECT_ENV_SENTINEL=loaded-from-project-dotenv\n");
+        writeFileSync(join(scratch, ".env.local"), "PSTACK_LOCAL_ENV_SENTINEL=loaded-from-project-local-dotenv\n");
+      }
+      if (startup === "bunfig" || startup === "combined") {
+        writeFileSync(join(scratch, "bunfig.toml"), 'preload = ["./project-preload.ts"]\n');
+        writeFileSync(join(scratch, "project-preload.ts"),
+          `await Bun.write(${JSON.stringify(bunPreload)}, "project preload ran");\n`);
+      }
+      if (startup === "bun-options" || startup === "combined") {
+        writeFileSync(join(scratch, "startup.env"), "PSTACK_PROJECT_ENV_SENTINEL=loaded-from-bun-options\n");
+        env.BUN_OPTIONS = "--env-file=./startup.env";
+      }
+      if (startup === "node-options" || startup === "combined") {
+        writeFileSync(join(scratch, "project-preload.cjs"),
+          `require("node:fs").writeFileSync(${JSON.stringify(nodePreload)}, "node preload ran");\n`);
+        env.NODE_OPTIONS = "--require=./project-preload.cjs";
+      }
+      writeFileSync(join(bin, "codex"), `#!/bin/sh
+if [ "$1" = "login" ]; then
+  printf '%s\\n' 'Logged in using ChatGPT'
+  exit 0
+fi
+printf '%s\\n' "\${PSTACK_PROJECT_ENV_SENTINEL-unset}" "\${PSTACK_LOCAL_ENV_SENTINEL-unset}" "\${PSTACK_INHERITED_ENV_SENTINEL-unset}" "\${BUN_OPTIONS-unset}" "\${NODE_OPTIONS-unset}" > "$PSTACK_ENV_CAPTURE"
+printf '%s\\n' '{"type":"thread.started","thread_id":"isolated"}' '{"type":"item.completed","item":{"type":"agent_message","text":"CODEX_OK"}}' '{"type":"turn.completed","usage":{"input_tokens":1,"output_tokens":1}}'
+`);
+      chmodSync(join(bin, "codex"), 0o755);
+      const runner = Bun.spawn(runnerArgs(input), {
+        cwd: scratch,
+        env,
+        stdout: "pipe",
+        stderr: "pipe",
+      });
+      const stdout = new Response(runner.stdout).text();
+      const stderr = new Response(runner.stderr).text();
+      expect(await exitWithin(runner, 3_000)).toBe(0);
+      await Promise.all([stdout, stderr]);
+      expect(readFileSync(captured, "utf8")).toBe("unset\nunset\ninherited-from-parent\nunset\nunset\n");
+      expect(existsSync(bunPreload)).toBe(false);
+      expect(existsSync(nodePreload)).toBe(false);
+      expect(readFileSync(input.outputPath, "utf8")).toContain("CODEX_OK");
+      expect(receipt(input.receiptPath)).toMatchObject({ status: "complete" });
+    });
+  }
+
   for (const provider of ["claude", "codex", "grok"] as const) {
     it(`executes and receipts the ${provider} external lane`, async () => {
       const input = options(provider);
@@ -683,7 +739,6 @@ describe("runLane", () => {
     const isolatedRunner = join(scratch, "isolated-runner");
     cpSync(import.meta.dir, isolatedRunner, { recursive: true });
     const runner = Bun.spawn([
-      process.execPath,
       join(isolatedRunner, "pstack-runner"),
       ...runnerArgs(input).slice(1),
     ], {
