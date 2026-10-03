@@ -71,6 +71,17 @@ describe('isolated harness boundaries', () => {
       calls.push(args);
       const env = options.env!;
       const config = env.CODEX_HOME ?? env.CLAUDE_CONFIG_DIR;
+      for (const path of [env.HOME!, env.TMPDIR!]) {
+        const info = await stat(path);
+        expect(info.isDirectory()).toBe(true);
+        expect(info.mode & 0o777).toBe(0o700);
+      }
+      if (options.cwd) expect((await stat(options.cwd)).isDirectory()).toBe(true);
+      if (args[0] === 'claude' && env.CLAUDE_CONFIG_DIR) {
+        const settings = join(env.HOME!, 'settings.json');
+        expect(JSON.parse(await readFile(settings, 'utf8'))).toEqual({});
+        expect((await stat(settings)).mode & 0o777).toBe(0o600);
+      }
       if (config) {
         const info = await stat(config);
         expect(info.isDirectory()).toBe(true);
