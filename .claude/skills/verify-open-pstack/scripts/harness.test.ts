@@ -1,9 +1,10 @@
 import { afterEach, describe, expect, test } from 'bun:test';
-import { mkdtemp, mkdir, readFile, realpath, rm, symlink, writeFile } from 'node:fs/promises';
+import { cp, mkdtemp, mkdir, readFile, realpath, rm, stat, symlink, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { doctor } from './doctor.ts';
-import { codexInstallation, launch, verifyCodexEnabled, verifyProjectDoctor } from './harness.ts';
+import { codexInstallation, launch, MacDriver, verifyCodexEnabled, verifyProjectDoctor } from './harness.ts';
+import { newReceipt } from './core.ts';
 import { freshRoot, isolatedEnv, redact, retainedFile, treeHash, type Command } from './io.ts';
 const roots: string[] = [];
 async function fixture(): Promise<string> { const root = await mkdtemp(join(tmpdir(), 'pstack-test-')); roots.push(root); return root; }
@@ -62,6 +63,50 @@ describe('isolated harness boundaries', () => {
     await expect(verifyProjectDoctor([text], other)).rejects.toThrow('passing child doctor');
     await expect(verifyProjectDoctor(['{}'], workspace)).rejects.toThrow('passing child doctor');
     await expect(verifyProjectDoctor([JSON.stringify({ ...JSON.parse(text), result: 'blocked' })], workspace)).rejects.toThrow('passing child doctor');
+  });
+  test('prepare creates private configuration homes before any harness command', async () => {
+    const root = await fixture(), sha = 'a'.repeat(40), calls: string[][] = [];
+    const platform = Object.getOwnPropertyDescriptor(process, 'platform')!;
+    const run: Command = async (args, options = {}) => {
+      calls.push(args);
+      const env = options.env!;
+      const config = env.CODEX_HOME ?? env.CLAUDE_CONFIG_DIR;
+      if (config) {
+        const info = await stat(config);
+        expect(info.isDirectory()).toBe(true);
+        expect(info.mode & 0o777).toBe(0o700);
+        expect(config).toBe(join(env.HOME!, 'config'));
+        expect(env.GH_TOKEN).toBeUndefined();
+      }
+      if (args[0] === 'git' && args[1] === 'clone') {
+        const plugin = join(args.at(-1)!, 'plugins/pstack');
+        for (const manifest of ['.claude-plugin', '.codex-plugin']) {
+          await mkdir(join(plugin, manifest), { recursive: true });
+          await writeFile(join(plugin, manifest, 'plugin.json'), JSON.stringify({ version: 'test' }));
+        }
+      }
+      if (args[0] === 'git' && args[1] === 'rev-parse') return sha;
+      if (args.includes('--version')) return 'version';
+      if (args.includes('--help')) return '--plugin-dir --settings --setting-sources --json local path';
+      if (args[0] === 'codex' && args[1] === 'plugin') {
+        expect(env.CODEX_HOME).toBeDefined();
+        if (args[2] === 'marketplace') return '{}';
+        if (args[2] === 'add') {
+          const installedPath = join(env.CODEX_HOME!, 'plugins/pstack');
+          await cp(join(env.HOME!, 'workspace/plugins/pstack'), installedPath, { recursive: true });
+          return JSON.stringify({ name: 'pstack', marketplaceName: 'open-pstack', installedPath });
+        }
+        if (args[2] === 'list') return JSON.stringify({ installed: [{ name: 'pstack', marketplaceName: 'open-pstack', installed: true, enabled: true }] });
+      }
+      return '';
+    };
+    try {
+      Object.defineProperty(process, 'platform', { ...platform, value: 'darwin' });
+      const installs = await new MacDriver(run).prepare(newReceipt(111, sha, 'b'.repeat(40), true, root));
+      expect(installs.map(i => i.harness)).toEqual(['claude', 'codex']);
+      expect(installs.every(i => i.sha === sha)).toBe(true);
+      expect(calls.some(c => c.join(' ') === 'codex plugin add pstack@open-pstack --json')).toBe(true);
+    } finally { Object.defineProperty(process, 'platform', platform); }
   });
   test('Codex exact installed tree and enabled listing are required', async () => {
     const root = await fixture(), plugin = join(root, 'config/plugins/pstack');

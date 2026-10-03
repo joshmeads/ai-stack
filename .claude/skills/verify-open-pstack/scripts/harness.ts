@@ -51,6 +51,7 @@ export class MacDriver implements Driver {
     for (const harness of HARNESSES) {
       const home = join(root, 'state', harness), workspace = join(home, 'workspace');
       await mkdir(join(home, 'tmp'), { recursive: true, mode: 0o700 });
+      await mkdir(join(home, 'config'), { recursive: true, mode: 0o700 });
       const env = isolatedEnv(home, harness);
       await this.run(['git', 'clone', '--no-checkout', '--', `https://github.com/${REPO}.git`, workspace], { env });
       await this.run(['git', 'fetch', 'origin', receipt.sha], { cwd: workspace, env });
