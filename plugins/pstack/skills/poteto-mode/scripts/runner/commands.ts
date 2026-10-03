@@ -55,10 +55,6 @@ function grokTools(mode: AccessMode): string {
   return [...readonly, ...(mode === "isolated-write" ? ["search_replace"] : [])].join(",");
 }
 
-function permissionMode(mode: AccessMode): string {
-  return mode === "read-only" ? "plan" : "acceptEdits";
-}
-
 function effortOverride(effort: Effort): string {
   return `model_reasoning_effort=${JSON.stringify(effort)}`;
 }
@@ -75,7 +71,8 @@ export function invocationCommand(options: RunnerOptions): CommandSpec {
           "--effort",
           options.effort,
           "--permission-mode",
-          permissionMode(options.mode),
+          // The Claude lane has no OS sandbox, so auto mode on read-only could let Bash write.
+          options.mode === "read-only" ? "plan" : "auto",
           "--setting-sources",
           "project",
           "--strict-mcp-config",

@@ -139,7 +139,7 @@ describe("invocationCommand", () => {
     expect(claude.args).toEqual(
       expect.arrayContaining([
         "--permission-mode",
-        "acceptEdits",
+        "auto",
         "--tools",
         "Read,Write,Edit,Grep,Glob,Bash",
       ])
