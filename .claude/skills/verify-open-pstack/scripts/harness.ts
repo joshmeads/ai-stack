@@ -14,7 +14,7 @@ export const ask: Ask = async question => {
 };
 export function launch(harness: Harness, home: string, workspace: string): string[] {
   return harness === 'claude'
-    ? ['claude', '--plugin-dir', join(workspace, 'plugins/pstack'), '--settings', join(home, 'settings.json'), '--setting-sources', '']
+    ? ['claude', '--plugin-dir', join(workspace, 'plugins/pstack'), '--settings', join(home, 'settings.json'), '--setting-sources', 'project']
     : ['codex'];
 }
 export async function codexInstallation(output: string, home: string, expected: string): Promise<string> {

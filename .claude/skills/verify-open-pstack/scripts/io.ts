@@ -22,6 +22,9 @@ export function isolatedEnv(home: string, harness?: 'claude' | 'codex'): Record<
   const env: Record<string, string> = { PATH: (process.env.PATH ?? '').split(':').filter(isAbsolute).join(':'),
     HOME: realHome, TMPDIR: join(home, 'tmp'), TERM: process.env.TERM ?? 'xterm-256color',
     GIT_CONFIG_GLOBAL: '/dev/null', GIT_CONFIG_SYSTEM: '/dev/null' };
+  for (const name of ['USER', 'LOGNAME']) {
+    if (process.env[name] !== undefined) env[name] = process.env[name];
+  }
   if (harness === 'claude') env.CLAUDE_CONFIG_DIR = join(home, 'config');
   if (harness === 'codex') env.CODEX_HOME = join(home, 'config');
   return env;

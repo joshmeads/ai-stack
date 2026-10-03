@@ -26,12 +26,30 @@ describe('isolated harness boundaries', () => {
         expect(env[harness === 'claude' ? 'CLAUDE_CONFIG_DIR' : 'CODEX_HOME']).toBe('/run/home/config');
         expect(JSON.stringify(env)).not.toContain('/daily/');
       }
-      expect(launch('claude', '/run/home', '/candidate')).toEqual(['claude', '--plugin-dir', '/candidate/plugins/pstack', '--settings', '/run/home/settings.json', '--setting-sources', '']);
+      expect(launch('claude', '/run/home', '/candidate')).toEqual(['claude', '--plugin-dir', '/candidate/plugins/pstack', '--settings', '/run/home/settings.json', '--setting-sources', 'project']);
       expect(launch('codex', '/run/home', '/candidate')).toEqual(['codex']);
     } finally {
       delete process.env.GH_TOKEN; delete process.env.CODEX_HOME; delete process.env.CLAUDE_CONFIG_DIR;
       if (oldAnthropic === undefined) delete process.env.ANTHROPIC_API_KEY; else process.env.ANTHROPIC_API_KEY = oldAnthropic;
       if (oldOpenai === undefined) delete process.env.OPENAI_API_KEY; else process.env.OPENAI_API_KEY = oldOpenai;
+    }
+  });
+  test('candidate environment preserves real account names without inventing an account', () => {
+    const previous = { USER: process.env.USER, LOGNAME: process.env.LOGNAME };
+    process.env.USER = 'operator-user'; process.env.LOGNAME = 'operator-login';
+    try {
+      for (const harness of ['claude', 'codex'] as const) {
+        const env = isolatedEnv('/run/home', harness);
+        expect(env.USER).toBe('operator-user'); expect(env.LOGNAME).toBe('operator-login');
+        expect(process.env.HOME).toBe(env.HOME);
+      }
+      delete process.env.USER; delete process.env.LOGNAME;
+      const env = isolatedEnv('/run/home', 'claude');
+      expect(env.USER).toBeUndefined(); expect(env.LOGNAME).toBeUndefined();
+    } finally {
+      for (const name of ['USER', 'LOGNAME'] as const) {
+        if (previous[name] === undefined) delete process.env[name]; else process.env[name] = previous[name];
+      }
     }
   });
   test('doctor blocks non-Mac and missing isolation interfaces, retaining reasons', async () => {
