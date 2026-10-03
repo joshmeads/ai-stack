@@ -59,12 +59,6 @@ function permissionMode(mode: AccessMode): string {
   return mode === "read-only" ? "plan" : "acceptEdits";
 }
 
-// Headless Grok cancels the whole turn on a permission prompt. Its auto mode reports a
-// blocked call to the model instead, and the read-only sandbox still blocks writes.
-function grokPermissionMode(mode: AccessMode): string {
-  return mode === "read-only" ? "auto" : "acceptEdits";
-}
-
 function effortOverride(effort: Effort): string {
   return `model_reasoning_effort=${JSON.stringify(effort)}`;
 }
@@ -134,8 +128,11 @@ export function invocationCommand(options: RunnerOptions): CommandSpec {
           options.model,
           "--reasoning-effort",
           options.effort,
+          // Headless Grok cancels the whole turn on a permission prompt, in both access modes.
+          // Auto mode reports a blocked call to the model instead; the sandbox still confines
+          // writes (read-only, or workspace for isolated-write).
           "--permission-mode",
-          grokPermissionMode(options.mode),
+          "auto",
           "--sandbox",
           grokSandbox(options.mode),
           "--tools",
