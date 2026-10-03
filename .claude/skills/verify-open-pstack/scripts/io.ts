@@ -17,8 +17,10 @@ export function redact(text: string): string {
   return text.replace(/(?:gh[pousr]_[\w]+|github_pat_[\w]+|sk-[\w-]+|Bearer\s+\S+)/gi, '[REDACTED]');
 }
 export function isolatedEnv(home: string, harness?: 'claude' | 'codex'): Record<string, string> {
+  const realHome = process.env.HOME;
+  if (!realHome || !isAbsolute(realHome)) throw new Error('A real absolute HOME is required; never substitute a temporary home');
   const env: Record<string, string> = { PATH: (process.env.PATH ?? '').split(':').filter(isAbsolute).join(':'),
-    HOME: home, TMPDIR: join(home, 'tmp'), TERM: process.env.TERM ?? 'xterm-256color',
+    HOME: realHome, TMPDIR: join(home, 'tmp'), TERM: process.env.TERM ?? 'xterm-256color',
     GIT_CONFIG_GLOBAL: '/dev/null', GIT_CONFIG_SYSTEM: '/dev/null' };
   if (harness === 'claude') env.CLAUDE_CONFIG_DIR = join(home, 'config');
   if (harness === 'codex') env.CODEX_HOME = join(home, 'config');

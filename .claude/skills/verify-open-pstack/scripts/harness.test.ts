@@ -21,7 +21,9 @@ describe('isolated harness boundaries', () => {
         const env = isolatedEnv('/run/home', harness);
         expect(env.GH_TOKEN).toBeUndefined(); expect(env.GITHUB_TOKEN).toBeUndefined();
         expect(env.ANTHROPIC_API_KEY).toBeUndefined(); expect(env.OPENAI_API_KEY).toBeUndefined();
-        expect(env.HOME).toBe('/run/home'); expect(env.GIT_CONFIG_GLOBAL).toBe('/dev/null');
+        expect(process.env.HOME).toBe(env.HOME); expect(env.GIT_CONFIG_GLOBAL).toBe('/dev/null');
+        expect(env.TMPDIR).toBe('/run/home/tmp');
+        expect(env[harness === 'claude' ? 'CLAUDE_CONFIG_DIR' : 'CODEX_HOME']).toBe('/run/home/config');
         expect(JSON.stringify(env)).not.toContain('/daily/');
       }
       expect(launch('claude', '/run/home', '/candidate')).toEqual(['claude', '--plugin-dir', '/candidate/plugins/pstack', '--settings', '/run/home/settings.json', '--setting-sources', '']);
@@ -71,14 +73,16 @@ describe('isolated harness boundaries', () => {
       calls.push(args);
       const env = options.env!;
       const config = env.CODEX_HOME ?? env.CLAUDE_CONFIG_DIR;
-      for (const path of [env.HOME!, env.TMPDIR!]) {
+      expect(process.env.HOME).toBe(env.HOME);
+      expect((await stat(env.HOME!)).isDirectory()).toBe(true);
+      for (const path of [env.TMPDIR!]) {
         const info = await stat(path);
         expect(info.isDirectory()).toBe(true);
         expect(info.mode & 0o777).toBe(0o700);
       }
       if (options.cwd) expect((await stat(options.cwd)).isDirectory()).toBe(true);
       if (args[0] === 'claude' && env.CLAUDE_CONFIG_DIR) {
-        const settings = join(env.HOME!, 'settings.json');
+        const settings = join(env.CLAUDE_CONFIG_DIR, '..', 'settings.json');
         expect(JSON.parse(await readFile(settings, 'utf8'))).toEqual({});
         expect((await stat(settings)).mode & 0o777).toBe(0o600);
       }
@@ -86,7 +90,8 @@ describe('isolated harness boundaries', () => {
         const info = await stat(config);
         expect(info.isDirectory()).toBe(true);
         expect(info.mode & 0o777).toBe(0o700);
-        expect(config).toBe(join(env.HOME!, 'config'));
+        expect(config).toBe(join(env.TMPDIR!, '..', 'config'));
+        expect(config.startsWith(root + '/state/')).toBe(true);
         expect(env.GH_TOKEN).toBeUndefined();
       }
       if (args[0] === 'git' && args[1] === 'clone') {
@@ -104,7 +109,7 @@ describe('isolated harness boundaries', () => {
         if (args[2] === 'marketplace') return '{}';
         if (args[2] === 'add') {
           const installedPath = join(env.CODEX_HOME!, 'plugins/pstack');
-          await cp(join(env.HOME!, 'workspace/plugins/pstack'), installedPath, { recursive: true });
+          await cp(join(env.CODEX_HOME!, '..', 'workspace/plugins/pstack'), installedPath, { recursive: true });
           return JSON.stringify({ name: 'pstack', marketplaceName: 'open-pstack', installedPath });
         }
         if (args[2] === 'list') return JSON.stringify({ installed: [{ name: 'pstack', marketplaceName: 'open-pstack', installed: true, enabled: true }] });
