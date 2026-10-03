@@ -110,6 +110,8 @@ ${vault ? `(deny file-read* file-write* (subpath ${quote(vault)}))` : ''}
 (deny process-exec (literal "/usr/bin/security"))
 (deny network-outbound (remote unix-socket (path-regex #".*")))
 (deny network-outbound (remote ip "localhost:*"))
+; Keep this rule last: Seatbelt's later read denials otherwise override root traversal.
+(allow file-read* (literal "/"))
 `;
 }
 export async function createSandbox(home: string, run: Command = command, deniedVaultRoot?: string): Promise<string> {

@@ -155,6 +155,13 @@ describe('disposable credential boundary', () => {
     expect(() => sandboxProfile(base, '/Users/operator', [], base)).toThrow('must not overlap');
     expect(() => sandboxProfile(root, '/Users/operator', [], base)).toThrow('must not overlap');
   });
+  test('root-read exception is the final Seatbelt rule after all read denials', () => {
+    const text = sandboxProfile('/private/run/candidate', '/Users/operator', ['/opt/homebrew/bin/bun']);
+    const rules = text.trim().split('\n').filter(line => !line.startsWith(';'));
+    expect(rules.at(-1)).toBe('(allow file-read* (literal "/"))');
+    expect(text.lastIndexOf('(allow file-read* (literal "/"))')).toBeGreaterThan(text.lastIndexOf('(deny file-read*'));
+    expect(text.lastIndexOf('(allow file-read* (literal "/"))')).toBeGreaterThan(text.lastIndexOf('(deny network-outbound (remote ip "localhost:*"))'));
+  });
   test('Seatbelt contract denies daily files, Keychain IPC, security execution, and arbitrary writes', () => {
     const text = sandboxProfile('/private/run/candidate', '/Users/operator', ['/opt/homebrew/bin/bun']);
     expect(text).toContain('(deny file-read* file-write* (subpath "/Users/operator"))');
