@@ -4,7 +4,7 @@ import { createInterface } from 'node:readline/promises';
 import { requiredFeatures } from './core.ts';
 import { command, interruption, isolatedEnv, redact, retainedFile, save, treeHash, type Command } from './io.ts';
 import { doctor } from './doctor.ts';
-import { copyCredentials, createSandbox, protectSources, removeCredentials, sandboxed, selectedAccounts, vaultRoot } from './isolation.ts';
+import { copyCredentials, createSandbox, protectSources, registerSessionCredentials, removeCredentials, sandboxed, selectedAccounts, vaultRoot } from './isolation.ts';
 import { sourceDigest, sourceHash } from './provenance.ts';
 import { validateMacTests } from './verify.ts';
 import { HARNESSES, REPO, type Accounts, type Driver, type Harness, type Installation, type Observation, type Receipt } from './types.ts';
@@ -50,11 +50,20 @@ export class MacDriver implements Driver {
   private profiles = new Map<string, string>();
   constructor(private run: Command = command, private review: Ask = ask, private accounts?: Accounts,
     private boundary: typeof createSandbox = createSandbox) {}
-  async cleanup(): Promise<void> { await removeCredentials(this.copied, this.profiles, this.run); }
+  async cleanup(): Promise<void> {
+    try {
+      for (const home of this.profiles.keys()) await registerSessionCredentials(home);
+    } finally {
+      await removeCredentials(this.copied, this.profiles, this.run);
+    }
+  }
   private candidate(home: string): Command {
     const profile = this.profiles.get(home);
     if (!profile) throw new Error('Candidate sandbox not established');
-    return (args, options = {}) => this.run(sandboxed(profile, args), { ...options, env: isolatedEnv(home) });
+    return async (args, options = {}) => {
+      try { return await this.run(sandboxed(profile, args), { ...options, env: isolatedEnv(home) }); }
+      finally { await registerSessionCredentials(home); }
+    };
   }
   async prepare(receipt: Receipt): Promise<Installation[]> {
     const root = receipt.artifactRoot;

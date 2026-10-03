@@ -113,10 +113,8 @@ export async function verify(options: { pr: number; selfTest: boolean; root: str
     await phase('publish'); await revalidateEvidence(receipt);
     receipt.commentUrl = await github.comment(receipt.pr, evidence(receipt)); await persist(receipt);
     const pull = await current(); await revalidateEvidence(receipt);
-    const body = liveEvidenceBody(pull.body, receipt);
-    await github.body(receipt.pr, body);
-    if ((await current()).body !== body) throw new Error('PR live-evidence body update was not retained');
-    await revalidateEvidence(receipt);
+    receipt.proposedTemplate = liveEvidenceBody(pull.body, receipt);
+    await persist(receipt); await current(); await revalidateEvidence(receipt);
     successAttempted = true;
     await github.status(receipt.sha, 'success', receipt.commentUrl, receipt.selection.noRuntime ? 'no runtime change' : 'All mapped features passed in both harnesses');
     receipt.status = 'success'; await persist(receipt); await current(); await revalidateEvidence(receipt);
@@ -148,13 +146,15 @@ export async function verify(options: { pr: number; selfTest: boolean; root: str
     if (successAttempted && receipt.commentUrl) await recover('withdraw success on pinned SHA', async () => {
       await github.status(receipt.sha, 'failure', receipt.commentUrl!, 'Verification aborted; rerun required'); receipt.status = 'failure';
     });
-    // A failed/ambiguous readiness response does not establish ownership of that transition.
-    if (receipt.madeReady) await recover('restore draft', async () => { await github.draft(receipt.pr); receipt.madeReady = false; });
-    if (!successAttempted) await recover('publish pinned failure', async () => {
-      await current();
-      receipt.commentUrl = await github.comment(receipt.pr, evidence(receipt)); await current();
-      await github.status(receipt.sha, 'failure', receipt.commentUrl, 'Verification failed; see retained evidence'); receipt.status = 'failure'; await current();
-    });
+    if (!successAttempted) {
+      await recover('publish failure evidence', async () => {
+        await current();
+        receipt.commentUrl = await github.comment(receipt.pr, evidence(receipt));
+      });
+      await recover('publish pinned failure', async () => {
+        await github.status(receipt.sha, 'failure', receipt.commentUrl ?? `https://github.com/${REPO}/pull/${receipt.pr}`, 'Verification failed; see retained evidence'); receipt.status = 'failure';
+      });
+    }
     await recover('persist compensation receipt', async () => { await persist(receipt); });
     throw new Error(receipt.failure);
   }

@@ -26,10 +26,9 @@ function fixture(runtime = false, selfTest = false) {
   const github: GitHub = {
     async pull() { mark('pull'); return structuredClone(pull); },
     async files(base, head) { expect(base).toBe(BASE); expect(head).toBe(SHA); mark('files'); return [{ filename: runtime ? 'plugins/pstack/skills/architect/SKILL.md' : 'README.md' }]; },
-    async body(_pr, body) { mark('body'); pull.body = body; },
     async comment(_pr, body) { mark('comment'); expect(body).toContain(SHA); return URL; },
-    async status(sha, state, target) { mark(`status:${state}:${sha}`); expect(target).toBe(URL); },
-    async ready() { mark('ready'); pull.draft = false; }, async draft() { mark('draft'); pull.draft = true; },
+    async status(sha, state, target) { mark(`status:${state}:${sha}`); expect([URL, `https://github.com/${REPO}/pull/123`]).toContain(target); },
+    async ready() { mark('ready'); pull.draft = false; },
   };
   const driver: Driver = {
     async prepare(r) {
@@ -80,12 +79,13 @@ describe('exact-head publication state machine', () => {
     expect(receipt.status).toBe('success'); expect(receipt.sha).toBe(SHA);
     expect(evidence(receipt)).toContain('no runtime change');
     expect(f.calls).not.toContain('prepare'); expect(f.calls).not.toContain('exercise');
-    expect(f.calls.indexOf('comment')).toBeLessThan(f.calls.indexOf('body'));
-    expect(f.calls.indexOf('body')).toBeLessThan(f.calls.indexOf(`status:success:${SHA}`));
+    expect(f.calls.indexOf('comment')).toBeLessThan(f.calls.indexOf(`status:success:${SHA}`));
     expect(f.calls.indexOf(`status:success:${SHA}`)).toBeLessThan(f.calls.indexOf('ready'));
-    expect(f.pull.body).toContain(URL); expect(f.pull.body).toContain('Retain these notes.'); expect(f.pull.body).not.toContain('_pending_');
-    expect(f.pull.body).toContain('- [x] The installed version, action, and observed result appear below.');
-    expect(liveEvidenceBody(f.pull.body, receipt)).toBe(f.pull.body);
+    expect(f.calls.filter(call => call === 'ready')).toHaveLength(1); expect(f.calls).not.toContain('draft');
+    expect(f.calls).not.toContain('body');
+    expect(f.pull.body).toContain('_pending_');
+    expect(receipt.proposedTemplate).toContain(URL);
+    expect(receipt.proposedTemplate).toContain('Retain these notes.');
   });
   test('unmanaged evidence replacement preserves every following heading and operator note', async () => {
     const receipt = await verify(fixture().options);
@@ -159,23 +159,28 @@ describe('exact-head publication state machine', () => {
   test('publication failure does not repeat an already completed cleanup', async () => {
     const f = fixture(true);
     f.options.driver.cleanup = async () => { f.calls.push('cleanup'); };
-    f.hook(call => { if (call === 'body') throw new Error('publisher failed'); });
+    f.hook(call => { if (call === 'comment') throw new Error('publisher failed'); });
     await expect(verify(f.options)).rejects.toThrow('publisher failed');
     expect(f.calls.filter(call => call === 'cleanup')).toHaveLength(1);
     expect(f.saved.at(-1)?.cleanup).toContain('removed');
   });
-  test('body readback must confirm installed evidence before success or readiness', async () => {
-    const f = fixture(); f.options.github.body = async () => {};
-    await expect(verify(f.options)).rejects.toThrow('body update was not retained');
-    expect(f.calls).not.toContain(`status:success:${SHA}`); expect(f.calls).not.toContain('ready');
+  test('concurrent author body edits are untouched and the operator proposal is retained', async () => {
+    const f = fixture(), edited = '# Author revision\nUnrelated edits must survive.';
+    expect('body' in f.options.github).toBe(false);
+    f.hook(call => { if (call === 'comment') f.pull.body = edited; });
+    const receipt = await verify(f.options);
+    expect(f.pull.body).toBe(edited); expect(f.calls).not.toContain('body');
+    expect(receipt.proposedTemplate).toContain('Live evidence:'); expect(receipt.proposedTemplate).toContain(URL);
+    expect(f.saved.at(-1)?.proposedTemplate).toBe(receipt.proposedTemplate);
   });
   test('already-ready PR stays ready when publication fails', async () => {
-    const f = fixture(); f.pull.draft = false; f.hook(call => { if (call === 'body') throw new Error('body denied'); });
-    await expect(verify(f.options)).rejects.toThrow('body denied'); expect(f.calls).not.toContain('draft'); expect(f.pull.draft).toBe(false);
+    const f = fixture(); f.pull.draft = false; f.hook(call => { if (call === 'comment') throw new Error('comment denied'); });
+    await expect(verify(f.options)).rejects.toThrow('comment denied'); expect(f.calls).not.toContain('draft'); expect(f.pull.draft).toBe(false);
+    expect(f.calls).toContain(`status:failure:${SHA}`);
   });
   test('transcript or artifact overwrite after acceptance prevents publication and readiness', async () => {
     for (const file of ['retained.log', 'fixture.json']) {
-      for (const boundary of ['exercise', 'comment', 'body', `status:success:${SHA}`]) {
+      for (const boundary of ['exercise', 'comment', `status:success:${SHA}`]) {
         const f = fixture(true); f.hook(call => { if (call === boundary) writeFileSync(join(f.options.root, file), 'overwritten'); });
         await expect(verify(f.options)).rejects.toThrow('changed after acceptance'); expect(f.calls).not.toContain('ready');
         if (boundary === `status:success:${SHA}`) expect(f.calls).toContain(`status:failure:${SHA}`);
@@ -198,11 +203,12 @@ describe('exact-head publication state machine', () => {
     }
   });
   test('head movement during classify, prepare, exercise, or comment aborts without success or readiness', async () => {
-    for (const boundary of ['files', 'prepare', 'exercise', 'comment', 'body']) {
+    for (const boundary of ['files', 'prepare', 'exercise', 'comment']) {
       const f = fixture(true); f.hook(call => { if (call === boundary) f.pull.head.sha = NEXT; });
       await expect(verify(f.options)).rejects.toThrow('changed');
       expect(f.calls.some(c => c.startsWith('status:success'))).toBe(false); expect(f.calls).not.toContain('ready');
       expect(f.saved.at(-1)?.phase).toBe('head-moved');
+      expect(f.calls).toContain(`status:failure:${SHA}`); expect(f.calls).not.toContain('draft');
     }
   });
   test('head or base movement after status withdraws success only on original SHA', async () => {
@@ -213,10 +219,11 @@ describe('exact-head publication state machine', () => {
       expect(f.calls).not.toContain('ready'); expect(f.saved.at(-1)?.status).toBe('failure');
     }
   });
-  test('post-ready head race restores draft and revokes the old status', async () => {
+  test('post-ready head race revokes pinned success without reversing readiness', async () => {
     const f = fixture(); f.hook(call => { if (call === 'ready') f.pull.head.sha = NEXT; });
     await expect(verify(f.options)).rejects.toThrow('changed');
-    expect(f.calls).toContain('draft'); expect(f.pull.draft).toBe(true); expect(f.saved.at(-1)?.madeReady).toBe(false);
+    expect(f.calls).not.toContain('draft'); expect(f.pull.draft).toBe(false); expect(f.saved.at(-1)?.madeReady).toBe(true);
+    expect(f.calls).toContain(`status:failure:${SHA}`); expect(f.calls.filter(call => call === 'ready')).toHaveLength(1);
   });
   test('incomplete exercise records failure against pinned head and never readies', async () => {
     const f = fixture(true); f.options.driver.exercise = async () => [];
@@ -254,7 +261,7 @@ describe('exact-head publication state machine', () => {
     await expect(verify(f.options)).rejects.toThrow('already ready');
     expect(f.calls).toContain(`status:failure:${SHA}`); expect(f.calls).not.toContain('draft'); expect(f.pull.draft).toBe(false);
   });
-  test('receipt-write errors cannot prevent compensating an accepted success or ready write', async () => {
+  test('receipt-write errors cannot prevent revoking pinned success and never reverse readiness', async () => {
     for (const boundary of [`status:success:${SHA}`, 'ready']) {
       const f = fixture(); let deny = false;
       f.hook(call => { if (call === boundary) { f.pull.base.sha = NEXT; deny = true; } });
@@ -264,7 +271,8 @@ describe('exact-head publication state machine', () => {
       };
       await expect(verify(f.options)).rejects.toThrow('changed');
       expect(f.calls).toContain(`status:failure:${SHA}`);
-      if (boundary === 'ready') { expect(f.calls).toContain('draft'); expect(f.pull.draft).toBe(true); }
+      expect(f.calls).not.toContain('draft');
+      if (boundary === 'ready') expect(f.pull.draft).toBe(false);
     }
   });
   test('failed compensation is retained, not reported as successful', async () => {
@@ -317,12 +325,11 @@ describe('publisher request boundaries', () => {
           catch (error) { if (!String(error).includes('Interrupted by')) throw error; }
         }
         await publisher.status(${JSON.stringify(SHA)}, 'failure', ${JSON.stringify(URL)}, 'withdraw');
-        await publisher.draft(123);
         console.log(JSON.stringify(executed));
       `;
       const calls = JSON.parse(execFileSync(process.execPath, ['-e', script], { encoding: 'utf8' }).trim()) as string[][];
-      expect(calls).toHaveLength(2);
-      expect(calls[0]).toContain('state=failure'); expect(calls[1]).toContain('--undo');
+      expect(calls).toHaveLength(1);
+      expect(calls[0]).toContain('state=failure'); expect(calls.flat()).not.toContain('--undo');
     }
   });
   test('status targets the supplied exact SHA and evidence URL, never a branch', async () => {

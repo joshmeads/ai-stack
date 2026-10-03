@@ -42,10 +42,6 @@ export class Publisher implements GitHub {
       return parseChangedFiles(output);
     } finally { await rm(repository, { recursive: true, force: true }); }
   }
-  async body(pr: number, body: string): Promise<void> {
-    if (body.length > 60000) throw new Error('PR body exceeds evidence budget');
-    await this.api(`pulls/${pr}`, ['--method', 'PATCH', '-f', `body=${body}`]);
-  }
   async comment(pr: number, body: string): Promise<string> {
     if (body.length > 60000) throw new Error('Evidence exceeds comment budget');
     const result = await this.api(`issues/${pr}/comments`, ['--method', 'POST', '-f', `body=${body}`]) as { html_url: string };
@@ -57,5 +53,4 @@ export class Publisher implements GitHub {
     await this.api(`statuses/${sha}`, ['--method', 'POST', '-f', 'context=live-gate', '-f', `state=${state}`, '-f', `target_url=${target}`, '-f', `description=${description.slice(0, 140)}`], state === 'failure');
   }
   async ready(pr: number): Promise<void> { await this.run(['gh', 'pr', 'ready', String(pr), '--repo', REPO]); }
-  async draft(pr: number): Promise<void> { await this.run(['gh', 'pr', 'ready', String(pr), '--undo', '--repo', REPO], { allowInterrupted: true }); }
 }

@@ -1,5 +1,5 @@
 import { createHash } from 'node:crypto';
-import { lstat, mkdir, readFile, readdir, realpath, rename, writeFile } from 'node:fs/promises';
+import { lstat, mkdir, readFile, readdir, realpath, rename, unlink, writeFile } from 'node:fs/promises';
 import { isAbsolute, join, relative, resolve } from 'node:path';
 
 export type Command = (args: string[], options?: { cwd?: string; env?: Record<string, string>; interactive?: boolean; allowInterrupted?: boolean }) => Promise<string>;
@@ -118,5 +118,10 @@ export async function retainedFile(root: string, path: string): Promise<{ path: 
   if (!actual.startsWith(output + '/') || actual === state || actual.startsWith(state + '/')) throw new Error('Evidence must be retained outside isolated state, within output');
   const stat = await lstat(actual);
   if (!stat.isFile() || !stat.size) throw new Error('Evidence file must be a nonempty regular file');
-  return { path: relative(output, actual), sha256: sha256(await readFile(actual)) };
+  const bytes = await readFile(actual);
+  if ([...secrets].some(secret => bytes.includes(Buffer.from(secret))) || redact(bytes.toString('latin1')) !== bytes.toString('latin1')) {
+    await unlink(actual);
+    throw new Error('Evidence contains credentials; contaminated external file removed');
+  }
+  return { path: relative(output, actual), sha256: sha256(bytes) };
 }

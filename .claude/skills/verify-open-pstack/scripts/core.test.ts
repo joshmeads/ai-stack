@@ -88,7 +88,7 @@ describe('registry and ownership', () => {
     expect(s.features).toEqual([]);
   });
   test('consumed instructions and known verifier enforcement require native project proof', () => {
-    for (const filename of ['AGENTS.md', 'CLAUDE.md', 'tests/skill-collision-repro.sh']) {
+    for (const filename of ['AGENTS.md', 'CLAUDE.md', 'tests/skill-collision-repro.sh', '.mergify.yml']) {
       const s = classify([{ filename }], registry);
       expect(s.noRuntime).toBe(false);
       expect(s.features).toEqual(['project-skill']);

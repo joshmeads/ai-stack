@@ -36,17 +36,15 @@ export interface Receipt {
   schema: 1; repo: string; pr: number; sha: string; base: string; phase: Phase;
   selection: Selection; installations: Installation[]; observations: Observation[];
   selfTest: boolean; artifactRoot: string; failure?: string;
-  commentUrl?: string; status?: 'success' | 'failure'; madeReady?: boolean;
+  commentUrl?: string; status?: 'success' | 'failure'; madeReady?: boolean; proposedTemplate?: string;
   compensation?: string[]; cleanup: string; started: string; macProof?: MacProof;
 }
 export interface GitHub {
   pull(pr: number): Promise<Pull>;
   files(base: string, head: string): Promise<ChangedFile[]>;
-  body(pr: number, body: string): Promise<void>;
   comment(pr: number, body: string): Promise<string>;
   status(sha: string, state: 'success' | 'failure', target: string, description: string): Promise<void>;
   ready(pr: number): Promise<void>;
-  draft(pr: number): Promise<void>;
 }
 export interface Driver {
   prepare(receipt: Receipt): Promise<Installation[]>;

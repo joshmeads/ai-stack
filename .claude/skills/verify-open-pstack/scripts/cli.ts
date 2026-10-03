@@ -1,4 +1,6 @@
 import { readFile } from 'node:fs/promises';
+import { lstatSync, readFileSync, readdirSync } from 'node:fs';
+import { createHash } from 'node:crypto';
 import { join, resolve } from 'node:path';
 import { validateRegistry } from './core.ts';
 import { doctor } from './doctor.ts';
@@ -9,11 +11,25 @@ import { verify } from './verify.ts';
 import { sourceDigest, sourceHash } from './provenance.ts';
 import type { GitHub } from './types.ts';
 
-export async function bindPublisher(repository: string, pr: number, github: GitHub): Promise<GitHub> {
+export function publisherCode(repository: string): string {
+  const hash = createHash('sha256');
+  const scripts = join(repository, '.claude/skills/verify-open-pstack/scripts');
+  for (const name of readdirSync(scripts).sort()) {
+    if (!name.endsWith('.ts')) continue;
+    const path = join(scripts, name), stat = lstatSync(path);
+    if (!stat.isFile() || stat.isSymbolicLink()) throw new Error('Publisher module must be a regular file');
+    hash.update(name + '\0').update(readFileSync(path)).update('\0');
+  }
+  return hash.digest('hex');
+}
+// Capture loaded module provenance synchronously, before main yields to freshRoot or GitHub.
+const loadedCode = publisherCode(resolve(import.meta.dir, '../../../..'));
+
+export async function bindPublisher(repository: string, pr: number, github: GitHub, startupCode = loadedCode): Promise<GitHub> {
   const loadedSource = await sourceDigest(repository);
   const pull = await github.pull(pr);
   const pinnedSource = await sourceHash(repository, pull.head.sha);
-  if (pinnedSource !== loadedSource) throw new Error('Publisher source changed while binding the pinned head');
+  if (pinnedSource !== loadedSource || publisherCode(repository) !== startupCode) throw new Error('Publisher source changed while binding the pinned head');
   const recheck = async (): Promise<void> => {
     if (await sourceHash(repository, pull.head.sha) !== pinnedSource) throw new Error('Publisher source changed after pinning');
   };
@@ -26,7 +42,6 @@ export async function bindPublisher(repository: string, pr: number, github: GitH
       if (base !== pull.base.sha || head !== pull.head.sha) throw new Error('Publisher pin differs from classification SHAs');
       await recheck(); return github.files(base, head);
     },
-    async body(number, body) { checkPr(number); await recheck(); await github.body(number, body); },
     async comment(number, body) { checkPr(number); await recheck(); return github.comment(number, body); },
     async status(sha, state, target, description) {
       if (sha !== pull.head.sha) throw new Error('Publisher status differs from pinned SHA');
@@ -35,7 +50,6 @@ export async function bindPublisher(repository: string, pr: number, github: GitH
       await github.status(sha, state, target, description);
     },
     async ready(number) { checkPr(number); await recheck(); await github.ready(number); },
-    async draft(number) { checkPr(number); await github.draft(number); },
   };
 }
 type Options = { mode: 'doctor'; output: string; pr: number; selfTest: boolean; candidate: boolean }

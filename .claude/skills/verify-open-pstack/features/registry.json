@@ -41,11 +41,11 @@
   ],
   "project": [
     ".claude/skills/verify-open-pstack/**", ".agents/skills/verify-open-pstack",
-    "AGENTS.md", "CLAUDE.md", "tests/skill-collision-repro.sh"
+    "AGENTS.md", "CLAUDE.md", "tests/skill-collision-repro.sh", ".mergify.yml"
   ],
   "nonRuntime": [
     "README.md", "CHANGES.md", "LICENSE", "LICENSE.md", "UPSTREAM.md",
-    ".gitignore", ".mergify.yml", "docs/**", "assets/**",
+    ".gitignore", "docs/**", "assets/**",
     "plugins/pstack/skills/poteto-mode/scripts/bootstrap.test.ts",
     "plugins/pstack/skills/poteto-mode/scripts/check-plan.test.ts"
   ]

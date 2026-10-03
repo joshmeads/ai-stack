@@ -44,6 +44,29 @@ export async function copyCredentials(home: string, vault: string, accounts: Acc
     await writeFile(target, bytes, { mode: 0o600, flag: 'wx' });
   }
 }
+export async function registerSessionCredentials(home: string): Promise<void> {
+  const root = await realpath(home).catch((error: NodeJS.ErrnoException) => {
+    if (error.code !== 'ENOENT') throw error;
+    return undefined;
+  });
+  if (root === undefined) return;
+  if (root !== home) throw new Error('Session credentials require canonical candidate state');
+  for (const tool of HARNESSES) {
+    const dir = join(home, tool === 'claude' ? '.claude' : '.codex');
+    if (await realpath(dir) !== dir) throw new Error('Session credential directory redirected');
+    const file = join(dir, tool === 'claude' ? '.credentials.json' : 'auth.json');
+    const info = await lstat(file).catch((error: NodeJS.ErrnoException) => {
+      if (error.code !== 'ENOENT') throw error;
+      return undefined;
+    });
+    if (!info) continue;
+    if (!info.isFile() || info.isSymbolicLink()) throw new Error('Session credentials must be regular files');
+    const auth = JSON.parse(await readFile(file, 'utf8'));
+    const tokens = tool === 'claude' ? auth.claudeAiOauth : auth.tokens;
+    if (!tokens || typeof tokens !== 'object') throw new Error('Unknown session OAuth credential format');
+    registerSecrets(Object.entries(tokens).flatMap(([key, value]) => /token/i.test(key) && typeof value === 'string' ? [value] : []));
+  }
+}
 export async function removeCredentials(paths: string[], profiles?: Map<string, string>, run: Command = command): Promise<void> {
   for (const home of new Set(paths.map(path => dirname(dirname(path))))) {
     await sourceDirectory(dirname(home));

@@ -47,6 +47,17 @@ describe('retained JSON and file boundaries', () => {
     expect(JSON.parse(await readFile(path, 'utf8'))).toEqual({ ...evidence, checks: { explanation: '[REDACTED]' } });
   });
 
+  test.each(['text', 'binary'])('rejects and removes retained %s artifacts containing copied credentials', async kind => {
+    const root = await fixture(), path = join(root, 'artifact');
+    const token = `known-copied-${kind}-opaque-credential`;
+    registerSecrets([token]);
+    await writeFile(path, kind === 'binary' ? Buffer.concat([Buffer.from([0, 255, 128]), Buffer.from(token), Buffer.from([0, 254])]) : `reviewed result ${token}`);
+    await expect(retainedFile(root, path)).rejects.toThrow('Evidence contains credentials');
+    expect(await Bun.file(path).exists()).toBe(false);
+    await writeFile(path, kind === 'binary' ? Buffer.from([0, 255, 128, 0, 254]) : 'reviewed sanitized result');
+    expect((await retainedFile(root, path)).path).toBe('artifact');
+  });
+
   test('permits evidence below an ancestor named state and canonicalizes output aliases', async () => {
     const root = await fixture(), output = join(root, 'state', 'run'), alias = join(root, 'alias');
     await mkdir(output, { recursive: true });

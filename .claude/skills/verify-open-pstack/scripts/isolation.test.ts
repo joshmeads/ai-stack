@@ -3,8 +3,8 @@ import { lstat, mkdir, mkdtemp, readFile, realpath, rm, rmdir, stat, symlink, wr
 import { randomUUID } from 'node:crypto';
 import { tmpdir } from 'node:os';
 import { dirname, join } from 'node:path';
-import { command, isolatedEnv, redact } from './io.ts';
-import { copyCredentials, createSandbox, protectSources, removeCredentials, resolveAppleGit, sandboxed, sandboxProfile, selectedAccounts } from './isolation.ts';
+import { command, isolatedEnv, redact, retainedFile } from './io.ts';
+import { copyCredentials, createSandbox, protectSources, registerSessionCredentials, removeCredentials, resolveAppleGit, sandboxed, sandboxProfile, selectedAccounts } from './isolation.ts';
 import type { Accounts } from './types.ts';
 
 const roots: string[] = [];
@@ -93,6 +93,45 @@ describe('disposable credential boundary', () => {
     await writeFile(join(base, 'codex', accounts.codex, 'auth.json'), JSON.stringify({ tokens: { id_token: tokens[2], access_token: tokens[3], refresh_token: tokens[4] } }));
     await copyCredentials(join(root, 'candidate'), base, accounts, copied);
     expect(redact(tokens.join(' '))).toBe(tokens.map(() => '[REDACTED]').join(' '));
+    await removeCredentials(copied);
+  });
+  test('real provider refreshes register opaque and JWT credentials before accepting evidence or cleanup', async () => {
+    const root = await fixture(), base = await vault(root), home = join(root, 'candidate'), copied: string[] = [];
+    await copyCredentials(home, base, accounts, copied);
+    const original = await Promise.all(copied.map(path => readFile(path, 'utf8')));
+    const tokens = ['refreshed-claude-access.opaque', 'refreshed-claude-refresh.opaque', 'refreshed-codex-access.opaque', 'refreshed-codex-refresh.opaque', 'eyJhbGciOiJSUzI1NiJ9.refresh.fixtureSignature'];
+    await writeFile(copied[0]!, JSON.stringify({ claudeAiOauth: { accessToken: tokens[0], refreshToken: tokens[1] } }));
+    await writeFile(copied[1]!, JSON.stringify({ tokens: { access_token: tokens[2], refresh_token: tokens[3], id_token: tokens[4] } }));
+    await registerSessionCredentials(home);
+    expect(redact(tokens.join(' '))).toBe(tokens.map(() => '[REDACTED]').join(' '));
+    for (const [i, token] of tokens.entries()) {
+      const evidence = join(root, `refreshed-artifact-${i}`);
+      await writeFile(evidence, Buffer.concat([Buffer.from([255, 0]), Buffer.from(token), Buffer.from([128, 0])]));
+      await expect(retainedFile(root, evidence)).rejects.toThrow('Evidence contains credentials');
+      expect(await Bun.file(evidence).exists()).toBe(false);
+    }
+    await removeCredentials(copied);
+    await registerSessionCredentials(home);
+    expect(await Bun.file(home).exists()).toBe(false);
+    expect(original).toEqual(await Promise.all([
+      readFile(join(base, 'claude', accounts.claude, '.credentials.json'), 'utf8'),
+      readFile(join(base, 'codex', accounts.codex, 'auth.json'), 'utf8'),
+    ]));
+  });
+  test('session credential discovery refuses redirected directories and credential files', async () => {
+    const root = await fixture(), base = await vault(root), home = join(root, 'candidate'), copied: string[] = [];
+    await copyCredentials(home, base, accounts, copied);
+    const external = join(root, 'external');
+    await mkdir(external);
+    await writeFile(join(external, '.credentials.json'), '{"claudeAiOauth":{"accessToken":"outside-fixture"}}');
+    await rm(join(home, '.claude'), { recursive: true });
+    await symlink(external, join(home, '.claude'));
+    await expect(registerSessionCredentials(home)).rejects.toThrow('redirected');
+    await rm(join(home, '.claude'));
+    await mkdir(join(home, '.claude'));
+    await symlink(join(external, '.credentials.json'), copied[0]!);
+    await expect(registerSessionCredentials(home)).rejects.toThrow('regular files');
+    expect(await readFile(join(external, '.credentials.json'), 'utf8')).toContain('outside-fixture');
     await removeCredentials(copied);
   });
   test('cleanup removes relocated and refreshed credentials anywhere in candidate state while preserving external evidence', async () => {
