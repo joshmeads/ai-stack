@@ -18,7 +18,9 @@ Verify tracked plugin/project-skill provenance against immutable pinned Git obje
 
 ## Operator-Mac proof
 
-From the trusted verifier checkout run:
+Runtime `run` automatically executes the pinned `scripts/isolation.test.ts` from a separate trusted exact-SHA checkout, with `PSTACK_OPERATOR_SENTINELS=1`, before copying disposable credentials. It retains `mac-isolation-proof.txt` outside candidate state, validates both named Mac tests passed without skips/failures and a successful exit, and requires explicit operator review of no Keychain dialog. The receipt binds SHA, canonical proof path/hash, and the review. Each native session then requires an operator-observed authenticated API request/response assertion bound to its reviewed transcript hash and `PASS AUTH <harness>` confirming no Keychain dialog. Both harnesses are mandatory. Missing, mismatched, overwritten, skipped, or rejected proof blocks success/readiness at publication boundaries. Fake unit-driver proof exercises validation without claiming Mac enforcement.
+
+For a separate diagnostic check, from the trusted verifier checkout run:
 
 ```sh
 PROOF="$(mktemp -d "${TMPDIR:-/tmp}/open-pstack-isolation-proof.XXXXXX")"

@@ -27,12 +27,17 @@ export interface Installation {
   harness: Harness; cliVersion: string; pluginVersion: string; sha: string;
   location: string; treeHash: string; home: string; account?: string; sourceHash?: string;
 }
+export interface MacProof {
+  sha: string; platform: 'darwin'; reviewer: 'operator'; tests: { path: string; sha256: string };
+  noKeychainDialog: boolean;
+  authenticated: { harness: Harness; observed: string; transcript: string; transcriptHash: string }[];
+}
 export interface Receipt {
   schema: 1; repo: string; pr: number; sha: string; base: string; phase: Phase;
   selection: Selection; installations: Installation[]; observations: Observation[];
   selfTest: boolean; artifactRoot: string; failure?: string;
   commentUrl?: string; status?: 'success' | 'failure'; madeReady?: boolean;
-  compensation?: string[]; cleanup: string; started: string;
+  compensation?: string[]; cleanup: string; started: string; macProof?: MacProof;
 }
 export interface GitHub {
   pull(pr: number): Promise<Pull>;

@@ -6,6 +6,38 @@ import { Publisher } from './github.ts';
 import { MacDriver } from './harness.ts';
 import { freshRoot, interruption, interruptCommands, redact, save } from './io.ts';
 import { verify } from './verify.ts';
+import { sourceDigest, sourceHash } from './provenance.ts';
+import type { GitHub } from './types.ts';
+
+export async function bindPublisher(repository: string, pr: number, github: GitHub): Promise<GitHub> {
+  const loadedSource = await sourceDigest(repository);
+  const pull = await github.pull(pr);
+  const pinnedSource = await sourceHash(repository, pull.head.sha);
+  if (pinnedSource !== loadedSource) throw new Error('Publisher source changed while binding the pinned head');
+  const recheck = async (): Promise<void> => {
+    if (await sourceHash(repository, pull.head.sha) !== pinnedSource) throw new Error('Publisher source changed after pinning');
+  };
+  const checkPr = (number: number): void => {
+    if (number !== pr) throw new Error('Publisher is bound to one PR');
+  };
+  return {
+    pull: number => { checkPr(number); return github.pull(number); },
+    async files(base, head) {
+      if (base !== pull.base.sha || head !== pull.head.sha) throw new Error('Publisher pin differs from classification SHAs');
+      await recheck(); return github.files(base, head);
+    },
+    async body(number, body) { checkPr(number); await recheck(); await github.body(number, body); },
+    async comment(number, body) { checkPr(number); await recheck(); return github.comment(number, body); },
+    async status(sha, state, target, description) {
+      if (sha !== pull.head.sha) throw new Error('Publisher status differs from pinned SHA');
+      // Failure compensation must remain possible even after source changes or interruption.
+      if (state === 'success') await recheck();
+      await github.status(sha, state, target, description);
+    },
+    async ready(number) { checkPr(number); await recheck(); await github.ready(number); },
+    async draft(number) { checkPr(number); await github.draft(number); },
+  };
+}
 type Options = { mode: 'doctor'; output: string; pr: number; selfTest: boolean; candidate: boolean }
   | { mode: 'run'; output: string; pr: number; selfTest: boolean; claudeAccount: string; codexAccount: string };
 export function parse(args: string[]): Options {
@@ -51,8 +83,9 @@ async function main(): Promise<void> {
     root = await freshRoot(options.output, repository);
     if (options.mode === 'doctor') await doctor(root, undefined, undefined, options.candidate);
     else {
+      const github = await bindPublisher(repository, options.pr, new Publisher());
       const registry = validateRegistry(JSON.parse(await readFile(join(import.meta.dir, '../features/registry.json'), 'utf8')));
-      const receipt = await verify({ pr: options.pr, selfTest: options.selfTest, root, registry, github: new Publisher(), driver: new MacDriver(undefined, undefined, { claude: options.claudeAccount, codex: options.codexAccount }), persist: r => save(join(root!, 'receipt.json'), r) });
+      const receipt = await verify({ pr: options.pr, selfTest: options.selfTest, root, registry, github, driver: new MacDriver(undefined, undefined, { claude: options.claudeAccount, codex: options.codexAccount }), persist: r => save(join(root!, 'receipt.json'), r) });
       console.log(`Pinned ${receipt.sha}: live-gate=${receipt.status}; evidence ${receipt.commentUrl}`);
     }
     interruption.signal.throwIfAborted();

@@ -39,11 +39,13 @@
     "plugins/pstack/skills/poteto-mode/scripts/check-plan.tsconfig.json",
     "plugins/pstack/skills/show-me-your-work/scripts/log.sh"
   ],
-  "project": [".claude/skills/verify-open-pstack/**", ".agents/skills/verify-open-pstack"],
+  "project": [
+    ".claude/skills/verify-open-pstack/**", ".agents/skills/verify-open-pstack",
+    "AGENTS.md", "CLAUDE.md", "tests/skill-collision-repro.sh"
+  ],
   "nonRuntime": [
-    "README.md", "AGENTS.md", "CLAUDE.md", "CHANGES.md", "LICENSE", "LICENSE.md", "UPSTREAM.md",
-    ".gitignore", ".mergify.yml", ".github/**", "docs/**", "assets/**", "tests/**",
-    "scripts/**",
+    "README.md", "CHANGES.md", "LICENSE", "LICENSE.md", "UPSTREAM.md",
+    ".gitignore", ".mergify.yml", "docs/**", "assets/**",
     "plugins/pstack/skills/poteto-mode/scripts/bootstrap.test.ts",
     "plugins/pstack/skills/poteto-mode/scripts/check-plan.test.ts"
   ]

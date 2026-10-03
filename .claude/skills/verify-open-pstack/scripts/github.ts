@@ -20,8 +20,8 @@ export function parseChangedFiles(output: string): ChangedFile[] {
 }
 export class Publisher implements GitHub {
   constructor(private run: Command = command) {}
-  private async api(path: string, args: string[] = []): Promise<unknown> {
-    return JSON.parse(await this.run(['gh', 'api', `repos/${REPO}/${path}`, ...args]));
+  private async api(path: string, args: string[] = [], allowInterrupted = false): Promise<unknown> {
+    return JSON.parse(await this.run(['gh', 'api', `repos/${REPO}/${path}`, ...args], { allowInterrupted }));
   }
   async pull(pr: number): Promise<Pull> {
     const data = await this.api(`pulls/${pr}`) as { number: number; head: { sha: string; repo?: { full_name: string } }; base: { sha: string }; draft: boolean; state: string; body: string | null };
@@ -54,8 +54,8 @@ export class Publisher implements GitHub {
   }
   async status(sha: string, state: 'success' | 'failure', target: string, description: string): Promise<void> {
     if (!/^[a-f0-9]{40}$/.test(sha)) throw new Error('Invalid status SHA');
-    await this.api(`statuses/${sha}`, ['--method', 'POST', '-f', 'context=live-gate', '-f', `state=${state}`, '-f', `target_url=${target}`, '-f', `description=${description.slice(0, 140)}`]);
+    await this.api(`statuses/${sha}`, ['--method', 'POST', '-f', 'context=live-gate', '-f', `state=${state}`, '-f', `target_url=${target}`, '-f', `description=${description.slice(0, 140)}`], state === 'failure');
   }
   async ready(pr: number): Promise<void> { await this.run(['gh', 'pr', 'ready', String(pr), '--repo', REPO]); }
-  async draft(pr: number): Promise<void> { await this.run(['gh', 'pr', 'ready', String(pr), '--undo', '--repo', REPO]); }
+  async draft(pr: number): Promise<void> { await this.run(['gh', 'pr', 'ready', String(pr), '--undo', '--repo', REPO], { allowInterrupted: true }); }
 }

@@ -82,10 +82,24 @@ describe('registry and ownership', () => {
     evidence(r);
     expect(() => completeEvidence(r)).not.toThrow();
   });
-  test('docs and CI only select no harnesses', () => {
-    const s = classify([{ filename: 'README.md' }, { filename: '.github/workflows/ci.yml' }], registry);
+  test('ordinary repository documentation selects no harnesses', () => {
+    const s = classify([{ filename: 'README.md' }, { filename: 'docs/guide.md' }], registry);
     expect(s.noRuntime).toBe(true);
     expect(s.features).toEqual([]);
+  });
+  test('consumed instructions and known verifier enforcement require native project proof', () => {
+    for (const filename of ['AGENTS.md', 'CLAUDE.md', 'tests/skill-collision-repro.sh']) {
+      const s = classify([{ filename }], registry);
+      expect(s.noRuntime).toBe(false);
+      expect(s.features).toEqual(['project-skill']);
+      expect(classify([{ filename: 'docs/moved.md', previous_filename: filename }], registry).noRuntime).toBe(false);
+    }
+  });
+  test('unregistered CI, tests, and scripts fail closed instead of bypassing runtime proof', () => {
+    for (const filename of ['.github/workflows/ci.yml', '.github/pull_request_template.md', 'tests/new-gate.sh', 'scripts/disable-proof.ts']) {
+      expect(() => classify([{ filename }], registry)).toThrow();
+      expect(() => classify([{ filename: 'README.md', previous_filename: filename }], registry)).toThrow();
+    }
   });
 });
 

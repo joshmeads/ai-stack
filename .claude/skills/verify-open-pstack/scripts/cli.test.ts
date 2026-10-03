@@ -1,11 +1,96 @@
 import { expect, test } from 'bun:test';
-import { parse } from './cli.ts';
-import { mkdtemp, readFile, realpath, rm, stat } from 'node:fs/promises';
+import { bindPublisher, parse } from './cli.ts';
+import { mkdir, mkdtemp, readFile, realpath, rm, stat, symlink, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { doctor } from './doctor.ts';
-import type { Command } from './io.ts';
+import { command, type Command } from './io.ts';
+import type { GitHub, Pull } from './types.ts';
+import { REPO } from './types.ts';
+import { verify } from './verify.ts';
+import { validateRegistry } from './core.ts';
+import registry from '../features/registry.json';
 const accounts = ['--claude-account', 'eric@litman.org', '--codex-account', 'eric@healthspanners.com'];
+async function publisherFixture() {
+  const root = await realpath(await mkdtemp(join(tmpdir(), 'pstack-publisher-binding-')));
+  const project = join(root, '.claude/skills/verify-open-pstack');
+  await mkdir(join(project, 'scripts'), { recursive: true });
+  await mkdir(join(project, 'features')); await mkdir(join(root, 'plugins/pstack'), { recursive: true });
+  await mkdir(join(root, '.agents/skills'), { recursive: true });
+  await symlink('../../.claude/skills/verify-open-pstack', join(root, '.agents/skills/verify-open-pstack'));
+  await writeFile(join(root, 'plugins/pstack/plugin.json'), '{}\n');
+  for (const path of ['scripts/cli.ts', 'scripts/github.ts', 'scripts/verify.sh', 'features/registry.json']) await writeFile(join(project, path), 'pinned publisher source\n');
+  for (const args of [
+    ['git', 'init', '--quiet'], ['git', 'config', 'user.name', 'Publisher Test'],
+    ['git', 'config', 'user.email', 'publisher@example.invalid'], ['git', 'add', '.'],
+    ['git', '-c', 'commit.gpgsign=false', 'commit', '--quiet', '-m', 'pinned publisher'],
+  ]) await command(args, { cwd: root });
+  const sha = (await command(['git', 'rev-parse', 'HEAD'], { cwd: root })).trim();
+  const calls: string[] = [], url = `https://github.com/${REPO}/pull/111#issuecomment-1`;
+  const pull: Pull = { number: 111, head: { sha }, base: { sha }, state: 'open', draft: false, headRepo: REPO, body: '' };
+  const github: GitHub = {
+    async pull() { calls.push('pull'); return structuredClone(pull); },
+    async files() { calls.push('files'); return [{ filename: 'README.md' }]; },
+    async body(_pr, body) { calls.push('body'); pull.body = body; },
+    async comment() { calls.push('comment'); return url; },
+    async status(_sha, state) { calls.push(`status:${state}`); },
+    async ready() { calls.push('ready'); }, async draft() { calls.push('draft'); },
+  };
+  return { root, project, sha, github, calls, pull, url };
+}
+test('publisher pin rejects an older local checkout before classification or publication', async () => {
+  const f = await publisherFixture();
+  try {
+    f.pull.head.sha = 'a'.repeat(40);
+    await expect(bindPublisher(f.root, 111, f.github)).rejects.toThrow('HEAD differs from pinned SHA');
+    expect(f.calls).toEqual(['pull']);
+  } finally { await rm(f.root, { recursive: true, force: true }); }
+});
+test('publisher pin rejects modified registry, wrapper and code, plus untracked project source', async () => {
+  const f = await publisherFixture();
+  try {
+    for (const path of ['features/registry.json', 'scripts/verify.sh', 'scripts/cli.ts', 'scripts/github.ts']) {
+      await writeFile(join(f.project, path), 'unapproved publisher logic\n');
+      await expect(bindPublisher(f.root, 111, f.github)).rejects.toThrow('Source differs from pinned Git tree');
+      await writeFile(join(f.project, path), 'pinned publisher source\n');
+    }
+    await writeFile(join(f.project, 'scripts/untracked.ts'), 'untracked logic\n');
+    await expect(bindPublisher(f.root, 111, f.github)).rejects.toThrow('Source differs from pinned Git tree');
+    expect(f.calls.every(call => call === 'pull')).toBe(true);
+  } finally { await rm(f.root, { recursive: true, force: true }); }
+});
+test('publisher source rechecks protect every success boundary but retain failure compensation', async () => {
+  const f = await publisherFixture();
+  try {
+    const bound = await bindPublisher(f.root, 111, f.github);
+    await writeFile(join(f.project, 'scripts/github.ts'), 'changed after binding\n');
+    for (const operation of [
+      () => bound.files(f.sha, f.sha), () => bound.body(111, 'evidence'),
+      () => bound.comment(111, 'evidence'), () => bound.status(f.sha, 'success', f.url, 'verified'), () => bound.ready(111),
+    ]) await expect(operation()).rejects.toThrow('Source differs from pinned Git tree');
+    expect(f.calls).toEqual(['pull']);
+    await bound.status(f.sha, 'failure', f.url, 'withdraw success'); await bound.draft(111);
+    expect(f.calls).toEqual(['pull', 'status:failure', 'draft']);
+  } finally { await rm(f.root, { recursive: true, force: true }); }
+});
+test('publisher pin also gates docs-only classification and success with no harness fallback', async () => {
+  const f = await publisherFixture();
+  try {
+    const github = await bindPublisher(f.root, 111, f.github);
+    const output = join(f.root, 'output'); await mkdir(output);
+    const receipt = await verify({ pr: 111, selfTest: false, root: output, registry: validateRegistry(registry), github,
+      driver: { async prepare() { throw new Error('Docs must not prepare harnesses'); }, async exercise() { throw new Error('Docs must not exercise harnesses'); } }, persist: async () => {} });
+    expect(receipt.selection.noRuntime).toBe(true); expect(receipt.status).toBe('success'); expect(f.calls).toContain('status:success');
+    await expect(github.files(f.sha, 'a'.repeat(40))).rejects.toThrow('classification SHAs');
+    await expect(github.status('a'.repeat(40), 'success', f.url, 'wrong head')).rejects.toThrow('pinned SHA');
+    await expect(github.body(112, 'wrong PR')).rejects.toThrow('one PR');
+    await writeFile(join(f.root, 'README.md'), 'new docs head\n');
+    await command(['git', 'add', 'README.md'], { cwd: f.root });
+    await command(['git', '-c', 'commit.gpgsign=false', 'commit', '--quiet', '-m', 'new docs head'], { cwd: f.root });
+    await expect(github.files(f.sha, f.sha)).rejects.toThrow('HEAD differs from pinned SHA');
+    await expect(github.status(f.sha, 'success', f.url, 'stale checkout')).rejects.toThrow('HEAD differs from pinned SHA');
+  } finally { await rm(f.root, { recursive: true, force: true }); }
+});
 test('candidate mode is an explicit doctor-only flag', () => {
   expect(parse(['doctor', '--candidate', '--output', '/fresh/probe'])).toEqual({ mode: 'doctor', output: '/fresh/probe', pr: 0, selfTest: false, candidate: true });
   expect(() => parse(['doctor', '--candidate', '--candidate', '--output', '/fresh/probe'])).toThrow('Duplicate option');

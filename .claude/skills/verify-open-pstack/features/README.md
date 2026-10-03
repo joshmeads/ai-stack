@@ -10,7 +10,7 @@
 | `runner` | Installed parent invoking real configured provider lanes |
 | `tools` | Installed parent invoking the changed shipped CLI |
 | `project` | Native discovery/invocation of this verifier in both harnesses |
-| `nonRuntime` | Explicit repository documentation/CI/non-shipped assets/tests; no plugin harness launch |
+| `nonRuntime` | Explicit ordinary repository documentation/non-shipped assets/unit-test paths; no plugin harness launch |
 
 Shipped `plugins/pstack/assets/**` belongs to `shared`: even a logo-only change requires both installed harness surfaces, not the no-runtime lane. `bootstrap.ts` belongs to `tools`; exercise its actual consumers, `orch` and `watch-pr`, including dependency bootstrapping rather than the unrelated external runner.
 
@@ -22,5 +22,7 @@ The four documents below define sub-features, user entry points, driving instruc
 - `setup.md`: setup/routing/model configuration.
 - `runner.md`: parent-to-child provider dispatch and receipts.
 - `shipped-tools.md`: orchestration, watch, plan checks, audit, and evidence logging.
+
+Consumed `AGENTS.md`/`CLAUDE.md` instructions and `tests/skill-collision-repro.sh` select `project-skill`. There are no blanket no-runtime exemptions for `.github/**`, `tests/**`, or `scripts/**`: unregistered instruction/enforcement paths fail closed until their runtime ownership is reviewed and mapped.
 
 Explicit non-runtime repository changes are `no runtime change`. Changes to this verifier always select `project-skill`; they cannot bypass native proof. `--self-test` also selects that exercise, deduplicated in each harness, and is mandatory for this skill's delivery PR. Plugin-runtime proof and local CLI proof remain separate.

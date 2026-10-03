@@ -3,8 +3,8 @@ import { lstat, mkdir, mkdtemp, readFile, realpath, rm, rmdir, stat, symlink, wr
 import { randomUUID } from 'node:crypto';
 import { tmpdir } from 'node:os';
 import { dirname, join } from 'node:path';
-import { command, isolatedEnv } from './io.ts';
-import { copyCredentials, createSandbox, protectSources, removeCredentials, sandboxed, sandboxProfile, selectedAccounts } from './isolation.ts';
+import { command, isolatedEnv, redact } from './io.ts';
+import { copyCredentials, createSandbox, protectSources, removeCredentials, resolveAppleGit, sandboxed, sandboxProfile, selectedAccounts } from './isolation.ts';
 import type { Accounts } from './types.ts';
 
 const roots: string[] = [];
@@ -86,6 +86,31 @@ describe('disposable credential boundary', () => {
     for (const path of copied) expect(await Bun.file(path).exists()).toBe(false);
     expect(await Promise.all(originals.map(path => readFile(path, 'utf8')))).toEqual(preserved);
   });
+  test('copy registers opaque OAuth access, refresh and ID tokens before candidate processing', async () => {
+    const root = await fixture(), base = await vault(root), copied: string[] = [];
+    const tokens = ['opaque.alpha.access.987', 'opaque-refresh-654', 'eyJhbGciOiJub25lIn0.eyJzdWIiOiJmaXh0dXJlIn0.sig', 'opaque.codex.access.321', 'opaque-codex-refresh-123'];
+    await writeFile(join(base, 'claude', accounts.claude, '.credentials.json'), JSON.stringify({ claudeAiOauth: { accessToken: tokens[0], refreshToken: tokens[1] } }));
+    await writeFile(join(base, 'codex', accounts.codex, 'auth.json'), JSON.stringify({ tokens: { id_token: tokens[2], access_token: tokens[3], refresh_token: tokens[4] } }));
+    await copyCredentials(join(root, 'candidate'), base, accounts, copied);
+    expect(redact(tokens.join(' '))).toBe(tokens.map(() => '[REDACTED]').join(' '));
+    await removeCredentials(copied);
+  });
+  test('cleanup removes relocated and refreshed credentials anywhere in candidate state while preserving external evidence', async () => {
+    const root = await fixture(), base = await vault(root), home = join(root, 'candidate'), copied: string[] = [];
+    await copyCredentials(home, base, accounts, copied);
+    const relocated = join(home, 'workspace/cache/relocated-oauth.json');
+    await mkdir(dirname(relocated), { recursive: true });
+    await writeFile(relocated, await readFile(copied[0]!));
+    await writeFile(join(home, 'refreshed-token'), 'refreshed-disposable-token');
+    await rm(copied[0]!);
+    const evidence = join(root, 'transcript.txt'); await writeFile(evidence, 'retained external evidence');
+    const before = await readFile(join(base, 'claude', accounts.claude, '.credentials.json'), 'utf8');
+    await removeCredentials(copied);
+    expect(await Bun.file(relocated).exists()).toBe(false);
+    expect(await Bun.file(join(home, 'refreshed-token')).exists()).toBe(false);
+    expect(await readFile(evidence, 'utf8')).toBe('retained external evidence');
+    expect(await readFile(join(base, 'claude', accounts.claude, '.credentials.json'), 'utf8')).toBe(before);
+  });
   test('partial copy can be cleaned on failure without changing any vault file', async () => {
     const root = await fixture(), base = await vault(root), copied: string[] = [];
     const bad = join(base, 'codex', accounts.codex, 'auth.json');
@@ -105,28 +130,29 @@ describe('disposable credential boundary', () => {
     await expect(copyCredentials(join(root, 'candidate'), base, accounts, copied)).rejects.toThrow('contained regular file');
     expect(copied).toEqual([]);
   });
-  test('credential cleanup refuses an ancestor redirect without deleting the external sentinel', async () => {
+  test('credential cleanup removes disposable state without following external configuration redirects', async () => {
     const root = await fixture(), base = await vault(root), home = join(root, 'candidate'), copied: string[] = [];
     await copyCredentials(home, base, accounts, copied);
     const outside = join(root, 'external'), sentinel = join(outside, '.credentials.json');
     await mkdir(outside); await writeFile(sentinel, 'external-credential-sentinel');
     await rm(join(home, '.claude'), { recursive: true }); await symlink(outside, join(home, '.claude'));
-    await expect(removeCredentials(copied)).rejects.toThrow('redirected parent');
-    expect(await readFile(sentinel, 'utf8')).toBe('external-credential-sentinel');
     const invoked: string[][] = [];
     await removeCredentials(copied, new Map([[home, join(root, 'candidate.sb')]]), async args => { invoked.push(args); return ''; });
-    expect(invoked).toEqual(copied.map(path => ['/usr/bin/sandbox-exec', '-f', join(root, 'candidate.sb'), '/bin/rm', '-f', '--', path]));
+    expect(invoked).toEqual([['/usr/bin/sandbox-exec', '-f', join(root, 'candidate.sb'), '/bin/rm', '-rf', '--', home]]);
     await expect(removeCredentials(copied, new Map())).rejects.toThrow('original candidate sandbox');
+    await removeCredentials(copied);
+    expect(await Bun.file(join(home, '.codex/auth.json')).exists()).toBe(false);
     expect(await readFile(sentinel, 'utf8')).toBe('external-credential-sentinel');
   });
-  test('cleanup refuses leaf symlinks and copy records destinations before a failed write', async () => {
+  test('cleanup removes leaf symlinks without following them and copy records destinations before a failed write', async () => {
     const root = await fixture(), base = await vault(root), home = join(root, 'candidate'), copied: string[] = [];
     await mkdir(join(home, '.claude'), { recursive: true });
     const target = join(home, '.claude/.credentials.json'), sentinel = join(root, 'external-credential');
     await writeFile(sentinel, 'preserve'); await symlink(sentinel, target);
     await expect(copyCredentials(home, base, accounts, copied)).rejects.toThrow();
     expect(copied).toEqual([target]);
-    await expect(removeCredentials(copied)).rejects.toThrow('nonregular file');
+    await removeCredentials(copied);
+    expect(await Bun.file(target).exists()).toBe(false);
     expect(await readFile(sentinel, 'utf8')).toBe('preserve');
   });
   test('selected vault tool and profile directories cannot redirect to another account', async () => {
@@ -154,6 +180,28 @@ describe('disposable credential boundary', () => {
     expect(() => sandboxProfile(join(base, 'nested'), '/Users/operator', [], base)).toThrow('must not overlap');
     expect(() => sandboxProfile(base, '/Users/operator', [], base)).toThrow('must not overlap');
     expect(() => sandboxProfile(root, '/Users/operator', [], base)).toThrow('must not overlap');
+  });
+  test('DNS permits only the macOS resolver socket after the general Unix-socket denial', () => {
+    const text = sandboxProfile('/private/run/candidate', '/Users/operator', []);
+    const exception = '(allow network-outbound (remote unix-socket (path "/private/var/run/mDNSResponder")))';
+    expect(text).toContain(exception);
+    expect(text.indexOf(exception)).toBeGreaterThan(text.indexOf('(deny network-outbound (remote unix-socket'));
+    expect(text.indexOf(exception)).toBeLessThan(text.indexOf('(deny network-outbound (remote ip "localhost:*"))'));
+    expect(text).not.toContain('(allow network-outbound (remote unix-socket (path-regex');
+  });
+  test('Apple Git resolves beyond the shim and allows only its selected runtime', async () => {
+    const root = await fixture(), executable = join(root, 'Xcode.app/Contents/Developer/usr/bin/git');
+    await mkdir(dirname(executable), { recursive: true }); await writeFile(executable, 'native-git-fixture');
+    const calls: string[][] = [];
+    const selected = await resolveAppleGit('/usr/bin/git', async args => { calls.push(args); return executable + '\n'; });
+    expect(calls).toEqual([['/usr/bin/xcrun', '--find', 'git']]);
+    expect(selected).toEqual({ executable, runtime: dirname(dirname(executable)) });
+    const text = sandboxProfile('/private/run/candidate', '/Users/operator', [selected.executable], undefined, [selected.runtime!]);
+    expect(text.match(new RegExp('subpath ' + JSON.stringify(selected.runtime!).replace(/[.*+?^${}()|[\]\\]/g, '\\$&'), 'g'))).toHaveLength(2);
+    expect(text).not.toContain('(subpath "/Applications")');
+    await expect(resolveAppleGit('/usr/bin/git', async () => '/usr/bin/git')).rejects.toThrow('beyond');
+    await expect(resolveAppleGit('/usr/bin/git', async () => 'relative/git')).rejects.toThrow('absolute');
+    expect(await resolveAppleGit(executable, async () => { throw new Error('Non-shim must not use xcrun'); })).toEqual({ executable });
   });
   test('root-read exception is the final Seatbelt rule after all read denials', () => {
     const text = sandboxProfile('/private/run/candidate', '/Users/operator', ['/opt/homebrew/bin/bun']);
@@ -243,6 +291,7 @@ macTest('real Mac sandbox denies daily-home and vault sentinels, writes, aliases
     if (previousHome === undefined) delete process.env.HOME; else process.env.HOME = previousHome;
   }
   const options = { cwd: home, env: isolatedEnv(home) };
+  expect(await command(sandboxed(profile, ['git', '--version']), options)).toContain('git version');
   const allowed = join(home, 'candidate-sentinel');
   await writeFile(allowed, 'candidate-state-allowed');
   expect(await command(sandboxed(profile, ['/bin/cat', allowed]), options)).toBe('candidate-state-allowed');
@@ -264,7 +313,9 @@ macTest('real Mac sandbox denies daily-home and vault sentinels, writes, aliases
   const redirectedCredential = join(home, '.claude/.credentials.json');
   await writeFile(join(deniedVault, '.credentials.json'), 'preserve-external-credential');
   await symlink(deniedVault, join(home, '.claude'));
-  await expect(removeCredentials([redirectedCredential], new Map([[home, profile]]))).rejects.toThrow();
+  // Full-state cleanup runs after all probes below; it must not follow this
+  // redirect or leave tokens relocated outside their original config path.
+  await writeFile(join(home, 'relocated-token'), 'disposable-token');
   expect(await readFile(join(deniedVault, '.credentials.json'), 'utf8')).toBe('preserve-external-credential');
   const proof = { platform: process.platform, denied: [] as string[], keychainServices: {} as Record<string, { unsandboxed: number; sandboxed: number }> };
   for (const [i, path] of locations.entries()) {
@@ -295,6 +346,9 @@ macTest('real Mac sandbox denies daily-home and vault sentinels, writes, aliases
     proof.keychainServices[service] = { unsandboxed, sandboxed: result };
   }
   expect(reachable).toBeGreaterThan(0);
+  await removeCredentials([redirectedCredential], new Map([[home, profile]]));
+  expect(await Bun.file(join(home, 'relocated-token')).exists()).toBe(false);
+  expect(await readFile(join(deniedVault, '.credentials.json'), 'utf8')).toBe('preserve-external-credential');
   console.log('Mac filesystem/Keychain denial proof:', JSON.stringify(proof));
 }, 0);
 

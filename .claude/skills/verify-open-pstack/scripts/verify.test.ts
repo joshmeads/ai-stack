@@ -7,10 +7,12 @@ import data from '../features/registry.json';
 import { requiredFeatures, validateRegistry } from './core.ts';
 import { parseChangedFiles, Publisher } from './github.ts';
 import { command, sha256 } from './io.ts';
-import { evidence, liveEvidenceBody, verify } from './verify.ts';
+import { evidence, liveEvidenceBody, MAC_TESTS, validateMacTests, verify } from './verify.ts';
 import { HARNESSES, REPO, type Driver, type GitHub, type Pull, type Receipt } from './types.ts';
 const SHA = 'a'.repeat(40), BASE = 'b'.repeat(40), NEXT = 'c'.repeat(40), HASH = 'd'.repeat(64);
 const URL = `https://github.com/${REPO}/pull/123#issuecomment-1`;
+// Explicit fake-driver proof exercises the gate; it makes no OS-enforcement claim.
+const testMacLog = (sha: string) => `Pinned SHA: ${sha}\n${MAC_TESTS.map(name => `(pass) ${name} [1ms]`).join('\n')}\n 2 pass\n 0 fail\nPSTACK_MAC_TEST_EXIT=0\n`;
 const roots: string[] = [];
 function temporary(): string { const root = realpathSync(mkdtempSync(join(tmpdir(), 'pstack-publish-test-'))); roots.push(root); return root; }
 afterEach(() => { for (const root of roots.splice(0)) rmSync(root, { recursive: true, force: true }); });
@@ -30,7 +32,11 @@ function fixture(runtime = false, selfTest = false) {
     async ready() { mark('ready'); pull.draft = false; }, async draft() { mark('draft'); pull.draft = true; },
   };
   const driver: Driver = {
-    async prepare(r) { mark('prepare'); return HARNESSES.map(harness => ({ harness, sha: r.sha, cliVersion: 'test', pluginVersion: '1.5.0', treeHash: HASH, location: `/isolated/${harness}/plugin`, home: `/isolated/${harness}` })); },
+    async prepare(r) {
+      const log = testMacLog(r.sha); writeFileSync(join(root, 'mac-proof.log'), log);
+      r.macProof = { sha: r.sha, platform: 'darwin', reviewer: 'operator', tests: { path: 'mac-proof.log', sha256: sha256(log) }, noKeychainDialog: true,
+        authenticated: HARNESSES.map(harness => ({ harness, observed: 'unit-driver authenticated request assertion', transcript: 'retained.log', transcriptHash: sha256('reviewed transcript') })) };
+      mark('prepare'); return HARNESSES.map(harness => ({ harness, sha: r.sha, cliVersion: 'test', pluginVersion: '1.5.0', treeHash: HASH, location: `/isolated/${harness}/plugin`, home: `/isolated/${harness}` })); },
     async exercise(r) { mark('exercise'); return HARNESSES.flatMap(harness => requiredFeatures(r).map(feature => ({ harness, feature, surface: 'native surface', action: 'invoke', observed: 'fixture changed', reviewer: 'operator' as const, transcript: 'retained.log', transcriptHash: sha256('reviewed transcript'), artifacts: [{ path: 'fixture.json', sha256: sha256('reviewed artifact') }] }))); },
   };
   const options = { pr: 123, root, selfTest, registry: validateRegistry(data), github, driver, persist: async (r: Receipt) => { saved.push(structuredClone(r)); } };
@@ -38,6 +44,37 @@ function fixture(runtime = false, selfTest = false) {
 }
 
 describe('exact-head publication state machine', () => {
+  test('Mac test output requires both exact names, no skips/failures and successful process exit', () => {
+    expect(() => validateMacTests(testMacLog(SHA), SHA)).not.toThrow();
+    for (const log of [testMacLog(NEXT), testMacLog(SHA).replace(MAC_TESTS[0], 'other test'), testMacLog(SHA).replace('(pass)', '(skip)'),
+      testMacLog(SHA).replace('0 fail', '1 fail'), testMacLog(SHA).replace('2 pass', '2 pass\n 1 skip'), testMacLog(SHA).replace('EXIT=0', 'EXIT=1')]) {
+      expect(() => validateMacTests(log, SHA)).toThrow('Both pinned Mac');
+    }
+  });
+  test.each(['missing', 'sha', 'keychain', 'authenticated', 'transcript', 'overwrite', 'skip'])('runtime Mac proof %s blocks success and readiness', async defect => {
+    const f = fixture(true);
+    const exercise = f.options.driver.exercise;
+    f.options.driver.exercise = async receipt => {
+      const observations = await exercise(receipt);
+      const proof = receipt.macProof!;
+      if (defect === 'missing') delete receipt.macProof;
+      if (defect === 'sha') proof.sha = NEXT;
+      if (defect === 'keychain') proof.noKeychainDialog = false;
+      if (defect === 'authenticated') proof.authenticated.pop();
+      if (defect === 'transcript') proof.authenticated[0]!.transcriptHash = HASH;
+      if (defect === 'overwrite') writeFileSync(join(f.options.root, proof.tests.path), 'overwritten');
+      if (defect === 'skip') { const log = testMacLog(SHA).replace('(pass)', '(skip)'); writeFileSync(join(f.options.root, proof.tests.path), log); proof.tests.sha256 = sha256(log); }
+      return observations;
+    };
+    await expect(verify(f.options)).rejects.toThrow();
+    expect(f.calls).not.toContain(`status:success:${SHA}`); expect(f.calls).not.toContain('ready');
+  });
+  test('proof mutation during publication withdraws exact-SHA success', async () => {
+    const f = fixture(true);
+    f.hook(call => { if (call === `status:success:${SHA}`) writeFileSync(join(f.options.root, 'mac-proof.log'), 'changed'); });
+    await expect(verify(f.options)).rejects.toThrow('Mac isolation proof changed');
+    expect(f.calls).toContain(`status:failure:${SHA}`); expect(f.calls).not.toContain('ready');
+  });
   test('docs-only publishes no-runtime evidence without either harness, then readies', async () => {
     const f = fixture(), receipt = await verify(f.options);
     expect(receipt.status).toBe('success'); expect(receipt.sha).toBe(SHA);
@@ -49,6 +86,18 @@ describe('exact-head publication state machine', () => {
     expect(f.pull.body).toContain(URL); expect(f.pull.body).toContain('Retain these notes.'); expect(f.pull.body).not.toContain('_pending_');
     expect(f.pull.body).toContain('- [x] The installed version, action, and observed result appear below.');
     expect(liveEvidenceBody(f.pull.body, receipt)).toBe(f.pull.body);
+  });
+  test('unmanaged evidence replacement preserves every following heading and operator note', async () => {
+    const receipt = await verify(fixture().options);
+    for (const suffix of ['# Release notes\nKeep these.', '## Notes\nKeep these.', '### Operator notes\nKeep these.', 'Ordinary operator text.\n\n## Later\nKeep these.', '---\nTrailing section.']) {
+      const before = `Summary is untouched.\n\nLive evidence:\n\n_pending_\n\n${suffix}`;
+      const after = liveEvidenceBody(before, receipt);
+      expect(after).toStartWith('Summary is untouched.\n\n');
+      expect(after).toEndWith(suffix); expect(after).not.toContain('_pending_');
+      expect(liveEvidenceBody(after, receipt)).toBe(after);
+    }
+    const ordinary = 'Live evidence:\nOperator-owned text immediately follows.\n# Closing notes';
+    expect(liveEvidenceBody(ordinary, receipt)).toEndWith('Operator-owned text immediately follows.\n# Closing notes');
   });
   test('all changed surfaces and explicit project self-test run in both harnesses', async () => {
     const f = fixture(true, true), r = await verify(f.options);
@@ -175,12 +224,47 @@ describe('exact-head publication state machine', () => {
     expect(f.calls).toContain(`status:failure:${SHA}`); expect(f.calls).not.toContain('ready');
     expect(f.saved.at(-1)?.failure).toContain('Missing/duplicate');
   });
-  test('ambiguous success-write and ready-write failures are compensated', async () => {
+  test('ambiguous publication responses revoke success without claiming a readiness transition', async () => {
     for (const boundary of [`status:success:${SHA}`, 'ready']) {
       const f = fixture(); f.hook(call => { if (call === boundary) throw new Error('response lost'); });
       await expect(verify(f.options)).rejects.toThrow('response lost');
       expect(f.calls).toContain(`status:failure:${SHA}`);
-      if (boundary === 'ready') expect(f.calls).toContain('draft');
+      expect(f.calls).not.toContain('draft');
+    }
+  });
+  test('another actor making the PR ready during the run is not reverted after failure', async () => {
+    const f = fixture();
+    f.hook(call => { if (call === `status:success:${SHA}`) f.pull.draft = false; });
+    f.options.persist = async receipt => {
+      if (receipt.status === 'success') throw new Error('receipt denied');
+      f.saved.push(structuredClone(receipt));
+    };
+    await expect(verify(f.options)).rejects.toThrow('receipt denied');
+    expect(f.calls).not.toContain('ready'); expect(f.calls).not.toContain('draft'); expect(f.pull.draft).toBe(false);
+  });
+  test('readiness is checked again after entering the ready phase', async () => {
+    const f = fixture(), persist = f.options.persist;
+    f.options.persist = async receipt => { await persist(receipt); if (receipt.phase === 'ready') f.pull.draft = false; };
+    await verify(f.options);
+    expect(f.calls).not.toContain('ready'); expect(f.calls).not.toContain('draft'); expect(f.pull.draft).toBe(false);
+  });
+  test('a failed or idempotent readiness call never rolls back another actor', async () => {
+    const f = fixture();
+    f.options.github.ready = async () => { f.calls.push('ready'); f.pull.draft = false; throw new Error('already ready'); };
+    await expect(verify(f.options)).rejects.toThrow('already ready');
+    expect(f.calls).toContain(`status:failure:${SHA}`); expect(f.calls).not.toContain('draft'); expect(f.pull.draft).toBe(false);
+  });
+  test('receipt-write errors cannot prevent compensating an accepted success or ready write', async () => {
+    for (const boundary of [`status:success:${SHA}`, 'ready']) {
+      const f = fixture(); let deny = false;
+      f.hook(call => { if (call === boundary) { f.pull.base.sha = NEXT; deny = true; } });
+      f.options.persist = async receipt => {
+        if (deny && ['head-moved', 'failed'].includes(receipt.phase)) throw new Error('ENOSPC');
+        f.saved.push(structuredClone(receipt));
+      };
+      await expect(verify(f.options)).rejects.toThrow('changed');
+      expect(f.calls).toContain(`status:failure:${SHA}`);
+      if (boundary === 'ready') { expect(f.calls).toContain('draft'); expect(f.pull.draft).toBe(true); }
     }
   });
   test('failed compensation is retained, not reported as successful', async () => {
@@ -215,6 +299,31 @@ describe('publisher request boundaries', () => {
     expect(calls.some(args => args[0] === 'gh')).toBe(false);
     expect(calls.at(-1)).toContain(`${base}...${head}`);
     await expect(publisher.files('main', head)).rejects.toThrow('Invalid diff SHA');
+  });
+  test('real interrupted command execution still permits only trusted rollback writes', () => {
+    for (const signal of ['SIGINT', 'SIGTERM']) {
+      const script = `
+        import { command, interruptCommands } from ${JSON.stringify(new globalThis.URL('./io.ts', import.meta.url).pathname)};
+        import { Publisher } from ${JSON.stringify(new globalThis.URL('./github.ts', import.meta.url).pathname)};
+        await interruptCommands(${JSON.stringify(signal)});
+        const executed = [];
+        const publisher = new Publisher(async (args, options) => {
+          const output = await command([process.execPath, '-e', 'console.log("{}")'], options);
+          executed.push(args);
+          return output;
+        });
+        for (const ordinary of [() => publisher.ready(123), () => publisher.status(${JSON.stringify(SHA)}, 'success', ${JSON.stringify(URL)}, 'passed')]) {
+          try { await ordinary(); throw new Error('ordinary write escaped interruption'); }
+          catch (error) { if (!String(error).includes('Interrupted by')) throw error; }
+        }
+        await publisher.status(${JSON.stringify(SHA)}, 'failure', ${JSON.stringify(URL)}, 'withdraw');
+        await publisher.draft(123);
+        console.log(JSON.stringify(executed));
+      `;
+      const calls = JSON.parse(execFileSync(process.execPath, ['-e', script], { encoding: 'utf8' }).trim()) as string[][];
+      expect(calls).toHaveLength(2);
+      expect(calls[0]).toContain('state=failure'); expect(calls[1]).toContain('--undo');
+    }
   });
   test('status targets the supplied exact SHA and evidence URL, never a branch', async () => {
     const calls: string[][] = []; const publisher = new Publisher(async args => { calls.push(args); return '{}'; });

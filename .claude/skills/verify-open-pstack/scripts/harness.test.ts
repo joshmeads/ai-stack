@@ -5,6 +5,7 @@ import { join } from 'node:path';
 import { doctor } from './doctor.ts';
 import { codexInstallation, launch, MacDriver, verifyCodexEnabled, verifyProjectDoctor } from './harness.ts';
 import { newReceipt } from './core.ts';
+import { MAC_TESTS } from './verify.ts';
 import { command, freshRoot, isolatedEnv, redact, retainedFile, treeHash, type Command } from './io.ts';
 const roots: string[] = [];
 async function fixture(): Promise<string> { const root = await realpath(await mkdtemp(join(tmpdir(), 'pstack-test-'))); roots.push(root); return root; }
@@ -89,7 +90,8 @@ describe('isolated harness boundaries', () => {
     await expect(verifyProjectDoctor(['{}'], workspace)).rejects.toThrow('passing child doctor');
     await expect(verifyProjectDoctor([JSON.stringify({ ...JSON.parse(text), result: 'blocked' })], workspace)).rejects.toThrow('passing child doctor');
   });
-  test.each([false, true])('prepare uses real pinned files, disposable accounts and cleanup (install failure=%s)', async failInstall => {
+  test.each([false, true, 'proof', 'review'])('prepare gates disposable credentials on pinned proof (failure=%s)', async failure => {
+    const failInstall = failure === true;
     const root = await fixture(), repository = join(root, 'repository'), calls: string[][] = [];
     const accounts = { claude: 'claude@example.com', codex: 'codex@example.com' };
     const caam = join(root, 'caam'), vault = join(caam, 'data/vault');
@@ -114,6 +116,14 @@ describe('isolated harness boundaries', () => {
     const run: Command = async (wrapped, options = {}) => {
       const args = wrapped[0] === '/usr/bin/sandbox-exec' ? wrapped.slice(3) : wrapped;
       calls.push(args);
+      if (args[0] === '/bin/sh') {
+        expect(options.cwd).toBe(join(root, 'source-home/workspace/.claude/skills/verify-open-pstack'));
+        expect(options.env!.PSTACK_OPERATOR_SENTINELS).toBe('1'); expect(process.env.HOME).toBe(options.env!.HOME);
+        expect(args[2]).toContain('--timeout 0'); expect(options.env!.GH_TOKEN).toBeUndefined();
+        for (const harness of ['claude', 'codex']) await expect(stat(join(root, 'state', harness))).rejects.toThrow('ENOENT');
+        // Fake adapter output only; actual OS proof is required on the operator Mac.
+        return `${MAC_TESTS.map(name => `(pass) ${name} [1ms]`).join('\n')}\n 2 pass\n 0 fail\nPSTACK_MAC_TEST_EXIT=${failure === 'proof' ? '1' : '0'}\n`;
+      }
       if (args[0] === 'caam') {
         expect(wrapped.slice(0, 2)).toEqual(['/usr/bin/sandbox-exec', '-p']);
         expect(wrapped[2]).toContain('(deny file-write*)');
@@ -180,11 +190,15 @@ describe('isolated harness boundaries', () => {
     const boundary = async (home: string): Promise<string> => {
       const profile = `${home}.unit-test.sb`; await writeFile(profile, 'unit adapter'); return profile;
     };
-    const driver = new MacDriver(run, undefined, accounts, boundary);
+    const review = async () => failure === 'review' ? 'REJECT' : 'PASS MAC ISOLATION';
+    const driver = new MacDriver(run, review, accounts, boundary);
     try {
       Object.defineProperty(process, 'platform', { ...platform, value: 'darwin' }); process.env.CAAM_HOME = caam;
-      const preparation = driver.prepare(newReceipt(111, sha, sha, true, root));
-      if (failInstall) await expect(preparation).rejects.toThrow('fixture installation failed');
+      const preparedReceipt = newReceipt(111, sha, sha, true, root);
+      const preparation = driver.prepare(preparedReceipt);
+      if (failure === 'proof') await expect(preparation).rejects.toThrow('Both pinned Mac');
+      else if (failure === 'review') await expect(preparation).rejects.toThrow('Operator rejected Mac');
+      else if (failInstall) await expect(preparation).rejects.toThrow('fixture installation failed');
       else {
         const installs = await preparation;
         expect(installs.map(i => i.harness)).toEqual(['claude', 'codex']);
@@ -195,7 +209,9 @@ describe('isolated harness boundaries', () => {
         expect(calls.some(c => c.join(' ') === 'codex plugin add pstack@open-pstack --json')).toBe(true);
         for (const installation of installs) {
           const receipt = newReceipt(111, sha, sha, true, root);
-          receipt.installations = [installation];
+          receipt.installations = [installation]; receipt.macProof = preparedReceipt.macProof;
+          expect(receipt.macProof!.sha).toBe(sha); expect(receipt.macProof!.noKeychainDialog).toBe(true);
+          expect(receipt.macProof!.tests.sha256).toMatch(/^[a-f0-9]{64}$/);
           await expect(driver.exercise(receipt)).rejects.toThrow('fixture protected native surface reached');
         }
         expect(calls.filter(c => c[0] === '/usr/bin/script')).toHaveLength(2);

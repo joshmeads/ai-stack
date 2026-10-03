@@ -37,8 +37,16 @@ export const command: Command = async (args, options = {}) => {
     activeCommands.delete(child.pid);
   }
 };
+const secrets = new Set<string>();
+export function registerSecrets(values: string[]): void {
+  for (const value of values) if (value) secrets.add(value);
+}
+function redactSecrets(text: string): string {
+  for (const secret of [...secrets].sort((a, b) => b.length - a.length)) text = text.split(secret).join('[REDACTED]');
+  return text;
+}
 export function redact(text: string): string {
-  return text.replace(/(?:gh[pousr]_[\w]+|github_pat_[\w]+|sk-[\w-]+|Bearer[ \t]+[^\s"'<>()[\]{},;]+)/gi, '[REDACTED]');
+  return redactSecrets(text).replace(/(?:gh[pousr]_[\w]+|github_pat_[\w]+|sk-[\w-]+|Bearer[ \t]+[^\s"'<>()[\]{},;]+)/gi, '[REDACTED]');
 }
 export function isolatedEnv(home: string, harness?: 'claude' | 'codex'): Record<string, string> {
   if (!isAbsolute(home)) throw new Error('Candidate HOME must be an absolute run-owned directory');
@@ -55,7 +63,12 @@ export function isolatedEnv(home: string, harness?: 'claude' | 'codex'): Record<
   return env;
 }
 export async function save(path: string, value: unknown): Promise<void> {
-  const json = JSON.stringify(value, (_key, item) => typeof item === 'string' ? redact(item) : item, 2);
+  const pathKeys = new Set(['path', 'paths', 'skill', 'workspace', 'featureMap', 'home', 'location', 'artifactRoot', 'transcript']);
+  const pathArrays = new WeakSet<object>();
+  const json = JSON.stringify(value, function (key, item) {
+    if (pathKeys.has(key) && Array.isArray(item)) pathArrays.add(item);
+    return typeof item === 'string' ? (pathKeys.has(key) || pathArrays.has(this) ? redactSecrets(item) : redact(item)) : item;
+  }, 2);
   await writeFile(path + '.tmp', json + '\n', { mode: 0o600 });
   await rename(path + '.tmp', path);
 }

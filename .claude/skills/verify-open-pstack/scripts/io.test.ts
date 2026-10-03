@@ -2,7 +2,7 @@ import { afterEach, describe, expect, test } from 'bun:test';
 import { chmod, mkdir, mkdtemp, readFile, realpath, rm, stat, symlink, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
-import { redact, retainedFile, save, treeHash } from './io.ts';
+import { redact, registerSecrets, retainedFile, save, treeHash } from './io.ts';
 
 const roots: string[] = [];
 async function fixture(): Promise<string> {
@@ -17,10 +17,34 @@ describe('retained JSON and file boundaries', () => {
     const root = await fixture(), path = join(root, 'receipt.json');
     await save(path, { path: '/tmp/Bearer token', nested: ['Bearer secret",}', 'github_pat_sensitive'], text: 'Bearer secret, next\nquoted "value"', count: 2 });
     const json = await readFile(path, 'utf8');
-    expect(JSON.parse(json)).toEqual({ path: '/tmp/[REDACTED]', nested: ['[REDACTED]",}', '[REDACTED]'], text: '[REDACTED], next\nquoted "value"', count: 2 });
+    expect(JSON.parse(json)).toEqual({ path: '/tmp/Bearer token', nested: ['[REDACTED]",}', '[REDACTED]'], text: '[REDACTED], next\nquoted "value"', count: 2 });
     expect(json).not.toContain('secret');
     expect((await stat(path)).mode & 0o777).toBe(0o600);
     expect(redact('Bearer token, next')).toBe('[REDACTED], next');
+  });
+
+  test('registered opaque access, refresh, and ID tokens cannot survive text or structured evidence', async () => {
+    const tokens = ['opaque-access.+/value', 'opaque-refresh:"quoted"', 'eyJhbGciOiJSUzI1NiJ9.eyJzdWIiOiJvcGVyYXRvciJ9.signature'];
+    registerSecrets(tokens);
+    registerSecrets(['']);
+    for (const token of tokens) {
+      expect(redact(`prefix ${token} suffix ${token}`)).toBe('prefix [REDACTED] suffix [REDACTED]');
+    }
+    const root = await fixture(), path = join(root, 'receipt.json');
+    await save(path, { text: tokens.join('\n'), nested: tokens, path: `/tmp/${tokens[0]}/live` });
+    const json = await readFile(path, 'utf8');
+    for (const token of tokens) expect(json).not.toContain(token);
+    expect(JSON.parse(json)).toEqual({ text: tokens.map(() => '[REDACTED]').join('\n'), nested: tokens.map(() => '[REDACTED]'), path: '/tmp/[REDACTED]/live' });
+  });
+
+  test('canonical structural paths retain token-like components without exempting free text', async () => {
+    const root = await fixture(), path = join(root, 'doctor.json'), canonical = '/tmp/sk-review/live';
+    const evidence = { skill: `${canonical}/.claude/skills/verify-open-pstack`, workspace: canonical,
+      home: canonical, location: canonical, artifactRoot: canonical, featureMap: canonical,
+      transcript: `${canonical}/transcript.txt`, artifacts: [{ path: `${canonical}/artifact.txt` }],
+      selection: { paths: ['sk-review/SKILL.md', 'github_pat_reference.md'] }, checks: { explanation: 'sk-private' } };
+    await save(path, evidence);
+    expect(JSON.parse(await readFile(path, 'utf8'))).toEqual({ ...evidence, checks: { explanation: '[REDACTED]' } });
   });
 
   test('permits evidence below an ancestor named state and canonicalizes output aliases', async () => {
