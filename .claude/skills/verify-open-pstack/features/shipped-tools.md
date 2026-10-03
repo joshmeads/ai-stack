@@ -14,4 +14,4 @@ Use the candidate's installed help and documented arguments. Create fixture stat
 
 ## Gotchas
 
-A mock test is not live proof. Never run queue/merge actions or edit daily workflow state as a fixture. Do not infer a successful remote read from an empty response. Missing required access fails the feature; preserve its reason and draft status.
+A mock test is not live proof. Never run queue/merge actions or edit daily workflow state as a fixture. Do not infer a successful remote read from an empty response. Candidate tools and descendants stay inside the macOS sandbox with run-owned `HOME`, both isolated provider configurations, and disposable explicitly selected caam session credentials. They cannot read daily home/GitHub/SSH/provider files or access Keychain/securityd; never pass publisher credentials to make a remote read succeed. GitHub evidence/status publication belongs only to the trusted parent. Missing required access fails the feature; preserve its reason without re-drafting an already-ready PR, including PR #111.

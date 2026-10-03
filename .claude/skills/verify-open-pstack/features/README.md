@@ -10,7 +10,9 @@
 | `runner` | Installed parent invoking real configured provider lanes |
 | `tools` | Installed parent invoking the changed shipped CLI |
 | `project` | Native discovery/invocation of this verifier in both harnesses |
-| `nonRuntime` | Explicit repository documentation/CI/assets/tests; no plugin harness launch |
+| `nonRuntime` | Explicit repository documentation/CI/non-shipped assets/tests; no plugin harness launch |
+
+Shipped `plugins/pstack/assets/**` belongs to `shared`: even a logo-only change requires both installed harness surfaces, not the no-runtime lane. `bootstrap.ts` belongs to `tools`; exercise its actual consumers, `orch` and `watch-pr`, including dependency bootstrapping rather than the unrelated external runner.
 
 Skill-owned `SKILL.md`, `references/**`, and `playbooks/**` select their skill. Additional executable paths must be registered explicitly. Shared consumed mappings select every dependent skill conservatively. The coverage test inventories all tracked plugin files; new unmapped files block CI and runs. Deleted skill surfaces cannot silently disappear from evidence: choose a surviving documented entry point demonstrating the intended removal, or report blocked.
 

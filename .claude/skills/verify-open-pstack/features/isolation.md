@@ -1,14 +1,40 @@
-# Isolation contract and approved operator probe
+# Disposable credential isolation contract
 
-The operator's read-only Mac probe is retained in issue #90 comment 5961645184; plan approval is comment 5961649164. On 2026-10-02 it reported Darwin, Claude Code 2.1.283, codex-cli 0.160.0, Bun 1.4.0, and gh 2.97.0. This is capability evidence, not proof of an installed candidate.
+The October 2 probe (issue #90 comment 5961645184) reported Darwin, Claude Code 2.1.283, codex-cli 0.160.0, Bun 1.4.0, and gh 2.97.0. This is capability evidence, not candidate isolation proof. The October 3 operator-selected caam 0.1.22 contract (issue #112 comments 5968857062 and 5969996999) supersedes the real-HOME/Keychain login approach.
 
-Selected interfaces:
-- Claude: the real `HOME` and a fresh run-owned `CLAUDE_CONFIG_DIR`, candidate `--plugin-dir`, explicit empty `--settings`, and `--setting-sources project` to load the pinned checkout's project settings and skills while excluding user settings. The operator measured project-skill discovery failing with an empty setting source and succeeding with `project` on Claude Code 2.1.283. No daily plugin/configuration state is copied.
-- Codex: the real `HOME` and a fresh run-owned `CODEX_HOME`; add the pinned checkout as a local marketplace with `codex plugin marketplace add <checkout> --json`, then `codex plugin add pstack@open-pstack --json`. Start a new interactive task after installation. Do not use the daily profile.
-- Both: a fresh candidate checkout, run-owned state and `TMPDIR`, minimal inherited environment, interactive login inside isolated config state, and fresh native sessions. The publisher's GitHub credentials and daily provider API keys are never passed to the candidate or either harness. Preserve the real `HOME`, `USER`, and `LOGNAME` so macOS can find the login Keychain and Claude uses the operator's account rather than `unknown`; never create, reset, or unlock any keychain. The operator measured config-scoped Claude OAuth items on 2.1.283 and observed `loggedIn:false` for a fresh config directory with real `HOME`; the new-head Mac run remains required to verify login and live behavior. Run-owned 'home' fields in receipts denote state roots, not process `HOME`.
+## Trusted parent
 
-The Codex JSON contract was checked against OpenAI's `codex-rs/cli/src/plugin_cmd.rs` at tag `rust-v0.160.0`: `JsonPluginAddOutput` uses camelCase `name`, `marketplaceName`, and `installedPath`; `JsonPluginListOutput.installed` contains `installed` and `enabled`. Unknown schemas fail closed rather than searching arbitrary caches for a plausible tree.
+Require explicit `--claude-account EMAIL` and `--codex-account EMAIL`. Validate selected vault identities once per run; record their emails in receipts. Copy only `claude/<account>/.credentials.json` into run-owned `CLAUDE_CONFIG_DIR` and `codex/<account>/auth.json` into run-owned `CODEX_HOME`. Never activate accounts, modify/write back to the vault, copy daily configuration, or introduce login. Missing/mismatched credentials and quota exhaustion fail closed. GitHub authentication and publication remain exclusively in the trusted parent.
 
-Phase 3 checks these CLI flags at runtime and verifies the installed plugin file tree against the pinned checkout. If either interface is absent or its installed tree cannot be established, stop. A help probe cannot substitute for actual installation/discovery. The build sandbox cannot supply the required Mac surface proof; delivery remains a draft for the operator's doctor and self-test.
+## Candidate boundary
 
-`doctor` records versions/help without installing or reading daily credentials. `run` uses the approved interfaces only after a passing doctor and an exact-head pin. Evidence remains outside the checkout. Cleanup is explicit operator removal of the named run-owned state after reviewing the receipt; never clean up a daily home.
+- Use run-owned `HOME`, `TMPDIR`, `CLAUDE_CONFIG_DIR`, and `CODEX_HOME` for both parent harnesses and cross-provider descendants. Preserve real `USER`/`LOGNAME`; scrub publisher tokens and daily API credentials.
+- Claude: candidate `--plugin-dir`, empty `--settings`, and `--setting-sources project`. This loads pinned project skills/settings while excluding user settings.
+- Codex: pinned local marketplace/plugin installation, then a fresh native session. Validate installed identity, enabled state, contained path, and pinned source provenance; unknown schemas fail closed.
+- Enforce candidate filesystem and credential isolation with macOS `sandbox-exec`, inherited by descendants. Deny daily home, `~/.config/gh`, `~/.ssh`, real `~/.claude`, real `~/.codex`, caam vault, and Keychain/securityd access. Do not link any real Library/Keychain path into run-owned state. Environment scrubbing alone is insufficient.
+- Never invoke candidate login, create/reset/unlock Keychain, or use daily auth as fallback. Only copied disposable credentials may authenticate native API requests.
+
+Verify tracked plugin/project-skill provenance against immutable pinned Git objects before and after exercise. Before launching a native session, call `protectSources(profile, home, sources, run?)` with canonical workspace and installed-plugin roots, then use its returned exercise policy for every candidate command. The policy is an exclusive-create mode-0600 file beside the original policy, outside candidate-writable state. Source roots and all ancestors must be canonical directories, not symlinks. Source/plugin writes and ancestor rename/unlink are denied except workspace `.claude/skills/verify-open-pstack/node_modules`, workspace `plugins/pstack/skills/poteto-mode/scripts/node_modules`, and installed-plugin `skills/poteto-mode/scripts/node_modules`. No broader write allowance is added; the original daily-home/vault/Keychain denies remain in force. Generated directories are established before freezing their parents. Rehashes alone cannot prevent modify-execute-restore, so pending adapter integration is a blocker. Candidate self-test uses `doctor --candidate` without vault/publisher probing.
+
+## Operator-Mac proof
+
+From the trusted verifier checkout run:
+
+```sh
+PROOF="$(mktemp -d "${TMPDIR:-/tmp}/open-pstack-isolation-proof.XXXXXX")"
+(
+  set -e -o pipefail
+  test "$(uname -s)" = Darwin
+  cd .claude/skills/verify-open-pstack
+  PSTACK_OPERATOR_SENTINELS=1 bun test --timeout 0 scripts/isolation.test.ts 2>&1 |
+    tee "$PROOF/isolation-proof.txt"
+)
+```
+
+The actual-HOME test requires explicit opt-in. It exclusively creates randomized `.pstack-denial-<UUID>` non-secret files in the real daily home, `~/.config/gh`, `~/.ssh`, `~/.claude`, `~/.codex`, and `~/Library/Keychains`; no existing daily file or actual Keychain database is opened for writing. Noncanonical/symlinked daily directories fail before sentinel creation. It removes only its own files and directories it created that remain empty; cleanup paths are printed for safe recovery after interruption. Never recursively remove daily directories.
+
+Require both Mac tests to pass without skips. Positive unsandboxed reads prove sentinels exist; sandboxed direct reads, aliases, descendants, and writes must be denied and sentinel content preserved. Keychain Mach-service denial requires a reachable unsandboxed control for the same service; a missing service is not proof. Exercise-policy tests require protected source writes/unlinks/renames, ancestor moves, alias writes, hardlinks, and policy replacement to fail while all three generated dependency leaves remain writable. Record the emitted denial proof in `$PROOF/isolation-proof.txt` alongside the exact-head receipt. Linux skips or stubbed wrappers cannot establish Seatbelt enforcement. No Keychain dialog and authenticated API requests in both harnesses still require operator observation during native live sessions, not inference from these tests. Missing adapter integration or failed tests block delivery. After Unfret passes, use explicit-account Launch commands with fresh probe/live directories; leave PR #111 ready.
+
+## Cleanup
+
+Delete all copied session credential files in final cleanup on success or failure, including child-provider copies; record the outcome and block on cleanup failure. Keep redacted receipts/transcripts/artifacts and sentinel-denial proof. Never modify vault/daily files or delete evidence as credential cleanup. Subsequent operator removal is limited to named run-owned state.

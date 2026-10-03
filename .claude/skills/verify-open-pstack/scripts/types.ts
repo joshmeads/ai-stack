@@ -1,10 +1,11 @@
 export const REPO = 'ericlitman/open-pstack';
 export const HARNESSES = ['claude', 'codex'] as const;
 export type Harness = typeof HARNESSES[number];
+export type Accounts = Record<Harness, string>;
 export type Phase = 'resolve' | 'classify' | 'prepare' | 'exercise' | 'publish' | 'ready' | 'failed' | 'head-moved';
 export interface Pull {
   number: number; head: { sha: string }; base: { sha: string }; draft: boolean;
-  state: string; headRepo: string;
+  state: string; headRepo: string; body: string;
 }
 export interface ChangedFile { filename: string; previous_filename?: string }
 export interface Registry {
@@ -24,7 +25,7 @@ export interface Observation {
 }
 export interface Installation {
   harness: Harness; cliVersion: string; pluginVersion: string; sha: string;
-  location: string; treeHash: string; home: string;
+  location: string; treeHash: string; home: string; account?: string; sourceHash?: string;
 }
 export interface Receipt {
   schema: 1; repo: string; pr: number; sha: string; base: string; phase: Phase;
@@ -35,7 +36,8 @@ export interface Receipt {
 }
 export interface GitHub {
   pull(pr: number): Promise<Pull>;
-  files(pr: number): Promise<ChangedFile[]>;
+  files(base: string, head: string): Promise<ChangedFile[]>;
+  body(pr: number, body: string): Promise<void>;
   comment(pr: number, body: string): Promise<string>;
   status(sha: string, state: 'success' | 'failure', target: string, description: string): Promise<void>;
   ready(pr: number): Promise<void>;
@@ -44,4 +46,5 @@ export interface GitHub {
 export interface Driver {
   prepare(receipt: Receipt): Promise<Installation[]>;
   exercise(receipt: Receipt): Promise<Observation[]>;
+  cleanup?(receipt: Receipt): Promise<void>;
 }

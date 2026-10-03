@@ -21,15 +21,15 @@
   "shared": [
     "plugins/pstack/.claude-plugin/plugin.json", "plugins/pstack/.codex-plugin/plugin.json",
     ".claude-plugin/marketplace.json", ".agents/plugins/marketplace.json",
-    "plugins/pstack/agents/**", "plugins/pstack/hooks/**",
+    "plugins/pstack/agents/**", "plugins/pstack/hooks/**", "plugins/pstack/assets/**",
     "plugins/pstack/skills/poteto-mode/references/**"
   ],
   "setup": ["plugins/pstack/skills/setup-pstack/SKILL.md"],
   "runner": [
-    "plugins/pstack/skills/poteto-mode/scripts/runner/**",
-    "plugins/pstack/skills/poteto-mode/scripts/bootstrap.ts"
+    "plugins/pstack/skills/poteto-mode/scripts/runner/**"
   ],
   "tools": [
+    "plugins/pstack/skills/poteto-mode/scripts/bootstrap.ts",
     "plugins/pstack/skills/poteto-mode/scripts/orch/**",
     "plugins/pstack/skills/poteto-mode/scripts/watch-pr/**",
     "plugins/pstack/skills/poteto-mode/scripts/check-plan.mjs",
@@ -44,7 +44,7 @@
     "README.md", "AGENTS.md", "CLAUDE.md", "CHANGES.md", "LICENSE", "LICENSE.md", "UPSTREAM.md",
     ".gitignore", ".mergify.yml", ".github/**", "docs/**", "assets/**", "tests/**",
     "scripts/**",
-    "plugins/pstack/assets/**", "plugins/pstack/skills/poteto-mode/scripts/bootstrap.test.ts",
+    "plugins/pstack/skills/poteto-mode/scripts/bootstrap.test.ts",
     "plugins/pstack/skills/poteto-mode/scripts/check-plan.test.ts"
   ]
 }

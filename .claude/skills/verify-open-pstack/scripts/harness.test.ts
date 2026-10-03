@@ -5,9 +5,9 @@ import { join } from 'node:path';
 import { doctor } from './doctor.ts';
 import { codexInstallation, launch, MacDriver, verifyCodexEnabled, verifyProjectDoctor } from './harness.ts';
 import { newReceipt } from './core.ts';
-import { freshRoot, isolatedEnv, redact, retainedFile, treeHash, type Command } from './io.ts';
+import { command, freshRoot, isolatedEnv, redact, retainedFile, treeHash, type Command } from './io.ts';
 const roots: string[] = [];
-async function fixture(): Promise<string> { const root = await mkdtemp(join(tmpdir(), 'pstack-test-')); roots.push(root); return root; }
+async function fixture(): Promise<string> { const root = await realpath(await mkdtemp(join(tmpdir(), 'pstack-test-'))); roots.push(root); return root; }
 afterEach(async () => { for (const root of roots.splice(0)) await rm(root, { recursive: true, force: true }); });
 
 describe('isolated harness boundaries', () => {
@@ -21,9 +21,11 @@ describe('isolated harness boundaries', () => {
         const env = isolatedEnv('/run/home', harness);
         expect(env.GH_TOKEN).toBeUndefined(); expect(env.GITHUB_TOKEN).toBeUndefined();
         expect(env.ANTHROPIC_API_KEY).toBeUndefined(); expect(env.OPENAI_API_KEY).toBeUndefined();
-        expect(process.env.HOME).toBe(env.HOME); expect(env.GIT_CONFIG_GLOBAL).toBe('/dev/null');
+        expect(env.HOME).toBe('/run/home'); expect(env.GIT_CONFIG_GLOBAL).toBe('/dev/null');
         expect(env.TMPDIR).toBe('/run/home/tmp');
-        expect(env[harness === 'claude' ? 'CLAUDE_CONFIG_DIR' : 'CODEX_HOME']).toBe('/run/home/config');
+        expect(env.CLAUDE_CONFIG_DIR).toBe('/run/home/.claude');
+        expect(env.CODEX_HOME).toBe('/run/home/.codex');
+        expect(env.GH_CONFIG_DIR).toBe('/run/home/.config/gh');
         expect(JSON.stringify(env)).not.toContain('/daily/');
       }
       expect(launch('claude', '/run/home', '/candidate')).toEqual(['claude', '--plugin-dir', '/candidate/plugins/pstack', '--settings', '/run/home/settings.json', '--setting-sources', 'project']);
@@ -41,7 +43,7 @@ describe('isolated harness boundaries', () => {
       for (const harness of ['claude', 'codex'] as const) {
         const env = isolatedEnv('/run/home', harness);
         expect(env.USER).toBe('operator-user'); expect(env.LOGNAME).toBe('operator-login');
-        expect(process.env.HOME).toBe(env.HOME);
+        expect(env.HOME).toBe('/run/home');
       }
       delete process.env.USER; delete process.env.LOGNAME;
       const env = isolatedEnv('/run/home', 'claude');
@@ -74,6 +76,9 @@ describe('isolated harness boundaries', () => {
     const alias = join(root, 'workspace-alias'); await symlink(workspace, alias);
     const run: Command = async args => args.includes('--version') ? 'version' : '--plugin-dir --settings --setting-sources --json local path';
     await doctor(root, run, 'darwin');
+    const parentText = await readFile(join(root, 'doctor.json'), 'utf8');
+    await expect(verifyProjectDoctor([parentText], workspace)).rejects.toThrow('passing child doctor');
+    await doctor(root, run, 'darwin', true);
     const text = await readFile(join(root, 'doctor.json'), 'utf8');
     expect(JSON.parse(text).skill).toBe(skill);
     await verifyProjectDoctor(['not JSON', text], workspace);
@@ -84,63 +89,130 @@ describe('isolated harness boundaries', () => {
     await expect(verifyProjectDoctor(['{}'], workspace)).rejects.toThrow('passing child doctor');
     await expect(verifyProjectDoctor([JSON.stringify({ ...JSON.parse(text), result: 'blocked' })], workspace)).rejects.toThrow('passing child doctor');
   });
-  test('prepare creates private configuration homes before any harness command', async () => {
-    const root = await fixture(), sha = 'a'.repeat(40), calls: string[][] = [];
-    const platform = Object.getOwnPropertyDescriptor(process, 'platform')!;
-    const run: Command = async (args, options = {}) => {
+  test.each([false, true])('prepare uses real pinned files, disposable accounts and cleanup (install failure=%s)', async failInstall => {
+    const root = await fixture(), repository = join(root, 'repository'), calls: string[][] = [];
+    const accounts = { claude: 'claude@example.com', codex: 'codex@example.com' };
+    const caam = join(root, 'caam'), vault = join(caam, 'data/vault');
+    const credentials = { claude: JSON.stringify({ claudeAiOauth: { accessToken: 'fixture-claude' } }), codex: JSON.stringify({ tokens: { access_token: 'fixture-codex' } }) };
+    for (const tool of ['claude', 'codex'] as const) {
+      const dir = join(vault, tool, accounts[tool]); await mkdir(dir, { recursive: true });
+      await writeFile(join(dir, tool === 'claude' ? '.credentials.json' : 'auth.json'), credentials[tool]);
+    }
+    for (const manifest of ['.claude-plugin', '.codex-plugin']) {
+      const dir = join(repository, 'plugins/pstack', manifest); await mkdir(dir, { recursive: true });
+      await writeFile(join(dir, 'plugin.json'), JSON.stringify({ version: 'test' }));
+    }
+    await mkdir(join(repository, '.claude/skills/verify-open-pstack'), { recursive: true });
+    await writeFile(join(repository, '.claude/skills/verify-open-pstack/SKILL.md'), 'pinned project skill');
+    await mkdir(join(repository, '.agents/skills'), { recursive: true });
+    await symlink('../../.claude/skills/verify-open-pstack', join(repository, '.agents/skills/verify-open-pstack'));
+    await command(['git', 'init', repository]);
+    await command(['git', 'add', '.'], { cwd: repository });
+    await command(['git', '-c', 'user.name=Fixture', '-c', 'user.email=fixture@example.com', '-c', 'commit.gpgsign=false', 'commit', '-m', 'fixture'], { cwd: repository });
+    const sha = (await command(['git', 'rev-parse', 'HEAD'], { cwd: repository })).trim();
+    const platform = Object.getOwnPropertyDescriptor(process, 'platform')!, previousCaam = process.env.CAAM_HOME;
+    const run: Command = async (wrapped, options = {}) => {
+      const args = wrapped[0] === '/usr/bin/sandbox-exec' ? wrapped.slice(3) : wrapped;
       calls.push(args);
-      const env = options.env!;
-      const config = env.CODEX_HOME ?? env.CLAUDE_CONFIG_DIR;
-      expect(process.env.HOME).toBe(env.HOME);
-      expect((await stat(env.HOME!)).isDirectory()).toBe(true);
-      for (const path of [env.TMPDIR!]) {
-        const info = await stat(path);
-        expect(info.isDirectory()).toBe(true);
-        expect(info.mode & 0o777).toBe(0o700);
+      if (args[0] === 'caam') {
+        expect(wrapped.slice(0, 2)).toEqual(['/usr/bin/sandbox-exec', '-p']);
+        expect(wrapped[2]).toContain('(deny file-write*)');
+        expect(options.env!.CAAM_HOME).toBe(caam);
+        return JSON.stringify({ profiles: ['claude', 'codex'].map(tool => ({ tool, name: accounts[tool as keyof typeof accounts], identity: { email: accounts[tool as keyof typeof accounts] } })) });
       }
-      if (options.cwd) expect((await stat(options.cwd)).isDirectory()).toBe(true);
-      if (args[0] === 'claude' && env.CLAUDE_CONFIG_DIR) {
-        const settings = join(env.CLAUDE_CONFIG_DIR, '..', 'settings.json');
+      const env = options.env!, candidate = env.HOME!.startsWith(join(root, 'state') + '/');
+      if (candidate) {
+        expect(wrapped.slice(0, 2)).toEqual(['/usr/bin/sandbox-exec', '-f']);
+        const baseProfile = `${env.HOME!}.unit-test.sb`;
+        expect([baseProfile, `${baseProfile}.exercise.sb`]).toContain(wrapped[2]!);
+        for (const dir of [env.HOME!, env.TMPDIR!, env.CLAUDE_CONFIG_DIR!, env.CODEX_HOME!, env.GH_CONFIG_DIR!]) {
+          const info = await stat(dir);
+          expect(info.isDirectory()).toBe(true); expect(info.mode & 0o777).toBe(0o700);
+        }
+        expect(env.CLAUDE_CONFIG_DIR).toBe(join(env.HOME!, '.claude'));
+        expect(env.CODEX_HOME).toBe(join(env.HOME!, '.codex'));
+        expect(env.GH_TOKEN).toBeUndefined(); expect(env.CAAM_HOME).toBeUndefined();
+        const settings = join(env.HOME!, 'settings.json');
         expect(JSON.parse(await readFile(settings, 'utf8'))).toEqual({});
         expect((await stat(settings)).mode & 0o777).toBe(0o600);
       }
-      if (config) {
-        const info = await stat(config);
-        expect(info.isDirectory()).toBe(true);
-        expect(info.mode & 0o777).toBe(0o700);
-        expect(config).toBe(join(env.TMPDIR!, '..', 'config'));
-        expect(config.startsWith(root + '/state/')).toBe(true);
-        expect(env.GH_TOKEN).toBeUndefined();
+      if (options.cwd) expect((await stat(options.cwd)).isDirectory()).toBe(true);
+      if (args[0] === '/bin/rm') return command(args, options);
+      if (args[0] === '/usr/bin/true') return '';
+      if (args[0] === '/usr/bin/script') {
+        expect(wrapped[2]).toBe(`${env.HOME!}.unit-test.sb.exercise.sb`);
+        expect(wrapped[2]!.startsWith(env.HOME! + '/')).toBe(false);
+        const policy = await readFile(wrapped[2]!, 'utf8');
+        const workspace = join(env.HOME!, 'workspace');
+        expect(policy).toContain(`(deny file-write* (require-all (subpath ${JSON.stringify(workspace)})`);
+        expect(policy).toContain(`(subpath ${JSON.stringify(join(workspace, '.claude/skills/verify-open-pstack/node_modules'))})`);
+        expect(policy).toContain(`(subpath ${JSON.stringify(join(workspace, 'plugins/pstack/skills/poteto-mode/scripts/node_modules'))})`);
+        if (args.includes('codex')) expect(policy).toContain(`(deny file-write* (require-all (subpath ${JSON.stringify(join(env.CODEX_HOME!, 'plugins/pstack'))})`);
+        expect(options.interactive).toBe(true);
+        throw new Error('fixture protected native surface reached');
       }
-      if (args[0] === 'git' && args[1] === 'clone') {
-        const plugin = join(args.at(-1)!, 'plugins/pstack');
-        for (const manifest of ['.claude-plugin', '.codex-plugin']) {
-          await mkdir(join(plugin, manifest), { recursive: true });
-          await writeFile(join(plugin, manifest, 'plugin.json'), JSON.stringify({ version: 'test' }));
-        }
+      if (args[0] === 'git') {
+        const local = [...args];
+        if (args[1] === 'clone') local[local.length - 2] = repository;
+        return command(local, options);
       }
-      if (args[0] === 'git' && args[1] === 'rev-parse') return sha;
       if (args.includes('--version')) return 'version';
       if (args.includes('--help')) return '--plugin-dir --settings --setting-sources --json local path';
       if (args[0] === 'codex' && args[1] === 'plugin') {
-        expect(env.CODEX_HOME).toBeDefined();
+        for (const tool of ['claude', 'codex'] as const) {
+          const file = join(env[tool === 'claude' ? 'CLAUDE_CONFIG_DIR' : 'CODEX_HOME']!, tool === 'claude' ? '.credentials.json' : 'auth.json');
+          expect(await readFile(file, 'utf8')).toBe(credentials[tool]);
+          expect((await stat(file)).mode & 0o777).toBe(0o600);
+        }
+        if (failInstall) throw new Error('fixture installation failed');
         if (args[2] === 'marketplace') return '{}';
         if (args[2] === 'add') {
           const installedPath = join(env.CODEX_HOME!, 'plugins/pstack');
-          await cp(join(env.CODEX_HOME!, '..', 'workspace/plugins/pstack'), installedPath, { recursive: true });
+          await cp(join(env.HOME!, 'workspace/plugins/pstack'), installedPath, { recursive: true });
           return JSON.stringify({ name: 'pstack', marketplaceName: 'open-pstack', installedPath });
         }
         if (args[2] === 'list') return JSON.stringify({ installed: [{ name: 'pstack', marketplaceName: 'open-pstack', installed: true, enabled: true }] });
       }
-      return '';
+      throw new Error(`Unexpected fixture command: ${args.join(' ')}`);
     };
+    // Unit adapter only: this wrapper does not enforce an OS boundary. The
+    // independent macOS isolation.test.ts lane executes real sandbox-exec.
+    const boundary = async (home: string): Promise<string> => {
+      const profile = `${home}.unit-test.sb`; await writeFile(profile, 'unit adapter'); return profile;
+    };
+    const driver = new MacDriver(run, undefined, accounts, boundary);
     try {
-      Object.defineProperty(process, 'platform', { ...platform, value: 'darwin' });
-      const installs = await new MacDriver(run).prepare(newReceipt(111, sha, 'b'.repeat(40), true, root));
-      expect(installs.map(i => i.harness)).toEqual(['claude', 'codex']);
-      expect(installs.every(i => i.sha === sha)).toBe(true);
-      expect(calls.some(c => c.join(' ') === 'codex plugin add pstack@open-pstack --json')).toBe(true);
-    } finally { Object.defineProperty(process, 'platform', platform); }
+      Object.defineProperty(process, 'platform', { ...platform, value: 'darwin' }); process.env.CAAM_HOME = caam;
+      const preparation = driver.prepare(newReceipt(111, sha, sha, true, root));
+      if (failInstall) await expect(preparation).rejects.toThrow('fixture installation failed');
+      else {
+        const installs = await preparation;
+        expect(installs.map(i => i.harness)).toEqual(['claude', 'codex']);
+        expect(installs.map(i => i.account)).toEqual([accounts.claude, accounts.codex]);
+        expect(installs.every(i => i.sha === sha)).toBe(true);
+        expect(installs.every(i => /^[a-f0-9]{64}$/.test(i.sourceHash!))).toBe(true);
+        expect(installs[0]!.sourceHash).toBe(installs[1]!.sourceHash);
+        expect(calls.some(c => c.join(' ') === 'codex plugin add pstack@open-pstack --json')).toBe(true);
+        for (const installation of installs) {
+          const receipt = newReceipt(111, sha, sha, true, root);
+          receipt.installations = [installation];
+          await expect(driver.exercise(receipt)).rejects.toThrow('fixture protected native surface reached');
+        }
+        expect(calls.filter(c => c[0] === '/usr/bin/script')).toHaveLength(2);
+      }
+    } finally {
+      await driver.cleanup(); await driver.cleanup();
+      Object.defineProperty(process, 'platform', platform);
+      if (previousCaam === undefined) delete process.env.CAAM_HOME; else process.env.CAAM_HOME = previousCaam;
+    }
+    for (const harness of ['claude', 'codex']) {
+      for (const tool of ['claude', 'codex'] as const) {
+        const filename = tool === 'claude' ? '.credentials.json' : 'auth.json';
+        await expect(stat(join(root, 'state', harness, '.' + tool, filename))).rejects.toThrow('ENOENT');
+        expect(await readFile(join(vault, tool, accounts[tool], filename), 'utf8')).toBe(credentials[tool]);
+      }
+    }
+    expect(JSON.parse(await readFile(join(root, 'doctor.json'), 'utf8')).result).toBe('pass');
   });
   test('Codex exact installed tree and enabled listing are required', async () => {
     const root = await fixture(), plugin = join(root, 'config/plugins/pstack');

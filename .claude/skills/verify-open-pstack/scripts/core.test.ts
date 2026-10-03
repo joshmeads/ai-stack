@@ -52,6 +52,18 @@ describe('registry and ownership', () => {
     expect(s.skills).toEqual([...registry.skills].sort());
     for (const feature of ['setup', 'runner', 'shipped-tools']) expect(s.features).toContain(feature);
   });
+  test('asset-only installed logo changes require real harness surfaces', () => {
+    const s = classify([{ filename: 'plugins/pstack/assets/logo.png' }], registry);
+    expect(s.noRuntime).toBe(false);
+    expect(s.skills).toEqual([...registry.skills].sort());
+    for (const feature of ['setup', 'runner', 'shipped-tools']) expect(s.features).toContain(feature);
+  });
+  test('bootstrap changes require its shipped tool consumers, not the unrelated runner', () => {
+    const s = classify([{ filename: 'plugins/pstack/skills/poteto-mode/scripts/bootstrap.ts' }], registry);
+    expect(s.noRuntime).toBe(false);
+    expect(s.features).toEqual(['shipped-tools']);
+    expect(s.features).not.toContain('runner');
+  });
   test('rename and deletion preserve old runtime ownership', () => {
     const s = classify([{ filename: 'docs/old.md', previous_filename: 'plugins/pstack/skills/architect/SKILL.md' }], registry);
     expect(s.features).toContain('skill-invocation:architect');

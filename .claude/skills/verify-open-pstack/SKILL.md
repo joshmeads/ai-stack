@@ -7,54 +7,76 @@ description: Verify an Open Pstack PR's exact head in isolated Claude Code and C
 
 ## Launch
 
-This is a repository-local, non-shipped skill shared with Codex through `.agents/skills/verify-open-pstack`. Run from a trusted checkout on the operator's Mac. Never run a candidate's arbitrary scripts with GitHub credentials. Review this verifier before using it; it creates GitHub comments/statuses and can mark a draft ready. It never queues or merges.
+This repository-local, non-shipped skill is shared with Codex through `.agents/skills/verify-open-pstack`. Run the reviewed verifier from a trusted checkout on the operator's Mac. GitHub publishing belongs exclusively to the trusted parent; never expose its credentials to candidate processes. The helper never queues or merges.
 
 ```sh
 (cd .claude/skills/verify-open-pstack && bun install --frozen-lockfile)
-PR=123 # supplied delivery PR number
+PR=111 # supplied delivery PR number
+CLAUDE_ACCOUNT='selected-claude-account@example.com' # explicit caam vault identity
+CODEX_ACCOUNT='selected-codex-account@example.com' # explicit caam vault identity
 SESSION="$(mktemp -d "${TMPDIR:-/tmp}/open-pstack-evidence.XXXXXX")"
 EVIDENCE="$SESSION/live" # must not exist yet
 .claude/skills/verify-open-pstack/scripts/verify.sh doctor --output "$SESSION/probe"
-.claude/skills/verify-open-pstack/scripts/verify.sh run --pr "$PR" --self-test --output "$EVIDENCE"
+.claude/skills/verify-open-pstack/scripts/verify.sh run --pr "$PR" --self-test \
+  --claude-account "$CLAUDE_ACCOUNT" --codex-account "$CODEX_ACCOUNT" --output "$EVIDENCE"
 ```
 
-Omit `--self-test` for ordinary plugin verification; it is mandatory for this skill's own delivery. Use a new evidence directory for every run, even if the head is unchanged. A previous run cannot resume or transfer success. The helper pins the open, same-repository PR's 40-character head SHA, fetches that exact object, classifies old/new changed paths, and checks the head at every boundary and around publication. Unknown paths abort.
+Replace both account placeholders with explicitly selected caam 0.1.22 vault identities; no default account or new authentication flow is allowed. Omit `--self-test` for ordinary plugin verification; it is mandatory for this skill's delivery. Use fresh evidence directories for every run. Pin the open, same-repository PR's exact head and base SHAs, classify changes from immutable Git objects, and recheck the PR at phase and publication boundaries. Unknown paths abort; previous evidence never transfers to a new head.
 
 ## Doctor
 
-Requires Darwin, Bun, gh authentication, both harness CLIs, and operator access to every selected provider. `doctor` writes `doctor.json` outside the checkout. It checks the supported isolation flags but does not claim that installation or live behavior works.
+The trusted-parent probe requires Darwin, Bun, gh authentication for publication, both harness CLIs, caam 0.1.22, and supported macOS `sandbox-exec` isolation. It records `doctor.json`; capability checks do not prove installation, authentication, sandbox enforcement, or live behavior. Missing capabilities fail closed.
 
-The approved October 2 Mac probe (issue #90, comment 5961645184) reported Darwin, Claude Code 2.1.283, codex-cli 0.160.0, Bun 1.4.0, gh 2.97.0. Selected interfaces: Claude `--plugin-dir`, `--settings`, `--setting-sources`, `CLAUDE_CONFIG_DIR`; Codex local `plugin marketplace add`/`plugin add`, `CODEX_HOME`. Claude uses `--setting-sources project` so the pinned checkout's project skills/settings load while user settings stay excluded. Both harnesses preserve the operator's real `HOME`, `USER`, and `LOGNAME` for Keychain location/account identity; only `CLAUDE_CONFIG_DIR`/`CODEX_HOME` and `TMPDIR` point into run-owned state. Never substitute a temporary `HOME`: the operator observed a macOS Keychain reset dialog with that setup. Never create, reset, or unlock any keychain. On the operator's Claude Code 2.1.283, the temporary config directory reported `loggedIn:false` and used a config-scoped `Claude Code-credentials-<hash>` item distinct from the daily credentials; this measured isolation must be confirmed by the operator's fresh live run. Installation/provenance checks validate those choices during the actual run. Missing interfaces or authentication fail closed: never use a daily install.
+Claude uses candidate `--plugin-dir`, empty `--settings`, `--setting-sources project`, and run-owned `CLAUDE_CONFIG_DIR`. Codex uses local marketplace/plugin installation and run-owned `CODEX_HOME`. Both sandboxed candidates use run-owned `HOME` and `TMPDIR`, retaining real `USER`/`LOGNAME` only for account identity. Both provider config variables must be isolated for cross-provider children. Do not link the real `Library` or Keychain into candidate state. Deny daily-home, GitHub/SSH/provider configuration, vault, and Keychain/securityd access with an OS-enforced boundary, not environment scrubbing alone. Never create, reset, unlock, or otherwise modify Keychain.
+
+The disposable credential contract replaces the earlier real-HOME/Keychain approach. The trusted parent validates each explicitly named vault identity and copies only `claude/<account>/.credentials.json` into `CLAUDE_CONFIG_DIR` and `codex/<account>/auth.json` into `CODEX_HOME`. It records the selected emails in the receipt, never modifies or activates the vault, and removes copied credential files in final cleanup. Candidates may use these disposable session credentials, but not publisher credentials or daily provider API keys. Missing credentials, identity mismatch, or quota failure stops the run; never log in or fall back to daily state.
+
+Operator-Mac handoff, from the trusted verifier checkout:
+
+```sh
+PROOF="$(mktemp -d "${TMPDIR:-/tmp}/open-pstack-isolation-proof.XXXXXX")"
+(
+  set -e -o pipefail
+  test "$(uname -s)" = Darwin
+  cd .claude/skills/verify-open-pstack
+  PSTACK_OPERATOR_SENTINELS=1 bun test --timeout 0 scripts/isolation.test.ts 2>&1 |
+    tee "$PROOF/isolation-proof.txt"
+)
+```
+
+The explicit sentinel opt-in plants randomized, exclusive-create, non-secret files in the actual operator `HOME`, `~/.config/gh`, `~/.ssh`, `~/.claude`, `~/.codex`, and `~/Library/Keychains`; it never overwrites credential/SSH/Keychain files. Redirected directories fail closed. The trusted test parent removes only its own sentinel files and newly created empty directories in `finally`; if interrupted, inspect the printed cleanup-path list and remove only those named sentinel files, never whole daily directories. Require positive unsandboxed read controls and denied sandboxed reads/writes, aliases, and descendant reads; require positive unsandboxed Keychain-service lookup followed by denial of the same service. The real Mac test also proves pinned workspace/plugin write, unlink, rename, alias-write, and hardlink denial while the three approved dependency leaves remain writable. Preserve `$PROOF/isolation-proof.txt` and require both Mac tests to pass without skips. Linux skips and stubbed commands are not Mac enforcement proof. Then run Launch with fresh probe/live directories. Record that no Keychain dialog appeared and both native sessions made observable authenticated API requests; neither observation can be inferred from sentinel tests. Missing/pending adapter integration or failed proof blocks live verification.
 
 ## Drive
 
-Read `features/README.md` and each selected feature document. Runtime markdown and consumed references are runtime. Shared paths select all consumers conservatively. `no runtime change` launches no harness unless the separate `--self-test` was requested.
+Read `features/README.md` and every selected feature document. Runtime instructions, consumed references, and installed assets require live coverage. Shared paths select consumers conservatively. `no runtime change` launches no harness unless the separate self-test is requested.
 
-The runner creates a detached exact-head candidate, separate run-owned config/state directories and fixture workspaces, and executable launchers. Process `HOME` remains the operator's real home; the run-owned paths referred to below as isolated homes are state roots, not replacements for `HOME`. Claude loads the candidate with its explicit plugin directory; Codex installs the candidate's local marketplace into its isolated home. The installed trees must match the candidate's content digest; a shared version string is insufficient. Fresh fixture sessions discover the canonical project skill and Codex link copied from this head.
+Create detached exact-head candidate checkouts, run-owned homes/config roots and fixture workspaces. Claude loads the explicit candidate plugin; Codex installs its local marketplace. Verify installed plugin and canonical project-skill sources against immutable pinned Git provenance before and after exercise. Before native exercise, adapters must call `protectSources(profile, home, [workspace, installedPlugin])` and switch all candidate/descendant commands to the returned exercise policy outside candidate-writable state. That policy freezes the workspace and installed plugin, including ancestor rename/unlink, except `.claude/skills/verify-open-pstack/node_modules` and `plugins/pstack/skills/poteto-mode/scripts/node_modules` under the workspace and `skills/poteto-mode/scripts/node_modules` under the installed plugin. Reject source/ancestor symlinks rather than protecting a redirected path. Hash rechecks alone cannot prevent modify-execute-restore. Only those generated dependencies may be excluded; tracked source mutations or redirected skill aliases fail. Version strings alone are insufficient.
 
-The operator authenticates only these isolated homes when needed, using the printed launcher with `auth login` (Claude) or `login` (Codex); do not copy daily auth/configuration. GitHub tokens and daily provider secrets are excluded from harness subprocess environments. A missing configured provider remains a feature failure. Never add a timeout or weaker-model fallback.
+Every candidate command and external-provider descendant must remain inside the macOS sandbox, with both isolated provider configurations and no access to trusted-parent credentials. Setup exercises write only fixture run-owned homes, never literal daily user files. No candidate login, vault activation/writeback, implicit timeout, or weaker-model fallback is permitted.
 
-For each selected feature in **each** harness, the runner opens a fresh native session with instructions from the feature map. Use a safe disposable fixture, exercise all changed sub-features, and observe actual tool calls and effects. Save and redact the native transcript and result artifacts outside the checkout. The runner asks for the surface, action, observed result, transcript path, and artifact paths, then requires explicit operator approval. Empty or missing evidence fails. A model's assertion that it passed does not count. Direct CLI proof is supplemental and must be labeled separately.
+For every selected feature in both fresh native sessions, exercise changed sub-features and retain actual native tool calls and concrete fixture effects. Save redacted transcripts and artifacts outside isolated state. Require operator-reviewed surface, action, expected/observed result, and retained artifact paths. Model self-reports and direct CLI tests are not installed-harness evidence.
 
-For `--self-test`, invoke this discovered project skill in both sessions and run `doctor` into a child evidence directory; save invocation traces and that output. Do not recursively run verification or publish from those sessions. This self-test cannot replace plugin-runtime exercises.
+For `project-skill`, invoke `/verify-open-pstack` in Claude and `$verify-open-pstack` in Codex. Ask the discovered pinned skill to run `verify.sh doctor --candidate --output <fresh-run-owned-directory>`. Candidate-mode doctor must not probe the vault or publisher authentication. Preserve the invocation and canonical-path doctor output; forbid recursive verification or publication. This does not replace required plugin exercises.
 
 ## Evidence
 
-Retain `doctor.json`, `receipt.json`, installed provenance, redacted transcripts, artifacts, and cleanup outcome in `$EVIDENCE`. Artifact content is hashed before publication. The helper rechecks installation digests and artifact hashes after exercises. The PR comment includes `Live evidence:`, head SHA, installed version/location/tree, surface/action/observed result, artifact hashes, and failure or `no runtime change`.
+Retain probe output, `receipt.json`, selected account emails, immutable source/installation provenance, redacted transcripts, artifacts, sandbox-denial proof, observable native API requests, and credential-cleanup outcome. Never retain copied credentials as evidence. Revalidate retained transcript/artifact hashes immediately before publication and around GitHub writes. Keep full detail in the receipt and bound the published summary.
 
-Only complete evidence publishes `live-gate=success` on the pinned SHA, targeting the evidence-comment URL; only then may this run mark a draft ready. Failure records its reason and, where possible, publishes failure against that same SHA. A changed head aborts; detected post-write races withdraw old-head success and restore draft if this run made it ready. GitHub mutations are not atomic; failed compensation is recorded prominently. Never attach the old run to a new head.
+The trusted parent publishes a pinned-SHA evidence comment and updates/reads back the PR template's `Live evidence:` block with installed version, surface, action, and observed result. Only complete evidence permits `live-gate=success` targeting that comment and subsequent draft-to-ready transition. Failure records its reason against the pinned SHA. Head movement aborts; revoke stale success on detected publication races and restore draft only if this run changed readiness. Preserve an already-ready PR on failure; record failed compensation prominently.
 
-The builder opens this delivery as a draft and does **not** run publication. The Mac operator supplies live evidence. For this delivery, Mergify queues automatically once `verify`, `Unfret`, and `live-gate` pass and the PR is ready; no manual queue submission is required. If Mergify creates another head, rerun on it; never hand-post a replacement status or reuse an old receipt. Queue policy/recovery is outside this skill.
+PR #111 is already ready and must not be re-drafted during this review round. Builders do not post the gate, queue, or merge. After Unfret passes, the operator performs fresh exact-head live proof. Mergify queues automatically once required checks pass and the PR is ready; no manual queue submission is required. A queue-created head needs a new run, never a hand-posted replacement status.
 
 ## Cleanup
 
-The runner leaves all run-owned state and evidence intact; it does not delete daily state or kill unrelated processes. Quit spawned native sessions normally. After reviewing and archiving evidence, the operator may remove only this run's candidate/homes/workspaces. Record that action in the retained receipt's cleanup field; retain redacted transcripts and artifact hashes. No implicit cleanup or runtime timeout.
+Final cleanup removes copied Claude `.credentials.json` and Codex `auth.json` files on success or failure, including disposable copies created for provider children. Record cleanup outcome without secrets; failed cleanup is a blocker requiring explicit remediation. Never modify the caam vault or daily files. Retain receipts, redacted transcripts, artifacts, and denial proof. Quit native sessions normally; after archiving evidence the operator may remove only named run-owned candidate/state/workspace paths. No unrelated process killing or implicit runtime timeout.
 
 ## Helpers
 
-- `scripts/verify.sh doctor --output <absolute-external-directory>`: capability report, no installation/publication.
-- `scripts/verify.sh run --pr <positive-number> [--self-test] --output <absolute-external-directory>`: supervised exact-head live verification and publication. Requires an interactive terminal for mapped exercises.
-- `bun run test` and `bun run typecheck` in this skill directory: orchestration tests and strict types; not live proof.
-- `features/registry.json`: maintained path ownership; unknown runtime paths block rather than guessing.
+- `scripts/verify.sh doctor --output <fresh-absolute-external-directory>`: trusted-parent capability report, no installation/publication.
+- `scripts/verify.sh doctor --candidate --output <fresh-run-owned-directory>`: planned sandboxed self-test probe; no vault or publisher authentication probing.
+- `scripts/verify.sh run --pr <positive-number> --claude-account <EMAIL> --codex-account <EMAIL> [--self-test] --output <fresh-absolute-external-directory>`: supervised exact-head verification; mapped exercises require an interactive terminal.
+- `bun test scripts/isolation.test.ts` on the operator Mac: required real-filesystem and Keychain/securityd denial proof, not a substitute for live behavior.
+- `bun run test` and `bun run typecheck`: independent helper tests and strict types, not live proof.
+- `features/registry.json`: maintained path ownership; unknown runtime paths block.
 
-Read receipts as data, never shell input. Do not put secrets in prompts/artifacts. All external commands use argument arrays; PR metadata is never evaluated as code.
+Read receipts as data, never shell input. Do not put secrets in prompts or artifacts.
