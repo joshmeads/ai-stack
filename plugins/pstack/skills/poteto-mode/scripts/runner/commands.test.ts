@@ -139,11 +139,20 @@ describe("invocationCommand", () => {
     expect(claude.args).toEqual(
       expect.arrayContaining([
         "--permission-mode",
-        "auto",
+        "acceptEdits",
         "--tools",
         "Read,Write,Edit,Grep,Glob,Bash",
       ])
     );
+    const settings = claude.args[claude.args.indexOf("--settings") + 1];
+    expect(JSON.parse(settings ?? "")).toEqual({
+      sandbox: {
+        enabled: true,
+        autoAllowBashIfSandboxed: true,
+        allowUnsandboxedCommands: false,
+        failIfUnavailable: true,
+      },
+    });
   });
 
   it("covers low, medium, and high for every external provider", () => {

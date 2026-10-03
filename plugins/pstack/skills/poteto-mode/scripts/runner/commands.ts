@@ -42,6 +42,24 @@ function claudeTools(mode: AccessMode): string {
     : "Read,Write,Edit,Grep,Glob,Bash";
 }
 
+// Writers run Bash without prompts inside the OS sandbox, which confines writes to the cwd and a
+// per-user temp directory. The model cannot opt a command out, and Claude refuses to start when
+// the sandbox is unavailable.
+const CLAUDE_WRITE_SANDBOX = JSON.stringify({
+  sandbox: {
+    enabled: true,
+    autoAllowBashIfSandboxed: true,
+    allowUnsandboxedCommands: false,
+    failIfUnavailable: true,
+  },
+});
+
+function claudePermissions(mode: AccessMode): string[] {
+  return mode === "read-only"
+    ? ["--permission-mode", "plan"]
+    : ["--permission-mode", "acceptEdits", "--settings", CLAUDE_WRITE_SANDBOX];
+}
+
 function codexSandbox(mode: AccessMode): string {
   return mode === "read-only" ? "read-only" : "workspace-write";
 }
@@ -70,9 +88,7 @@ export function invocationCommand(options: RunnerOptions): CommandSpec {
           options.model,
           "--effort",
           options.effort,
-          "--permission-mode",
-          // The Claude lane has no OS sandbox, so auto mode on read-only could let Bash write.
-          options.mode === "read-only" ? "plan" : "auto",
+          ...claudePermissions(options.mode),
           "--setting-sources",
           "project",
           "--strict-mcp-config",
