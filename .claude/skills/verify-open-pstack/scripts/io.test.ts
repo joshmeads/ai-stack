@@ -2,7 +2,7 @@ import { afterEach, describe, expect, test } from 'bun:test';
 import { chmod, mkdir, mkdtemp, readFile, realpath, rm, stat, symlink, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
-import { assertNoKnownSecrets, command, isolatedEnv, registerSecrets, retainedFile, save, sha256, treeHash } from './io.ts';
+import { command, isolatedEnv, retainedFile, save, sha256, treeHash } from './io.ts';
 
 const roots: string[] = [];
 async function fixture(): Promise<string> {
@@ -29,17 +29,8 @@ describe('private values and retained file boundaries', () => {
     expect(String(failure)).toBe('Error: /bin/sh failed: private sk-review diagnostic');
   });
 
-  test('refuses only exact copied secrets in comments with a generic error', () => {
-    const token = 'opaque-copied-token.+/value';
-    registerSecrets([token, '']);
-    expect(() => assertNoKnownSecrets(`review ${token} result`)).toThrow('Comment contains copied credentials');
-    try { assertNoKnownSecrets(token); } catch (error) { expect(String(error)).not.toContain(token); }
-    expect(() => assertNoKnownSecrets('review opaque-copied-token result')).not.toThrow();
-    expect(() => assertNoKnownSecrets('review sk-private and sk-review result')).not.toThrow();
-  });
-
   test('uses real account metadata, run-owned config paths, and normal PATH', () => {
-    const previous = { HOME: process.env.HOME, USER: process.env.USER, LOGNAME: process.env.LOGNAME, PATH: process.env.PATH };
+    const previous = { HOME: process.env.HOME, USER: process.env.USER, LOGNAME: process.env.LOGNAME, PATH: process.env.PATH, CLAUDE_CONFIG_DIR: process.env.CLAUDE_CONFIG_DIR };
     process.env.HOME = '/Users/operator'; process.env.USER = 'operator-user'; process.env.LOGNAME = 'operator-login';
     process.env.PATH = '/usr/local/bin:/usr/bin:/bin';
     try {
@@ -48,14 +39,23 @@ describe('private values and retained file boundaries', () => {
       expect(env).toMatchObject({ HOME: '/Users/operator', USER: 'operator-user', LOGNAME: 'operator-login',
         PATH: '/usr/local/bin:/usr/bin:/bin', TMPDIR: '/run/home/tmp', XDG_CONFIG_HOME: '/run/home/.config',
         XDG_CACHE_HOME: '/run/home/.cache', GH_CONFIG_DIR: '/run/home/.config/gh',
-        CLAUDE_CONFIG_DIR: '/run/home/.claude', CODEX_HOME: '/run/home/.codex' });
+        CODEX_HOME: '/run/home/.codex' });
+      delete process.env.CLAUDE_CONFIG_DIR;
+      expect(isolatedEnv('/run/home').CLAUDE_CONFIG_DIR).toBeUndefined();
+      process.env.CLAUDE_CONFIG_DIR = '/Users/operator/custom-claude';
+      for (const harness of ['claude', 'codex'] as const) {
+        const inherited = isolatedEnv('/run/home', harness);
+        expect(inherited.CLAUDE_CONFIG_DIR).toBe('/Users/operator/custom-claude');
+        expect(inherited.CODEX_HOME).toBe('/run/home/.codex');
+        for (const key of ['GH_TOKEN', 'GITHUB_TOKEN', 'OPENAI_API_KEY', 'ANTHROPIC_API_KEY', 'CLAUDE_CODE_OAUTH_TOKEN']) expect(inherited[key]).toBeUndefined();
+      }
       expect(env.PATH).not.toContain('/run/home/bin');
       process.env.HOME = 'relative/home';
       expect(() => isolatedEnv('/run/home')).toThrow('Real HOME must be absolute');
       process.env.HOME = '/Users/operator'; delete process.env.USER;
       expect(() => isolatedEnv('/run/home', 'codex')).toThrow('Real USER and LOGNAME are required');
     } finally {
-      for (const name of ['HOME', 'USER', 'LOGNAME', 'PATH'] as const) {
+      for (const name of ['HOME', 'USER', 'LOGNAME', 'PATH', 'CLAUDE_CONFIG_DIR'] as const) {
         if (previous[name] === undefined) delete process.env[name]; else process.env[name] = previous[name];
       }
     }
@@ -64,7 +64,6 @@ describe('private values and retained file boundaries', () => {
   test('retains binary artifacts unchanged without inspecting copied secrets', async () => {
     const root = await fixture(), path = join(root, 'artifact.bin'), token = 'known-copied-binary-opaque-credential';
     const bytes = Buffer.concat([Buffer.from([0, 255, 128]), Buffer.from(token), Buffer.from([0, 254])]);
-    registerSecrets([token]);
     await writeFile(path, bytes);
     expect(await retainedFile(root, path)).toEqual({ path: 'artifact.bin', sha256: sha256(bytes) });
     expect(Buffer.from(await readFile(path))).toEqual(bytes);

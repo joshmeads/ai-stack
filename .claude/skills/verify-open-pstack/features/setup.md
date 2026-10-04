@@ -6,18 +6,14 @@ Installed setup invocation, harness-to-provider mapping, generated routing/model
 
 ## How to get to it (user POV)
 
-The intended installed entries are `/pstack:setup-pstack` in Claude and `$setup-pstack` in Codex. The installed instructions are the authority for setup inputs, but the verifier must not invoke them against the operator's real `HOME` before config-home support exists.
+Invoke `/pstack:setup-pstack` in Claude or `$setup-pstack` in Codex. The installed instructions are the authority for setup inputs.
 
 ## Driving it with verify-open-pstack
 
-Setup is mandatory fail-closed until setup-pstack config-home support in issue #120 merges. For every selected setup exercise, record exactly:
+For setup only, snapshot the operator's real `${CLAUDE_CONFIG_DIR:-$HOME/.claude}/pstack-models.md` and `CLAUDE.md` before invocation, preserving exact bytes and whether each file existed. Exercise every changed setup branch with explicit model/provider inputs. Retain the native transcript and generated configuration privately, then invoke a consuming installed skill to observe the configured route.
 
-`setup exercise requires #120 (setup-pstack config-home)`
-
-Stop that verification run. Do not invoke setup, redirect `HOME`, permit writes to daily paths, use a mock, or accept a generated file from a direct CLI test as substitute evidence.
-
-After #120 merges, use its explicit config-home to target run-owned state while retaining real `HOME`, `USER`, and `LOGNAME`. Exercise each changed setup branch with explicit requested model/provider inputs, retain the native invocation transcript and generated configuration file, and invoke a consuming installed skill to observe the configured route. Confirm all setup writes remain under the explicit run-owned config home.
+Restore both files byte for byte afterwards, including restoring original absence, on success or failure. Verify restoration before any evidence comment or status publication. Restoration failure stops the run and publishes nothing. Retain snapshot and restoration results in the private mode-0700 evidence root through merge.
 
 ## Gotchas
 
-`CLAUDE_CONFIG_DIR`, `CODEX_HOME`, XDG/GitHub config, and temp paths are run-owned, but `HOME` is intentionally real. That is why setup cannot run safely before #120. Supply operator-pre-authenticated normal-login directories with `--claude-config <dir>` and `--codex-home <dir>`; selected accounts may be active in daily use. Copy only `.credentials.json` and `auth.json` into run-owned provider roots, preserving refresh material. Do not copy other daily configuration, log in, or write credentials back to source directories. Trusted-parent doctor validates sources with `claude auth status` under the supplied `CLAUDE_CONFIG_DIR` and `codex login status` under the supplied `CODEX_HOME`; authentication failures fail closed with `CLAUDE_CONFIG_DIR=<dir> claude auth login` or `CODEX_HOME=<dir> codex login`, which the verifier never executes automatically. Generated configuration by itself does not prove the consuming surface.
+Claude uses the operator's normal config/login; Codex uses a run-owned home with auth symlinked to the daily login. Do not redirect `HOME`, copy credentials, start login, or use a mock as setup proof. Generated configuration alone does not prove the consuming surface. Setup restoration is the only permitted temporary change to these daily Claude files.

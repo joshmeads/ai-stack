@@ -37,13 +37,6 @@ export const command: Command = async (args, options = {}) => {
     activeCommands.delete(child.pid);
   }
 };
-const secrets = new Set<string>();
-export function registerSecrets(values: string[]): void {
-  for (const value of values) if (value) secrets.add(value);
-}
-export function assertNoKnownSecrets(body: string): void {
-  if ([...secrets].some(secret => body.includes(secret))) throw new Error('Comment contains copied credentials');
-}
 export function isolatedEnv(state: string, _harness?: 'claude' | 'codex'): Record<string, string> {
   if (!isAbsolute(state)) throw new Error('Candidate state must be an absolute run-owned directory');
   const { HOME, USER, LOGNAME } = process.env;
@@ -55,7 +48,8 @@ export function isolatedEnv(state: string, _harness?: 'claude' | 'codex'): Recor
     GH_CONFIG_DIR: join(state, '.config/gh'),
     GIT_CONFIG_GLOBAL: '/dev/null', GIT_CONFIG_SYSTEM: '/dev/null', GIT_CONFIG_NOSYSTEM: '1',
     GIT_CONFIG_COUNT: '1', GIT_CONFIG_KEY_0: 'credential.helper', GIT_CONFIG_VALUE_0: '',
-    CLAUDE_CONFIG_DIR: join(state, '.claude'), CODEX_HOME: join(state, '.codex') };
+    ...(process.env.CLAUDE_CONFIG_DIR !== undefined ? { CLAUDE_CONFIG_DIR: process.env.CLAUDE_CONFIG_DIR } : {}),
+    CODEX_HOME: join(state, '.codex') };
 }
 export async function save(path: string, value: unknown): Promise<void> {
   const json = JSON.stringify(value, null, 2);

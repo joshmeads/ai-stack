@@ -19,59 +19,55 @@ Then run from the trusted publisher checkout:
 
 ```sh
 PR=111 # supplied delivery PR number
-CLAUDE_SOURCE='/absolute/path/to/authenticated/claude-config'
-CODEX_SOURCE='/absolute/path/to/authenticated/codex-home'
 SESSION="$(mktemp -d "${TMPDIR:-/tmp}/open-pstack-evidence.XXXXXX")"
 EVIDENCE="$SESSION/live" # must not exist yet
-.claude/skills/verify-open-pstack/scripts/verify.sh doctor \
-  --claude-config "$CLAUDE_SOURCE" --codex-home "$CODEX_SOURCE" --output "$SESSION/probe"
-.claude/skills/verify-open-pstack/scripts/verify.sh run --pr "$PR" --self-test \
-  --claude-config "$CLAUDE_SOURCE" --codex-home "$CODEX_SOURCE" --output "$EVIDENCE"
+.claude/skills/verify-open-pstack/scripts/verify.sh doctor --output "$SESSION/probe"
+.claude/skills/verify-open-pstack/scripts/verify.sh run --pr "$PR" --self-test --output "$EVIDENCE"
 ```
 
-Replace both placeholders with existing operator-pre-authenticated normal-login configuration directories. Selection is explicit; a selected account may be active in daily use. No profile manager or maintainer-specific infrastructure is required. Authenticate those directories manually before verification; the verifier never starts a login flow. Omit `--self-test` for ordinary plugin verification; it is mandatory for this skill's delivery.
+Reuse the Claude Code and Codex logins you already have; no extra login or credential source flags. Omit `--self-test` for ordinary plugin verification; it is mandatory for this skill's delivery.
 
 The publisher revision is recorded separately from the candidate SHA and must equal it when classification selects `project-skill`. Run those PRs from their reviewed candidate head; run all other PRs from trusted `main`. Use a fresh private output directory for every run. The verifier requires an open same-repository PR, pins exact head and base SHAs, classifies immutable Git objects, and rechecks them at phase and publication boundaries. Unknown paths abort; evidence never transfers to another head.
 
 ## Doctor
 
-The trusted-parent doctor checks Bun, git, both native harness CLIs, and the capabilities needed by the run. It requires both supplied source directories to exist and validates their authentication with `CLAUDE_CONFIG_DIR=<dir> claude auth status` and `CODEX_HOME=<dir> codex login status`. Unauthorized, expired, missing, or unusable authentication fails closed with the corresponding manual login command: `CLAUDE_CONFIG_DIR=<dir> claude auth login` or `CODEX_HOME=<dir> codex login`. The verifier never executes login or repairs credentials automatically. Candidate-mode doctor checks only candidate-safe capabilities and does not inspect source credentials or publisher authentication. Capability and authentication checks do not prove installation or live behavior; missing requirements fail closed.
+The parent doctor checks Bun, git, both native harness CLIs, and required capabilities. There are no credential-source flags or source-directory authentication checks. Candidate-mode doctor checks only candidate-safe capabilities, not publisher authentication. Capability checks do not prove installation or live behavior; missing requirements fail closed.
 
-Candidates retain the operator's real `HOME`, `USER`, and `LOGNAME`. `CLAUDE_CONFIG_DIR`, `CODEX_HOME`, `TMPDIR`, `GH_CONFIG_DIR`, and other XDG/config/cache locations are run-owned. Git configuration is disabled or run-owned. This separation is operational isolation, not an OS security boundary: the verifier makes no Seatbelt, source-protection, Keychain-denial, daily-home secrecy, or Mac filesystem-denial claim.
+Candidates retain real `HOME`, `USER`, and `LOGNAME`. Claude uses normal operator config/login. Codex uses a run-owned `CODEX_HOME` with `auth.json` symlinked to the operator's `${CODEX_HOME:-$HOME/.codex}/auth.json`, resolving the daily home before overriding the environment. If that source file is absent, stop with a plain message that this tool needs file-based Codex auth; do not start login. Refresh writes through the symlink to the single existing login file.
 
-The trusted parent copies only `.credentials.json` from `--claude-config <dir>` into run-owned `CLAUDE_CONFIG_DIR` and `auth.json` from `--codex-home <dir>` into run-owned `CODEX_HOME`. It does not copy settings or other source-directory state. Complete recognized credential files retain their refresh material so native clients can refresh during the session; refreshed copies are never written back to the source directories. Missing files, unknown credential formats, or unusable authentication fail closed. Never log in, repair credentials automatically, or fall back to daily provider configuration.
+Temporary, GitHub, and fixture state remain run-owned; Git configuration is disabled or run-owned. This is operational state separation, not an OS security boundary. Do not read, parse, or copy credential contents, register tokens, or check public comments against credentials. No extra login directories are needed.
 
 ## Drive
 
 Read `features/README.md` and every selected feature document. Runtime instructions, consumed references, shipped tools, and installed assets require coverage on their actual consumers. Shared paths select consumers conservatively. `no runtime change` launches no harness unless `--self-test` is requested.
 
-Create detached exact-head candidate checkouts, run-owned provider/config/temp roots, and fixture workspaces. Claude loads the explicit candidate plugin with candidate settings; Codex installs the pinned local marketplace/plugin. Verify installed plugin and project-skill sources against immutable candidate Git provenance before and after exercise. Version strings alone are insufficient.
+Create detached exact-head candidate checkouts and run-owned temporary/fixture state. Launch Claude with normal operator config/login and session-only `claude --plugin-dir <exact-head checkout>/plugins/pstack --settings '{"enabledPlugins":{"pstack@open-pstack":false}}'`. Codex installs the exact-head marketplace/plugin in its run-owned home with `codex plugin marketplace add … --ref <sha>` and `codex plugin add`. Verify candidate plugin and project-skill sources against immutable Git provenance before and after exercise; version strings alone are insufficient.
 
-Every candidate command and external-provider descendant uses the recorded candidate environment. Candidate processes receive disposable provider credentials only, never GitHub publisher credentials. No candidate login, source-credential writeback, implicit timeout, or weaker-model fallback is permitted.
+Candidate commands and provider descendants use the recorded native-login arrangement, never GitHub publisher credentials. No extra login, implicit timeout, or weaker-model fallback is permitted. If Claude's plugin flags fail to exclude installed pstack or Codex replaces the auth symlink instead of writing through it, stop and reopen the design.
 
 For every selected feature, exercise changed sub-features on each actual consuming native surface and retain real native tool calls and concrete fixture effects. Asset consumers come from the pinned plugin manifests; the current `plugins/pstack/assets/logo.png` is consumed by the Codex manifest only and therefore requires the Codex installed surface, not an invented Claude asset exercise. Save raw transcripts and artifacts in the private run root. Require operator-reviewed surface, action, expected/observed result, and retained artifact paths. Model self-reports and direct CLI tests are not installed-harness evidence.
 
-Setup is currently fail-closed. Until setup-pstack config-home support in issue #120 merges, record exactly `setup exercise requires #120 (setup-pstack config-home)` and do not invoke setup against real `HOME`.
+For setup only, snapshot real `${CLAUDE_CONFIG_DIR:-$HOME/.claude}/pstack-models.md` and `CLAUDE.md`, including original absence, before exercise. Restore exact bytes or absence afterwards on success or failure and verify restoration before any publication. Restoration failure stops the run and publishes nothing.
 
 For `project-skill`, invoke `/verify-open-pstack` in Claude and `$verify-open-pstack` in Codex. Ask the discovered pinned skill to run `verify.sh doctor --candidate --output <fresh-run-owned-directory>`. Preserve the invocation and canonical-path doctor output; forbid recursive verification or publication. This does not replace required plugin exercises.
 
 ## Evidence
 
-Create the requested run root as a private mode-0700 directory. Keep raw receipts, transcripts, artifacts, selected credential-source paths, immutable source/installation provenance, and credential-cleanup outcome private in that root. Raw evidence may contain operational details and is not a public artifact. Keep it through merge; after the merged evidence is archived, only the operator deletes the named run root. Never retain copied credential files as evidence.
+Create a fresh private mode-0700 run root. Keep raw receipts, transcripts, artifacts, immutable source/installation provenance, and setup restoration results private through merge. Raw evidence is not a public artifact; after archival, only the operator deletes the named run root.
 
 Before publication, revalidate retained transcript and artifact hashes. The trusted parent publishes one bounded, structured PR comment for the exact candidate SHA and sets `live-gate` on that same SHA with the comment URL as its target. It never edits the PR body, marks ready or draft, reverses a transition, or performs PR-state compensation. No other PR write is permitted. Head movement requires a fresh run and status on the new exact SHA.
 
-The public-comment guard compares the rendered comment against the exact credential values registered from the copied known credential fields. It does not use token-shape heuristics and does not claim that arbitrary private raw evidence is secret-free. Unknown credential formats fail before publication. Failure details remain private; the public failure comment is bounded and the exact candidate SHA receives failure status only after disposable credential cleanup succeeds.
+Re-prompt operator `surface`, `action`, and `observed` values until each is printable ASCII without backtick or angle brackets and at most 160 characters. Publish accepted values verbatim using the shared predicate. Other unsafe fields remain omitted whole. Failure details remain private; never publish raw evidence or claim it is secret-free. Failed setup restoration forbids all publication.
 
 ## Cleanup
 
-Quit native sessions normally and remove only the copied disposable Claude `.credentials.json` and Codex `auth.json` files on success or failure, including refreshes written to those same run-owned paths. Preserve candidate state and raw evidence. Record cleanup outcome; failed credential cleanup blocks publication. Never modify the supplied source credential files or daily provider files. Preserve the private mode-0700 raw evidence root through merge, archive it after merge, and let the operator delete only the named run root. Do not kill unrelated processes.
+Quit native sessions normally. Verify any setup restoration before publication. Removing the Codex run home removes only its auth symlink, never the operator's target file. Preserve private raw evidence through merge, archive it afterwards, and let the operator delete only the named run root. No credential-copy cleanup or separate `~/.pstack-verify` login directories are needed. Do not kill unrelated processes.
 
 ## Helpers
 
-- `scripts/verify.sh doctor --claude-config <dir> --codex-home <dir> --output <fresh-absolute-external-directory>`: trusted-parent capability and source-authentication report, no installation/publication.
-- `scripts/verify.sh doctor --candidate --output <fresh-run-owned-directory>`: candidate-safe self-test probe; no source-credential or publisher authentication probing.
-- `scripts/verify.sh run --pr <positive-number> --claude-config <dir> --codex-home <dir> [--self-test] --output <fresh-absolute-external-directory>`: supervised exact-head verification; mapped exercises require an interactive terminal.
+- `scripts/verify.sh doctor --output <fresh-absolute-external-directory>`: parent capability report, no installation/publication.
+- `scripts/verify.sh doctor --candidate --output <fresh-run-owned-directory>`: candidate-safe self-test probe; no publisher authentication probing.
+- `scripts/verify.sh run --pr <positive-number> [--self-test] --output <fresh-absolute-external-directory>`: supervised exact-head verification; mapped exercises require an interactive terminal.
 - `bun run test` and `bun run typecheck`: development checks after a separate frozen dependency install, not live proof.
 - `features/registry.json`: maintained path ownership; unknown runtime paths block.
 

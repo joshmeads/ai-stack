@@ -87,7 +87,7 @@ describe('exact-head evidence publication', () => {
     expect(f.calls).toContain('prepare');
   });
 
-  test('successful verification cleans disposable credentials before any publication', async () => {
+  test('successful verification restores setup and removes Codex run state before any publication', async () => {
     const f = fixture(true); f.options.driver.cleanup = async () => { f.calls.push('cleanup'); };
     const receipt = await verify(f.options);
     expect(f.calls.filter(call => call === 'cleanup')).toHaveLength(1);
@@ -104,13 +104,14 @@ describe('exact-head evidence publication', () => {
     expect(f.saved.at(-1)?.failure).toContain('RAW_CREDENTIAL_CLEANUP_EXCEPTION');
   });
 
-  test('a successful cleanup retry permits one generic failure publication', async () => {
+  test('failed setup restoration forbids publication even if cleanup retry succeeds', async () => {
     const f = fixture(true); let attempts = 0;
-    f.options.driver.cleanup = async () => { f.calls.push('cleanup'); if (++attempts === 1) throw new Error('RAW_FIRST_CLEANUP_FAILURE'); };
-    await expect(verify(f.options)).rejects.toThrow('RAW_FIRST_CLEANUP_FAILURE');
-    expect(f.calls.filter(call => call === 'cleanup')).toHaveLength(2); expect(f.comments).toHaveLength(1);
-    expect(f.comments[0]).toContain('FAILED — verification did not complete'); expect(f.comments[0]).not.toContain('RAW_FIRST_CLEANUP_FAILURE');
-    expect(f.calls).toContain(`status:failure:${SHA}`); expect(f.saved.at(-1)?.failure).toContain('RAW_FIRST_CLEANUP_FAILURE');
+    f.options.driver.cleanup = async () => { f.calls.push('cleanup'); if (++attempts === 1) throw new Error('Setup restoration failed'); };
+    await expect(verify(f.options)).rejects.toThrow('Setup restoration failed');
+    expect(f.calls.filter(call => call === 'cleanup')).toHaveLength(2);
+    expect(f.comments).toHaveLength(0);
+    expect(f.calls.some(call => call.startsWith('status:'))).toBe(false);
+    expect(f.saved.at(-1)?.failure).toContain('Setup restoration failed');
   });
 
   test('failure publication is structured and excludes raw exceptions, transcripts, and artifact paths', async () => {

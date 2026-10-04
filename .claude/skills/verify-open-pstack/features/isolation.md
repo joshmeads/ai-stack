@@ -1,42 +1,31 @@
-# Disposable credential and run-state contract
+# Native login and run-state contract
 
-The verifier uses run-owned provider/configuration state and credential files copied from explicitly supplied operator-pre-authenticated normal-login directories. No profile manager or maintainer-specific infrastructure is required. This is operational state separation, not a Seatbelt or macOS filesystem security boundary.
+Reuse the operator's existing Claude Code and Codex logins. No extra login, credential source flags, credential reading/copying/parsing, token registration, or exact-secret public-comment check. This is operational state separation, not an OS security boundary.
 
 ## Trusted parent
 
-Run the publisher from a maintainer-reviewed trusted `main` checkout. Record that publisher revision separately from the PR's exact candidate SHA; never treat publisher code provenance as candidate proof. For PR #111 bootstrap, use the reviewed trusted publisher head while pinning all candidate evidence and status to PR #111's reviewed exact head.
-
-Require explicit `--claude-config <dir>` and `--codex-home <dir>` pointing to existing operator-pre-authenticated normal-login configuration directories; never infer source directories or choose defaults. A selected account may be active in daily use. Record source paths privately in the receipt.
-
-Trusted-parent doctor validates those source directories with `CLAUDE_CONFIG_DIR=<dir> claude auth status` and `CODEX_HOME=<dir> codex login status`. Missing or unusable authentication, including unauthorized or expired credentials, fails closed with the corresponding manual remediation: `CLAUDE_CONFIG_DIR=<dir> claude auth login` or `CODEX_HOME=<dir> codex login`. Never execute login automatically, switch identities, or fall back automatically.
-
-Copy only the source Claude `.credentials.json` into run-owned `CLAUDE_CONFIG_DIR` and source Codex `auth.json` into run-owned `CODEX_HOME`. Copy the complete recognized credential file, including refresh material needed by the native client, but no other configuration or source state. Never write refreshed state back to source directories. Missing credential files, unknown credential formats, or unusable authentication fail closed. GitHub authentication and publication remain exclusively in the trusted parent.
+Verifier-changing PRs run from their reviewed candidate head, with publisher revision equal to candidate SHA; all other PRs run from trusted `main`. Record publisher revision separately. GitHub authentication and publication remain exclusively in the parent; candidate processes never receive publisher credentials.
 
 ## Candidate process state
 
-- Preserve the operator's real `HOME`, `USER`, and `LOGNAME` for native-client compatibility and identity.
-- Set `CLAUDE_CONFIG_DIR`, `CODEX_HOME`, `TMPDIR`, `GH_CONFIG_DIR`, XDG config/cache, and other configurable provider/GitHub/temp locations to run-owned directories.
-- Disable global/system git configuration and credential helpers for candidate commands.
-- Claude uses the explicit candidate plugin, empty settings, and project setting sources. Codex uses pinned local marketplace/plugin installation.
-- Provider descendants inherit both run-owned provider config roots. Never pass GitHub publisher credentials or daily provider API keys.
-- Never invoke login, modify source credentials, or copy daily provider configuration as fallback.
+- Preserve real `HOME`, `USER`, and `LOGNAME`.
+- Claude uses normal operator login/config with `claude --plugin-dir <exact-head checkout>/plugins/pstack --settings '{"enabledPlugins":{"pstack@open-pstack":false}}'`. These flags load only the candidate for that session, without persistent installation or settings changes.
+- Codex installs the exact-head marketplace with `codex plugin marketplace add … --ref <sha>` and `codex plugin add` in a run-owned `CODEX_HOME`. Symlink its `auth.json` to the operator's `${CODEX_HOME:-$HOME/.codex}/auth.json`, resolving the daily home before overriding the environment.
+- If the daily home has no `auth.json`, fail closed: this tool needs file-based Codex auth. Do not read credentials, copy them, or start login. Native refresh writes through the symlink to the single existing login file.
+- Keep temporary, GitHub, and fixture state run-owned; disable global/system Git configuration and credential helpers for candidate commands. Provider descendants use the same native-login arrangement, never publisher credentials.
 
-These controls do not deny a process access to real `HOME`, Keychain, or candidate sources. Do not claim Seatbelt enforcement, source write protection, Keychain/securityd denial, daily-home denial, or OS-backed secrecy. Provenance rechecks detect changed candidate/installed files but are not prevention.
+Do not claim Seatbelt enforcement, source-write protection, Keychain denial, daily-home denial, or OS-backed secrecy. Provenance rechecks detect changed candidate/installed files but are not prevention.
 
 ## Setup boundary
 
-Because `HOME` remains real, setup must not be exercised until config-home support in issue #120 merges. Until then, setup selection fails closed with exactly:
-
-`setup exercise requires #120 (setup-pstack config-home)`
-
-Do not redirect `HOME`, allow setup to write daily files, or replace this result with a mock.
-
-## Public comment check
-
-Register exact access/refresh/id-token values only from the copied, recognized credential fields. Immediately before a GitHub write, compare the rendered structured comment against those exact known values and refuse publication on a match. Do not use token-shape, prefix, entropy, regex, or other heuristic secrecy claims. Unknown credential layouts block before publication. Private raw evidence is not declared secret-free.
+For setup only, snapshot `${CLAUDE_CONFIG_DIR:-$HOME/.claude}/pstack-models.md` and `CLAUDE.md` before exercise, including original absence. Restore exact bytes or absence afterwards, on success or failure, and verify restoration before any publication. Failed restoration stops the run and publishes nothing. Do not substitute a mock or generated configuration alone for installed-surface evidence.
 
 ## Private evidence and cleanup
 
-Create each output root fresh, outside the repository, with mode 0700; use private files beneath it. Retain raw transcripts, artifacts, receipts, and cleanup results in that private root through merge. Copied credential files are session state, not evidence: remove only the copied Claude `.credentials.json` and Codex `auth.json` files in run-owned config roots after native sessions on success or failure, including refreshes written to those same paths. Preserve candidate state and raw evidence. Cleanup failure blocks GitHub publication.
+Use a fresh external mode-0700 run root. Retain raw transcripts, artifacts, receipts, and restoration results privately through merge. Quit native sessions normally. Removing the Codex run home removes its auth symlink, never the operator's target file. No copied-credential cleanup or separate `~/.pstack-verify` login directories are needed.
 
-After merge, archive the retained evidence and let the operator delete only the named run root. Never modify supplied source credential files or daily provider files, and never recursively delete an operator directory.
+After merge, archive retained evidence and let the operator delete only the named run root. Never recursively delete an operator directory or kill unrelated processes.
+
+## Native verification
+
+Confirm a real Mac session loads only the candidate in Claude, Codex authenticates through the symlink, daily Codex still works after any refresh, and setup restoration is byte-exact. If Codex replaces the symlink or installed pstack leaks into Claude's candidate session, stop and reopen the design rather than improvise.

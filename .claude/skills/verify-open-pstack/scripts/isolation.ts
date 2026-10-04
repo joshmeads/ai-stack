@@ -1,111 +1,73 @@
-import { chmod, lstat, mkdir, open, readFile, realpath, unlink } from 'node:fs/promises';
+import { lstat, mkdir, readFile, readlink, realpath, rm, stat, symlink, writeFile } from 'node:fs/promises';
 import { isAbsolute, join, resolve } from 'node:path';
-import { isolatedEnv, registerSecrets } from './io.ts';
-import { HARNESSES, type CredentialSources, type Harness } from './types.ts';
 
-export function loginFix(tool: Harness, directory: string): string {
-  const quoted = `'${directory.replaceAll("'", "'\\''")}'`;
-  return tool === 'claude' ? `CLAUDE_CONFIG_DIR=${quoted} claude auth login` : `CODEX_HOME=${quoted} codex login`;
+function codexAuth(): string {
+  return resolve(process.env.CODEX_HOME ?? join(process.env.HOME!, '.codex'), 'auth.json');
 }
 
-export async function credentialSources(sources: CredentialSources): Promise<CredentialSources> {
-  const canonical = {} as CredentialSources;
-  for (const tool of HARNESSES) {
-    const directory = sources[tool];
-    try {
-      if (typeof directory !== 'string' || !directory || directory.includes('\0')) throw new Error('explicit source directory required');
-      const path = resolve(directory), info = await lstat(path);
-      if (!info.isDirectory() || info.isSymbolicLink()) throw new Error('source directory must be a directory, not symlinked');
-      canonical[tool] = await realpath(path);
-      const source = join(canonical[tool], tool === 'claude' ? '.credentials.json' : 'auth.json');
-      const sourceInfo = await lstat(source);
-      if (!sourceInfo.isFile() || sourceInfo.isSymbolicLink() || await realpath(source) !== source) throw new Error('credentials must be a contained regular file');
-    } catch (error) {
-      const reason = error instanceof Error ? error.message : String(error);
-      throw new Error(`${tool} credential source unavailable: ${reason}; log in once with: ${loginFix(tool, directory ?? '')}`);
-    }
-  }
-  return canonical;
+async function codexDirectory(home: string): Promise<string> {
+  if (!isAbsolute(home) || await realpath(home) !== home) throw new Error('Codex state must be a canonical run-owned directory');
+  const directory = join(home, '.codex');
+  const info = await lstat(directory);
+  if (!info.isDirectory() || info.isSymbolicLink() || await realpath(directory) !== directory) throw new Error('Codex state directory redirected');
+  return directory;
 }
 
-function credentialLocation(home: string, tool: Harness): { directory: string; path: string } {
-  const env = isolatedEnv(home);
-  const directory = tool === 'claude' ? env.CLAUDE_CONFIG_DIR : env.CODEX_HOME;
-  if (!directory) throw new Error(`Isolated ${tool} configuration directory is missing`);
-  return { directory, path: join(directory, tool === 'claude' ? '.credentials.json' : 'auth.json') };
+export async function linkCodexAuth(home: string): Promise<void> {
+  const source = codexAuth();
+  const info = await stat(source).catch((error: NodeJS.ErrnoException) => {
+    if (error.code !== 'ENOENT') throw error;
+    return undefined;
+  });
+  if (!info?.isFile()) throw new Error('Codex verification requires existing file-based authentication (auth.json); keyring-only authentication is not supported');
+  await mkdir(join(home, '.codex'), { recursive: true, mode: 0o700 });
+  await symlink(source, join(await codexDirectory(home), 'auth.json'));
 }
 
-async function canonicalDirectory(path: string, message: string): Promise<void> {
+export async function assertCodexAuth(home: string): Promise<void> {
+  const path = join(await codexDirectory(home), 'auth.json');
   const info = await lstat(path);
-  if (!info.isDirectory() || info.isSymbolicLink() || await realpath(path) !== path) throw new Error(message);
-}
-
-function credentialTokens(tool: Harness, auth: Record<string, unknown>): string[] {
-  const fields = (tool === 'claude' ? auth.claudeAiOauth : auth.tokens) as Record<string, unknown> | undefined;
-  const access = tool === 'claude' ? fields?.accessToken : fields?.access_token;
-  const apiKey = tool === 'codex' && typeof auth.OPENAI_API_KEY === 'string' && auth.OPENAI_API_KEY ? auth.OPENAI_API_KEY : undefined;
-  if ((typeof access !== 'string' || !access) && !apiKey) throw new Error(`${tool} requires file-backed native credentials; unknown format blocks`);
-  const names = tool === 'claude' ? ['accessToken', 'refreshToken'] : ['access_token', 'refresh_token', 'id_token'];
-  return [...(apiKey ? [apiKey] : []), ...names.flatMap(name => typeof fields?.[name] === 'string' ? [fields[name] as string] : [])];
-}
-
-export async function copyCredentials(home: string, sources: CredentialSources, copied: string[]): Promise<void> {
-  if (!isAbsolute(home) || resolve(home) !== home) throw new Error('Credential copy requires canonical candidate state');
-  const canonical = await credentialSources(sources);
-  await mkdir(home, { recursive: true, mode: 0o700 });
-  await canonicalDirectory(home, 'Credential copy refuses redirected candidate state');
-
-  for (const tool of HARNESSES) {
-    const source = join(canonical[tool], tool === 'claude' ? '.credentials.json' : 'auth.json');
-    const bytes = await readFile(source);
-    try {
-      const auth = JSON.parse(bytes.toString()) as Record<string, unknown>;
-      registerSecrets(credentialTokens(tool, auth));
-    } catch {
-      throw new Error(`${tool} credential source has unsupported file-backed credentials; log in once with: ${loginFix(tool, canonical[tool])}`);
-    }
-
-    const target = credentialLocation(home, tool);
-    await mkdir(target.directory, { recursive: true, mode: 0o700 });
-    await canonicalDirectory(target.directory, 'Candidate credential directory redirected');
-    await chmod(target.directory, 0o700);
-    const file = await open(target.path, 'wx', 0o600);
-    copied.push(target.path);
-    try { await file.writeFile(bytes); }
-    finally { await file.close(); }
+  if (!info.isSymbolicLink() || await readlink(path) !== codexAuth()) {
+    throw new Error('Codex replaced or redirected auth.json instead of writing through its symlink; stop and report before publication');
   }
 }
 
-export async function removeCredentials(paths: string[]): Promise<void> {
-  for (const path of new Set(paths)) {
-    if (!isAbsolute(path) || resolve(path) !== path) throw new Error('Credential cleanup requires canonical copied paths');
-    const home = resolve(path, '../..');
-    const expected = HARNESSES.map(tool => credentialLocation(home, tool).path);
-    if (!expected.includes(path)) throw new Error('Credential cleanup only removes copied provider credential files');
+export async function removeCodexHome(home: string): Promise<void> {
+  await assertCodexAuth(home);
+  await rm(await codexDirectory(home), { recursive: true });
+}
 
-    const homeInfo = await lstat(home).catch((error: NodeJS.ErrnoException) => {
-      if (error.code !== 'ENOENT') throw error;
-      return undefined;
-    });
-    if (!homeInfo) continue;
-    if (!homeInfo.isDirectory() || homeInfo.isSymbolicLink() || await realpath(home) !== home) throw new Error('Credential cleanup refuses redirected candidate state');
+export type SetupSnapshot = { path: string; bytes?: Buffer; mode?: number }[];
 
-    const directory = resolve(path, '..');
-    const directoryInfo = await lstat(directory).catch((error: NodeJS.ErrnoException) => {
-      if (error.code !== 'ENOENT') throw error;
-      return undefined;
-    });
-    if (!directoryInfo) continue;
-    if (!directoryInfo.isDirectory() || directoryInfo.isSymbolicLink() || await realpath(directory) !== directory) {
-      throw new Error('Credential cleanup refuses redirected candidate credential directories');
+async function setupFile(path: string) {
+  const info = await lstat(path).catch((error: NodeJS.ErrnoException) => {
+    if (error.code !== 'ENOENT') throw error;
+    return undefined;
+  });
+  if (info && (!info.isFile() || info.isSymbolicLink())) throw new Error(`Setup restoration requires a regular file: ${path}`);
+  return info;
+}
+
+export async function snapshotSetup(): Promise<SetupSnapshot> {
+  const directory = process.env.CLAUDE_CONFIG_DIR ?? join(process.env.HOME!, '.claude');
+  const snapshot: SetupSnapshot = [];
+  for (const name of ['pstack-models.md', 'CLAUDE.md']) {
+    const path = join(directory, name), info = await setupFile(path);
+    snapshot.push(info ? { path, bytes: await readFile(path), mode: info.mode & 0o777 } : { path });
+  }
+  return snapshot;
+}
+
+export async function restoreSetup(snapshot: SetupSnapshot): Promise<void> {
+  for (const { path, bytes, mode } of snapshot) {
+    await setupFile(path);
+    if (bytes === undefined) await rm(path, { force: true });
+    else await writeFile(path, bytes, { mode });
+  }
+  for (const { path, bytes } of snapshot) {
+    const info = await setupFile(path);
+    if (bytes === undefined ? info !== undefined : !info || !(await readFile(path)).equals(bytes)) {
+      throw new Error(`Setup restoration verification failed: ${path}`);
     }
-
-    const info = await lstat(path).catch((error: NodeJS.ErrnoException) => {
-      if (error.code !== 'ENOENT') throw error;
-      return undefined;
-    });
-    if (!info) continue;
-    if (!info.isFile() && !info.isSymbolicLink()) throw new Error('Credential cleanup only removes regular credential files or their leaf links');
-    await unlink(path);
   }
 }

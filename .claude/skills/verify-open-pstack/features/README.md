@@ -7,7 +7,7 @@
 | `skills` | One `skill-invocation:<name>` exercise per selected skill, in both harnesses |
 | `shared` | All listed skills, setup, runner, and shipped tools in both harnesses |
 | `assets` | Installed UI/resource surface for each actual consumer found in the pinned plugin manifests |
-| `setup` | Installed setup/model configuration; currently the named #120 fail-closed result |
+| `setup` | Installed setup/model configuration with byte-exact daily Claude file restoration before publication |
 | `runner` | Installed parent invoking real configured provider lanes |
 | `tools` | Installed parent invoking the changed shipped CLI |
 | `project` | Native discovery/invocation of this verifier in both harnesses |
@@ -22,7 +22,8 @@ Skill-owned `SKILL.md`, `references/**`, and `playbooks/**` select their skill. 
 The feature documents below define sub-features, user entry points, driving instructions, and gotchas. Review each changed sub-feature in the diff; one aggregate observation cannot replace distinct selected skills. Record all changed sub-feature actions in the feature's transcript and artifact. Do not run destructive application work in the maintainer checkout.
 
 - `skill-invocation.md`: installed native skills, principle leaves, and project-skill self-test.
-- `setup.md`: setup/routing/model configuration and the #120 block.
+- `setup.md`: setup/routing/model configuration and byte-exact restoration.
+- `isolation.md`: existing native logins, Codex auth symlink, and private run state.
 - `runner.md`: parent-to-child provider dispatch and receipts.
 - `shipped-tools.md`: orchestration, watch, plan checks, audit, and evidence logging.
 - `assets.md`: manifest-declared installed assets on actual consuming harnesses.

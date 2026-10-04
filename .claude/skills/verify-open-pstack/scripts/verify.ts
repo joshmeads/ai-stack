@@ -1,9 +1,9 @@
 import { classify, completeEvidence, newReceipt } from './core.ts';
-import { assertNoKnownSecrets, retainedFile, sha256 } from './io.ts';
+import { retainedFile, sha256 } from './io.ts';
 import { REPO, type Driver, type GitHub, type Pull, type Receipt, type Registry } from './types.ts';
 
 class HeadMoved extends Error {}
-// Omit unsafe/oversized values whole: truncating or rewriting one could hide an exact registered secret.
+// Omit unsafe or oversized values whole rather than rewriting operator evidence.
 export const EVIDENCE_LIMIT = 160;
 export const publishable = (text: string, limit = EVIDENCE_LIMIT): boolean => text.length <= limit && /^[\x20-\x7e]*$/.test(text) && !/[`<>]/.test(text);
 const safe = (text: string, limit = EVIDENCE_LIMIT): string => publishable(text, limit) ? text : '[value omitted]';
@@ -63,12 +63,13 @@ export async function verify(options: VerifyOptions): Promise<Receipt> {
   const initial = await github.pull(options.pr);
   if (initial.state !== 'open' || initial.headRepo !== REPO) throw new Error('Require an open same-repository PR');
   const receipt = newReceipt(options.pr, initial.head.sha, initial.base.sha, options.selfTest, options.root, options.publisherRevision);
-  let successAttempted = false, commentAttempted = false, cleanupComplete = false;
+  let successAttempted = false, commentAttempted = false, cleanupComplete = false, cleanupFailed = false;
   const cleanup = async (): Promise<void> => {
     if (cleanupComplete) return;
-    await driver.cleanup?.(receipt);
+    try { await driver.cleanup?.(receipt); }
+    catch (error) { cleanupFailed = true; throw error; }
     cleanupComplete = true;
-    receipt.cleanup = 'Copied disposable credentials removed; candidate state and private raw evidence retained';
+    receipt.cleanup = 'Setup files restored and verified; run-owned Codex home removed; private raw evidence retained';
   };
   const current = async (): Promise<Pull> => {
     const pull = await github.pull(receipt.pr);
@@ -82,7 +83,6 @@ export async function verify(options: VerifyOptions): Promise<Receipt> {
   };
   const publishComment = async (): Promise<void> => {
     const body = evidence(receipt);
-    assertNoKnownSecrets(body);
     commentAttempted = true;
     receipt.commentUrl = await github.comment(receipt.pr, body);
     await persist(receipt);
@@ -116,13 +116,13 @@ export async function verify(options: VerifyOptions): Promise<Receipt> {
     try { await cleanup(); }
     catch (cleanupError) {
       receipt.cleanup = `FAILED: ${cleanupError instanceof Error ? cleanupError.message : String(cleanupError)}`;
-      appendFailure('credential cleanup', cleanupError);
+      appendFailure('setup restoration or Codex cleanup', cleanupError);
     }
     try { await persist(receipt); }
     catch (persistError) { appendFailure('persist failure receipt', persistError); }
 
-    // Publication is forbidden while disposable credential cleanup remains incomplete.
-    if (cleanupComplete) {
+    // Failed setup restoration or Codex auth-link cleanup forbids all publication.
+    if (cleanupComplete && !cleanupFailed) {
       if (!commentAttempted) {
         try { await current(); await publishComment(); }
         catch (publicationError) { appendFailure('publish failure evidence', publicationError); }
