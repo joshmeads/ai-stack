@@ -90,14 +90,16 @@ for source in "$setup" "$config_mapping"; do
   for rule in \
     'When `<config-home>` is the default home, render exactly' \
     'Only when `CLAUDE_CONFIG_DIR` redirects the home' \
-    'absolute resolved' \
-    'each space backslash-escaped' \
+    'render exactly `@./pstack-models.md`' \
     'basename is `pstack-models.md`' \
     'On a rerun, replace that one line in place, preserving all unrelated bytes.' \
     'If zero matching import lines exist, append one.' \
     'If more than one exists, stop and report inconsistent state before either write'; do
     grep -Fq "$rule" "$source" || config_home_bad="${config_home_bad}$source lacks Claude import rule: $rule"$'\n'
   done
+  if grep -nE 'backslash|space-escaped|absolute resolved' "$source"; then
+    config_home_bad="${config_home_bad}$source still specifies absolute or escaped Claude imports"$'\n'
+  fi
 done
 grep -Fq '[harness config-home rule](../poteto-mode/references/codex-tools.md#harness-config-homes)' "$setup" || config_home_bad="${config_home_bad}setup does not reference the canonical config-home rule"$'\n'
 for expression in '"${CLAUDE_CONFIG_DIR:-$HOME/.claude}"' '"${CODEX_HOME:-$HOME/.codex}"'; do
@@ -114,9 +116,9 @@ if ! (
   CLAUDE_CONFIG_DIR="" CODEX_HOME=""
   [ "${CLAUDE_CONFIG_DIR:-$HOME/.claude}" = "$HOME/.claude" ] &&
   [ "${CODEX_HOME:-$HOME/.codex}" = "$HOME/.codex" ] || exit 1
-  CLAUDE_CONFIG_DIR="/tmp/pstack claude config" CODEX_HOME="/tmp/pstack codex config"
-  [ "${CLAUDE_CONFIG_DIR:-$HOME/.claude}" = "/tmp/pstack claude config" ] &&
-  [ "${CODEX_HOME:-$HOME/.codex}" = "/tmp/pstack codex config" ]
+  CLAUDE_CONFIG_DIR="/tmp/pstack claude # config" CODEX_HOME="/tmp/pstack codex # config"
+  [ "${CLAUDE_CONFIG_DIR:-$HOME/.claude}" = "/tmp/pstack claude # config" ] &&
+  [ "${CODEX_HOME:-$HOME/.codex}" = "/tmp/pstack codex # config" ]
 ); then
   config_home_bad="${config_home_bad}unset, empty, or space-containing resolution changed"$'\n'
 fi

@@ -19,7 +19,7 @@ The Claude integration is the one `@` import line in `<config-home>/CLAUDE.md` w
 @~/.claude/pstack-models.md
 ```
 
-Only when `CLAUDE_CONFIG_DIR` redirects the home, render `@` followed by the absolute resolved sheet path with each space backslash-escaped, never a variable or placeholder. On a rerun, replace that one line in place, preserving all unrelated bytes. If zero matching import lines exist, append one. If more than one exists, stop and report inconsistent state before either write; do not append another import or guess which one to replace.
+Only when `CLAUDE_CONFIG_DIR` redirects the home, render exactly `@./pstack-models.md`. This relative import resolves from the importing file's directory, where the sheet also lives, so the import line contains no config-directory characters. On a rerun, replace that one line in place, preserving all unrelated bytes. If zero matching import lines exist, append one. If more than one exists, stop and report inconsistent state before either write; do not append another import or guess which one to replace.
 
 ## Tool actions
 

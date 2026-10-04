@@ -10,7 +10,7 @@ Usage:
   bash tests/setup-config-home-repro.sh --verify RUN_DIR
 
 Preparation keeps HOME and USER unchanged, snapshots daily sheet/integration
-files, and creates private redirected config directories (including spaces).
+files, and creates private redirected config directories (including spaces and #).
 Only .credentials.json / auth.json are copied from explicitly supplied login
 sources. Without a file-backed source, log in in the redirected directory.
 No daily configuration or credentials are modified by this fixture.
@@ -49,7 +49,7 @@ for (const [i, target] of meta.targets.entries()) {
   const before = path.join(run, 'daily', String(i));
   if (fs.existsSync(before) !== fs.existsSync(target) || (fs.existsSync(before) && !fs.readFileSync(before).equals(fs.readFileSync(target)))) fail(`daily config target changed: ${target}`);
 }
-const home = path.join(run, `${meta.harness} config`);
+const home = path.join(run, `${meta.harness} # config`);
 const sheet = path.join(home, 'pstack-models.md');
 const integration = path.join(home, meta.harness === 'claude' ? 'CLAUDE.md' : 'AGENTS.md');
 if (!fs.existsSync(sheet) || !fs.statSync(sheet).size) fail('redirected model sheet missing or empty');
@@ -59,7 +59,7 @@ const sentinel = fs.readFileSync(path.join(run, 'sentinel'), 'utf8');
 if (!text.startsWith(sentinel)) fail('unrelated integration bytes changed');
 if (meta.harness === 'claude') {
   const includes = text.split('\n').filter(line => line.startsWith('@') && line.includes('pstack-models.md'));
-  if (includes.length !== 1 || includes[0] !== `@${sheet.replaceAll(' ', '\\ ')}`) fail('Claude include is not the single resolved sheet path with escaped spaces');
+  if (includes.length !== 1 || includes[0] !== '@./pstack-models.md') fail('Claude include is not the single relative sheet import');
 } else {
   const begin = '<!-- pstack:models:begin -->';
   const end = '<!-- pstack:models:end -->';
@@ -103,13 +103,13 @@ done
 umask 077
 run="$(mktemp -d "${TMPDIR:-/tmp}/pstack-config-home.XXXXXX")"
 run="$(cd "$run" && pwd -P)"
-mkdir "$run/claude config" "$run/codex config" "$run/daily" "$run/workspace"
-[ -z "$claude_source" ] || cp "$claude_source/.credentials.json" "$run/claude config/.credentials.json"
-[ -z "$codex_source" ] || cp "$codex_source/auth.json" "$run/codex config/auth.json"
+mkdir "$run/claude # config" "$run/codex # config" "$run/daily" "$run/workspace"
+[ -z "$claude_source" ] || cp "$claude_source/.credentials.json" "$run/claude # config/.credentials.json"
+[ -z "$codex_source" ] || cp "$codex_source/auth.json" "$run/codex # config/auth.json"
 printf '%s\n' '# Fixture instructions' 'Preserve this unrelated text exactly.' > "$run/sentinel"
-cp "$run/sentinel" "$run/claude config/CLAUDE.md"
-cp "$run/sentinel" "$run/codex config/AGENTS.md"
-printf '[features]\nmulti_agent = true\n' > "$run/codex config/config.toml"
+cp "$run/sentinel" "$run/claude # config/CLAUDE.md"
+cp "$run/sentinel" "$run/codex # config/AGENTS.md"
+printf '[features]\nmulti_agent = true\n' > "$run/codex # config/config.toml"
 node - "$run" "$repo" "$harness" "$claude_source" "$codex_source" <<'JS'
 const fs = require('node:fs');
 const path = require('node:path');
@@ -122,7 +122,7 @@ fs.writeFileSync(path.join(run, 'run.json'), JSON.stringify({harness, home: proc
 JS
 printf 'Prepared private run: %s\n' "$run"
 printf 'Keep HOME and USER unchanged. In an operator terminal:\ncd %q\n' "$run/workspace"
-printf 'export CLAUDE_CONFIG_DIR=%q CODEX_HOME=%q\n' "$run/claude config" "$run/codex config"
+printf 'export CLAUDE_CONFIG_DIR=%q CODEX_HOME=%q\n' "$run/claude # config" "$run/codex # config"
 if [ "$harness" = claude ]; then
   printf 'claude --plugin-dir %q\n' "$repo/plugins/pstack"
 else
