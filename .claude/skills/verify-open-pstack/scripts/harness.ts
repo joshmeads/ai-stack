@@ -85,9 +85,9 @@ export class MacDriver implements Driver {
       const candidate = join(workspace, 'plugins/pstack'), expected = await treeHash(candidate, ['skills/poteto-mode/scripts/node_modules']);
       if (await sourceDigest(workspace) !== pinnedSource) throw new Error('Candidate files differ from trusted pinned source');
       let location = candidate;
+      await linkCodexAuth(home);
+      this.codexHomes.push(home);
       if (harness === 'codex') {
-        await linkCodexAuth(home);
-        this.codexHomes.push(home);
         const added = await candidateRun(['codex', 'plugin', 'marketplace', 'add', workspace, '--json'], { env, cwd: home });
         await save(join(root, 'codex-marketplace.json'), JSON.parse(added));
         const installed = await candidateRun(['codex', 'plugin', 'add', 'pstack@open-pstack', '--json'], { env, cwd: home });

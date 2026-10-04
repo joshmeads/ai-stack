@@ -143,6 +143,9 @@ describe('isolated harness boundaries', () => {
       }
       if (args[0] === '/usr/bin/script') {
         expect(candidate).toBe(true); expect(options.interactive).toBe(true);
+        const linked = join(env!.CODEX_HOME!, 'auth.json');
+        expect((await lstat(linked)).isSymbolicLink()).toBe(true);
+        expect(await readlink(linked)).toBe(auth);
         await writeFile(args[2]!, 'retained raw native evidence');
         throw new Error('fixture native surface reached');
       }
@@ -208,7 +211,7 @@ describe('isolated harness boundaries', () => {
     for (const harness of ['claude', 'codex']) {
       const home = join(root, 'state', harness); expect((await stat(home)).isDirectory()).toBe(true);
       expect(await readFile(join(home, 'native-state.db'), 'utf8')).toBe('retained candidate state');
-      if (harness === 'codex') await expect(stat(join(home, '.codex'))).rejects.toThrow('ENOENT');
+      await expect(stat(join(home, '.codex'))).rejects.toThrow('ENOENT');
       await expect(stat(join(home, '.claude'))).rejects.toThrow('ENOENT');
       if (!failInstall) expect(await readFile(join(home, 'surface.raw'), 'utf8')).toBe('retained raw native evidence');
     }
