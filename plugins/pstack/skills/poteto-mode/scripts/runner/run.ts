@@ -814,9 +814,9 @@ async function executeLane(
     }
   }
   const providerFailure = parseError instanceof ProviderResultError ? parseError : null;
-  const metadata = providerFailure?.metadata ?? parsed;
+  const metadata = providerFailure?.metadata ?? (result.exitCode === 0 ? parsed : null);
   if (result.cancelledBy !== null || result.timedOut || providerFailure !== null
-      || (result.exitCode !== 0 && parseError === null)) {
+      || result.exitCode !== 0) {
     const rawFailureEvidence = `${result.stderr}\n${result.stdout}`;
     const failureEvidence = evidence(providerFailure === null
       ? rawFailureEvidence : `${providerFailure.message}\n${rawFailureEvidence}`);

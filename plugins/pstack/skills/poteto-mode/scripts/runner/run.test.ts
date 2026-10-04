@@ -439,15 +439,36 @@ process.exit(${scenario.endsWith("nonzero") ? 1 : 0});
         `process.stdout.write(${JSON.stringify(stdout)}); process.exit(${exitCode});`));
       process.env.FAKE_GROK_ERROR_RESULT = "1";
       const result = await runLane(input);
-      expect(result.exitCode).toBe(65);
+      expect(result.exitCode).toBe(exitCode === 0 ? 65 : 70);
       expect(result.receipt).toMatchObject({
-        status: "malformed-output", exitCode, reportedModel: null, modelVerified: false,
-        sessionId: null, error: { message: "grok result did not contain a valid terminal status" },
+        status: exitCode === 0 ? "malformed-output" : "child-failed",
+        exitCode, reportedModel: null, modelVerified: false,
+        sessionId: null, error: { message: exitCode === 0
+          ? "grok result did not contain a valid terminal status" : "child exited with status 1" },
       });
-      expect(result.receipt.error?.evidence).toEndWith(stdout.trim());
       expect(readFileSync(streamPath(result.receipt.stdoutPath), "utf8")).toEndWith(stdout);
       expect(existsSync(input.outputPath)).toBe(false);
     });
+  }
+
+  for (const stdout of ['{"type":"system","subtype":"init"}\n', "startup failed\n"]) {
+    for (const exitCode of [0, 1]) {
+      it(`handles missing Grok terminal output ${JSON.stringify(stdout)} after exit ${exitCode}`, async () => {
+        const input = options("grok");
+        const stderr = "sandbox startup refused\n";
+        writeFileSync(join(bin, "grok"), fake.replace("const modelIndex =",
+          `process.stdout.write(${JSON.stringify(stdout)}); process.stderr.write(${JSON.stringify(stderr)}); process.exit(${exitCode});\nconst modelIndex =`));
+        const result = await runLane(input);
+        expect(result.exitCode).toBe(exitCode === 0 ? 65 : 70);
+        expect(result.receipt).toMatchObject({
+          status: exitCode === 0 ? "malformed-output" : "child-failed",
+          exitCode, reportedModel: null, sessionId: null,
+        });
+        expect(readFileSync(streamPath(result.receipt.stdoutPath), "utf8")).toBe(stdout);
+        expect(readFileSync(streamPath(result.receipt.stderrPath), "utf8")).toBe(stderr);
+        expect(existsSync(input.outputPath)).toBe(false);
+      });
+    }
   }
 
   it("does not invent metadata for a valid provider failure", async () => {
