@@ -2,7 +2,7 @@ import { afterEach, describe, expect, test } from 'bun:test';
 import { chmod, mkdir, mkdtemp, readFile, realpath, rm, stat, symlink, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
-import { command, isolatedEnv, retainedFile, save, sha256, treeHash } from './io.ts';
+import { command, isolatedEnv, retainedFile, save, session, sha256, treeHash } from './io.ts';
 
 const roots: string[] = [];
 async function fixture(): Promise<string> {
@@ -27,6 +27,17 @@ describe('private values and retained file boundaries', () => {
     try { await command(['/bin/sh', '-c', "printf '%s' 'private sk-review diagnostic' >&2; exit 7"]); }
     catch (error) { failure = error; }
     expect(String(failure)).toBe('Error: /bin/sh failed: private sk-review diagnostic');
+  });
+
+  test('session recorder streams private output to files and keeps it on failure', async () => {
+    const root = await fixture(), stdout = join(root, 'session.jsonl'), stderr = join(root, 'session.stderr');
+    const code = await session(['/bin/sh', '-c', 'cat; printf partial; printf diagnostic >&2; exit 3'],
+      { cwd: root, env: { PATH: process.env.PATH ?? '' }, input: 'prompt\n', stdout, stderr });
+    expect(code).toBe(3);
+    expect(await readFile(stdout, 'utf8')).toBe('prompt\npartial');
+    expect(await readFile(stderr, 'utf8')).toBe('diagnostic');
+    for (const path of [stdout, stderr]) expect((await stat(path)).mode & 0o777).toBe(0o600);
+    await expect(session(['/bin/true'], { cwd: root, env: {}, input: '', stdout, stderr })).rejects.toThrow('EEXIST');
   });
 
   test('uses real account metadata, run-owned config paths, and normal PATH', () => {

@@ -17,3 +17,7 @@ Restore both files byte for byte afterwards, including restoring original absenc
 ## Gotchas
 
 Claude uses the operator's normal config/login; Codex uses a run-owned home with auth symlinked to the daily login. Do not redirect `HOME`, copy credentials, start login, or use a mock as setup proof. Generated configuration alone does not prove the consuming surface. Setup restoration is the only permitted temporary change to these daily Claude files.
+
+## Headless
+
+The setup recipe in `recipes.ts` serves `setup` and `skill-invocation:setup-pstack`. One session runs setup with explicit answers that move every model-family role to `claude:opus@high`, and asserts the written sheet holds only that descriptor. A second session has `poteto-mode` report the configured route for one role. The parent snapshots the daily files before the first session and restores and verifies them after the last, on success or failure.

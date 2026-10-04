@@ -29,3 +29,7 @@ After merge, archive retained evidence and let the operator delete only the name
 ## Native verification
 
 Confirm a real Mac session loads only the candidate in Claude, Codex authenticates through the symlink, daily Codex still works after any refresh, and setup restoration is byte-exact. If Codex replaces the symlink or installed pstack leaks into Claude's candidate session, stop and reopen the design rather than improvise.
+
+## Headless
+
+Headless sessions use the same candidate environment. `recipes.ts` describes each case; the trusted parent records the session streams under `sessions/` in the private run root.

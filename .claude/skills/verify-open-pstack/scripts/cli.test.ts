@@ -60,7 +60,7 @@ test('candidate doctor probes only help and versions with private roots already 
 });
 test('run and parent doctor need no credential flags', () => {
   expect(parse(['doctor', '--output', '/fresh/probe'])).toEqual({ mode: 'doctor', output: '/fresh/probe', pr: 0, selfTest: false, candidate: false });
-  expect(parse(['run', '--pr', '123', '--self-test', '--output', '/fresh/run'])).toEqual({ mode: 'run', output: '/fresh/run', pr: 123, selfTest: true });
+  expect(parse(['run', '--pr', '123', '--self-test', '--output', '/fresh/run'])).toEqual({ mode: 'run', output: '/fresh/run', pr: 123, selfTest: true, routes: [] });
   for (const args of [[], ['wat'], ['run', '--pr', '0', '--output', '/tmp/a'], ['run', '--pr', '1.5', '--output', '/tmp/a'], ['run', '--pr', '9007199254740992', '--output', '/tmp/a'], ['doctor', '--pr', '1', '--output', '/tmp/a'], ['doctor', '--output', '/tmp/a', '--output', '/tmp/b'], ['run', '--pr', '1'], ['doctor', '--output', '--self-test'], ['doctor', '--output', '/tmp/a', '--publish']]) expect(() => parse(args)).toThrow();
 });
 test('credential-directory and account options are removed', () => {
@@ -68,5 +68,12 @@ test('credential-directory and account options are removed', () => {
     for (const args of [['run', '--pr', '111'], ['doctor'], ['doctor', '--candidate']]) {
       expect(() => parse([...args, '--output', '/fresh/run', option, '/operator/config'])).toThrow(`Unknown option: ${option}`);
     }
+  }
+});
+test('runner routes are explicit, repeatable, and distinct', () => {
+  expect(parse(['run', '--pr', '1', '--runner-route', 'codex:gpt-6.1-sol@max', '--runner-route', 'codex:gpt-6.1-sol@ultra', '--output', '/fresh/run']))
+    .toMatchObject({ routes: ['codex:gpt-6.1-sol@max', 'codex:gpt-6.1-sol@ultra'] });
+  for (const args of [['--runner-route', 'gpt-6.1-sol'], ['--runner-route', 'codex:a@max', '--runner-route', 'codex:a@max']]) {
+    expect(() => parse(['run', '--pr', '1', '--output', '/fresh/run', ...args])).toThrow();
   }
 });
