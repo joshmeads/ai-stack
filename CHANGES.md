@@ -3,6 +3,12 @@
 Mergify auto-queue is live: ready PRs to main require passing verify, Unfret and exact-head live-gate; workflow changes require operator queueing.
 This port applies the Cursor → Claude Code substitutions in skill bodies. Earlier drafts left them flagged; this revision resolves them. A later pass added a Codex build that shares the same skills; see [Codex port](#codex-port) below.
 
+## Unreleased
+
+The shipped `pstack-runner` no longer loads the caller project's environment files or `bunfig.toml` at startup. Its POSIX shell launcher clears inherited `BUN_OPTIONS` and `NODE_OPTIONS`, then executes Bun with env-file loading disabled and project Bun configuration ignored while preserving ordinary parent-provided environment variables. It needs no `env -S` or directory-resolution helpers. The TypeScript entry keeps the first-statement deadline capture, and `exec` preserves signal behavior. Direct-executable regressions cover startup isolation, inherited environment, and preflight cancellation.
+
+- Document Linux Landlock and bubblewrap prerequisites for bounded Grok lanes, including affected Claude Code cloud hosts, and link setup failures to the shared host and parent prerequisites without changing runner behavior (#56).
+
 ## 1.5.0 syncs to Cursor pstack 0.15.5
 
 Open Pstack 1.5.0 tracks Cursor pstack 0.15.5 at `12d587dfb20741cafc376c42c696c5f6e2a64487`. The first-run panel is now three models: `claude:opus@max`, `codex:gpt-5.6-sol@max`, and `grok:grok-4.7@xhigh`. Opus max takes judgment and prose, hardest tasks, and the How explainer. Grok 4.7 xhigh takes feature and refactoring work, the How explorer, and Swarm workers. Bug-fix, perf-issue, and hillclimb stay on Sol max. Why and Reflect stay on `inherit-parent`. Fable stays in the model matrix with its native agents, but no first-run role uses it. Setup asks about roles first, then asks efforts for and probes only the assigned families (the ordering follows PR #73 by @arjitj2). It drops and lists retired-role rows such as `how critics`.

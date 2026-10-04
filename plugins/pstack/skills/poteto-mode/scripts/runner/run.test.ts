@@ -692,6 +692,83 @@ process.exit(${scenario.endsWith("nonzero") ? 1 : 0});
 });
 
 describe("runLane", () => {
+  for (const startup of ["dotenv", "bunfig", "bun-options", "node-options", "combined", "hostile-path", "bare-name"]) {
+    it(`shipped launcher startup isolation: ${startup}`, async () => {
+      const input = options("codex", startup);
+      // Exceed pipe capacity so the fake provider must consume stdin before exiting.
+      writeFileSync(input.promptPath, "Return the marker.\n".repeat(100_000));
+      const captured = join(scratch, "provider-env.txt");
+      const capturedPrompt = join(scratch, "provider-prompt.txt");
+      const bunPreload = join(scratch, "bun-preload.ran");
+      const nodePreload = join(scratch, "node-preload.ran");
+      const env: Record<string, string> = {
+        PATH: process.env.PATH!,
+        PSTACK_ENV_CAPTURE: captured,
+        PSTACK_PROMPT_CAPTURE: capturedPrompt,
+        PSTACK_INHERITED_ENV_SENTINEL: "inherited-from-parent",
+      };
+      if (startup === "dotenv" || startup === "combined") {
+        writeFileSync(join(scratch, ".env"), "PSTACK_PROJECT_ENV_SENTINEL=loaded-from-project-dotenv\n");
+        writeFileSync(join(scratch, ".env.local"), "PSTACK_LOCAL_ENV_SENTINEL=loaded-from-project-local-dotenv\n");
+      }
+      if (startup === "bunfig" || startup === "combined") {
+        writeFileSync(join(scratch, "bunfig.toml"), 'preload = ["./project-preload.ts"]\n');
+        writeFileSync(join(scratch, "project-preload.ts"),
+          `await Bun.write(${JSON.stringify(bunPreload)}, "project preload ran");\n`);
+      }
+      if (startup === "bun-options" || startup === "combined") {
+        writeFileSync(join(scratch, "startup.env"), "PSTACK_PROJECT_ENV_SENTINEL=loaded-from-bun-options\n");
+        env.BUN_OPTIONS = "--env-file=./startup.env";
+      }
+      if (startup === "node-options" || startup === "combined") {
+        writeFileSync(join(scratch, "project-preload.cjs"),
+          `require("node:fs").writeFileSync(${JSON.stringify(nodePreload)}, "node preload ran");\n`);
+        env.NODE_OPTIONS = "--require=./project-preload.cjs";
+      }
+      writeFileSync(join(bin, "codex"), `#!/bin/sh
+if [ "$1" = "login" ]; then
+  printf '%s\\n' 'Logged in using ChatGPT'
+  exit 0
+fi
+cat > "$PSTACK_PROMPT_CAPTURE"
+printf '%s\\n' "\${PSTACK_PROJECT_ENV_SENTINEL-unset}" "\${PSTACK_LOCAL_ENV_SENTINEL-unset}" "\${PSTACK_INHERITED_ENV_SENTINEL-unset}" "\${BUN_OPTIONS-unset}" "\${NODE_OPTIONS-unset}" > "$PSTACK_ENV_CAPTURE"
+printf '%s\\n' '{"type":"thread.started","thread_id":"isolated"}' '{"type":"item.completed","item":{"type":"agent_message","text":"CODEX_OK"}}' '{"type":"turn.completed","usage":{"input_tokens":1,"output_tokens":1}}'
+`);
+      chmodSync(join(bin, "codex"), 0o755);
+      const helperSentinel = join(scratch, "helper.ran");
+      if (startup === "hostile-path") {
+        for (const name of ["env", "dirname", "readlink"]) {
+          writeFileSync(join(bin, name), `#!/bin/sh\nprintf '%s\\n' '${name}' > "${helperSentinel}"\nexit 1\n`);
+          chmodSync(join(bin, name), 0o755);
+        }
+      }
+      const runner = Bun.spawn(startup === "bare-name"
+        ? ["/bin/sh", "pstack-runner", ...runnerArgs(input).slice(1)]
+        : runnerArgs(input), {
+        cwd: startup === "bare-name" ? import.meta.dir : scratch,
+        env,
+        stdout: "pipe",
+        stderr: "pipe",
+      });
+      const stdout = new Response(runner.stdout).text();
+      const stderr = new Response(runner.stderr).text();
+      const exitCode = await exitWithin(runner, 3_000);
+      const [stdoutText, stderrText] = await Promise.all([stdout, stderr]);
+      expect(exitCode, JSON.stringify({
+        stdout: stdoutText,
+        stderr: stderrText,
+        receipt: existsSync(input.receiptPath) ? receipt(input.receiptPath) : null,
+      })).toBe(0);
+      expect(readFileSync(capturedPrompt, "utf8")).toBe(readFileSync(input.promptPath, "utf8"));
+      expect(readFileSync(captured, "utf8")).toBe("unset\nunset\ninherited-from-parent\nunset\nunset\n");
+      expect(existsSync(bunPreload)).toBe(false);
+      expect(existsSync(nodePreload)).toBe(false);
+      expect(existsSync(helperSentinel)).toBe(false);
+      expect(readFileSync(input.outputPath, "utf8")).toContain("CODEX_OK");
+      expect(receipt(input.receiptPath)).toMatchObject({ status: "complete" });
+    });
+  }
+
   for (const provider of ["claude", "codex", "grok"] as const) {
     it(`executes and receipts the ${provider} external lane`, async () => {
       const input = options(provider);
@@ -923,7 +1000,7 @@ describe("runLane", () => {
     const transientMarker = join(scratch, "grok-cancel-unauth.pid");
     const preflightLog = join(scratch, "grok-cancel-unauth.log");
     const input = options("grok", "grok-preflight-retry-cancelled");
-    const runner = Bun.spawn([process.execPath, ...runnerArgs(input)], {
+    const runner = Bun.spawn(runnerArgs(input), {
       cwd: scratch,
       env: {
         ...process.env,
@@ -982,7 +1059,7 @@ describe("runLane", () => {
   it("does not spawn the model when preflight exhausts the wrapper deadline", async () => {
     const modelStarted = join(scratch, "deadline-model.started");
     const input = { ...options("claude", "preflight-deadline"), timeoutMs: 300 };
-    const runner = Bun.spawn([process.execPath, ...runnerArgs(input)], {
+    const runner = Bun.spawn(runnerArgs(input), {
       cwd: scratch,
       env: {
         ...process.env,
@@ -1007,7 +1084,7 @@ describe("runLane", () => {
 
   it("lets a delayed wrapper lane finish when timeout is omitted", async () => {
     const input = options("claude", "unbounded-default");
-    const runner = Bun.spawn([process.execPath, ...runnerArgs(input)], {
+    const runner = Bun.spawn(runnerArgs(input), {
       cwd: scratch,
       env: { ...process.env, FAKE_MODEL_DELAY_MS: "400" },
       stdout: "pipe",
@@ -1030,7 +1107,7 @@ describe("runLane", () => {
       ...options("claude", "long-runtime-deadline"),
       timeoutMs: 2_147_483_648,
     };
-    const runner = Bun.spawn([process.execPath, ...runnerArgs(input)], {
+    const runner = Bun.spawn(runnerArgs(input), {
       cwd: scratch,
       env: { ...process.env, FAKE_MODEL_DELAY_MS: "100" },
       stdout: "pipe",
@@ -1093,7 +1170,7 @@ describe("runLane", () => {
   it("bounds a descendant-held pipe by the explicit deadline without fabricating a signal", async () => {
     const descendantPidPath = join(scratch, "deadline-descendant.pid");
     const input = { ...options("claude", "deadline-drain"), timeoutMs: 700 };
-    const runner = Bun.spawn([process.execPath, ...runnerArgs(input)], {
+    const runner = Bun.spawn(runnerArgs(input), {
       cwd: scratch,
       env: {
         ...process.env,
@@ -1124,7 +1201,7 @@ describe("runLane", () => {
   it("does not claim a signal was sent to an already signal-reaped child", async () => {
     const descendantPidPath = join(scratch, "signalled-descendant.pid");
     const input = { ...options("claude", "signalled-drain"), timeoutMs: 700 };
-    const runner = Bun.spawn([process.execPath, ...runnerArgs(input)], {
+    const runner = Bun.spawn(runnerArgs(input), {
       cwd: scratch,
       env: {
         ...process.env,
@@ -1155,7 +1232,7 @@ describe("runLane", () => {
     const descendantPidPath = join(scratch, "cancel-descendant.pid");
     const modelExiting = join(scratch, "cancel-model.exiting");
     const input = options("claude", "cancel-drain");
-    const runner = Bun.spawn([process.execPath, ...runnerArgs(input)], {
+    const runner = Bun.spawn(runnerArgs(input), {
       cwd: scratch,
       env: {
         ...process.env,
@@ -1188,7 +1265,7 @@ describe("runLane", () => {
 
   it("clears a losing long-deadline timer when the shipped wrapper succeeds", async () => {
     const input = { ...options("claude", "long-deadline"), timeoutMs: 60_000 };
-    const runner = Bun.spawn([process.execPath, ...runnerArgs(input)], {
+    const runner = Bun.spawn(runnerArgs(input), {
       cwd: scratch,
       env: { ...process.env },
       stdout: "pipe",
@@ -1209,7 +1286,6 @@ describe("runLane", () => {
     const isolatedRunner = join(scratch, "isolated-runner");
     cpSync(import.meta.dir, isolatedRunner, { recursive: true });
     const runner = Bun.spawn([
-      process.execPath,
       join(isolatedRunner, "pstack-runner"),
       ...runnerArgs(input).slice(1),
     ], {
@@ -1243,7 +1319,7 @@ describe("runLane", () => {
     const input = { ...options("codex", "repeated-cancel"), timeoutMs: 60_000 };
     const started = join(scratch, "repeated-child.started");
     const terminated = join(scratch, "repeated-child.terminated");
-    const runner = Bun.spawn([process.execPath, ...runnerArgs(input)], {
+    const runner = Bun.spawn(runnerArgs(input), {
       cwd: scratch,
       env: {
         ...process.env,
@@ -1284,7 +1360,7 @@ describe("runLane", () => {
       FAKE_STARTED_PATH: started,
       FAKE_TERMINATED_PATH: terminated,
     };
-    const runner = Bun.spawn([process.execPath, ...runnerArgs(input)], {
+    const runner = Bun.spawn(runnerArgs(input), {
       cwd: scratch,
       env,
       stdout: "pipe",
@@ -1306,7 +1382,7 @@ describe("runLane", () => {
       error: { message: "launcher received SIGTERM; signal was sent to child" },
     });
 
-    const samePaths = Bun.spawn([process.execPath, ...runnerArgs(input)], {
+    const samePaths = Bun.spawn(runnerArgs(input), {
       cwd: scratch,
       env: { ...process.env },
       stdout: "pipe",
@@ -1355,7 +1431,7 @@ describe("runLane", () => {
   it("terminalizes catchable failures after reserving output paths", async () => {
     const unreadable = options("claude", "unreadable-prompt");
     chmodSync(unreadable.promptPath, 0o000);
-    const unreadableRunner = Bun.spawn([process.execPath, ...runnerArgs(unreadable)], {
+    const unreadableRunner = Bun.spawn(runnerArgs(unreadable), {
       cwd: scratch,
       env: { ...process.env },
       stdout: "pipe",
@@ -1376,7 +1452,7 @@ describe("runLane", () => {
       error: { message: "launcher failed after reserving output paths" },
     });
 
-    const samePaths = Bun.spawn([process.execPath, ...runnerArgs(unreadable)], {
+    const samePaths = Bun.spawn(runnerArgs(unreadable), {
       cwd: scratch,
       env: { ...process.env },
       stdout: "pipe",
@@ -1390,7 +1466,7 @@ describe("runLane", () => {
 
     const spawnFailure = options("claude", "spawn-failure");
     const modelStarted = join(scratch, "spawn-failure-model.started");
-    const spawnRunner = Bun.spawn([process.execPath, ...runnerArgs(spawnFailure)], {
+    const spawnRunner = Bun.spawn(runnerArgs(spawnFailure), {
       cwd: scratch,
       env: {
         ...process.env,
