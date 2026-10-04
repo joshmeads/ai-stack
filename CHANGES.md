@@ -5,7 +5,7 @@ This port applies the Cursor → Claude Code substitutions in skill bodies. Earl
 
 ## Unreleased
 
-The shipped `pstack-runner` no longer loads the caller project's environment files or `bunfig.toml` at startup. Its hardened Bun shebang clears inherited `BUN_OPTIONS` and `NODE_OPTIONS`, disables env-file loading, and ignores project Bun configuration while preserving ordinary parent-provided environment variables. The launcher keeps its existing first-statement deadline capture and signal behavior. Direct-executable regressions cover startup isolation, inherited environment, and preflight cancellation.
+The shipped `pstack-runner` no longer loads the caller project's environment files or `bunfig.toml` at startup. Its POSIX shell launcher clears inherited `BUN_OPTIONS` and `NODE_OPTIONS`, then executes Bun with env-file loading disabled and project Bun configuration ignored while preserving ordinary parent-provided environment variables. It needs no `env -S` or directory-resolution helpers. The TypeScript entry keeps the first-statement deadline capture, and `exec` preserves signal behavior. Direct-executable regressions cover startup isolation, inherited environment, and preflight cancellation.
 
 ## 1.5.0 syncs to Cursor pstack 0.15.5
 
