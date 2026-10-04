@@ -1,5 +1,5 @@
 import { createHash } from 'node:crypto';
-import { lstat, mkdir, readFile, readdir, realpath, rename, unlink, writeFile } from 'node:fs/promises';
+import { lstat, mkdir, readFile, readdir, realpath, rename, writeFile } from 'node:fs/promises';
 import { isAbsolute, join, relative, resolve } from 'node:path';
 
 export type Command = (args: string[], options?: { cwd?: string; env?: Record<string, string>; interactive?: boolean; allowInterrupted?: boolean }) => Promise<string>;
@@ -31,7 +31,7 @@ export const command: Command = async (args, options = {}) => {
     ]);
     const code = await child.exited;
     if (!options.allowInterrupted) interruption.signal.throwIfAborted();
-    if (code !== 0) throw new Error(`${args[0]} failed: ${redact(error).slice(0, 1500)}`);
+    if (code !== 0) throw new Error(`${args[0]} failed: ${error}`);
     return output;
   } finally {
     activeCommands.delete(child.pid);
@@ -41,34 +41,24 @@ const secrets = new Set<string>();
 export function registerSecrets(values: string[]): void {
   for (const value of values) if (value) secrets.add(value);
 }
-function redactSecrets(text: string): string {
-  for (const secret of [...secrets].sort((a, b) => b.length - a.length)) text = text.split(secret).join('[REDACTED]');
-  return text;
+export function assertNoKnownSecrets(body: string): void {
+  if ([...secrets].some(secret => body.includes(secret))) throw new Error('Comment contains copied credentials');
 }
-export function redact(text: string): string {
-  return redactSecrets(text).replace(/(?:gh[pousr]_[\w]+|github_pat_[\w]+|sk-[\w-]+|Bearer[ \t]+[^\s"'<>()[\]{},;]+)/gi, '[REDACTED]');
-}
-export function isolatedEnv(home: string, harness?: 'claude' | 'codex'): Record<string, string> {
-  if (!isAbsolute(home)) throw new Error('Candidate HOME must be an absolute run-owned directory');
-  const env: Record<string, string> = { PATH: [join(home, 'bin'), ...(process.env.PATH ?? '').split(':').filter(isAbsolute)].join(':'),
-    HOME: home, TMPDIR: join(home, 'tmp'), TERM: process.env.TERM ?? 'xterm-256color',
-    XDG_CONFIG_HOME: join(home, '.config'), XDG_CACHE_HOME: join(home, '.cache'),
-    GH_CONFIG_DIR: join(home, '.config/gh'),
+export function isolatedEnv(state: string, _harness?: 'claude' | 'codex'): Record<string, string> {
+  if (!isAbsolute(state)) throw new Error('Candidate state must be an absolute run-owned directory');
+  const { HOME, USER, LOGNAME } = process.env;
+  if (!HOME || !isAbsolute(HOME)) throw new Error('Real HOME must be absolute');
+  if (!USER || !LOGNAME) throw new Error('Real USER and LOGNAME are required');
+  return { PATH: process.env.PATH ?? '', HOME, USER, LOGNAME,
+    TMPDIR: join(state, 'tmp'), TERM: process.env.TERM ?? 'xterm-256color',
+    XDG_CONFIG_HOME: join(state, '.config'), XDG_CACHE_HOME: join(state, '.cache'),
+    GH_CONFIG_DIR: join(state, '.config/gh'),
     GIT_CONFIG_GLOBAL: '/dev/null', GIT_CONFIG_SYSTEM: '/dev/null', GIT_CONFIG_NOSYSTEM: '1',
     GIT_CONFIG_COUNT: '1', GIT_CONFIG_KEY_0: 'credential.helper', GIT_CONFIG_VALUE_0: '',
-    CLAUDE_CONFIG_DIR: join(home, '.claude'), CODEX_HOME: join(home, '.codex') };
-  for (const name of ['USER', 'LOGNAME']) {
-    if (process.env[name] !== undefined) env[name] = process.env[name];
-  }
-  return env;
+    CLAUDE_CONFIG_DIR: join(state, '.claude'), CODEX_HOME: join(state, '.codex') };
 }
 export async function save(path: string, value: unknown): Promise<void> {
-  const pathKeys = new Set(['path', 'paths', 'skill', 'workspace', 'featureMap', 'home', 'location', 'artifactRoot', 'transcript']);
-  const pathArrays = new WeakSet<object>();
-  const json = JSON.stringify(value, function (key, item) {
-    if (pathKeys.has(key) && Array.isArray(item)) pathArrays.add(item);
-    return typeof item === 'string' ? (pathKeys.has(key) || pathArrays.has(this) ? redactSecrets(item) : redact(item)) : item;
-  }, 2);
+  const json = JSON.stringify(value, null, 2);
   await writeFile(path + '.tmp', json + '\n', { mode: 0o600 });
   await rename(path + '.tmp', path);
 }
@@ -119,9 +109,5 @@ export async function retainedFile(root: string, path: string): Promise<{ path: 
   const stat = await lstat(actual);
   if (!stat.isFile() || !stat.size) throw new Error('Evidence file must be a nonempty regular file');
   const bytes = await readFile(actual);
-  if ([...secrets].some(secret => bytes.includes(Buffer.from(secret))) || redact(bytes.toString('latin1')) !== bytes.toString('latin1')) {
-    await unlink(actual);
-    throw new Error('Evidence contains credentials; contaminated external file removed');
-  }
   return { path: relative(output, actual), sha256: sha256(bytes) };
 }

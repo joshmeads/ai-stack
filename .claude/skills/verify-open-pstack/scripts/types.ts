@@ -2,15 +2,16 @@ export const REPO = 'ericlitman/open-pstack';
 export const HARNESSES = ['claude', 'codex'] as const;
 export type Harness = typeof HARNESSES[number];
 export type Accounts = Record<Harness, string>;
-export type Phase = 'resolve' | 'classify' | 'prepare' | 'exercise' | 'publish' | 'ready' | 'failed' | 'head-moved';
+export type Phase = 'resolve' | 'classify' | 'prepare' | 'exercise' | 'publish' | 'failed' | 'head-moved';
 export interface Pull {
-  number: number; head: { sha: string }; base: { sha: string }; draft: boolean;
-  state: string; headRepo: string; body: string;
+  number: number; head: { sha: string }; base: { sha: string };
+  state: string; headRepo: string;
 }
 export interface ChangedFile { filename: string; previous_filename?: string }
 export interface Registry {
   skills: string[];
   shared: string[];
+  assets: string[];
   setup: string[];
   runner: string[];
   tools: string[];
@@ -27,24 +28,17 @@ export interface Installation {
   harness: Harness; cliVersion: string; pluginVersion: string; sha: string;
   location: string; treeHash: string; home: string; account?: string; sourceHash?: string;
 }
-export interface MacProof {
-  sha: string; platform: 'darwin'; reviewer: 'operator'; tests: { path: string; sha256: string };
-  noKeychainDialog: boolean;
-  authenticated: { harness: Harness; observed: string; transcript: string; transcriptHash: string }[];
-}
 export interface Receipt {
   schema: 1; repo: string; pr: number; sha: string; base: string; phase: Phase;
   selection: Selection; installations: Installation[]; observations: Observation[];
-  selfTest: boolean; artifactRoot: string; failure?: string;
-  commentUrl?: string; status?: 'success' | 'failure'; madeReady?: boolean; proposedTemplate?: string;
-  compensation?: string[]; cleanup: string; started: string; macProof?: MacProof;
+  selfTest: boolean; artifactRoot: string; publisherRevision?: string; failure?: string;
+  commentUrl?: string; status?: 'success' | 'failure'; cleanup: string; started: string;
 }
 export interface GitHub {
   pull(pr: number): Promise<Pull>;
   files(base: string, head: string): Promise<ChangedFile[]>;
   comment(pr: number, body: string): Promise<string>;
   status(sha: string, state: 'success' | 'failure', target: string, description: string): Promise<void>;
-  ready(pr: number): Promise<void>;
 }
 export interface Driver {
   prepare(receipt: Receipt): Promise<Installation[]>;

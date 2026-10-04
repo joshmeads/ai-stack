@@ -2,7 +2,7 @@ import { afterEach, describe, expect, test } from 'bun:test';
 import { chmod, mkdir, mkdtemp, readFile, realpath, rm, stat, symlink, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
-import { redact, registerSecrets, retainedFile, save, treeHash } from './io.ts';
+import { assertNoKnownSecrets, command, isolatedEnv, registerSecrets, retainedFile, save, sha256, treeHash } from './io.ts';
 
 const roots: string[] = [];
 async function fixture(): Promise<string> {
@@ -12,50 +12,62 @@ async function fixture(): Promise<string> {
 }
 afterEach(async () => { for (const root of roots.splice(0)) await rm(root, { recursive: true, force: true }); });
 
-describe('retained JSON and file boundaries', () => {
-  test('redacts string values before serialization without corrupting JSON punctuation or escapes', async () => {
+describe('private values and retained file boundaries', () => {
+  test('saves canonical private JSON unchanged with private permissions', async () => {
     const root = await fixture(), path = join(root, 'receipt.json');
-    await save(path, { path: '/tmp/Bearer token', nested: ['Bearer secret",}', 'github_pat_sensitive'], text: 'Bearer secret, next\nquoted "value"', count: 2 });
-    const json = await readFile(path, 'utf8');
-    expect(JSON.parse(json)).toEqual({ path: '/tmp/Bearer token', nested: ['[REDACTED]",}', '[REDACTED]'], text: '[REDACTED], next\nquoted "value"', count: 2 });
-    expect(json).not.toContain('secret');
-    expect((await stat(path)).mode & 0o777).toBe(0o600);
-    expect(redact('Bearer token, next')).toBe('[REDACTED], next');
-  });
-
-  test('registered opaque access, refresh, and ID tokens cannot survive text or structured evidence', async () => {
-    const tokens = ['opaque-access.+/value', 'opaque-refresh:"quoted"', 'eyJhbGciOiJSUzI1NiJ9.eyJzdWIiOiJvcGVyYXRvciJ9.signature'];
-    registerSecrets(tokens);
-    registerSecrets(['']);
-    for (const token of tokens) {
-      expect(redact(`prefix ${token} suffix ${token}`)).toBe('prefix [REDACTED] suffix [REDACTED]');
-    }
-    const root = await fixture(), path = join(root, 'receipt.json');
-    await save(path, { text: tokens.join('\n'), nested: tokens, path: `/tmp/${tokens[0]}/live` });
-    const json = await readFile(path, 'utf8');
-    for (const token of tokens) expect(json).not.toContain(token);
-    expect(JSON.parse(json)).toEqual({ text: tokens.map(() => '[REDACTED]').join('\n'), nested: tokens.map(() => '[REDACTED]'), path: '/tmp/[REDACTED]/live' });
-  });
-
-  test('canonical structural paths retain token-like components without exempting free text', async () => {
-    const root = await fixture(), path = join(root, 'doctor.json'), canonical = '/tmp/sk-review/live';
-    const evidence = { skill: `${canonical}/.claude/skills/verify-open-pstack`, workspace: canonical,
-      home: canonical, location: canonical, artifactRoot: canonical, featureMap: canonical,
-      transcript: `${canonical}/transcript.txt`, artifacts: [{ path: `${canonical}/artifact.txt` }],
-      selection: { paths: ['sk-review/SKILL.md', 'github_pat_reference.md'] }, checks: { explanation: 'sk-private' } };
+    const evidence = { workspace: '/tmp/sk-review/live', nested: ['Bearer private",}', 'github_pat_sensitive'],
+      checks: { explanation: 'sk-private' }, count: 2 };
     await save(path, evidence);
-    expect(JSON.parse(await readFile(path, 'utf8'))).toEqual({ ...evidence, checks: { explanation: '[REDACTED]' } });
+    expect(await readFile(path, 'utf8')).toBe(JSON.stringify(evidence, null, 2) + '\n');
+    expect((await stat(path)).mode & 0o777).toBe(0o600);
   });
 
-  test.each(['text', 'binary'])('rejects and removes retained %s artifacts containing copied credentials', async kind => {
-    const root = await fixture(), path = join(root, 'artifact');
-    const token = `known-copied-${kind}-opaque-credential`;
+  test('keeps private command errors unchanged', async () => {
+    let failure: unknown;
+    try { await command(['/bin/sh', '-c', "printf '%s' 'private sk-review diagnostic' >&2; exit 7"]); }
+    catch (error) { failure = error; }
+    expect(String(failure)).toBe('Error: /bin/sh failed: private sk-review diagnostic');
+  });
+
+  test('refuses only exact copied secrets in comments with a generic error', () => {
+    const token = 'opaque-copied-token.+/value';
+    registerSecrets([token, '']);
+    expect(() => assertNoKnownSecrets(`review ${token} result`)).toThrow('Comment contains copied credentials');
+    try { assertNoKnownSecrets(token); } catch (error) { expect(String(error)).not.toContain(token); }
+    expect(() => assertNoKnownSecrets('review opaque-copied-token result')).not.toThrow();
+    expect(() => assertNoKnownSecrets('review sk-private and sk-review result')).not.toThrow();
+  });
+
+  test('uses real account metadata, run-owned config paths, and normal PATH', () => {
+    const previous = { HOME: process.env.HOME, USER: process.env.USER, LOGNAME: process.env.LOGNAME, PATH: process.env.PATH };
+    process.env.HOME = '/Users/operator'; process.env.USER = 'operator-user'; process.env.LOGNAME = 'operator-login';
+    process.env.PATH = '/usr/local/bin:/usr/bin:/bin';
+    try {
+      expect(() => isolatedEnv('relative/home')).toThrow('absolute run-owned');
+      const env = isolatedEnv('/run/home', 'claude');
+      expect(env).toMatchObject({ HOME: '/Users/operator', USER: 'operator-user', LOGNAME: 'operator-login',
+        PATH: '/usr/local/bin:/usr/bin:/bin', TMPDIR: '/run/home/tmp', XDG_CONFIG_HOME: '/run/home/.config',
+        XDG_CACHE_HOME: '/run/home/.cache', GH_CONFIG_DIR: '/run/home/.config/gh',
+        CLAUDE_CONFIG_DIR: '/run/home/.claude', CODEX_HOME: '/run/home/.codex' });
+      expect(env.PATH).not.toContain('/run/home/bin');
+      process.env.HOME = 'relative/home';
+      expect(() => isolatedEnv('/run/home')).toThrow('Real HOME must be absolute');
+      process.env.HOME = '/Users/operator'; delete process.env.USER;
+      expect(() => isolatedEnv('/run/home', 'codex')).toThrow('Real USER and LOGNAME are required');
+    } finally {
+      for (const name of ['HOME', 'USER', 'LOGNAME', 'PATH'] as const) {
+        if (previous[name] === undefined) delete process.env[name]; else process.env[name] = previous[name];
+      }
+    }
+  });
+
+  test('retains binary artifacts unchanged without inspecting copied secrets', async () => {
+    const root = await fixture(), path = join(root, 'artifact.bin'), token = 'known-copied-binary-opaque-credential';
+    const bytes = Buffer.concat([Buffer.from([0, 255, 128]), Buffer.from(token), Buffer.from([0, 254])]);
     registerSecrets([token]);
-    await writeFile(path, kind === 'binary' ? Buffer.concat([Buffer.from([0, 255, 128]), Buffer.from(token), Buffer.from([0, 254])]) : `reviewed result ${token}`);
-    await expect(retainedFile(root, path)).rejects.toThrow('Evidence contains credentials');
-    expect(await Bun.file(path).exists()).toBe(false);
-    await writeFile(path, kind === 'binary' ? Buffer.from([0, 255, 128, 0, 254]) : 'reviewed sanitized result');
-    expect((await retainedFile(root, path)).path).toBe('artifact');
+    await writeFile(path, bytes);
+    expect(await retainedFile(root, path)).toEqual({ path: 'artifact.bin', sha256: sha256(bytes) });
+    expect(Buffer.from(await readFile(path))).toEqual(bytes);
   });
 
   test('permits evidence below an ancestor named state and canonicalizes output aliases', async () => {

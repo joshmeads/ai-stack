@@ -6,12 +6,18 @@ Installed setup invocation, harness-to-provider mapping, generated routing/model
 
 ## How to get to it (user POV)
 
-Invoke `/pstack:setup-pstack` in the isolated Claude session, or `$setup-pstack` in the isolated Codex session. The installed instructions are the authority for the setup inputs.
+The intended installed entries are `/pstack:setup-pstack` in Claude and `$setup-pstack` in Codex. The installed instructions are the authority for setup inputs, but the verifier must not invoke them against the operator's real `HOME` before config-home support exists.
 
 ## Driving it with verify-open-pstack
 
-Use only the sandboxed run-owned fixture workspace and process `HOME`; both `CLAUDE_CONFIG_DIR` and `CODEX_HOME` must point into run-owned state. Literal `~/.claude` and `~/.codex` setup writes must resolve inside that fixture home, never the operator's daily home. Exercise each changed setup branch with explicit requested model/provider inputs. Retain the native invocation transcript and generated configuration file (redacted), then invoke a consuming installed skill and observe it use the configured route. Check that all paths written remain in run-owned state. Record requested versus observed provider/model and changed failure branches. Capture separate local CLI output only as supplemental evidence.
+Setup is mandatory fail-closed until setup-pstack config-home support in issue #120 merges. For every selected setup exercise, record exactly:
+
+`setup exercise requires #120 (setup-pstack config-home)`
+
+Stop that verification run. Do not invoke setup, redirect `HOME`, permit writes to daily paths, use a mock, or accept a generated file from a direct CLI test as substitute evidence.
+
+After #120 merges, use its explicit config-home to target run-owned state while retaining real `HOME`, `USER`, and `LOGNAME`. Exercise each changed setup branch with explicit requested model/provider inputs, retain the native invocation transcript and generated configuration file, and invoke a consuming installed skill to observe the configured route. Confirm all setup writes remain under the explicit run-owned config home.
 
 ## Gotchas
 
-Do not copy a daily configuration to make setup pass. Stop if required provider authentication is unavailable. Generated configuration by itself does not prove the consuming surface. The trusted parent requires explicit caam 0.1.22 account emails, validates vault identities, and copies only disposable Claude/Codex credential files into run-owned config roots. No candidate login or vault activation/writeback is allowed. Both sessions and provider children remain sandboxed against daily home/GitHub/SSH/provider files and Keychain/securityd, with no real Library/Keychain link. Retain sentinel-denial proof and observable native API requests; delete copied credentials in final cleanup while preserving redacted evidence.
+`CLAUDE_CONFIG_DIR`, `CODEX_HOME`, XDG/GitHub config, and temp paths are run-owned, but `HOME` is intentionally real. That is why setup cannot run safely before #120. Do not copy daily configuration, activate accounts, log in, or write back to caam. Verification accounts remain explicitly selected, but may be active in daily use. Trusted-parent doctor runs `caam limits <tool> --format json` and inspects the selected provider's `profile_name`; unauthorized or expired results fail closed with the exact manual repair command `caam add <tool> <account> --no-activate --force`, which the verifier never executes automatically. Generated configuration by itself does not prove the consuming surface.

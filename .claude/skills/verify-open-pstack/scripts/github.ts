@@ -24,9 +24,9 @@ export class Publisher implements GitHub {
     return JSON.parse(await this.run(['gh', 'api', `repos/${REPO}/${path}`, ...args], { allowInterrupted }));
   }
   async pull(pr: number): Promise<Pull> {
-    const data = await this.api(`pulls/${pr}`) as { number: number; head: { sha: string; repo?: { full_name: string } }; base: { sha: string }; draft: boolean; state: string; body: string | null };
-    if (data.number !== pr || typeof data.draft !== 'boolean' || typeof data.state !== 'string' || data.body !== null && typeof data.body !== 'string') throw new Error('Invalid PR response');
-    return { number: pr, head: { sha: data.head.sha }, base: { sha: data.base.sha }, draft: data.draft, state: data.state, headRepo: data.head.repo?.full_name ?? '', body: data.body ?? '' };
+    const data = await this.api(`pulls/${pr}`) as { number: number; head: { sha: string; repo?: { full_name: string } }; base: { sha: string }; state: string };
+    if (data.number !== pr || typeof data.state !== 'string') throw new Error('Invalid PR response');
+    return { number: pr, head: { sha: data.head.sha }, base: { sha: data.base.sha }, state: data.state, headRepo: data.head.repo?.full_name ?? '' };
   }
   async files(base: string, head: string): Promise<ChangedFile[]> {
     if (![base, head].every(sha => /^[a-f0-9]{40}$/.test(sha))) throw new Error('Invalid diff SHA');
@@ -52,5 +52,4 @@ export class Publisher implements GitHub {
     if (!/^[a-f0-9]{40}$/.test(sha)) throw new Error('Invalid status SHA');
     await this.api(`statuses/${sha}`, ['--method', 'POST', '-f', 'context=live-gate', '-f', `state=${state}`, '-f', `target_url=${target}`, '-f', `description=${description.slice(0, 140)}`], state === 'failure');
   }
-  async ready(pr: number): Promise<void> { await this.run(['gh', 'pr', 'ready', String(pr), '--repo', REPO]); }
 }

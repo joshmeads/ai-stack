@@ -6,7 +6,7 @@ Strict argument validation, parent/provider routing, external child launch, prom
 
 ## How to get to it (user POV)
 
-Invoke the installed parent workflow (`poteto-mode`, `arena`, or `swarm` as documented by the candidate) in the fresh isolated harness. Have that parent dispatch its documented external-provider lane.
+Invoke the installed parent workflow (`poteto-mode`, `arena`, or `swarm` as documented by the candidate) in the fresh native harness. Have that parent dispatch its documented external-provider lane.
 
 ## Driving it with verify-open-pstack
 
@@ -14,4 +14,6 @@ Read the candidate's `pstack-runner --help` and installed mapping through the na
 
 ## Gotchas
 
-Every external-provider child inherits the OS-enforced macOS sandbox, run-owned `HOME`/`TMPDIR`, and both run-owned `CLAUDE_CONFIG_DIR` and `CODEX_HOME`; never allow Claude→Codex or Codex→Claude to fall back to daily configuration. The trusted parent copies only the explicitly selected caam account credentials, records both emails, and deletes copied credentials in final cleanup. No candidate login, vault activation/writeback, Library/Keychain link, or Keychain/securityd access is allowed. Retain real-filesystem sentinel-denial evidence and observable native API requests for the dispatched lanes. A missing provider or unusable authentication is a failure, not a skip or weaker-model fallback. Do not add implicit timeouts. A model assertion that a child ran is insufficient; inspect the actual receipt and output. Never reuse output from another SHA or run.
+Every external-provider child retains real `HOME`, `USER`, and `LOGNAME` while inheriting run-owned `TMPDIR`, `GH_CONFIG_DIR`, XDG/config/cache paths, `CLAUDE_CONFIG_DIR`, and `CODEX_HOME`. This state separation is not an OS access-denial guarantee. Never let Claude→Codex or Codex→Claude fall back to daily provider configuration, and never pass publisher credentials.
+
+The trusted parent copies complete recognized credential files for explicitly selected caam accounts so native refresh can work, and removes only the copied credential files (including refreshes written to those paths) during cleanup without writing back to the vault or deleting raw evidence. A selected account may be active in daily use. Trusted-parent doctor runs `caam limits <tool> --format json` and inspects the chosen `profile_name` for each provider; a mismatch, missing provider, or unusable authentication is a failure, not a skip or weaker-model fallback. Unauthorized or expired results fail closed with the exact manual repair command `caam add <tool> <account> --no-activate --force`; never execute it automatically. Do not add implicit timeouts. A model assertion that a child ran is insufficient; inspect the actual receipt and output. Never reuse output from another SHA or run.

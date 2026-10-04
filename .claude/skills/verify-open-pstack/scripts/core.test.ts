@@ -2,8 +2,10 @@ import { describe, expect, test } from 'bun:test';
 import { execFileSync } from 'node:child_process';
 import { resolve } from 'node:path';
 import registryData from '../features/registry.json';
-import { classify, completeEvidence, matches, newReceipt, validateRegistry } from './core.ts';
-import { HARNESSES, type Receipt } from './types.ts';
+import { classify, completeEvidence, matches, newReceipt, requiredFeatures, requiredHarnesses, validateRegistry } from './core.ts';
+import { type Receipt } from './types.ts';
+import codexManifest from '../../../../plugins/pstack/.codex-plugin/plugin.json';
+import claudeManifest from '../../../../plugins/pstack/.claude-plugin/plugin.json';
 
 export const SHA = 'a'.repeat(40), BASE = 'b'.repeat(40);
 export const registry = validateRegistry(registryData);
@@ -13,10 +15,10 @@ export function receipt(selfTest = false): Receipt {
   return r;
 }
 export function evidence(r: Receipt): void {
-  for (const harness of HARNESSES) {
+  for (const harness of requiredHarnesses(r)) {
     r.installations.push({ harness, sha: r.sha, cliVersion: 'test', pluginVersion: '1.5.0',
       location: '/tmp/candidate/plugin', home: `/tmp/${harness}`, treeHash: 'c'.repeat(64) });
-    for (const feature of new Set([...r.selection.features, ...(r.selfTest ? ['project-skill'] : [])])) {
+    for (const feature of requiredFeatures(r, harness)) {
       r.observations.push({ harness, feature, surface: 'native skill', action: 'invoke', observed: 'fixture changed',
         transcript: '/tmp/log', transcriptHash: 'c'.repeat(64), reviewer: 'operator',
         artifacts: [{ path: '/tmp/artifact', sha256: 'd'.repeat(64) }] });
@@ -32,7 +34,7 @@ describe('registry and ownership', () => {
     for (const filename of paths) expect(() => classify([{ filename }], registry)).not.toThrow();
   });
   test('validates external registry shape', () => {
-    for (const value of [null, {}, { ...registry, skills: ['../bad'] }, { ...registry, tools: ['x', 'x'] }, { ...registry, shared: [3] }]) {
+    for (const value of [null, {}, { ...registry, skills: ['../bad'] }, { ...registry, tools: ['x', 'x'] }, { ...registry, shared: [3] }, { ...registry, assets: undefined }, { ...registry, assets: ['../asset'] }, { ...registry, assets: ['x', 'x'] }]) {
       expect(() => validateRegistry(value)).toThrow();
     }
   });
@@ -52,11 +54,50 @@ describe('registry and ownership', () => {
     expect(s.skills).toEqual([...registry.skills].sort());
     for (const feature of ['setup', 'runner', 'shipped-tools']) expect(s.features).toContain(feature);
   });
-  test('asset-only installed logo changes require real harness surfaces', () => {
-    const s = classify([{ filename: 'plugins/pstack/assets/logo.png' }], registry);
-    expect(s.noRuntime).toBe(false);
-    expect(s.skills).toEqual([...registry.skills].sort());
-    for (const feature of ['setup', 'runner', 'shipped-tools']) expect(s.features).toContain(feature);
+  test('installed logo changes require only their actual Codex manifest consumer', () => {
+    expect(codexManifest.interface.logo).toBe('./assets/logo.png');
+    expect(JSON.stringify(claudeManifest)).not.toContain('assets/logo.png');
+    const r = receipt();
+    r.selection = classify([{ filename: 'plugins/pstack/assets/logo.png' }], registry);
+    expect(r.selection.noRuntime).toBe(false);
+    expect(r.selection.skills).toEqual([]);
+    expect(r.selection.features).toEqual(['assets:codex']);
+    expect(requiredHarnesses(r)).toEqual(['codex']);
+    expect(requiredFeatures(r, 'claude')).toEqual([]);
+    expect(requiredFeatures(r, 'codex')).toEqual(['assets:codex']);
+    expect(() => completeEvidence(r)).toThrow('Missing installation: codex');
+    evidence(r);
+    expect(r.installations.map(i => i.harness)).toEqual(['codex']);
+    expect(() => completeEvidence(r)).not.toThrow();
+    r.observations.push({ ...r.observations[0]!, harness: 'claude' });
+    expect(() => completeEvidence(r)).toThrow('Extra installation or evidence');
+  });
+  test('unknown assets fail closed rather than inheriting logo consumers', () => {
+    for (const filename of ['plugins/pstack/assets/new.png', 'plugins/pstack/assets/nested/logo.png']) {
+      expect(() => classify([{ filename }], registry)).toThrow('Unmapped asset consumer');
+      expect(() => classify([{ filename: 'README.md', previous_filename: filename }], registry)).toThrow('Unmapped asset consumer');
+    }
+  });
+  test('manifest changes retain shared coverage in both harnesses', () => {
+    for (const filename of ['plugins/pstack/.claude-plugin/plugin.json', 'plugins/pstack/.codex-plugin/plugin.json']) {
+      const r = receipt();
+      r.selection = classify([{ filename }], registry);
+      expect(requiredHarnesses(r)).toEqual(['claude', 'codex']);
+      expect(requiredFeatures(r, 'claude')).toContain('setup');
+      expect(requiredFeatures(r, 'codex')).toContain('setup');
+    }
+  });
+  test('asset self-test requires both harnesses without fictitious Claude asset proof', () => {
+    const r = receipt(true);
+    r.selection = classify([{ filename: 'plugins/pstack/assets/logo.png' }], registry);
+    expect(requiredHarnesses(r)).toEqual(['claude', 'codex']);
+    expect(requiredFeatures(r, 'claude')).toEqual(['project-skill']);
+    expect(requiredFeatures(r, 'codex')).toEqual(['assets:codex', 'project-skill']);
+    evidence(r);
+    expect(r.observations).toHaveLength(3);
+    expect(() => completeEvidence(r)).not.toThrow();
+    r.observations = r.observations.filter(o => o.harness !== 'claude');
+    expect(() => completeEvidence(r)).toThrow('Missing/duplicate evidence: claude/project-skill');
   });
   test('bootstrap changes require its shipped tool consumers, not the unrelated runner', () => {
     const s = classify([{ filename: 'plugins/pstack/skills/poteto-mode/scripts/bootstrap.ts' }], registry);
@@ -88,11 +129,20 @@ describe('registry and ownership', () => {
     expect(s.features).toEqual([]);
   });
   test('consumed instructions and known verifier enforcement require native project proof', () => {
-    for (const filename of ['AGENTS.md', 'CLAUDE.md', 'tests/skill-collision-repro.sh', '.mergify.yml']) {
+    for (const filename of ['AGENTS.md', 'CLAUDE.md', 'tests/skill-collision-repro.sh']) {
       const s = classify([{ filename }], registry);
       expect(s.noRuntime).toBe(false);
       expect(s.features).toEqual(['project-skill']);
       expect(classify([{ filename: 'docs/moved.md', previous_filename: filename }], registry).noRuntime).toBe(false);
+    }
+  });
+  test('Mergify enforcement is not plugin runtime, including renamed paths', () => {
+    for (const file of [{ filename: '.mergify.yml' }, { filename: 'docs/moved.md', previous_filename: '.mergify.yml' }]) {
+      const r = receipt();
+      r.selection = classify([file], registry);
+      expect(r.selection.noRuntime).toBe(true);
+      expect(requiredHarnesses(r)).toEqual([]);
+      expect(() => completeEvidence(r)).not.toThrow();
     }
   });
   test('unregistered CI, tests, and scripts fail closed instead of bypassing runtime proof', () => {
@@ -104,9 +154,11 @@ describe('registry and ownership', () => {
 });
 
 describe('receipt and evidence boundaries', () => {
-  test('validates exact immutable SHAs and PR', () => {
+  test('validates exact immutable SHAs, PR, and optional publisher revision', () => {
     for (const pr of [0, -1, 1.1, NaN]) expect(() => newReceipt(pr, SHA, BASE, false, '/tmp')).toThrow();
     for (const sha of ['main', 'a'.repeat(39), 'A'.repeat(40)]) expect(() => newReceipt(90, sha, BASE, false, '/tmp')).toThrow();
+    expect(newReceipt(90, SHA, BASE, false, '/tmp', 'c'.repeat(40)).publisherRevision).toBe('c'.repeat(40));
+    for (const revision of ['', 'main', 'c'.repeat(39), 'c'.repeat(64), 'C'.repeat(40)]) expect(() => newReceipt(90, SHA, BASE, false, '/tmp', revision)).toThrow('publisher revision');
   });
   test('ordinary no-runtime has no install requirement', () => expect(() => completeEvidence(receipt())).not.toThrow());
   test('self-test is separate and required in both harnesses', () => {

@@ -120,6 +120,9 @@ if (name === "claude") {
   console.log(JSON.stringify({type:"thread.started",thread_id:"o1"}));
   console.log(JSON.stringify({type:"item.completed",item:{type:"agent_message",text:"CODEX_OK"}}));
   console.log(JSON.stringify({type:"turn.completed",usage:{input_tokens:20,cached_input_tokens:5,output_tokens:3,reasoning_output_tokens:1}}));
+} else if (process.env.FAKE_GROK_ERROR_RESULT === "1") {
+  console.log(JSON.stringify({type:"system",subtype:"init",skills:Array(500).fill("skill-name")}));
+  console.log(JSON.stringify({type:"result",subtype:"error_during_execution",is_error:true,stop_reason:"cancelled",errors:["cancelled"]}));
 } else {
   console.log(JSON.stringify({type:"assistant",message:{content:[{type:"text",text:"progress"}]}}));
   console.log(JSON.stringify({type:"result",subtype:"success",is_error:false,result:"GROK_OK",session_id:"g1",usage:{input_tokens:30,output_tokens:4,total_tokens:34},total_cost_usd:0.02,modelUsage:{[model + "-build"]:{}}}));
@@ -244,6 +247,7 @@ beforeEach(() => {
   delete process.env.FAKE_DESCENDANT_HOLDS_PIPES_MS;
   delete process.env.FAKE_DESCENDANT_PID_PATH;
   delete process.env.FAKE_SELF_SIGNAL;
+  delete process.env.FAKE_GROK_ERROR_RESULT;
 });
 
 afterEach(() => {
@@ -268,6 +272,7 @@ afterEach(() => {
   delete process.env.FAKE_DESCENDANT_HOLDS_PIPES_MS;
   delete process.env.FAKE_DESCENDANT_PID_PATH;
   delete process.env.FAKE_SELF_SIGNAL;
+  delete process.env.FAKE_GROK_ERROR_RESULT;
   rmSync(scratch, { recursive: true, force: true });
 });
 
@@ -305,6 +310,22 @@ describe("runLane", () => {
       modelVerified: false,
       modelEvidence: "pinned-argv",
     });
+  });
+
+  it("keeps Grok's terminal error result in malformed-output evidence", async () => {
+    process.env.FAKE_GROK_ERROR_RESULT = "1";
+    const input = options("grok", "grok-error-result");
+    const result = await runLane(input);
+    expect(result.exitCode).toBe(65);
+    expect(existsSync(input.outputPath)).toBe(false);
+    const recorded = receipt(input.receiptPath);
+    expect(recorded).toMatchObject({
+      status: "malformed-output",
+      exitCode: 0,
+      error: { message: "grok reported an error result" },
+    });
+    expect(recorded.error?.evidence).toContain('"stop_reason":"cancelled","errors":["cancelled"]');
+    expect(recorded.error?.evidence.length).toBeLessThanOrEqual(4_000);
   });
 
   it("classifies an unavailable model without falling back", async () => {

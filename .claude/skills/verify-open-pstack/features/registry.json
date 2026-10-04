@@ -21,9 +21,10 @@
   "shared": [
     "plugins/pstack/.claude-plugin/plugin.json", "plugins/pstack/.codex-plugin/plugin.json",
     ".claude-plugin/marketplace.json", ".agents/plugins/marketplace.json",
-    "plugins/pstack/agents/**", "plugins/pstack/hooks/**", "plugins/pstack/assets/**",
+    "plugins/pstack/agents/**", "plugins/pstack/hooks/**",
     "plugins/pstack/skills/poteto-mode/references/**"
   ],
+  "assets": ["plugins/pstack/assets/**"],
   "setup": ["plugins/pstack/skills/setup-pstack/SKILL.md"],
   "runner": [
     "plugins/pstack/skills/poteto-mode/scripts/runner/**"
@@ -41,11 +42,11 @@
   ],
   "project": [
     ".claude/skills/verify-open-pstack/**", ".agents/skills/verify-open-pstack",
-    "AGENTS.md", "CLAUDE.md", "tests/skill-collision-repro.sh", ".mergify.yml"
+    "AGENTS.md", "CLAUDE.md", "tests/skill-collision-repro.sh"
   ],
   "nonRuntime": [
     "README.md", "CHANGES.md", "LICENSE", "LICENSE.md", "UPSTREAM.md",
-    ".gitignore", "docs/**", "assets/**",
+    ".gitignore", ".mergify.yml", "docs/**", "assets/**",
     "plugins/pstack/skills/poteto-mode/scripts/bootstrap.test.ts",
     "plugins/pstack/skills/poteto-mode/scripts/check-plan.test.ts"
   ]
