@@ -3,6 +3,10 @@
 Mergify auto-queue is live: ready PRs to main require passing verify, Unfret and exact-head live-gate; workflow changes require operator queueing.
 This port applies the Cursor → Claude Code substitutions in skill bodies. Earlier drafts left them flagged; this revision resolves them. A later pass added a Codex build that shares the same skills; see [Codex port](#codex-port) below.
 
+## Unreleased
+
+- Document Linux Landlock and bubblewrap prerequisites for bounded Grok lanes, including affected Claude Code cloud hosts, and link setup failures to the shared host and parent prerequisites without changing runner behavior (#56).
+
 ## Config-home port correction (#120)
 
 Setup resolves the active harness's config home through `poteto-mode/references/codex-tools.md`: nonempty `CLAUDE_CONFIG_DIR` or `CODEX_HOME`, falling back to `$HOME/.claude` or `$HOME/.codex` for unset or empty values. The model sheet, global instruction integration, current-state reads, snapshots, restoration, and readback all use that directory. Claude keeps the literal `@~/.claude/pstack-models.md` import at the default home and renders exactly `@./pstack-models.md` for a redirected home, keeping spaces and `#` in the config-directory name out of the import line. It identifies the existing import by the target basename `pstack-models.md`, replaces one matching line in place, appends when none exist, and stops before writing if more than one exists. Codex retains its exact-byte bounded block. Default-home behavior, role defaults, probes, and confirmation are unchanged.

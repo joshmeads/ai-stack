@@ -69,7 +69,10 @@ Pass arguments as an argv array or quote every path. Never interpolate prompt te
 
 Grok authentication preflight has one bounded retry. If the first `grok models` result would be classified as unauthenticated, the runner waits five seconds and tries the same preflight once more. A second failure is terminal. The delay and second attempt share the runner's absolute deadline and cancellation latch, and the receipt keeps evidence from both attempts. Model execution is never retried.
 
-The parent tool sandbox still governs whether a subscribed child CLI can reach its credentials and network. Run setup's live probe from the actual parent profile. A blocked external CLI is a loud dropout, not a reason to elevate permissions or substitute a model silently.
+### Host and parent prerequisites
+
+- The parent tool sandbox still governs whether a subscribed child CLI can reach its credentials and network. Run setup's live probe from the actual parent profile. A blocked external CLI is a loud dropout, not a reason to elevate permissions or substitute a model silently.
+- On Linux, Grok's bounded `read-only` and `workspace` sandbox profiles require Landlock support and bubblewrap (`bwrap`). Hosts missing these prerequisites, including affected Claude Code cloud sessions, cannot run these Grok lanes even if `grok models` succeeds. A sandbox-startup refusal remains `child-failed` (exit 70), with Grok's refusal text in the receipt's `error.evidence`; inspect that evidence rather than attributing every `child-failed` result to missing prerequisites. Open Pstack never substitutes `devbox` or `off` to bypass these protections.
 
 The parent invocation must itself be resumable background work:
 
