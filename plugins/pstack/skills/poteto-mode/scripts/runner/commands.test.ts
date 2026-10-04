@@ -96,7 +96,7 @@ describe("invocationCommand", () => {
       "--reasoning-effort",
       "xhigh",
       "--permission-mode",
-      "plan",
+      "auto",
       "--sandbox",
       "read-only",
       "--tools",
@@ -124,7 +124,7 @@ describe("invocationCommand", () => {
     expect(grok.args).toEqual(
       expect.arrayContaining([
         "--permission-mode",
-        "acceptEdits",
+        "auto",
         "--sandbox",
         "workspace",
         "--tools",
