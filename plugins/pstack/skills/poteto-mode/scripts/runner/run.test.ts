@@ -282,6 +282,183 @@ afterEach(() => {
   rmSync(scratch, { recursive: true, force: true });
 });
 
+describe("Codex parent sandbox diagnostics", () => {
+  let previousNetworkDisabled: string | undefined;
+
+  beforeEach(() => {
+    previousNetworkDisabled = process.env.CODEX_SANDBOX_NETWORK_DISABLED;
+    delete process.env.CODEX_SANDBOX_NETWORK_DISABLED;
+  });
+
+  afterEach(() => {
+    if (previousNetworkDisabled === undefined) {
+      delete process.env.CODEX_SANDBOX_NETWORK_DISABLED;
+    } else {
+      process.env.CODEX_SANDBOX_NETWORK_DISABLED = previousNetworkDisabled;
+    }
+  });
+
+  it("names likely Codex sandbox cause after child failure", async () => {
+    process.env.CODEX_SANDBOX_NETWORK_DISABLED = "1";
+    const invoked = join(scratch, "model-invoked.json");
+    writeFileSync(join(bin, "claude"), `#!/usr/bin/env bun
+import { writeFileSync } from "node:fs";
+if (process.argv[2] === "auth") {
+  console.log(JSON.stringify({ loggedIn: true }));
+  process.exit(0);
+}
+writeFileSync(${JSON.stringify(invoked)}, JSON.stringify({
+  argv: process.argv.slice(2),
+  networkDisabled: process.env.CODEX_SANDBOX_NETWORK_DISABLED ?? null,
+}));
+console.error("ENOTFOUND api.anthropic.com");
+process.exit(1);
+`);
+    const input = options("claude");
+    const result = await runLane(input);
+    const saved = receipt(input.receiptPath);
+    expect(JSON.parse(readFileSync(invoked, "utf8"))).toMatchObject({
+      argv: expect.arrayContaining(["--model", "fable"]),
+      networkDisabled: null,
+    });
+    expect(result.exitCode).toBe(70);
+    expect(saved.status).toBe("child-failed");
+    expect(saved.exitCode).toBe(1);
+    expect(saved.preflight.status).toBe("passed");
+    expect(saved.error?.message).toContain("child exited with status 1");
+    expect(saved.error?.message).toContain("likely cause: Codex parent sandbox has network disabled");
+    expect(saved.error?.evidence).toStartWith("likely cause: Codex parent sandbox has network disabled");
+    expect(saved.error?.evidence).toContain("ENOTFOUND api.anthropic.com");
+    expect(saved.error?.message).toContain("provider-dispatch.md#host-and-parent-prerequisites");
+    expect(saved.schemaVersion).toBe(1);
+    expect(saved.model).toBe(input.model);
+    expect(saved.effort).toBe(input.effort);
+    expect(readFileSync(streamPath(saved.stderrPath), "utf8")).toBe("ENOTFOUND api.anthropic.com\n");
+    expect(existsSync(input.outputPath)).toBe(false);
+  });
+
+  for (const marker of [undefined, "0", "true"]) {
+    it(`does not infer blocked network from marker ${marker}`, async () => {
+      if (marker !== undefined) process.env.CODEX_SANDBOX_NETWORK_DISABLED = marker;
+      writeFileSync(join(bin, "claude"), `#!/usr/bin/env bun
+if (process.argv[2] === "auth") {
+  console.log(JSON.stringify({ loggedIn: true }));
+  process.exit(0);
+}
+console.error("ENOTFOUND api.anthropic.com; EACCES local-state");
+process.exit(1);
+`);
+      const result = await runLane(options("claude"));
+      expect(result.exitCode).toBe(70);
+      expect(result.receipt.error).toEqual({
+        message: "child exited with status 1",
+        evidence: "ENOTFOUND api.anthropic.com; EACCES local-state",
+      });
+    });
+  }
+
+  it("does not blame a Claude parent even with the network marker", async () => {
+    process.env.CODEX_SANDBOX_NETWORK_DISABLED = "1";
+    writeFileSync(join(bin, "grok"), `#!/usr/bin/env bun
+if (process.argv[2] === "models") {
+  console.log("You are logged in with grok.com.\\nAvailable models:\\n  * grok-4.6 (default)");
+  process.exit(0);
+}
+console.error("ENOTFOUND grok.com");
+process.exit(1);
+`);
+    const result = await runLane({ ...options("grok"), parent: "claude" });
+    expect(result.exitCode).toBe(70);
+    expect(result.receipt.error).toEqual({
+      message: "child exited with status 1",
+      evidence: "ENOTFOUND grok.com",
+    });
+  });
+
+  it("puts the hint ahead of bounded evidence without changing raw sidecars", async () => {
+    process.env.CODEX_SANDBOX_NETWORK_DISABLED = "1";
+    const stderr = "startup warning\n".repeat(400) + "EACCES ~/.grok/managed_config.toml\n";
+    writeFileSync(join(bin, "grok"), `#!/usr/bin/env bun
+if (process.argv[2] === "models") {
+  console.log("You are logged in with grok.com.\\nAvailable models:\\n  * grok-4.6 (default)");
+  process.exit(0);
+}
+process.stderr.write(${JSON.stringify(stderr)});
+process.exit(1);
+`);
+    const input = { ...options("grok"), parent: "codex" as const };
+    const result = await runLane(input);
+    expect(result.exitCode).toBe(70);
+    expect(result.receipt.status).toBe("child-failed");
+    expect(result.receipt.error?.evidence).toStartWith("likely cause: Codex parent sandbox has network disabled");
+    expect(result.receipt.error?.evidence?.length).toBe(4_000);
+    expect(readFileSync(streamPath(result.receipt.stderrPath), "utf8")).toBe(stderr);
+  });
+
+  for (const scenario of ["api-error", "cancelled"]) {
+    it(`preserves provider-reported ${scenario} ahead of any sandbox hint`, async () => {
+      process.env.CODEX_SANDBOX_NETWORK_DISABLED = "1";
+      const reason = scenario === "api-error" ? "API unavailable" : "User cancelled the execution";
+      const terminal = JSON.stringify({
+        type: "result",
+        subtype: scenario === "api-error" ? "api_error" : "error_during_execution",
+        is_error: true,
+        stop_reason: scenario === "api-error" ? "end_turn" : "cancelled",
+        errors: [reason],
+      });
+      writeFileSync(join(bin, "grok"), `#!/usr/bin/env bun
+if (process.argv[2] === "models") {
+  console.log("You are logged in with grok.com.\\nAvailable models:\\n  * grok-4.6 (default)");
+  process.exit(0);
+}
+console.log(${JSON.stringify(terminal)});
+console.error("startup warning".repeat(500));
+process.exit(1);
+`);
+      const result = await runLane({ ...options("grok"), parent: "codex" });
+      expect(result.exitCode).toBe(scenario === "api-error" ? 70 : 130);
+      expect(result.receipt.status).toBe(scenario === "api-error" ? "child-failed" : "cancelled");
+      expect(result.receipt.error?.message).toBe(reason);
+      expect(result.receipt.error?.evidence).toStartWith(reason);
+      expect(result.receipt.error?.evidence).not.toContain("Codex parent sandbox");
+    });
+  }
+
+  for (const provider of ["claude", "grok"] as const) {
+    it(`leaves successful ${provider} lanes unchanged with the marker`, async () => {
+      process.env.CODEX_SANDBOX_NETWORK_DISABLED = "1";
+      const result = await runLane({ ...options(provider), parent: "codex" });
+      expect(result.exitCode).toBe(0);
+      expect(result.receipt.status).toBe("complete");
+      expect(result.receipt.error).toBeNull();
+    });
+  }
+
+  for (const status of ["unavailable-model", "unauthenticated", "timed-out"] as const) {
+    it(`does not enrich ${status} with a sandbox hint`, async () => {
+      process.env.CODEX_SANDBOX_NETWORK_DISABLED = "1";
+      const input = { ...options("grok"), parent: "codex" as const,
+        timeoutMs: status === "timed-out" ? 150 : null };
+      if (status === "unavailable-model") process.env.FAKE_INVALID_MODEL = "1";
+      if (status === "unauthenticated") {
+        writeFileSync(join(bin, "grok"), `#!/usr/bin/env bun
+if (process.argv[2] === "models") {
+  console.log("You are logged in with grok.com.\\nAvailable models:\\n  * grok-4.6 (default)");
+  process.exit(0);
+}
+console.error("Not logged in. Run grok auth login.");
+process.exit(1);
+`);
+      }
+      if (status === "timed-out") process.env.FAKE_TIMEOUT = "1";
+      const result = await runLane(input);
+      expect(result.receipt.status).toBe(status);
+      expect(result.receipt.error?.message).not.toContain("Codex parent sandbox");
+      expect(result.receipt.error?.evidence).not.toContain("Codex parent sandbox");
+    });
+  }
+});
+
 describe("issue78 terminal results", () => {
   for (const scenario of ["cancel-zero", "cancel-nonzero", "api-error", "api-error-nonzero", "success-streams"]) {
     it(`issue78 ${scenario}`, async () => {
