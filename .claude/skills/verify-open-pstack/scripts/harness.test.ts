@@ -9,6 +9,19 @@ import { command, freshRoot, isolatedEnv, retainedFile, treeHash, type Command }
 const roots: string[] = [];
 async function fixture(): Promise<string> { const root = await realpath(await mkdtemp(join(tmpdir(), 'pstack-test-'))); roots.push(root); return root; }
 afterEach(async () => { for (const root of roots.splice(0)) await rm(root, { recursive: true, force: true }); });
+async function sourceFixture(root: string) {
+  const sources = { claude: join(root, 'source-claude'), codex: join(root, 'source-codex') };
+  const credentials = {
+    claude: JSON.stringify({ claudeAiOauth: { accessToken: 'fixture-claude', refreshToken: 'fixture-claude-refresh' } }),
+    codex: JSON.stringify({ tokens: { access_token: 'fixture-codex', refresh_token: 'fixture-codex-refresh', id_token: 'fixture-codex-id' } }),
+  };
+  for (const tool of ['claude', 'codex'] as const) {
+    await mkdir(sources[tool], { mode: 0o700 });
+    await writeFile(join(sources[tool], tool === 'claude' ? '.credentials.json' : 'auth.json'), credentials[tool]);
+    await writeFile(join(sources[tool], 'source-only.txt'), 'must not be copied');
+  }
+  return { sources, credentials };
+}
 
 describe('isolated harness boundaries', () => {
   test('candidate environment keeps operator identity while isolating provider configuration', () => {
@@ -56,12 +69,12 @@ describe('isolated harness boundaries', () => {
     const run: Command = async args => args.includes('--version') ? 'version' : '';
     await expect(doctor(root, run, 'linux')).rejects.toThrow('operator Mac');
     expect(JSON.parse(await readFile(join(root, 'doctor.json'), 'utf8')).result).toBe('blocked');
-    await expect(doctor(root, run, 'darwin')).rejects.toThrow('isolation missing');
+    await expect(doctor(root, run, 'darwin', true)).rejects.toThrow('isolation missing');
   });
   test('doctor probes without installing or reading daily authentication', async () => {
     const calls: string[][] = [], root = await fixture();
     const run: Command = async args => { calls.push(args); return args.includes('--version') ? 'version' : '--plugin-dir --settings --setting-sources --json local path'; };
-    await doctor(root, run, 'darwin');
+    await doctor(root, run, 'darwin', true);
     expect(JSON.parse(await readFile(join(root, 'doctor.json'), 'utf8')).result).toBe('pass');
     expect(calls.every(c => c.includes('--help') || c.includes('--version'))).toBe(true);
   });
@@ -72,7 +85,9 @@ describe('isolated harness boundaries', () => {
     await symlink(skill, join(workspace, '.claude/skills/verify-open-pstack'));
     const alias = join(root, 'workspace-alias'); await symlink(workspace, alias);
     const run: Command = async args => args.includes('--version') ? 'version' : '--plugin-dir --settings --setting-sources --json local path';
-    await doctor(root, run, 'darwin');
+    const { sources } = await sourceFixture(root);
+    const parentRun: Command = async args => args[1] === 'auth' ? JSON.stringify({ loggedIn: true }) : args[1] === 'login' ? 'Logged in using ChatGPT' : run(args);
+    await doctor(root, parentRun, 'darwin', false, sources);
     const parentText = await readFile(join(root, 'doctor.json'), 'utf8');
     await expect(verifyProjectDoctor([parentText], workspace)).rejects.toThrow('passing child doctor');
     await doctor(root, run, 'darwin', true);
@@ -90,7 +105,7 @@ describe('isolated harness boundaries', () => {
     const root = await fixture(), sha = '1'.repeat(40), calls: string[][] = [];
     const receipt = newReceipt(120, sha, sha, false, root);
     receipt.selection.features = ['setup'];
-    const driver = new MacDriver(async args => { calls.push(args); return ''; }, async () => '', { claude: 'claude@example.com', codex: 'codex@example.com' });
+    const driver = new MacDriver(async args => { calls.push(args); return ''; }, async () => '', { claude: join(root, 'source-claude'), codex: join(root, 'source-codex') });
     const message = 'setup exercise requires #120 (setup-pstack config-home)';
     for (const operation of [() => driver.prepare(receipt), () => driver.exercise(receipt)]) {
       let caught: unknown;
@@ -98,46 +113,44 @@ describe('isolated harness boundaries', () => {
       expect(caught).toBeInstanceOf(Error); expect((caught as Error).message).toBe(message); expect(calls).toEqual([]);
     }
   });
-  test.each(['claude', 'codex'] as const)('prepare refuses an unauthorized %s vault copy before candidate commands', async tool => {
+  test.each(['claude', 'codex'] as const)('prepare refuses an unauthenticated %s source before candidate commands', async tool => {
     const root = await fixture(), calls: string[][] = [], sha = '2'.repeat(40);
-    const accounts = { claude: 'claude@example.com', codex: 'codex@example.com' };
-    const run: Command = async args => {
+    const { sources, credentials } = await sourceFixture(root);
+    const run: Command = async (args, options = {}) => {
       calls.push(args);
       if (args.includes('--version')) return 'version';
       if (args.includes('--help')) return '--plugin-dir --settings --setting-sources --json local path';
-      if (args[0] === 'caam' && args[1] === 'ls') return JSON.stringify({ profiles: [
-        { tool: 'claude', name: accounts.claude, identity: { email: accounts.claude }, active: true },
-        { tool: 'codex', name: accounts.codex, identity: { email: accounts.codex }, active: true },
-      ] });
-      if (args[0] === 'caam' && args[1] === 'limits') {
-        const provider = args[2] as keyof typeof accounts;
-        return JSON.stringify([{ provider, profile_name: accounts[provider], usage: { error: provider === tool ? 'HTTP 401 Unauthorized' : '' } }]);
+      if (args[1] === 'auth' || args[1] === 'login') {
+        expect(options.env!.CLAUDE_CONFIG_DIR).toBe(sources.claude);
+        expect(options.env!.CODEX_HOME).toBe(sources.codex);
+        if (args[0] === 'claude') {
+          expect(args).toEqual(['claude', 'auth', 'status', '--json']);
+          return JSON.stringify({ loggedIn: tool !== 'claude' });
+        }
+        expect(args).toEqual(['codex', 'login', 'status']);
+        if (tool === 'codex') throw new Error('Not logged in');
+        return 'Logged in using ChatGPT';
       }
       throw new Error(`Unexpected fixture command: ${args.join(' ')}`);
     };
     const platform = Object.getOwnPropertyDescriptor(process, 'platform')!;
+    const remediation = tool === 'claude' ? `CLAUDE_CONFIG_DIR='${sources.claude}' claude auth login` : `CODEX_HOME='${sources.codex}' codex login`;
     try {
       Object.defineProperty(process, 'platform', { ...platform, value: 'darwin' });
-      await expect(new MacDriver(run, async () => '', accounts).prepare(newReceipt(111, sha, sha, true, root))).rejects.toThrow(`caam add ${tool} ${accounts[tool]} --no-activate --force`);
+      await expect(new MacDriver(run, async () => '', sources).prepare(newReceipt(111, sha, sha, true, root))).rejects.toThrow(remediation);
     } finally { Object.defineProperty(process, 'platform', platform); }
-    expect(calls.some(c => c.join(' ') === 'caam ls --json')).toBe(true);
-    expect(calls.some(c => c.join(' ') === `caam limits ${tool} --format json`)).toBe(true);
-    expect(calls.some(c => c[0] === 'caam' && ['add', 'activate'].includes(c[1]!))).toBe(false);
+    expect(calls.some(c => c.join(' ') === (tool === 'claude' ? 'claude auth status --json' : 'codex login status'))).toBe(true);
+    expect(calls.some(c => c.includes('login') && c.join(' ') !== 'codex login status')).toBe(false);
     expect(calls.some(c => c[0] === 'git' && !c.includes('--version'))).toBe(false);
+    await expect(stat(join(root, 'state'))).rejects.toThrow('ENOENT');
+    for (const provider of ['claude', 'codex'] as const) {
+      expect(await readFile(join(sources[provider], provider === 'claude' ? '.credentials.json' : 'auth.json'), 'utf8')).toBe(credentials[provider]);
+    }
     expect(JSON.parse(await readFile(join(root, 'doctor.json'), 'utf8')).result).toBe('blocked');
   });
   test.each([false, true])('prepare uses pinned local git fixture and disposable config credentials (install failure=%s)', async failInstall => {
     const root = await fixture(), repository = join(root, 'repository'), operatorHome = join(root, 'operator-home'), calls: string[][] = [];
-    const accounts = { claude: 'claude@example.com', codex: 'codex@example.com' };
-    const caam = join(root, 'caam'), vault = join(caam, 'data/vault');
-    const credentials = {
-      claude: JSON.stringify({ claudeAiOauth: { accessToken: 'fixture-claude', refreshToken: 'fixture-claude-refresh' } }),
-      codex: JSON.stringify({ tokens: { access_token: 'fixture-codex', refresh_token: 'fixture-codex-refresh', id_token: 'fixture-codex-id' } }),
-    };
-    for (const tool of ['claude', 'codex'] as const) {
-      const dir = join(vault, tool, accounts[tool]); await mkdir(dir, { recursive: true });
-      await writeFile(join(dir, tool === 'claude' ? '.credentials.json' : 'auth.json'), credentials[tool]);
-    }
+    const { sources, credentials } = await sourceFixture(root);
     for (const manifest of ['.claude-plugin', '.codex-plugin']) {
       const dir = join(repository, 'plugins/pstack', manifest); await mkdir(dir, { recursive: true });
       await writeFile(join(dir, 'plugin.json'), JSON.stringify({ version: 'test' }));
@@ -152,17 +165,18 @@ describe('isolated harness boundaries', () => {
     const sha = (await command(['git', 'rev-parse', 'HEAD'], { cwd: repository })).trim(), actualGit: Command = command;
     await mkdir(operatorHome, { mode: 0o700 });
     const platform = Object.getOwnPropertyDescriptor(process, 'platform')!;
-    const previous = { CAAM_HOME: process.env.CAAM_HOME, HOME: process.env.HOME, USER: process.env.USER, LOGNAME: process.env.LOGNAME };
+    const previous = { HOME: process.env.HOME, USER: process.env.USER, LOGNAME: process.env.LOGNAME };
     const run: Command = async (args, options = {}) => {
       calls.push(args);
-      if (args[0] === 'caam') {
-        if (args[1] === 'ls') {
-          expect(args).toEqual(['caam', 'ls', '--json']);
-          return JSON.stringify({ profiles: ['claude', 'codex'].map(tool => ({ tool, name: accounts[tool as keyof typeof accounts], identity: { email: accounts[tool as keyof typeof accounts] }, active: true })) });
+      if (args[1] === 'auth' || args[1] === 'login') {
+        expect(options.env!.CLAUDE_CONFIG_DIR).toBe(sources.claude);
+        expect(options.env!.CODEX_HOME).toBe(sources.codex);
+        if (args[0] === 'claude') {
+          expect(args).toEqual(['claude', 'auth', 'status', '--json']);
+          return JSON.stringify({ loggedIn: true });
         }
-        const provider = args[2] as keyof typeof accounts;
-        expect(args).toEqual(['caam', 'limits', provider, '--format', 'json']);
-        return JSON.stringify([{ provider, profile_name: accounts[provider], usage: {} }]);
+        expect(args).toEqual(['codex', 'login', 'status']);
+        return 'Logged in using ChatGPT';
       }
       const env = options.env, candidate = Boolean(env?.CLAUDE_CONFIG_DIR?.startsWith(join(root, 'state') + '/'));
       if (candidate) {
@@ -170,7 +184,7 @@ describe('isolated harness boundaries', () => {
         expect(env!.HOME).toBe(operatorHome); expect(env!.USER).toBe('operator-user'); expect(env!.LOGNAME).toBe('operator-login');
         expect(env!.CLAUDE_CONFIG_DIR).toBe(join(stateHome, '.claude')); expect(env!.CODEX_HOME).toBe(join(stateHome, '.codex'));
         expect(env!.TMPDIR).toBe(join(stateHome, 'tmp')); expect(env!.GH_CONFIG_DIR).toBe(join(stateHome, '.config/gh'));
-        expect(env!.GH_TOKEN).toBeUndefined(); expect(env!.CAAM_HOME).toBeUndefined();
+        expect(env!.GH_TOKEN).toBeUndefined(); expect(env!.GITHUB_TOKEN).toBeUndefined();
         for (const dir of [stateHome, env!.TMPDIR!, env!.CLAUDE_CONFIG_DIR!, env!.CODEX_HOME!, env!.GH_CONFIG_DIR!]) {
           const info = await stat(dir); expect(info.isDirectory()).toBe(true); expect(info.mode & 0o777).toBe(0o700);
         }
@@ -205,16 +219,16 @@ describe('isolated harness boundaries', () => {
       }
       throw new Error(`Unexpected fixture command: ${args.join(' ')}`);
     };
-    const driver = new MacDriver(run, async () => '', accounts);
+    const driver = new MacDriver(run, async () => '', sources);
     try {
       Object.defineProperty(process, 'platform', { ...platform, value: 'darwin' });
-      process.env.CAAM_HOME = caam; process.env.HOME = operatorHome; process.env.USER = 'operator-user'; process.env.LOGNAME = 'operator-login';
+      process.env.HOME = operatorHome; process.env.USER = 'operator-user'; process.env.LOGNAME = 'operator-login';
       const receipt = newReceipt(111, sha, sha, true, root), preparation = driver.prepare(receipt);
       if (failInstall) await expect(preparation).rejects.toThrow('fixture installation failed');
       else {
         const installs = await preparation; receipt.installations = installs;
         expect(installs.map(i => i.harness)).toEqual(['claude', 'codex']);
-        expect(installs.map(i => i.account)).toEqual([accounts.claude, accounts.codex]);
+        expect(installs.map(i => i.credentialSource)).toEqual([sources.claude, sources.codex]);
         expect(installs.every(i => i.sha === sha)).toBe(true);
         expect(installs.every(i => /^[a-f0-9]{64}$/.test(i.sourceHash!))).toBe(true);
         expect(installs[0]!.sourceHash).toBe(installs[1]!.sourceHash);
@@ -226,20 +240,30 @@ describe('isolated harness boundaries', () => {
         expect(calls.filter(c => c[0] === '/usr/bin/script')).toHaveLength(2);
       }
     } finally {
+      await mkdir(join(root, 'artifacts'), { mode: 0o700 });
+      await writeFile(join(root, 'artifacts/private.txt'), credentials.codex, { mode: 0o600 });
+      for (const harness of ['claude', 'codex']) await writeFile(join(root, 'state', harness, 'native-state.db'), 'retained candidate state');
       await driver.cleanup(); await driver.cleanup();
       Object.defineProperty(process, 'platform', platform);
       for (const [name, value] of Object.entries(previous)) {
         if (value === undefined) delete process.env[name]; else process.env[name] = value;
       }
     }
-    expect(calls.some(c => c.join(' ') === 'caam ls --json')).toBe(true);
+    expect(calls.filter(c => c.join(' ') === 'claude auth status --json')).toHaveLength(1);
+    expect(calls.filter(c => c.join(' ') === 'codex login status')).toHaveLength(1);
     expect(calls.some(c => c[0] === '/usr/bin/sandbox-exec')).toBe(false);
+    expect(await readFile(join(root, 'artifacts/private.txt'), 'utf8')).toBe(credentials.codex);
+    expect((await stat(join(root, 'artifacts'))).mode & 0o777).toBe(0o700);
+    expect((await stat(join(root, 'artifacts/private.txt'))).mode & 0o777).toBe(0o600);
     for (const harness of ['claude', 'codex']) {
       const home = join(root, 'state', harness); expect((await stat(home)).isDirectory()).toBe(true);
+      expect(await readFile(join(home, 'native-state.db'), 'utf8')).toBe('retained candidate state');
       for (const tool of ['claude', 'codex'] as const) {
         const filename = tool === 'claude' ? '.credentials.json' : 'auth.json';
         await expect(stat(join(home, '.' + tool, filename))).rejects.toThrow('ENOENT');
-        expect(await readFile(join(vault, tool, accounts[tool], filename), 'utf8')).toBe(credentials[tool]);
+        expect(await readFile(join(sources[tool], filename), 'utf8')).toBe(credentials[tool]);
+        expect(await readFile(join(sources[tool], 'source-only.txt'), 'utf8')).toBe('must not be copied');
+        await expect(stat(join(home, '.' + tool, 'source-only.txt'))).rejects.toThrow('ENOENT');
       }
       if (!failInstall) expect(await readFile(join(home, 'surface.raw'), 'utf8')).toBe('retained raw native evidence');
     }

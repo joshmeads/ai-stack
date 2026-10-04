@@ -10,7 +10,7 @@ import { REPO } from './types.ts';
 import { verify } from './verify.ts';
 import { validateRegistry } from './core.ts';
 import registry from '../features/registry.json';
-const accounts = ['--claude-account', 'eric@litman.org', '--codex-account', 'eric@healthspanners.com'];
+const sources = ['--claude-config', '/operator/claude config', '--codex-home', '/operator/codex home'];
 
 test('publisher revision is recorded independently of candidate proof', async () => {
   const root = await realpath(await mkdtemp(join(tmpdir(), 'pstack-publisher-revision-')));
@@ -32,7 +32,7 @@ test('publisher revision is recorded independently of candidate proof', async ()
 test('candidate mode is an explicit doctor-only flag', () => {
   expect(parse(['doctor', '--candidate', '--output', '/fresh/probe'])).toEqual({ mode: 'doctor', output: '/fresh/probe', pr: 0, selfTest: false, candidate: true });
   expect(() => parse(['doctor', '--candidate', '--candidate', '--output', '/fresh/probe'])).toThrow('Duplicate option');
-  expect(() => parse(['run', '--candidate', '--pr', '111', '--output', '/fresh/run', ...accounts])).toThrow('Unknown option');
+  expect(() => parse(['run', '--candidate', '--pr', '111', '--output', '/fresh/run', ...sources])).toThrow('Unknown option');
 });
 test('candidate doctor probes only help and versions with private roots already present', async () => {
   const root = await realpath(await mkdtemp(join(tmpdir(), 'pstack-doctor-'))), calls: string[][] = [];
@@ -56,39 +56,48 @@ test('candidate doctor probes only help and versions with private roots already 
     expect(report.candidate).toBe(true); expect(report.result).toBe('pass');
     expect(Object.keys(report.checks)).toEqual(['bun', 'git', 'claude', 'codex', 'claudeHelp', 'codex plugin marketplace add --help', 'codex plugin add --help']);
     expect(calls.every(args => args.includes('--version') || args.includes('--help'))).toBe(true);
-    expect(calls.some(args => ['gh', 'caam', '/usr/bin/sandbox-exec'].includes(args[0]!))).toBe(false);
+    expect(calls.some(args => args[0] === 'gh')).toBe(false);
     expect(calls.some(args => args.includes('auth') || args.includes('login'))).toBe(false);
-    await doctor(root, run, 'darwin');
-    expect(JSON.parse(await readFile(join(root, 'doctor.json'), 'utf8')).candidate).toBe(false);
-    expect(calls.some(args => args[0] === 'gh' && args[1] === '--version')).toBe(true);
   } finally { await rm(root, { recursive: true, force: true }); }
 });
 test('CLI strictly validates run inputs and permits read-only child doctor', () => {
-  expect(parse(['doctor', '--output', '/fresh/probe'])).toEqual({ mode: 'doctor', output: '/fresh/probe', pr: 0, selfTest: false, candidate: false });
-  expect(parse(['run', '--pr', '123', '--self-test', '--output', '/fresh/run', ...accounts])).toEqual({ mode: 'run', output: '/fresh/run', pr: 123, selfTest: true, claudeAccount: 'eric@litman.org', codexAccount: 'eric@healthspanners.com' });
-  for (const args of [[], ['wat'], ['run', '--pr', '0', '--output', '/tmp/a', ...accounts], ['run', '--pr', '1.5', '--output', '/tmp/a', ...accounts], ['doctor', '--pr', '1', '--output', '/tmp/a'], ['doctor', '--output', '/tmp/a', '--output', '/tmp/b'], ['run', '--pr', '1', ...accounts], ['doctor', '--output', '--self-test'], ['doctor', '--output', '/tmp/a', '--publish']]) expect(() => parse(args)).toThrow();
+  expect(parse(['doctor', '--candidate', '--output', '/fresh/probe'])).toEqual({ mode: 'doctor', output: '/fresh/probe', pr: 0, selfTest: false, candidate: true });
+  expect(parse(['run', '--pr', '123', '--self-test', '--output', '/fresh/run', ...sources])).toEqual({ mode: 'run', output: '/fresh/run', pr: 123, selfTest: true, claudeConfig: sources[1], codexHome: sources[3] });
+  for (const args of [[], ['wat'], ['run', '--pr', '0', '--output', '/tmp/a', ...sources], ['run', '--pr', '1.5', '--output', '/tmp/a', ...sources], ['run', '--pr', '9007199254740992', '--output', '/tmp/a', ...sources], ['doctor', '--pr', '1', '--output', '/tmp/a'], ['doctor', '--output', '/tmp/a', '--output', '/tmp/b'], ['run', '--pr', '1', ...sources], ['doctor', '--output', '--self-test'], ['doctor', '--output', '/tmp/a', '--publish']]) expect(() => parse(args)).toThrow();
 });
-test('run requires both explicit accounts and parent doctor accepts paired account options', () => {
+test('run and parent doctor require paired credential directories; candidate doctor rejects sources', () => {
   const run = ['run', '--pr', '111', '--output', '/fresh/run'];
-  expect(() => parse(run)).toThrow('Run requires --claude-account and --codex-account');
-  expect(() => parse([...run, ...accounts.slice(0, 2)])).toThrow('Run requires');
-  expect(() => parse([...run, ...accounts.slice(2)])).toThrow('Run requires');
-  expect(parse(['doctor', '--output', '/fresh/probe', ...accounts])).toEqual({ mode: 'doctor', output: '/fresh/probe', pr: 0, selfTest: false, candidate: false, claudeAccount: 'eric@litman.org', codexAccount: 'eric@healthspanners.com' });
-  expect(() => parse(['doctor', '--candidate', '--output', '/fresh/probe', ...accounts])).toThrow('cannot inspect caam credentials');
-  for (const option of ['--claude-account', '--codex-account']) {
-    expect(() => parse(['doctor', '--output', '/fresh/probe', option, 'eric@litman.org'])).toThrow('require both');
-    expect(() => parse([...run, ...accounts, option, 'eric@mobilyze.com'])).toThrow('Duplicate option');
-    expect(() => parse([...run, option])).toThrow('Missing value');
-    expect(() => parse([...run, option, '--self-test'])).toThrow('Missing value');
+  const parent = ['doctor', '--output', '/fresh/probe'];
+  expect(() => parse(run)).toThrow('Run requires --claude-config and --codex-home');
+  expect(() => parse(parent)).toThrow('Doctor requires both --claude-config and --codex-home');
+  expect(() => parse([...run, ...sources.slice(0, 2)])).toThrow('Run requires');
+  expect(() => parse([...run, ...sources.slice(2)])).toThrow('Run requires');
+  expect(parse([...parent, ...sources])).toEqual({ mode: 'doctor', output: '/fresh/probe', pr: 0, selfTest: false, candidate: false, claudeConfig: sources[1], codexHome: sources[3] });
+  expect(() => parse([...parent, '--candidate', ...sources])).toThrow('Candidate doctor cannot inspect source credentials');
+  for (const option of ['--claude-config', '--codex-home']) {
+    expect(() => parse([...parent, option, '/operator/config'])).toThrow('requires both');
+    expect(() => parse([...parent, '--candidate', option, '/operator/config'])).toThrow('Candidate doctor cannot inspect source credentials');
+    for (const mode of [run, parent]) {
+      expect(() => parse([...mode, ...sources, option, '/other/config'])).toThrow('Duplicate option');
+      expect(() => parse([...mode, option])).toThrow('Missing value');
+      expect(() => parse([...mode, option, '--output'])).toThrow('Missing value');
+      expect(() => parse([...mode, option, ''])).toThrow('Missing value');
+    }
   }
 });
-test('account choices are bounded emails rather than vault paths or arbitrary strings', () => {
+test('credential options accept directory paths and reject NUL paths and obsolete account options', () => {
+  for (const option of ['--claude-config', '--codex-home']) {
+    const other = option === '--claude-config' ? '--codex-home' : '--claude-config';
+    for (const mode of [['run', '--pr', '111'], ['doctor']]) {
+      const args = [...mode, '--output', '/fresh/run', other, '/operator/config', option];
+      expect(() => parse([...args, '/operator/config\0suffix'])).toThrow(`Invalid credential directory: ${option}`);
+      for (const directory of ['/operator/config with spaces', './preauthenticated-config']) {
+        const result = parse([...args, directory]);
+        expect(option === '--claude-config' ? result.claudeConfig : result.codexHome).toBe(directory);
+      }
+    }
+  }
   for (const option of ['--claude-account', '--codex-account']) {
-    const other = option === '--claude-account' ? '--codex-account' : '--claude-account';
-    const args = ['run', '--pr', '111', '--output', '/fresh/run', other, 'eric@litman.org', option];
-    for (const account of ['../eric@litman.org', 'claude/eric@litman.org', 'eric\\@litman.org', 'eric@../litman.org', 'eric@litman..org', 'eric', ' eric@litman.org', 'eric@litman.org\n', '@litman.org', 'eric@litman', 'x'.repeat(65) + '@litman.org', 'x@' + 'a.'.repeat(127) + 'org']) expect(() => parse([...args, account])).toThrow('Account must be a safe email');
-    const result = parse([...args, 'eric+verification@litman.org']);
-    expect(result.mode).toBe('run');
-    if (result.mode === 'run') expect(option === '--claude-account' ? result.claudeAccount : result.codexAccount).toBe('eric+verification@litman.org');
+    expect(() => parse(['run', '--pr', '111', '--output', '/fresh/run', ...sources, option, 'person@example.com'])).toThrow(`Unknown option: ${option}`);
   }
 });

@@ -1,7 +1,7 @@
 export const REPO = 'ericlitman/open-pstack';
 export const HARNESSES = ['claude', 'codex'] as const;
 export type Harness = typeof HARNESSES[number];
-export type Accounts = Record<Harness, string>;
+export type CredentialSources = Record<Harness, string>;
 export type Phase = 'resolve' | 'classify' | 'prepare' | 'exercise' | 'publish' | 'failed' | 'head-moved';
 export interface Pull {
   number: number; head: { sha: string }; base: { sha: string };
@@ -26,7 +26,7 @@ export interface Observation {
 }
 export interface Installation {
   harness: Harness; cliVersion: string; pluginVersion: string; sha: string;
-  location: string; treeHash: string; home: string; account?: string; sourceHash?: string;
+  location: string; treeHash: string; home: string; credentialSource?: string; sourceHash?: string;
 }
 export interface Receipt {
   schema: 1; repo: string; pr: number; sha: string; base: string; phase: Phase;
