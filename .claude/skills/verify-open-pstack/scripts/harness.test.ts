@@ -327,8 +327,7 @@ const writeResult = async (cwd: string) => { await writeFile(join(cwd, 'result.m
 describe('headless recipes', () => {
   test('missing or unsupported recipes fail before any session starts', async () => {
     const { root, installation } = await candidate('codex');
-    for (const [feature, reason] of [['mystery', 'missing-recipe:codex/mystery'], ['assets:codex', 'unsupported-native-consumer'],
-      ['skill-invocation:babysit', 'unsupported-headless:babysit']]) {
+    for (const [feature, reason] of [['mystery', 'missing-recipe:codex/mystery'], ['assets:codex', 'unsupported-native-consumer']]) {
       const { record, calls } = stub(claudeStream({ command: 'pstack:architect' }), writeResult);
       await expect(new MacDriver(command, record).exercise(selected(root, installation, ['skill-invocation:architect', feature!]))).rejects.toThrow(reason);
       expect(calls).toHaveLength(0);

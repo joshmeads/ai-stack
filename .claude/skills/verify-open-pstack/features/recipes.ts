@@ -33,7 +33,6 @@ export const CLAUDE_TOOLS = 'Skill,Read,Glob,Grep,Write,Edit,Bash,Agent,Task,Tod
 export const DEFAULT_ROUTES: Record<Harness, string> = { claude: 'codex:gpt-6.1-sol@max', codex: 'claude:opus@max' };
 export const ROUTE = /^(claude|codex|grok):([A-Za-z0-9._-]+)@([a-z]+)$/;
 const SETUP_DESCRIPTOR = 'claude:opus@high';
-const UNSUPPORTED_HEADLESS = new Set(['babysit']);
 
 const rules = (dir: string): string => `Work only inside ${dir}. Do not push, post, open, merge, or modify pull requests, issues, or remote branches, and do not write outside ${dir}. Do not edit any skill, plugin, or configuration file. Do not ask questions: where the skill would ask, choose its documented default and continue.`;
 
@@ -92,11 +91,14 @@ function skillCase(skill: string, request: string, check?: (record: SessionRecor
   };
 }
 
+async function ciFixed(_record: SessionRecord, f: Fixture): Promise<Evidence> {
+  if (!/return\s+a\s*\+\s*b/.test(await readFile(join(f.dir, 'sum.mjs'), 'utf8'))) throw new Error('ci-not-fixed:sum.mjs');
+  return { assertions: ['fixed:sum.mjs'], files: [join(f.dir, 'sum.mjs')] };
+}
+
 const overrides: Record<string, Case> = {
-  'fix-ci': skillCase('fix-ci', 'There is no pull request or remote. The failing CI check is the local command `sh ci.sh` in $DIR. Fix it locally and do not push.', async (_record, f) => {
-    if (!/return\s+a\s*\+\s*b/.test(await readFile(join(f.dir, 'sum.mjs'), 'utf8'))) throw new Error('ci-not-fixed:sum.mjs');
-    return { assertions: ['fixed:sum.mjs'], files: [join(f.dir, 'sum.mjs')] };
-  }),
+  'fix-ci': skillCase('fix-ci', 'There is no pull request or remote. The failing CI check is the local command `sh ci.sh` in $DIR. Fix it locally and do not push.', ciFixed),
+  babysit: skillCase('babysit', 'The pull request is the local `main` branch of the repository at $DIR; there is no remote. Its one failing check is the local command `sh ci.sh`. Do exactly one babysit pass: fix the failing check locally, push nothing, change nothing remote, then stop instead of watching.', ciFixed),
   'make-pr-easy-to-review': skillCase('make-pr-easy-to-review', 'The pull request is the local branch `feature` against `main` in $DIR; there is no remote. Do not rewrite history or push; write reviewer guidance only.', async (_record, f) => {
     if ((await git(f, 'rev-parse', 'feature')).trim() !== (await readFile(`${f.dir}.head`, 'utf8')).trim()) throw new Error('history-rewritten:feature');
     return { assertions: ['history-unchanged'], files: [] };
@@ -208,6 +210,5 @@ export function recipe(feature: string, harness: Harness, routes: string[] = [])
   if (feature === 'shipped-tools') return [shippedTools];
   const skill = /^skill-invocation:([a-z][a-z0-9-]+)$/.exec(feature)?.[1];
   if (!skill) throw new Error(`missing-recipe:${harness}/${feature}`);
-  if (UNSUPPORTED_HEADLESS.has(skill)) throw new Error(`unsupported-headless:${skill}`);
   return [overrides[skill] ?? skillCase(skill, 'Apply it to the task in $DIR/TASK.md.')];
 }
