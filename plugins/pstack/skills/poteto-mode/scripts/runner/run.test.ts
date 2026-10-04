@@ -276,6 +276,68 @@ afterEach(() => {
   rmSync(scratch, { recursive: true, force: true });
 });
 
+describe("issue78 terminal results", () => {
+  for (const scenario of ["cancel-zero", "cancel-nonzero", "api-error", "success-streams"]) {
+    it(`issue78 ${scenario}`, async () => {
+      const input = options("grok");
+      const reason = scenario === "api-error"
+        ? "API unavailable"
+        : "User cancelled the execution for tool run_terminal_command";
+      const terminal = {
+        type: "result",
+        subtype: scenario === "api-error" ? "api_error"
+          : scenario === "success-streams" ? "success" : "error_during_execution",
+        is_error: scenario !== "success-streams",
+        stop_reason: scenario.startsWith("cancel") ? "cancelled" : "end_turn",
+        errors: [reason],
+        result: "GROK_OK",
+        session_id: "terminal-session",
+        usage: { input_tokens: 30, output_tokens: 4 },
+        total_cost_usd: 0.02,
+        modelUsage: { "grok-4.6-build": {} },
+      };
+      const stdout = JSON.stringify(terminal) + "\n";
+      const stderr = "startup warning\n".repeat(400) + "\n";
+      writeFileSync(join(bin, "grok"), `#!/usr/bin/env bun
+if (process.argv[2] === "models") {
+  console.log("You are logged in with grok.com.\\nAvailable models:\\n  * grok-4.6 (default)");
+  process.exit(0);
+}
+process.stdout.write(${JSON.stringify(stdout)});
+process.stderr.write(${JSON.stringify(stderr)});
+process.exit(${scenario === "cancel-nonzero" ? 1 : 0});
+`);
+      const result = await runLane(input);
+      const saved = JSON.parse(readFileSync(input.receiptPath, "utf8"));
+      expect(saved.status).toBe(scenario === "success-streams" ? "complete"
+        : scenario === "api-error" ? "child-failed" : "cancelled");
+      expect(result.exitCode).toBe(scenario === "success-streams" ? 0
+        : scenario === "api-error" ? 70 : 130);
+      expect(saved.exitCode).toBe(scenario === "cancel-nonzero" ? 1 : 0);
+      expect(saved.reportedModel).toBe("grok-4.6-build");
+      expect(saved.modelVerified).toBe(true);
+      expect(saved.modelEvidence).toBe("provider-report");
+      expect(saved.sessionId).toBe("terminal-session");
+      expect(saved.usage).toEqual({ inputTokens: 30, outputTokens: 4 });
+      expect(saved.costUsd).toBe(0.02);
+      if (scenario !== "success-streams") {
+        expect(saved.error.message).toBe(reason);
+        expect(saved.error.evidence.startsWith(reason)).toBe(true);
+        expect(saved.error.evidence.length).toBeLessThanOrEqual(4_000);
+        expect(existsSync(input.outputPath)).toBe(false);
+      }
+      expect(saved.stdoutPath).toBe(`${input.receiptPath}.stdout`);
+      expect(saved.stderrPath).toBe(`${input.receiptPath}.stderr`);
+      expect(readFileSync(saved.stdoutPath)).toEqual(Buffer.from(stdout));
+      expect(readFileSync(saved.stderrPath)).toEqual(Buffer.from(stderr));
+      expect(statSync(saved.stderrPath).size).toBe(6_401);
+      for (const path of [saved.stdoutPath, saved.stderrPath, input.receiptPath]) {
+        expect(statSync(path).mode & 0o777).toBe(0o600);
+      }
+    });
+  }
+});
+
 describe("runLane", () => {
   for (const provider of ["claude", "codex", "grok"] as const) {
     it(`executes and receipts the ${provider} external lane`, async () => {
