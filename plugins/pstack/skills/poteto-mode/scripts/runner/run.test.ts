@@ -1,4 +1,5 @@
-import { afterEach, beforeEach, describe, expect, it } from "bun:test";
+import { afterEach, beforeEach, describe, expect, it, spyOn } from "bun:test";
+import * as fs from "node:fs";
 import {
   chmodSync,
   cpSync,
@@ -19,6 +20,11 @@ import type { Provider, RunnerOptions, RunnerReceipt } from "./types.ts";
 let scratch = "";
 let bin = "";
 let previousPath: string | undefined;
+
+function streamPath(path: string | null): string {
+  if (path === null) throw new Error("expected a reserved stream artifact path");
+  return path;
+}
 
 const fake = `#!/usr/bin/env bun
 import { appendFileSync, existsSync, unlinkSync, writeFileSync } from "node:fs";
@@ -276,6 +282,224 @@ afterEach(() => {
   rmSync(scratch, { recursive: true, force: true });
 });
 
+describe("issue78 terminal results", () => {
+  for (const scenario of ["cancel-zero", "cancel-nonzero", "api-error", "api-error-nonzero", "success-streams"]) {
+    it(`issue78 ${scenario}`, async () => {
+      const input = options("grok");
+      const reason = scenario.startsWith("api-error")
+        ? "API unavailable"
+        : "User cancelled the execution for tool run_terminal_command";
+      const terminal = {
+        type: "result",
+        subtype: scenario.startsWith("api-error") ? "api_error"
+          : scenario === "success-streams" ? "success" : "error_during_execution",
+        is_error: scenario !== "success-streams",
+        stop_reason: scenario.startsWith("cancel") ? "cancelled" : "end_turn",
+        errors: [reason],
+        result: "GROK_OK",
+        session_id: "terminal-session",
+        usage: { input_tokens: 30, output_tokens: 4 },
+        total_cost_usd: 0.02,
+        modelUsage: { "grok-4.6-build": {} },
+      };
+      const stdout = JSON.stringify(terminal) + "\n";
+      const stderr = "startup warning\n".repeat(400) + "\n";
+      writeFileSync(join(bin, "grok"), `#!/usr/bin/env bun
+if (process.argv[2] === "models") {
+  console.log("You are logged in with grok.com.\\nAvailable models:\\n  * grok-4.6 (default)");
+  process.exit(0);
+}
+process.stdout.write(${JSON.stringify(stdout)});
+process.stderr.write(${JSON.stringify(stderr)});
+process.exit(${scenario.endsWith("nonzero") ? 1 : 0});
+`);
+      const result = await runLane(input);
+      const saved = JSON.parse(readFileSync(input.receiptPath, "utf8"));
+      expect(saved.status).toBe(scenario === "success-streams" ? "complete"
+        : scenario.startsWith("api-error") ? "child-failed" : "cancelled");
+      expect(result.exitCode).toBe(scenario === "success-streams" ? 0
+        : scenario.startsWith("api-error") ? 70 : 130);
+      expect(saved.exitCode).toBe(scenario.endsWith("nonzero") ? 1 : 0);
+      expect(saved.reportedModel).toBe("grok-4.6-build");
+      expect(saved.modelVerified).toBe(true);
+      expect(saved.modelEvidence).toBe("provider-report");
+      expect(saved.sessionId).toBe("terminal-session");
+      expect(saved.usage).toEqual({ inputTokens: 30, outputTokens: 4 });
+      expect(saved.costUsd).toBe(0.02);
+      if (scenario !== "success-streams") {
+        expect(saved.error.message).toBe(reason);
+        expect(saved.error.evidence.startsWith(reason)).toBe(true);
+        expect(saved.error.evidence.length).toBeLessThanOrEqual(4_000);
+        expect(existsSync(input.outputPath)).toBe(false);
+      }
+      expect(saved.stdoutPath).toBe(`${input.receiptPath}.stdout`);
+      expect(saved.stderrPath).toBe(`${input.receiptPath}.stderr`);
+      expect(readFileSync(streamPath(saved.stdoutPath))).toEqual(Buffer.from(stdout));
+      expect(readFileSync(streamPath(saved.stderrPath))).toEqual(Buffer.from(stderr));
+      expect(statSync(streamPath(saved.stderrPath)).size).toBe(6_401);
+      expect(saved.schemaVersion).toBe(1);
+      for (const path of [saved.stdoutPath, saved.stderrPath, input.receiptPath]) {
+        expect(statSync(streamPath(path)).mode & 0o777).toBe(0o600);
+      }
+    });
+  }
+
+  for (const stream of ["stdout", "stderr"]) {
+    it(`rolls back reservations without overwriting an existing ${stream} sidecar`, async () => {
+      const input = options("grok");
+      const conflict = `${input.receiptPath}.${stream}`;
+      writeFileSync(conflict, "operator evidence");
+      await expect(runLane(input)).rejects.toThrow();
+      expect(readFileSync(conflict, "utf8")).toBe("operator evidence");
+      for (const path of [input.outputPath, input.receiptPath,
+        `${input.receiptPath}.${stream === "stdout" ? "stderr" : "stdout"}`]) {
+        expect(existsSync(path)).toBe(false);
+      }
+    });
+
+    it(`rejects a ${stream} sidecar colliding with the prompt or output`, async () => {
+      const input = options("grok");
+      const conflict = `${input.receiptPath}.${stream}`;
+      writeFileSync(conflict, "operator prompt");
+      await expect(runLane({ ...input, promptPath: conflict })).rejects.toThrow("must be distinct");
+      expect(readFileSync(conflict, "utf8")).toBe("operator prompt");
+      rmSync(conflict);
+      await expect(runLane({ ...input, outputPath: conflict })).rejects.toThrow("must be distinct");
+      for (const path of [input.outputPath, input.receiptPath,
+        `${input.receiptPath}.stdout`, `${input.receiptPath}.stderr`]) {
+        expect(existsSync(path)).toBe(false);
+      }
+    });
+  }
+
+  it("retains complete streams when writes are partial", async () => {
+    const input = options("grok");
+    const stdout = JSON.stringify({ type: "result", subtype: "success", is_error: false,
+      result: "GROK_OK", modelUsage: { "grok-4.6-build": {} } }) + "\n";
+    const stderr = "complete stderr despite partial writes\n";
+    writeFileSync(join(bin, "grok"), fake.replace("const modelIndex =",
+      `process.stdout.write(${JSON.stringify(stdout)}); process.stderr.write(${JSON.stringify(stderr)}); process.exit(0);\nconst modelIndex =`));
+    const originalWrite = fs.writeSync;
+    let partialWrites = 0;
+    const write = spyOn(fs, "writeSync").mockImplementation((descriptor, data, offset, length) => {
+      if (typeof data === "string") return originalWrite(descriptor, data, offset);
+      partialWrites++;
+      return originalWrite(descriptor, data, offset,
+        Math.min(typeof length === "number" ? length : data.byteLength, 7));
+    });
+    try {
+      const result = await runLane(input);
+      expect(result.exitCode).toBe(0);
+      expect(partialWrites).toBeGreaterThan(1);
+      expect(readFileSync(streamPath(result.receipt.stdoutPath))).toEqual(Buffer.from(stdout));
+      expect(readFileSync(streamPath(result.receipt.stderrPath))).toEqual(Buffer.from(stderr));
+    } finally {
+      write.mockRestore();
+    }
+  });
+
+  it("terminalizes a sidecar write failure without waiting for the child", async () => {
+    const input = options("grok");
+    writeFileSync(join(bin, "grok"), fake.replace("const modelIndex =",
+      'process.stdout.write("stream data"); await Bun.sleep(10_000);\nconst modelIndex ='));
+    const originalWrite = fs.writeSync;
+    const write = spyOn(fs, "writeSync").mockImplementation((descriptor, data, offset, length) => {
+      if (typeof data === "string") return originalWrite(descriptor, data, offset);
+      throw new Error("sidecar storage unavailable");
+    });
+    try {
+      const result = await runLane(input);
+      expect(result.exitCode).toBe(70);
+      expect(result.receipt.status).toBe("child-failed");
+      expect(result.receipt.error?.evidence).toContain("sidecar storage unavailable");
+      expect(existsSync(input.outputPath)).toBe(false);
+      expect(existsSync(streamPath(result.receipt.stdoutPath))).toBe(true);
+      expect(existsSync(streamPath(result.receipt.stderrPath))).toBe(true);
+    } finally {
+      write.mockRestore();
+    }
+  });
+
+  it("retains undecodable stderr bytes rather than re-encoding captured text", async () => {
+    const input = options("grok");
+    const bytes = Buffer.from([0, 255, 195, 169, 13, 10]);
+    writeFileSync(join(bin, "grok"), fake.replace("const modelIndex =",
+      `process.stderr.write(Buffer.from(${JSON.stringify([...bytes])}));\nconst modelIndex =`));
+    const result = await runLane(input);
+    expect(result.exitCode).toBe(0);
+    expect(readFileSync(streamPath(result.receipt.stderrPath))).toEqual(bytes);
+  });
+
+  for (const exitCode of [0, 1]) {
+    it(`keeps malformed terminal data distinct after child exit ${exitCode}`, async () => {
+      const input = options("grok");
+      const stdout = '{"type":"result","is_error":true}\n';
+      writeFileSync(join(bin, "grok"), fake.replace(
+        'console.log(JSON.stringify({type:"result",subtype:"error_during_execution",is_error:true,stop_reason:"cancelled",errors:["cancelled"]}));',
+        `process.stdout.write(${JSON.stringify(stdout)}); process.exit(${exitCode});`));
+      process.env.FAKE_GROK_ERROR_RESULT = "1";
+      const result = await runLane(input);
+      expect(result.exitCode).toBe(exitCode === 0 ? 65 : 70);
+      expect(result.receipt).toMatchObject({
+        status: exitCode === 0 ? "malformed-output" : "child-failed",
+        exitCode, reportedModel: null, modelVerified: false,
+        sessionId: null, error: { message: exitCode === 0
+          ? "grok result did not contain a valid terminal status" : "child exited with status 1" },
+      });
+      expect(readFileSync(streamPath(result.receipt.stdoutPath), "utf8")).toEndWith(stdout);
+      expect(existsSync(input.outputPath)).toBe(false);
+    });
+  }
+
+  for (const stdout of ['{"type":"system","subtype":"init"}\n', "startup failed\n"]) {
+    for (const exitCode of [0, 1]) {
+      it(`handles missing Grok terminal output ${JSON.stringify(stdout)} after exit ${exitCode}`, async () => {
+        const input = options("grok");
+        const stderr = "sandbox startup refused\n";
+        writeFileSync(join(bin, "grok"), fake.replace("const modelIndex =",
+          `process.stdout.write(${JSON.stringify(stdout)}); process.stderr.write(${JSON.stringify(stderr)}); process.exit(${exitCode});\nconst modelIndex =`));
+        const result = await runLane(input);
+        expect(result.exitCode).toBe(exitCode === 0 ? 65 : 70);
+        expect(result.receipt).toMatchObject({
+          status: exitCode === 0 ? "malformed-output" : "child-failed",
+          exitCode, reportedModel: null, sessionId: null,
+        });
+        expect(readFileSync(streamPath(result.receipt.stdoutPath), "utf8")).toBe(stdout);
+        expect(readFileSync(streamPath(result.receipt.stderrPath), "utf8")).toBe(stderr);
+        expect(existsSync(input.outputPath)).toBe(false);
+      });
+    }
+  }
+
+  it("does not invent metadata for a valid provider failure", async () => {
+    const input = options("grok");
+    writeFileSync(join(bin, "grok"), fake.replace(
+      'console.log(JSON.stringify({type:"result",subtype:"error_during_execution",is_error:true,stop_reason:"cancelled",errors:["cancelled"]}));',
+      'console.log(JSON.stringify({type:"result",subtype:"api_error",is_error:true,errors:["API unavailable"]})); process.exit(1);'));
+    process.env.FAKE_GROK_ERROR_RESULT = "1";
+    const result = await runLane(input);
+    expect(result.exitCode).toBe(70);
+    expect(result.receipt).toMatchObject({
+      status: "child-failed", exitCode: 1, reportedModel: null, modelVerified: false,
+      modelEvidence: null, sessionId: null, usage: null, costUsd: null,
+      error: { message: "API unavailable" },
+    });
+    expect(readFileSync(streamPath(result.receipt.stdoutPath), "utf8")).toContain("api_error");
+    expect(existsSync(input.outputPath)).toBe(false);
+  });
+
+  it("retains strict model verification for successful Grok results", async () => {
+    const input = options("grok");
+    writeFileSync(join(bin, "grok"), fake.replace('[model + "-build"]', '["grok-unexpected"]'));
+    const result = await runLane(input);
+    expect(result.exitCode).toBe(65);
+    expect(result.receipt).toMatchObject({ status: "malformed-output", modelVerified: false });
+    expect(result.receipt.error?.message).toBe("requested model grok-4.6 was not reported by grok");
+    expect(readFileSync(streamPath(result.receipt.stdoutPath), "utf8")).toContain("grok-unexpected");
+    expect(existsSync(input.outputPath)).toBe(false);
+  });
+});
+
 describe("runLane", () => {
   for (const startup of ["dotenv", "bunfig", "bun-options", "node-options", "combined", "hostile-path", "bare-name"]) {
     it(`shipped launcher startup isolation: ${startup}`, async () => {
@@ -370,6 +594,12 @@ printf '%s\\n' '{"type":"thread.started","thread_id":"isolated"}' '{"type":"item
         modelEvidence: provider === "codex" ? "pinned-argv" : "provider-report",
         preflight: { status: "passed" },
       });
+      const saved = receipt(input.receiptPath);
+      expect(readFileSync(streamPath(saved.stdoutPath), "utf8")).toContain(provider.toUpperCase());
+      expect(readFileSync(streamPath(saved.stderrPath))).toEqual(Buffer.alloc(0));
+      for (const path of [saved.stdoutPath, saved.stderrPath]) {
+        expect(statSync(streamPath(path)).mode & 0o777).toBe(0o600);
+      }
       if (provider === "claude") {
         expect(receipt(input.receiptPath).reportedModel).toBe("claude-fable-9-9");
       }
@@ -389,19 +619,19 @@ printf '%s\\n' '{"type":"thread.started","thread_id":"isolated"}' '{"type":"item
     });
   });
 
-  it("keeps Grok's terminal error result in malformed-output evidence", async () => {
+  it("keeps Grok's terminal cancellation reason in bounded evidence", async () => {
     process.env.FAKE_GROK_ERROR_RESULT = "1";
     const input = options("grok", "grok-error-result");
     const result = await runLane(input);
-    expect(result.exitCode).toBe(65);
+    expect(result.exitCode).toBe(130);
     expect(existsSync(input.outputPath)).toBe(false);
     const recorded = receipt(input.receiptPath);
     expect(recorded).toMatchObject({
-      status: "malformed-output",
+      status: "cancelled",
       exitCode: 0,
-      error: { message: "grok reported an error result" },
+      error: { message: "cancelled" },
     });
-    expect(recorded.error?.evidence).toContain('"stop_reason":"cancelled","errors":["cancelled"]');
+    expect(recorded.error?.evidence).toStartWith("cancelled");
     expect(recorded.error?.evidence.length).toBeLessThanOrEqual(4_000);
   });
 
