@@ -11,9 +11,9 @@ Resolve the current parent's config home once: Claude Code uses nonempty `CLAUDE
 "${CODEX_HOME:-$HOME/.codex}"
 ```
 
-Empty and unset variables both select the default. Preserve spaces in the resolved path by quoting shell file operands. In shared instructions, `<config-home>` means this resolved parent-specific directory, not literal text to write. Use that same home for setup's sheet and integration writes, snapshots, restoration, and readback; current-state reads follow the existing Claude import when it points elsewhere.
+Empty and unset variables both select the default. Preserve spaces in the resolved path by quoting shell file operands. In shared instructions, `<config-home>` means this resolved parent-specific directory, not literal text to write. Use that same home for setup's sheet and integration writes, snapshots, restoration, and readback.
 
-The Claude integration is the one `@` import line in `<config-home>/CLAUDE.md` whose target's basename is `pstack-models.md`, regardless of its existing directory or path spelling. When that import points elsewhere, load current state from its target (relative to the importing file's directory, expanding `~` to the user's home), name the source and new destination at confirmation, and carry the loaded assignments into `<config-home>/pstack-models.md`; if the imported file is missing, report that and use the normal first-run path. When `<config-home>` is the default home, render exactly the legacy line:
+The Claude integration is the one `@` import line in `<config-home>/CLAUDE.md` whose target's basename is `pstack-models.md`, regardless of its existing directory or path spelling. Select current state using [setup-pstack step 2](../../setup-pstack/SKILL.md#2-load-current-state). When `<config-home>` is the default home, render exactly the legacy line:
 
 ```text
 @~/.claude/pstack-models.md
