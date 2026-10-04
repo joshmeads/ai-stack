@@ -34,7 +34,7 @@ export const DEFAULT_ROUTES: Record<Harness, string> = { claude: 'codex:gpt-6.1-
 export const ROUTE = /^(claude|codex|grok):([A-Za-z0-9._-]+)@([a-z]+)$/;
 const SETUP_DESCRIPTOR = 'claude:opus@high';
 
-const rules = (dir: string): string => `Work only inside ${dir}. Do not push, post, open, merge, or modify pull requests, issues, or remote branches, and do not write outside ${dir}. Do not edit any skill, plugin, or configuration file outside ${dir}. Do not ask questions: where the skill would ask, choose its documented default and continue.`;
+const rules = (dir: string): string => `Work only inside ${dir}. Do not push, post, open, merge, or modify pull requests, issues, or remote branches, and do not write outside ${dir}. Do not edit any skill, plugin, or configuration file outside ${dir}. Do not ask questions: where the skill would ask, choose its documented default and continue. This is a headless session that ends at your first final reply and stops any background work still running, so run every command and subagent in the foreground, even where the skill says to use the background, and finish all work before you reply.`;
 
 export function invoke(harness: Harness, skill: string, text: string): string {
   if (harness === 'codex') return `$pstack:${skill} ${text}`;
@@ -155,7 +155,7 @@ function runner(harness: Harness, routes: string[]): Case[] {
       id: `route-${index + 1}`,
       codexSandbox: 'danger-full-access',
       prepare: async f => { await writeFile(lane(f, 'prompt.md'), 'Reply with the single word PONG.\n'); },
-      prompt: f => `${invoke(f.harness, 'poteto-mode', `Dispatch exactly one external lane and nothing else. Run the installed launcher ${join(f.location, 'skills/poteto-mode/scripts/runner/pstack-runner')} with these arguments as one foreground command (not a background task, because this session ends when you reply) and wait for it to exit: --parent ${harness} --provider ${provider} --model ${model} --effort ${effort} --mode read-only --prompt ${lane(f, 'prompt.md')} --cwd ${f.dir} --output ${lane(f, 'output.md')} --receipt ${lane(f, 'receipt.json')}`)}. ${rules(f.dir)}`,
+      prompt: f => `${invoke(f.harness, 'poteto-mode', `Dispatch exactly one external lane and nothing else. Run the installed launcher ${join(f.location, 'skills/poteto-mode/scripts/runner/pstack-runner')} with these arguments and wait for it to exit: --parent ${harness} --provider ${provider} --model ${model} --effort ${effort} --mode read-only --prompt ${lane(f, 'prompt.md')} --cwd ${f.dir} --output ${lane(f, 'output.md')} --receipt ${lane(f, 'receipt.json')}`)}. ${rules(f.dir)}`,
       async assert(record, f) {
         const launcher = join(f.location, 'skills/poteto-mode/scripts/runner/pstack-runner');
         if (!record.commands.some(c => c.includes(launcher))) throw new Error('runner-not-run');
