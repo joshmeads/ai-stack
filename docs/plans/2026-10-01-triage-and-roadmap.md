@@ -133,9 +133,9 @@ Each issue goes through these steps:
 2. Claude moves the card to Planning with `factory-run`.
 3. The planner posts a plan.
 4. `factory-adjudicate` judges the plan with a different model.
-5. Build runs on the Factory branch. Before opening the PR, the builder runs the checks AGENTS.md requires: Bun tests, strict typecheck, static invariants, and plugin validation. Then it opens the PR as a draft. If the build host lacks Bun, as the triage sandbox did, fix the host before the first run. Don't skip the checks.
-6. Claude runs the live gate on the Mac (A3) against the draft head, records the evidence in the PR, and sets the `live-gate` status on that exact head. Only then is the PR marked ready, as AGENTS.md requires.
-7. Unfret reviews the ready PR. The builder fixes the findings. Each new head needs a fresh `live-gate` status, because the status is bound to the head SHA.
+5. Build runs on the Factory branch. Before opening the PR, the builder runs the checks AGENTS.md requires: Bun tests, strict typecheck, static invariants, and plugin validation. Then it opens the PR, ready for review. If the build host lacks Bun, as the triage sandbox did, fix the host before the first run. Don't skip the checks.
+6. Unfret reviews the PR. The builder fixes the findings until Unfret passes.
+7. Claude runs the live gate (A3) on that final head. The verifier posts one evidence comment and the `live-gate` status on that exact head, and changes nothing else on the PR. Any later head, including a queue-created head, needs a fresh run.
 8. Mergify queues the PR once `verify`, `Unfret`, and `live-gate` pass on the same head.
 9. The builder verifies the merged result and moves the card to Done.
 10. `closeout` closes the GitHub issue (A2) and records findings.
@@ -165,3 +165,7 @@ Waves:
 - `begin` and `closeout` accept only Linear sources (MASTRA-737). This blocks every open-pstack run.
 - #101 gap: Unfret doesn't review drafts, so a PR has to be non-draft to get `Unfret`. Once it's non-draft, #101 queues it when `verify` and `Unfret` pass, which can happen before the live test. Fix requirement: the commit that merges must be the commit the installed-harness test ran on, and the queue must never wait on a check that nothing can post. The likely shape, to be confirmed in the #101 session against Mergify's docs: in-place queue checks (empty `merge_conditions`, `batch_size: 1`, so Mergify creates no draft batch PR), and `queue_conditions` that require `-draft`, `verify`, `Unfret`, `live-gate` (a commit status that the #90 skill posts on the exact head), and the branch being up to date with `main`. With the merge-commit method and an up-to-date branch, the merged tree is the tested tree. Any `main` change forces a rebase, which creates a new head that needs fresh `verify`, `Unfret`, and `live-gate`. Corrections are posted on the #101 Greptile thread.
 - Order: MASTRA-737, then the live-gate check in #101 and its merge, then #90. After that, Wave 1. Until #90 exists, the operator posts `live-gate` by hand on each PR head, after running the installed-harness test, with a link to the evidence. #101 is merged that way as well.
+
+## 7. Gate change (2026-10-03)
+
+AGENTS.md now treats the exact-head `live-gate` status and its linked evidence comment as the live-evidence record, in place of the PR template and the draft rule. Mergify's required `live-gate` check enforces it. The change came out of the #111 step-back: every way the verifier changed draft, ready, or body state produced new review findings, and draft state was no longer a merge control. The verifier (#90) posts only the comment and the status. #106's runbook follows this order: review first, then the live gate on the final head.
