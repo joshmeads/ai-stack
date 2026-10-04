@@ -20,7 +20,7 @@ export function evidence(r: Receipt): void {
       location: '/tmp/candidate/plugin', home: `/tmp/${harness}`, treeHash: 'c'.repeat(64) });
     for (const feature of requiredFeatures(r, harness)) {
       r.observations.push({ harness, feature, surface: 'native skill', action: 'invoke', observed: 'fixture changed',
-        transcript: '/tmp/log', transcriptHash: 'c'.repeat(64), reviewer: 'operator',
+        transcript: '/tmp/log', transcriptHash: 'c'.repeat(64), reviewer: 'recipe', assertions: ['invoke:skill-loaded'],
         artifacts: [{ path: '/tmp/artifact', sha256: 'd'.repeat(64) }] });
     }
   }
@@ -41,6 +41,11 @@ describe('registry and ownership', () => {
   test('terminal prefix cannot match sibling directory', () => {
     expect(matches('skills/x/file', 'skills/x/**')).toBe(true);
     expect(matches('skills/xyz/file', 'skills/x/**')).toBe(false);
+  });
+  test('repository-root attribution files are not runtime', () => {
+    for (const filename of ['NOTICE.md', 'README-UPSTREAM.md', 'LICENSE-cursor-team-kit', 'LICENSE-superpowers']) {
+      expect(classify([{ filename }], registry).noRuntime).toBe(true);
+    }
   });
   test('markdown instructions are runtime', () => {
     for (const filename of ['plugins/pstack/skills/architect/SKILL.md', 'plugins/pstack/skills/architect/references/guide.md']) {
@@ -183,6 +188,7 @@ describe('receipt and evidence boundaries', () => {
       (r: Receipt) => { r.observations.push(r.observations[0]!); },
       (r: Receipt) => { r.observations[0]!.transcriptHash = ''; },
       (r: Receipt) => { r.observations[0]!.observed = ''; },
+      (r: Receipt) => { r.observations[0]!.assertions = []; },
       (r: Receipt) => { r.observations[0]!.artifacts = []; },
       (r: Receipt) => { r.failure = 'provider unavailable'; },
     ]) {

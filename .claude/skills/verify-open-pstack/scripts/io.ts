@@ -1,8 +1,8 @@
 import { createHash } from 'node:crypto';
-import { lstat, mkdir, readFile, readdir, realpath, rename, writeFile } from 'node:fs/promises';
+import { lstat, mkdir, open, readFile, readdir, realpath, rename, writeFile } from 'node:fs/promises';
 import { isAbsolute, join, relative, resolve } from 'node:path';
 
-export type Command = (args: string[], options?: { cwd?: string; env?: Record<string, string>; interactive?: boolean; allowInterrupted?: boolean }) => Promise<string>;
+export type Command = (args: string[], options?: { cwd?: string; env?: Record<string, string>; allowInterrupted?: boolean }) => Promise<string>;
 export const interruption = new AbortController();
 const activeCommands = new Map<number, Promise<number>>();
 let interrupting: Promise<void> | undefined;
@@ -21,12 +21,10 @@ export function interruptCommands(signal: 'SIGINT' | 'SIGTERM'): Promise<void> {
 }
 export const command: Command = async (args, options = {}) => {
   if (!options.allowInterrupted) interruption.signal.throwIfAborted();
-  const child = Bun.spawn(args, { cwd: options.cwd, env: options.env, detached: true,
-    stdin: options.interactive ? 'inherit' : 'ignore', stdout: options.interactive ? 'inherit' : 'pipe',
-    stderr: options.interactive ? 'inherit' : 'pipe' });
+  const child = Bun.spawn(args, { cwd: options.cwd, env: options.env, detached: true, stdin: 'ignore', stdout: 'pipe', stderr: 'pipe' });
   if (!options.allowInterrupted) activeCommands.set(child.pid, child.exited);
   try {
-    const [output, error] = options.interactive ? ['', ''] : await Promise.all([
+    const [output, error] = await Promise.all([
       new Response(child.stdout).text(), new Response(child.stderr).text(),
     ]);
     const code = await child.exited;
@@ -36,6 +34,25 @@ export const command: Command = async (args, options = {}) => {
   } finally {
     activeCommands.delete(child.pid);
   }
+};
+export type Session = (args: string[], options: { cwd: string; env: Record<string, string>; input: string; stdout: string; stderr: string }) => Promise<number>;
+/** Run one headless session, streaming stdout and stderr to new private files so output survives any exit. */
+export const session: Session = async (args, options) => {
+  interruption.signal.throwIfAborted();
+  const stdout = await open(options.stdout, 'wx', 0o600);
+  try {
+    const stderr = await open(options.stderr, 'wx', 0o600);
+    try {
+      const child = Bun.spawn(args, { cwd: options.cwd, env: options.env, detached: true,
+        stdin: new Blob([options.input]), stdout: stdout.fd, stderr: stderr.fd });
+      activeCommands.set(child.pid, child.exited);
+      try {
+        const code = await child.exited;
+        interruption.signal.throwIfAborted();
+        return code;
+      } finally { activeCommands.delete(child.pid); }
+    } finally { await stderr.close(); }
+  } finally { await stdout.close(); }
 };
 export function isolatedEnv(state: string, _harness?: 'claude' | 'codex'): Record<string, string> {
   if (!isAbsolute(state)) throw new Error('Candidate state must be an absolute run-owned directory');

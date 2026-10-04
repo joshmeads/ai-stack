@@ -46,6 +46,7 @@
   ],
   "nonRuntime": [
     "README.md", "CHANGES.md", "LICENSE", "LICENSE.md", "UPSTREAM.md",
+    "NOTICE.md", "README-UPSTREAM.md", "LICENSE-cursor-team-kit", "LICENSE-superpowers",
     ".gitignore", ".mergify.yml", "docs/**", "assets/**",
     "plugins/pstack/skills/poteto-mode/scripts/bootstrap.test.ts",
     "plugins/pstack/skills/poteto-mode/scripts/check-plan.test.ts"

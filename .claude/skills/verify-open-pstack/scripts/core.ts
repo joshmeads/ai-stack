@@ -78,7 +78,7 @@ export function completeEvidence(receipt: Receipt): void {
       const records = receipt.observations.filter(o => o.harness === harness && o.feature === feature);
       if (records.length !== 1) throw new Error(`Missing/duplicate evidence: ${harness}/${feature}`);
       const o = records[0]!;
-      if (o.reviewer !== 'operator' || !o.surface.trim() || !o.action.trim() || !o.observed.trim() ||
+      if (o.reviewer !== 'recipe' || !o.assertions?.length || !o.surface.trim() || !o.action.trim() || !o.observed.trim() ||
           !o.transcript || !/^[a-f0-9]{64}$/.test(o.transcriptHash) || !o.artifacts.length ||
           o.artifacts.some(a => !a.path || !/^[a-f0-9]{64}$/.test(a.sha256))) throw new Error(`Incomplete evidence: ${harness}/${feature}`);
     }
