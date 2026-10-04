@@ -571,6 +571,8 @@ async function executeLane(
 ): Promise<RunResult> {
   const startedAt = new Date(started).toISOString();
   const prompt = readFileSync(options.promptPath, "utf8");
+  const parentNetworkDisabled = options.parent === "codex"
+    && process.env.CODEX_SANDBOX_NETWORK_DISABLED === "1";
   const env = childEnvironment(options.provider);
   const executable = Bun.which(invocation.command, {
     PATH: env.PATH,
@@ -818,13 +820,19 @@ async function executeLane(
   if (result.cancelledBy !== null || result.timedOut || providerFailure !== null
       || result.exitCode !== 0) {
     const rawFailureEvidence = `${result.stderr}\n${result.stdout}`;
-    const failureEvidence = evidence(providerFailure === null
-      ? rawFailureEvidence : `${providerFailure.message}\n${rawFailureEvidence}`);
     const status: ReceiptStatus = result.cancelledBy !== null
       ? "cancelled"
       : result.timedOut
         ? "timed-out"
         : providerFailure?.status ?? unavailableStatus(rawFailureEvidence);
+    const sandboxHint = status === "child-failed" && providerFailure === null && parentNetworkDisabled
+      ? "likely cause: Codex parent sandbox has network disabled; see provider-dispatch.md#host-and-parent-prerequisites"
+      : null;
+    const failureEvidence = evidence(providerFailure !== null
+      ? `${providerFailure.message}\n${rawFailureEvidence}`
+      : sandboxHint !== null
+        ? `${sandboxHint}\n${rawFailureEvidence}`
+        : rawFailureEvidence);
     receipt = completeReceipt(options, {
       ...base,
       status,
@@ -841,7 +849,7 @@ async function executeLane(
             : `launcher received ${result.cancelledBy} after child exited`
           : result.timedOut
             ? `launcher exceeded the explicit ${options.timeoutMs}ms deadline`
-            : providerFailure?.message ?? `child exited with status ${result.exitCode}`,
+            : providerFailure?.message ?? `child exited with status ${result.exitCode}${sandboxHint === null ? "" : `; ${sandboxHint}`}`,
         evidence: failureEvidence,
       },
     });
