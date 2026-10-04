@@ -58,6 +58,13 @@ function grokTools(mode: AccessMode): string {
 // Writers run Bash without prompts inside the OS sandbox, which confines writes to the cwd and a
 // per-user temp directory. The model cannot opt a command out, and Claude refuses to start when
 // the sandbox is unavailable. A linked worktree's shared git directory is otherwise writable.
+// denyWrite entries are globs, and Claude Code 2.1.288 ignores backslash escapes, so each glob
+// metacharacter becomes `?`: the pattern still matches the literal path, plus at most a few
+// same-length siblings, which only denies more.
+function denyWritePattern(path: string): string {
+  return path.replace(/[[\]{}*?]/g, "?");
+}
+
 function claudePermissions(mode: AccessMode, sharedGitDir: string | null): string[] {
   if (mode === "read-only") return ["--permission-mode", "plan"];
   const sandbox = {
@@ -65,7 +72,7 @@ function claudePermissions(mode: AccessMode, sharedGitDir: string | null): strin
     autoAllowBashIfSandboxed: true,
     allowUnsandboxedCommands: false,
     failIfUnavailable: true,
-    ...(sharedGitDir === null ? {} : { filesystem: { denyWrite: [sharedGitDir] } }),
+    ...(sharedGitDir === null ? {} : { filesystem: { denyWrite: [denyWritePattern(sharedGitDir)] } }),
   };
   return ["--permission-mode", "acceptEdits", "--settings", JSON.stringify({ sandbox })];
 }

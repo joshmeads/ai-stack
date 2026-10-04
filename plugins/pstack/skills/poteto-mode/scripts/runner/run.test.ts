@@ -964,7 +964,11 @@ describe("sharedGitDir", () => {
       const main = join(root, "main");
       const linked = join(root, "linked");
       const git = (...args: string[]): void => {
-        const result = Bun.spawnSync(["git", ...args], { stdout: "ignore", stderr: "pipe" });
+        // An inherited GIT_DIR or GIT_WORK_TREE would point these commands at the caller's repository.
+        const env = Object.fromEntries(
+          Object.entries(process.env).filter(([name]) => !name.startsWith("GIT_"))
+        );
+        const result = Bun.spawnSync(["git", ...args], { env, stdout: "ignore", stderr: "pipe" });
         if (result.exitCode !== 0) throw new Error(result.stderr.toString());
       };
       mkdirSync(main);

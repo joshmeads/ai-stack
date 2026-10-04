@@ -161,6 +161,9 @@ describe("invocationCommand", () => {
     expect(settings(invocationCommand(writer, "/repo/.git").args)).toEqual({
       sandbox: { ...sandbox, filesystem: { denyWrite: ["/repo/.git"] } },
     });
+    expect(settings(invocationCommand(writer, "/tmp/x[repo]{a,b}*?/.git").args)).toEqual({
+      sandbox: { ...sandbox, filesystem: { denyWrite: ["/tmp/x?repo??a,b???/.git"] } },
+    });
 
     const reader = invocationCommand(
       options({ provider: "claude", model: "fable" }),
