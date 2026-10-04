@@ -318,6 +318,8 @@ function stub(stream: string, effect?: (cwd: string) => Promise<void>, exitCode 
   return { calls, record: async (args, options) => {
     calls.push(args);
     await writeFile(options.stdout, stream); await writeFile(options.stderr, '');
+    // Linux file timestamps are coarser than Date.now(); a real session runs for seconds before it writes.
+    await Bun.sleep(20);
     await effect?.(options.cwd);
     return exitCode;
   } };
