@@ -7,7 +7,7 @@ description: Verify an Open Pstack PR's exact candidate head in native Claude Co
 
 ## Launch
 
-This repository-local, non-shipped skill is shared with Codex through `.agents/skills/verify-open-pstack`. Run the reviewed verifier from a trusted `main` checkout. The trusted parent owns GitHub reads and publication; candidate processes never receive publisher credentials. Its only GitHub writes are one structured evidence comment and `live-gate` status on the exact candidate SHA; it never queues or merges.
+This repository-local, non-shipped skill is shared with Codex through `.agents/skills/verify-open-pstack`. Verifier-changing PRs run from a checkout of their reviewed candidate head; all other PRs run from trusted `main`. The trusted parent owns GitHub reads and publication; candidate processes never receive publisher credentials. Its only GitHub writes are one structured evidence comment and `live-gate` status on the exact candidate SHA; it never queues or merges.
 
 Install development dependencies separately when testing this skill; `verify.sh` does not install at runtime:
 
@@ -31,7 +31,7 @@ EVIDENCE="$SESSION/live" # must not exist yet
 
 Replace both placeholders with existing operator-pre-authenticated normal-login configuration directories. Selection is explicit; a selected account may be active in daily use. No profile manager or maintainer-specific infrastructure is required. Authenticate those directories manually before verification; the verifier never starts a login flow. Omit `--self-test` for ordinary plugin verification; it is mandatory for this skill's delivery.
 
-The trusted `main` publisher revision is recorded separately from the PR's candidate SHA. PR #111 bootstrap must use the maintainer-reviewed trusted publisher head, while all candidate installation, classification, evidence, comments, and `live-gate` status remain bound to PR #111's exact candidate SHA. Use a fresh private output directory for every run. The verifier requires an open same-repository PR, pins exact head and base SHAs, classifies immutable Git objects, and rechecks them at phase and publication boundaries. Unknown paths abort; evidence never transfers to another head.
+The publisher revision is recorded separately from the candidate SHA and must equal it when classification selects `project-skill`. Run those PRs from their reviewed candidate head; run all other PRs from trusted `main`. Use a fresh private output directory for every run. The verifier requires an open same-repository PR, pins exact head and base SHAs, classifies immutable Git objects, and rechecks them at phase and publication boundaries. Unknown paths abort; evidence never transfers to another head.
 
 ## Doctor
 

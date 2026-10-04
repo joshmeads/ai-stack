@@ -6,6 +6,7 @@ import { command, interruption, isolatedEnv, retainedFile, save, treeHash, type 
 import { doctor } from './doctor.ts';
 import { copyCredentials, credentialSources, removeCredentials } from './isolation.ts';
 import { sourceDigest, sourceHash } from './provenance.ts';
+import { EVIDENCE_LIMIT, publishable } from './verify.ts';
 import { HARNESSES, REPO, type CredentialSources, type Driver, type Harness, type Installation, type Observation, type Receipt } from './types.ts';
 
 export type Ask = (question: string) => Promise<string>;
@@ -125,9 +126,11 @@ export class MacDriver implements Driver {
       if (await sourceDigest(workspace) !== installation.sourceHash) throw new Error('Pinned project/plugin source changed during exercise');
       const transcript = await retainedFile(receipt.artifactRoot, await this.review(`Retain a private copy of ${raw} inside output (outside state), review it, and enter its path. Do not publish raw content:`));
       for (const feature of requiredFeatures(receipt, harness)) {
-        const surface = await this.review(`${harness}/${feature}: native surface/discovery entry point?`);
-        const action = await this.review('Concrete action exercised?');
-        const observed = await this.review('Observed assertion/result (not the model\'s success claim)?');
+        const answers = { surface: '', action: '', observed: '' };
+        for (const [field, question] of [['surface', `${harness}/${feature}: native surface/discovery entry point?`], ['action', 'Concrete action exercised?'], ['observed', 'Observed assertion/result (not the model\'s success claim)?']] as const) {
+          do { answers[field] = await this.review(`${question} Use printable ASCII, no backtick, < or >, and at most ${EVIDENCE_LIMIT} characters.`); } while (!publishable(answers[field]));
+        }
+        const { surface, action, observed } = answers;
         const artifacts = [];
         for (const path of (await this.review('Reviewed artifact paths inside output, one or more separated by commas?')).split(',')) {
           artifacts.push(await retainedFile(receipt.artifactRoot, path.trim()));

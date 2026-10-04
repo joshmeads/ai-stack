@@ -66,6 +66,27 @@ describe('exact-head evidence publication', () => {
     expect(receipt.observations.map(record => `${record.harness}/${record.feature}`).sort()).toEqual(['claude/project-skill', 'codex/project-skill']);
   });
 
+  test('verifier changes require the candidate publisher before any driver call or GitHub write', async () => {
+    for (const revision of [REVISION, SHA]) {
+      const f = fixture(); f.options.publisherRevision = revision;
+      f.options.github.files = async () => [{ filename: '.claude/skills/verify-open-pstack/scripts/verify.ts' }];
+      f.options.driver.cleanup = async () => { f.calls.push('cleanup'); };
+      if (revision !== SHA) {
+        await expect(verify(f.options)).rejects.toThrow('rerun from that checkout');
+        expect(f.calls.some(call => ['prepare', 'exercise', 'cleanup', 'comment'].includes(call) || call.startsWith('status:'))).toBe(false);
+      } else {
+        expect((await verify(f.options)).status).toBe('success');
+        expect(f.calls).toContain('prepare'); expect(f.calls).toContain('exercise');
+      }
+    }
+  });
+
+  test('non-verifier changes do not require a candidate publisher revision', async () => {
+    const f = fixture(true);
+    expect((await verify(f.options)).status).toBe('success');
+    expect(f.calls).toContain('prepare');
+  });
+
   test('successful verification cleans disposable credentials before any publication', async () => {
     const f = fixture(true); f.options.driver.cleanup = async () => { f.calls.push('cleanup'); };
     const receipt = await verify(f.options);

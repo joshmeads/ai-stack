@@ -4,7 +4,9 @@ import { REPO, type Driver, type GitHub, type Pull, type Receipt, type Registry 
 
 class HeadMoved extends Error {}
 // Omit unsafe/oversized values whole: truncating or rewriting one could hide an exact registered secret.
-const safe = (text: string, limit = 160): string => text.length <= limit && /^[\x20-\x7e]*$/.test(text) && !/[`<>]/.test(text) ? text : '[value omitted]';
+export const EVIDENCE_LIMIT = 160;
+export const publishable = (text: string, limit = EVIDENCE_LIMIT): boolean => text.length <= limit && /^[\x20-\x7e]*$/.test(text) && !/[`<>]/.test(text);
+const safe = (text: string, limit = EVIDENCE_LIMIT): string => publishable(text, limit) ? text : '[value omitted]';
 
 /** Build the single structured public record for this run. Failure details remain private in receipt.json. */
 export function evidence(receipt: Receipt): string {
@@ -24,7 +26,7 @@ export function evidence(receipt: Receipt): string {
     }
     let shown = 0;
     for (const record of receipt.observations) {
-      const line = `- Observation (${record.harness} / ${safe(record.feature, 72)}): surface ${safe(record.surface, 48)}; action ${safe(record.action, 48)}; result ${safe(record.observed, 48)}; operator reviewed; transcript SHA-256 \`${record.transcriptHash}\`; artifact-set SHA-256 \`${sha256(JSON.stringify(record.artifacts))}\`.`;
+      const line = `- Observation (${record.harness} / ${safe(record.feature, 72)}): surface ${safe(record.surface)}; action ${safe(record.action)}; result ${safe(record.observed)}; operator reviewed; transcript SHA-256 \`${record.transcriptHash}\`; artifact-set SHA-256 \`${sha256(JSON.stringify(record.artifacts))}\`.`;
       if (lines.join('\n').length + line.length > 48000) break;
       lines.push(line); shown++;
     }
@@ -88,9 +90,12 @@ export async function verify(options: VerifyOptions): Promise<Receipt> {
   const appendFailure = (label: string, error: unknown): void => {
     receipt.failure = `${receipt.failure}; ${label}: ${error instanceof Error ? error.message : String(error)}`;
   };
+  await phase('classify');
+  receipt.selection = classify(await github.files(receipt.base, receipt.sha), options.registry);
+  if (receipt.selection.features.includes('project-skill') && receipt.publisherRevision !== receipt.sha) {
+    throw new Error('Verifier-changing PRs must run from a checkout of the candidate head; rerun from that checkout');
+  }
   try {
-    await phase('classify');
-    receipt.selection = classify(await github.files(receipt.base, receipt.sha), options.registry);
     await current(); await persist(receipt);
     if (!receipt.selection.noRuntime || receipt.selfTest) {
       await phase('prepare'); receipt.installations = await driver.prepare(receipt); await current(); await persist(receipt);

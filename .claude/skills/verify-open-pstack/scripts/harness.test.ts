@@ -5,6 +5,8 @@ import { join } from 'node:path';
 import { doctor } from './doctor.ts';
 import { codexInstallation, launch, MacDriver, verifyCodexEnabled, verifyProjectDoctor } from './harness.ts';
 import { newReceipt } from './core.ts';
+import { sourceDigest } from './provenance.ts';
+import { evidence } from './verify.ts';
 import { command, freshRoot, isolatedEnv, retainedFile, treeHash, type Command } from './io.ts';
 const roots: string[] = [];
 async function fixture(): Promise<string> { const root = await realpath(await mkdtemp(join(tmpdir(), 'pstack-test-'))); roots.push(root); return root; }
@@ -269,6 +271,30 @@ describe('isolated harness boundaries', () => {
     }
     expect(JSON.parse(await readFile(join(root, 'doctor.json'), 'utf8')).result).toBe('pass');
   });
+  test('exercise re-prompts unsafe evidence and publishes accepted answers verbatim', async () => {
+    const root = await fixture(), home = join(root, 'state/claude'), workspace = join(home, 'workspace');
+    for (const path of ['plugins/pstack', '.claude/skills/verify-open-pstack', '.agents/skills']) await mkdir(join(workspace, path), { recursive: true });
+    await symlink('../../.claude/skills/verify-open-pstack', join(workspace, '.agents/skills/verify-open-pstack'));
+    await writeFile(join(workspace, 'plugins/pstack/SKILL.md'), 'candidate plugin');
+    await writeFile(join(root, 'transcript.txt'), 'reviewed native transcript');
+    await writeFile(join(root, 'artifact.txt'), 'reviewed effect');
+    const receipt = newReceipt(111, 'a'.repeat(40), 'b'.repeat(40), false, root);
+    receipt.selection = { paths: [], skills: ['architect'], features: ['skill-invocation:architect'], noRuntime: false };
+    receipt.installations = [{ harness: 'claude', home, location: join(workspace, 'plugins/pstack'), sha: receipt.sha, cliVersion: 'test', pluginVersion: 'test', treeHash: await treeHash(join(workspace, 'plugins/pstack')), sourceHash: await sourceDigest(workspace) }];
+    const long = 's'.repeat(54), answers = ['transcript.txt', long, '`unsafe`', long, '✓', long, 'artifact.txt', 'PASS skill-invocation:architect'];
+    const questions: string[] = [];
+    const driver = new MacDriver(async () => '', async question => { questions.push(question); return answers.shift()!; });
+    receipt.observations = await driver.exercise(receipt);
+    expect(receipt.observations[0]!.surface).toBe(long);
+    expect(questions.filter(question => question.startsWith('Concrete action'))).toHaveLength(2);
+    expect(questions.filter(question => question.startsWith('Observed assertion'))).toHaveLength(2);
+    for (const question of questions.slice(1, 6)) expect(question).toContain('printable ASCII, no backtick, < or >, and at most 160 characters');
+    const comment = evidence(receipt);
+    expect(comment).toContain(`surface ${long}; action ${long}; result ${long};`);
+    expect(comment).not.toContain('[value omitted]');
+    expect(answers).toHaveLength(0);
+  });
+
   test('Codex exact installed tree and enabled listing are required', async () => {
     const root = await fixture(), plugin = join(root, 'config/plugins/pstack');
     await mkdir(plugin, { recursive: true }); await writeFile(join(plugin, 'SKILL.md'), 'candidate');
