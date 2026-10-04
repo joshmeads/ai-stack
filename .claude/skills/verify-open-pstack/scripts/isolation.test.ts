@@ -136,6 +136,18 @@ describe('setup-only snapshot and restoration', () => {
     expect(await readlink(path)).toBe(target);
   });
 
+  test('fails restoration when an intermediate link in the chain was redirected', async () => {
+    const { root, claude } = await fixture();
+    const current = join(root, 'current'), other = join(root, 'other');
+    await mkdir(join(root, 'v1')); await mkdir(other);
+    await writeFile(join(root, 'v1/CLAUDE.md'), 'operator instructions\n'); await writeFile(join(other, 'CLAUDE.md'), 'redirected\n');
+    await symlink(join(root, 'v1'), current);
+    await symlink(join(current, 'CLAUDE.md'), join(claude, 'CLAUDE.md'));
+    const snapshot = await snapshotSetup();
+    await rm(current); await symlink(other, current);
+    await expect(restoreSetup(snapshot)).rejects.toThrow('verification failed');
+  });
+
   test('rejects links that appear during the run without following redirected files', async () => {
     const { root, claude } = await fixture();
     const path = join(claude, 'pstack-models.md'), external = join(root, 'external');

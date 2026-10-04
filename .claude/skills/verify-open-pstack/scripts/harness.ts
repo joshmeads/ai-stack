@@ -15,7 +15,7 @@ export function launch(harness: Harness, workspace: string, options: { cwd: stri
   return harness === 'claude'
     ? ['claude', '-p', '--input-format', 'stream-json', '--replay-user-messages', '--output-format', 'stream-json', '--verbose', '--no-session-persistence',
       '--plugin-dir', join(workspace, 'plugins/pstack'), '--settings', '{"enabledPlugins":{"pstack@open-pstack":false}}',
-      '--permission-mode', options.claudePermission ?? 'dontAsk', ...addDirs, '--allowedTools', CLAUDE_TOOLS]
+      '--permission-mode', options.claudePermission ?? 'dontAsk', ...options.claudePermission ? ['--strict-mcp-config'] : [], ...addDirs, '--allowedTools', CLAUDE_TOOLS]
     : ['codex', 'exec', '--json', '--skip-git-repo-check', '--dangerously-bypass-hook-trust', '-c', 'approval_policy="never"',
       '--sandbox', options.codexSandbox ?? 'workspace-write', '--cd', options.cwd, ...addDirs, '-'];
 }

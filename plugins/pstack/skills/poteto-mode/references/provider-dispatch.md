@@ -25,7 +25,7 @@ Normalize configured descriptors before matching them to the matrix or choosing 
 
 This read-time rule makes an older installed sheet use the latest family revision immediately without writing user files. Once per parent run, report that the persisted sheet is stale and that `/setup-pstack` will rewrite it after its normal probes and confirmation. Unknown versioned Claude models remain invalid. The external runner rejects a missed Fable or Opus version pin instead of silently executing it.
 
-`codex:gpt-5.6-sol@<effort>` is the previous Sol default. Match it to the Sol row and dispatch it unchanged, with the sheet's model and effort, until `/setup-pstack` replaces it. Do not rewrite it in memory. Any other model outside the matrix remains invalid.
+`codex:gpt-5.6-sol@<effort>` is the previous Sol default. Match it to the Sol row and dispatch it unchanged, with the sheet's model and effort, until `/setup-pstack` replaces it. Do not rewrite it in memory.
 
 `fast` is part of Cursor's Grok selector, not a Grok Build CLI model or effort flag. The portable Grok route pins the current CLI model `grok-4.7`. The first-run Grok effort is `xhigh`.
 

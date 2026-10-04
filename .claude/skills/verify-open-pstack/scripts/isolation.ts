@@ -37,7 +37,7 @@ export async function removeCodexHome(home: string): Promise<void> {
   await rm(await codexDirectory(home), { recursive: true });
 }
 
-export type SetupSnapshot = { path: string; bytes?: Buffer; mode?: number; link?: string }[];
+export type SetupSnapshot = { path: string; bytes?: Buffer; mode?: number; link?: string; target?: string }[];
 
 async function setupFile(path: string) {
   const info = await lstat(path).catch((error: NodeJS.ErrnoException) => {
@@ -59,7 +59,7 @@ export async function snapshotSetup(): Promise<SetupSnapshot> {
       // that link plus its target's bytes. Links that appear during the run are still refused.
       const link = (await lstat(path).catch(() => undefined))?.isSymbolicLink() ? await readlink(path) : undefined;
       const target = link === undefined ? path : await realpath(path);
-      if (link !== undefined) snapshot.push({ path, link });
+      if (link !== undefined) snapshot.push({ path, link, target });
       const info = await setupFile(target);
       snapshot.push(info ? { path: target, bytes: await readFile(target), mode: info.mode & 0o777 } : { path: target });
     }
@@ -81,9 +81,10 @@ export async function restoreSetup(snapshot: SetupSnapshot): Promise<void> {
     if (bytes === undefined) await rm(path, { force: true });
     else await writeFile(path, bytes, { mode });
   }
-  for (const { path, bytes, link } of snapshot) {
+  for (const { path, bytes, link, target } of snapshot) {
     if (link !== undefined) {
-      if (await readlink(path).catch(() => undefined) !== link) throw new Error(`Setup restoration verification failed: ${path}`);
+      // The whole chain must still resolve to the snapshot's file, not only the outer link.
+      if (await readlink(path).catch(() => undefined) !== link || await realpath(path).catch(() => undefined) !== target) throw new Error(`Setup restoration verification failed: ${path}`);
       continue;
     }
     const info = await setupFile(path);
