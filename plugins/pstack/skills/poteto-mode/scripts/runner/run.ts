@@ -52,6 +52,11 @@ function evidence(value: string): string {
   return value.trim().slice(0, ERROR_EVIDENCE_LIMIT);
 }
 
+// A provider's terminal event ends its stream, so malformed output keeps the tail.
+function trailingEvidence(value: string): string {
+  return value.trim().slice(-ERROR_EVIDENCE_LIMIT);
+}
+
 function removeIfExists(path: string): void {
   if (existsSync(path)) unlinkSync(path);
 }
@@ -839,7 +844,7 @@ async function executeLane(
       costUsd: null,
       error: {
         message,
-        evidence: evidence(`${result.stderr}\n${result.stdout}`),
+        evidence: trailingEvidence(`${result.stderr}\n${result.stdout}`),
       },
     });
   }
