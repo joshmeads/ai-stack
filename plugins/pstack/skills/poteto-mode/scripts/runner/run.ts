@@ -4,11 +4,12 @@ import {
   mkdirSync,
   openSync,
   readFileSync,
+  realpathSync,
   statSync,
   unlinkSync,
   writeFileSync,
 } from "node:fs";
-import { dirname, resolve } from "node:path";
+import { dirname, isAbsolute, relative, resolve } from "node:path";
 import { invocationCommand, preflightCommand, type CommandSpec } from "./commands.ts";
 import { versionedClaudeAlias } from "./model-aliases.ts";
 import { parseProviderOutput, reportedModelMatches } from "./parse-output.ts";
@@ -853,13 +854,36 @@ async function executeLane(
   return { exitCode: statusExitCode(receipt.status), receipt };
 }
 
+// A linked worktree keeps its refs, objects and index in the main repository's git directory,
+// outside the cwd. Returns that directory, or null for a primary checkout or a non-repository.
+export function sharedGitDir(cwd: string): string | null {
+  let result;
+  try {
+    result = Bun.spawnSync(
+      ["git", "-C", cwd, "rev-parse", "--path-format=absolute", "--git-common-dir"],
+      { stdout: "pipe", stderr: "ignore" }
+    );
+  } catch {
+    return null;
+  }
+  if (result.exitCode !== 0) return null;
+  const gitDir = realpathSync(result.stdout.toString().trim());
+  const fromCwd = relative(realpathSync(cwd), gitDir);
+  return fromCwd.startsWith("..") || isAbsolute(fromCwd) ? gitDir : null;
+}
+
 export async function runLane(
   options: RunnerOptions,
   started: number = Date.now()
 ): Promise<RunResult> {
   validateOptions(options);
   const deadlineAt = options.timeoutMs === null ? null : started + options.timeoutMs;
-  const invocation = invocationCommand(options);
+  const invocation = invocationCommand(
+    options,
+    options.provider === "claude" && options.mode === "isolated-write"
+      ? sharedGitDir(options.cwd)
+      : null
+  );
   const preflight = preflightCommand(options.provider);
   const progress: LaneProgress = {
     executable: null,

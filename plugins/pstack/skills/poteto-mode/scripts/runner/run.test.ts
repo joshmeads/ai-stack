@@ -6,13 +6,14 @@ import {
   mkdtempSync,
   mkdirSync,
   readFileSync,
+  realpathSync,
   rmSync,
   statSync,
   writeFileSync,
 } from "node:fs";
 import { dirname, join } from "node:path";
 import { tmpdir } from "node:os";
-import { childEnvironment, runLane } from "./run.ts";
+import { childEnvironment, runLane, sharedGitDir } from "./run.ts";
 import { main } from "./cli.ts";
 import type { Provider, RunnerOptions, RunnerReceipt } from "./types.ts";
 
@@ -953,5 +954,32 @@ describe("childEnvironment", () => {
       PATH: "/bin",
       KEEP_ME: "yes",
     });
+  });
+});
+
+describe("sharedGitDir", () => {
+  it("returns the main repository's git directory only for a linked worktree", () => {
+    const root = realpathSync(mkdtempSync(join(tmpdir(), "pstack-shared-git-")));
+    try {
+      const main = join(root, "main");
+      const linked = join(root, "linked");
+      const git = (...args: string[]): void => {
+        const result = Bun.spawnSync(["git", ...args], { stdout: "ignore", stderr: "pipe" });
+        if (result.exitCode !== 0) throw new Error(result.stderr.toString());
+      };
+      mkdirSync(main);
+      git("-C", main, "init", "-q");
+      git(
+        "-C", main, "-c", "user.name=t", "-c", "user.email=t@t", "-c", "commit.gpgsign=false", "commit", "-q",
+        "--allow-empty", "-m", "init"
+      );
+      git("-C", main, "worktree", "add", "-q", linked);
+
+      expect(sharedGitDir(linked)).toBe(join(main, ".git"));
+      expect(sharedGitDir(main)).toBeNull();
+      expect(sharedGitDir(root)).toBeNull();
+    } finally {
+      rmSync(root, { recursive: true, force: true });
+    }
   });
 });
