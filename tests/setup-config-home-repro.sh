@@ -1,13 +1,20 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
-# Prepare and inspect a real-harness run; never simulate setup's writes.
+# Prepare and inspect a real-harness run; static checks test the verifier only.
 repo="$(cd "$(dirname "$0")/.." && pwd)"
 usage() {
   cat <<'EOF'
 Usage:
   bash tests/setup-config-home-repro.sh claude|codex redirected [--claude-config DIR] [--codex-home DIR]
+  bash tests/setup-config-home-repro.sh claude imported-sheet [--claude-config DIR] [--codex-home DIR]
   bash tests/setup-config-home-repro.sh --verify RUN_DIR
+  bash tests/setup-config-home-repro.sh --static
+
+The imported-sheet case seeds the legacy import and snapshots the existing
+~/.claude/pstack-models.md read-only; keep its assignments unchanged during setup.
+Static mode tests artifact comparisons without invoking a harness or claiming
+live acceptance.
 
 Preparation keeps HOME and USER unchanged, snapshots daily sheet/integration
 files, and creates private redirected config directories (including spaces and #).
@@ -31,6 +38,49 @@ EOF
 }
 
 if [ "${1:-}" = "--help" ]; then usage; exit 0; fi
+if [ "${1:-}" = "--static" ]; then
+  node - "$repo" <<'JS'
+const fs = require('node:fs');
+const os = require('node:os');
+const path = require('node:path');
+const cp = require('node:child_process');
+const assert = require('node:assert/strict');
+const repo = process.argv[2];
+const run = fs.mkdtempSync(path.join(os.tmpdir(), 'pstack-import-static-'));
+try {
+  const home = path.join(run, 'claude # config');
+  fs.mkdirSync(home);
+  const sentinel = '# Fixture instructions\nPreserve this unrelated text exactly.\n';
+  const rows = 'how explorer: claude:opus@max\narena runners: codex:gpt-5.6-sol@max, claude:opus@max\n';
+  fs.writeFileSync(path.join(run, 'sentinel'), sentinel);
+  fs.writeFileSync(path.join(run, 'imported-sheet'), rows);
+  fs.writeFileSync(path.join(run, 'run.json'), JSON.stringify({harness: 'claude', home: process.env.HOME, user: process.env.USER || '', sha: cp.execFileSync('git', ['-C', repo, 'rev-parse', 'HEAD'], {encoding: 'utf8'}).trim(), targets: []}));
+  const sheet = path.join(home, 'pstack-models.md');
+  const integration = path.join(home, 'CLAUDE.md');
+  const verify = () => cp.spawnSync('bash', [path.join(repo, 'tests/setup-config-home-repro.sh'), '--verify', run], {encoding: 'utf8'});
+  fs.writeFileSync(sheet, rows);
+  fs.writeFileSync(integration, sentinel + '@~/.claude/pstack-models.md\n');
+  let result = verify();
+  assert.equal(result.status, 1, result.stdout + result.stderr);
+  assert.match(result.stderr, /single relative sheet import/);
+  fs.writeFileSync(integration, sentinel + '@./pstack-models.md\n');
+  for (const changed of [rows.replace('claude:opus@max', 'auto'), rows.replace('@max', '@high')]) {
+    fs.writeFileSync(sheet, changed);
+    result = verify();
+    assert.equal(result.status, 1, result.stdout + result.stderr);
+    assert.match(result.stderr, /imported sheet assignments were not preserved/);
+  }
+  fs.writeFileSync(sheet, rows);
+  for (let i = 0; i < 2; i++) {
+    result = verify();
+    assert.equal(result.status, 0, result.stdout + result.stderr);
+  }
+  console.log('ok: static imported-sheet fixture rejects stale assignments and legacy redirected imports; preserved assignments and unchanged rerun pass');
+  console.log('No live harness was invoked; HOME and USER and daily configuration were unchanged.');
+} finally { fs.rmSync(run, {recursive: true, force: true}); }
+JS
+  exit 0
+fi
 if [ "${1:-}" = "--verify" ]; then
   [ "$#" = 2 ] || { usage >&2; exit 2; }
   command -v node >/dev/null || { echo 'FAIL: node is required for artifact comparisons' >&2; exit 1; }
@@ -54,6 +104,12 @@ const sheet = path.join(home, 'pstack-models.md');
 const integration = path.join(home, meta.harness === 'claude' ? 'CLAUDE.md' : 'AGENTS.md');
 if (!fs.existsSync(sheet) || !fs.statSync(sheet).size) fail('redirected model sheet missing or empty');
 const bytes = fs.readFileSync(sheet);
+const imported = path.join(run, 'imported-sheet');
+if (fs.existsSync(imported)) {
+  const assignments = text => text.split('\n').filter(line => /^[^:#]+:\s*(?:claude:|codex:|grok:|inherit-parent\s*$|auto\s*$)/.test(line)).map(line => line.trim()).sort();
+  const before = assignments(fs.readFileSync(imported, 'utf8'));
+  if (!before.length || JSON.stringify(before) !== JSON.stringify(assignments(bytes.toString('utf8')))) fail('imported sheet assignments were not preserved');
+}
 const text = fs.readFileSync(integration, 'utf8');
 const sentinel = fs.readFileSync(path.join(run, 'sentinel'), 'utf8');
 if (!text.startsWith(sentinel)) fail('unrelated integration bytes changed');
@@ -80,7 +136,11 @@ fi
 
 harness="${1:-}"
 case "$harness" in claude|codex) ;; *) usage >&2; exit 2 ;; esac
-[ "${2:-}" = redirected ] || { echo 'FAIL: only redirected live writes are permitted; test defaults statically' >&2; exit 2; }
+mode="${2:-}"
+case "$harness:$mode" in claude:redirected|codex:redirected|claude:imported-sheet) ;; *) echo 'FAIL: only redirected live writes are permitted; test defaults statically' >&2; exit 2 ;; esac
+if [ "$mode" = imported-sheet ]; then
+  [ -s "$HOME/.claude/pstack-models.md" ] || { echo 'FAIL: imported-sheet case requires an existing ~/.claude/pstack-models.md' >&2; exit 1; }
+fi
 shift 2
 claude_source=""
 codex_source=""
@@ -108,6 +168,10 @@ mkdir "$run/claude # config" "$run/codex # config" "$run/daily" "$run/workspace"
 [ -z "$codex_source" ] || cp "$codex_source/auth.json" "$run/codex # config/auth.json"
 printf '%s\n' '# Fixture instructions' 'Preserve this unrelated text exactly.' > "$run/sentinel"
 cp "$run/sentinel" "$run/claude # config/CLAUDE.md"
+if [ "$mode" = imported-sheet ]; then
+  cp "$HOME/.claude/pstack-models.md" "$run/imported-sheet"
+  printf '@~/.claude/pstack-models.md\n' >> "$run/claude # config/CLAUDE.md"
+fi
 cp "$run/sentinel" "$run/codex # config/AGENTS.md"
 printf '[features]\nmulti_agent = true\n' > "$run/codex # config/config.toml"
 node - "$run" "$repo" "$harness" "$claude_source" "$codex_source" <<'JS'

@@ -101,6 +101,7 @@ for source in "$setup" "$config_mapping"; do
     config_home_bad="${config_home_bad}$source still specifies absolute or escaped Claude imports"$'\n'
   fi
 done
+grep -Fq "On Claude, if the single existing model-sheet import in \`<config-home>/CLAUDE.md\` points elsewhere, resolve its target relative to the importing file's directory (expanding \`~\` to the user's home), read current state from that imported sheet, and name the source file; if it is missing, report that and use the normal first-run path." "$setup" || config_home_bad="${config_home_bad}setup does not load the imported sheet as current state"$'\n'
 grep -Fq '[harness config-home rule](../poteto-mode/references/codex-tools.md#harness-config-homes)' "$setup" || config_home_bad="${config_home_bad}setup does not reference the canonical config-home rule"$'\n'
 for expression in '"${CLAUDE_CONFIG_DIR:-$HOME/.claude}"' '"${CODEX_HOME:-$HOME/.codex}"'; do
   grep -Fxq "$expression" "$config_mapping" || config_home_bad="${config_home_bad}mapping lacks quoted nonempty/default resolution: $expression"$'\n'
