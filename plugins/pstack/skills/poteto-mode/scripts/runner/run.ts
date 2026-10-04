@@ -11,8 +11,9 @@ import {
 import { dirname, resolve } from "node:path";
 import { invocationCommand, preflightCommand, type CommandSpec } from "./commands.ts";
 import { versionedClaudeAlias } from "./model-aliases.ts";
-import { parseProviderOutput, reportedModelMatches } from "./parse-output.ts";
+import { parseProviderOutput, ProviderResultError, reportedModelMatches } from "./parse-output.ts";
 import type {
+  ParsedOutput,
   Provider,
   ReceiptStatus,
   RunnerOptions,
@@ -770,23 +771,37 @@ async function executeLane(
     signal: result.signal,
   } as const;
 
-  if (result.cancelledBy !== null || result.timedOut || result.exitCode !== 0) {
+  let parsed: ParsedOutput | null = null;
+  let parseError: unknown = null;
+  if (result.cancelledBy === null && !result.timedOut
+      && (result.exitCode === 0 || (options.provider === "grok" && result.stdout.trim().length > 0))) {
+    try {
+      parsed = parseProviderOutput(options.provider, result.stdout, result.stderr, options.model);
+    } catch (error) {
+      parseError = error;
+    }
+  }
+  const providerFailure = parseError instanceof ProviderResultError ? parseError : null;
+  const metadata = providerFailure?.metadata ?? parsed;
+  if (result.cancelledBy !== null || result.timedOut || providerFailure !== null
+      || (result.exitCode !== 0 && parseError === null)) {
     const rawFailureEvidence = `${result.stderr}\n${result.stdout}`;
-    const failureEvidence = evidence(rawFailureEvidence);
+    const failureEvidence = evidence(providerFailure === null
+      ? rawFailureEvidence : `${providerFailure.message}\n${rawFailureEvidence}`);
     const status: ReceiptStatus = result.cancelledBy !== null
       ? "cancelled"
       : result.timedOut
         ? "timed-out"
-        : unavailableStatus(rawFailureEvidence);
+        : providerFailure?.status ?? unavailableStatus(rawFailureEvidence);
     receipt = completeReceipt(options, {
       ...base,
       status,
-      reportedModel: null,
-      modelVerified: false,
-      modelEvidence: null,
-      sessionId: null,
-      usage: null,
-      costUsd: null,
+      ...(metadata === null
+        ? { reportedModel: null, modelVerified: false, modelEvidence: null }
+        : modelProof(options.provider, options.model, metadata.reportedModel)),
+      sessionId: metadata?.sessionId ?? null,
+      usage: metadata?.usage ?? null,
+      costUsd: metadata?.costUsd ?? null,
       error: {
         message: result.cancelledBy !== null
           ? result.signal === result.cancelledBy
@@ -794,7 +809,7 @@ async function executeLane(
             : `launcher received ${result.cancelledBy} after child exited`
           : result.timedOut
             ? `launcher exceeded the explicit ${options.timeoutMs}ms deadline`
-            : `child exited with status ${result.exitCode}`,
+            : providerFailure?.message ?? `child exited with status ${result.exitCode}`,
         evidence: failureEvidence,
       },
     });
@@ -804,12 +819,8 @@ async function executeLane(
   }
 
   try {
-    const parsed = parseProviderOutput(
-      options.provider,
-      result.stdout,
-      result.stderr,
-      options.model
-    );
+    if (parseError !== null) throw parseError;
+    if (parsed === null) throw new Error("provider result was not parsed");
     const proof = modelProof(
       options.provider,
       options.model,

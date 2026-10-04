@@ -374,19 +374,19 @@ describe("runLane", () => {
     });
   });
 
-  it("keeps Grok's terminal error result in malformed-output evidence", async () => {
+  it("keeps Grok's terminal cancellation reason in bounded evidence", async () => {
     process.env.FAKE_GROK_ERROR_RESULT = "1";
     const input = options("grok", "grok-error-result");
     const result = await runLane(input);
-    expect(result.exitCode).toBe(65);
+    expect(result.exitCode).toBe(130);
     expect(existsSync(input.outputPath)).toBe(false);
     const recorded = receipt(input.receiptPath);
     expect(recorded).toMatchObject({
-      status: "malformed-output",
+      status: "cancelled",
       exitCode: 0,
-      error: { message: "grok reported an error result" },
+      error: { message: "cancelled" },
     });
-    expect(recorded.error?.evidence).toContain('"stop_reason":"cancelled","errors":["cancelled"]');
+    expect(recorded.error?.evidence).toStartWith("cancelled");
     expect(recorded.error?.evidence.length).toBeLessThanOrEqual(4_000);
   });
 
