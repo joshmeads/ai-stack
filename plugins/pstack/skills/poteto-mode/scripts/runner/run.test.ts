@@ -968,16 +968,21 @@ describe("sharedGitDir", () => {
         if (result.exitCode !== 0) throw new Error(result.stderr.toString());
       };
       mkdirSync(main);
-      git("-C", main, "init", "-q");
+      git("-C", main, "-c", "init.defaultBranch=main", "init", "-q");
       git(
         "-C", main, "-c", "user.name=t", "-c", "user.email=t@t", "-c", "commit.gpgsign=false", "commit", "-q",
         "--allow-empty", "-m", "init"
       );
-      git("-C", main, "worktree", "add", "-q", linked);
+      git("-C", main, "worktree", "add", "-q", "-b", "lane", linked);
+      mkdirSync(join(linked, "sub"));
 
       expect(sharedGitDir(linked)).toBe(join(main, ".git"));
+      expect(sharedGitDir(join(linked, "sub"))).toBe(join(main, ".git"));
       expect(sharedGitDir(main)).toBeNull();
       expect(sharedGitDir(root)).toBeNull();
+
+      writeFileSync(join(linked, ".git"), "gitdir: ../main/.git/worktrees/linked\n");
+      expect(sharedGitDir(linked)).toBe(join(main, ".git"));
     } finally {
       rmSync(root, { recursive: true, force: true });
     }

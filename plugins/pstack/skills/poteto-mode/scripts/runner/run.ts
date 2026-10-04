@@ -9,7 +9,7 @@ import {
   unlinkSync,
   writeFileSync,
 } from "node:fs";
-import { dirname, isAbsolute, relative, resolve } from "node:path";
+import { dirname, isAbsolute, join, relative, resolve } from "node:path";
 import { invocationCommand, preflightCommand, type CommandSpec } from "./commands.ts";
 import { versionedClaudeAlias } from "./model-aliases.ts";
 import { parseProviderOutput, reportedModelMatches } from "./parse-output.ts";
@@ -856,20 +856,29 @@ async function executeLane(
 
 // A linked worktree keeps its refs, objects and index in the main repository's git directory,
 // outside the cwd. Returns that directory, or null for a primary checkout or a non-repository.
+// Reads the files git itself reads, so no git binary or version is involved.
 export function sharedGitDir(cwd: string): string | null {
-  let result;
   try {
-    result = Bun.spawnSync(
-      ["git", "-C", cwd, "rev-parse", "--path-format=absolute", "--git-common-dir"],
-      { stdout: "pipe", stderr: "ignore" }
-    );
+    const root = realpathSync(cwd);
+    let dir = root;
+    while (!existsSync(join(dir, ".git"))) {
+      if (dirname(dir) === dir) return null;
+      dir = dirname(dir);
+    }
+    let gitDir = join(dir, ".git");
+    if (!statSync(gitDir).isDirectory()) {
+      const target = /^gitdir: (.+)$/m.exec(readFileSync(gitDir, "utf8"))?.[1]?.trim();
+      if (target === undefined) return null;
+      gitDir = resolve(dir, target);
+    }
+    const commonDir = join(gitDir, "commondir");
+    if (existsSync(commonDir)) gitDir = resolve(gitDir, readFileSync(commonDir, "utf8").trim());
+    const shared = realpathSync(gitDir);
+    const fromCwd = relative(root, shared);
+    return fromCwd.startsWith("..") || isAbsolute(fromCwd) ? shared : null;
   } catch {
     return null;
   }
-  if (result.exitCode !== 0) return null;
-  const gitDir = realpathSync(result.stdout.toString().trim());
-  const fromCwd = relative(realpathSync(cwd), gitDir);
-  return fromCwd.startsWith("..") || isAbsolute(fromCwd) ? gitDir : null;
 }
 
 export async function runLane(
