@@ -77,6 +77,42 @@ fi
 # interrogate defaults copy it verbatim.
 setup="$repo/plugins/pstack/skills/setup-pstack/SKILL.md"
 dispatch="$repo/plugins/pstack/skills/poteto-mode/references/provider-dispatch.md"
+
+# Config-home port invariant (#120): guard upstream merges against daily-home writes.
+config_mapping="$repo/plugins/pstack/skills/poteto-mode/references/codex-tools.md"
+config_home_bad=""
+if grep -nE '~/(\.claude|\.codex)|\$HOME/(\.claude|\.codex)' "$setup"; then
+  config_home_bad="setup still names a literal default config path"$'\n'
+fi
+grep -Fq '[harness config-home rule](../poteto-mode/references/codex-tools.md#harness-config-homes)' "$setup" || config_home_bad="${config_home_bad}setup does not reference the canonical config-home rule"$'\n'
+for expression in '"${CLAUDE_CONFIG_DIR:-$HOME/.claude}"' '"${CODEX_HOME:-$HOME/.codex}"'; do
+  grep -Fxq "$expression" "$config_mapping" || config_home_bad="${config_home_bad}mapping lacks quoted nonempty/default resolution: $expression"$'\n'
+done
+for target in pstack-models.md CLAUDE.md AGENTS.md; do
+  grep -Fq "<config-home>/$target" "$setup" || config_home_bad="${config_home_bad}setup does not resolve $target through config-home"$'\n'
+done
+# Resolution only: keep real HOME/USER and never write default or daily targets.
+if ! (
+  unset CLAUDE_CONFIG_DIR CODEX_HOME
+  [ "${CLAUDE_CONFIG_DIR:-$HOME/.claude}" = "$HOME/.claude" ] &&
+  [ "${CODEX_HOME:-$HOME/.codex}" = "$HOME/.codex" ] || exit 1
+  CLAUDE_CONFIG_DIR="" CODEX_HOME=""
+  [ "${CLAUDE_CONFIG_DIR:-$HOME/.claude}" = "$HOME/.claude" ] &&
+  [ "${CODEX_HOME:-$HOME/.codex}" = "$HOME/.codex" ] || exit 1
+  CLAUDE_CONFIG_DIR="/tmp/pstack claude config" CODEX_HOME="/tmp/pstack codex config"
+  [ "${CLAUDE_CONFIG_DIR:-$HOME/.claude}" = "/tmp/pstack claude config" ] &&
+  [ "${CODEX_HOME:-$HOME/.codex}" = "/tmp/pstack codex config" ]
+); then
+  config_home_bad="${config_home_bad}unset, empty, or space-containing resolution changed"$'\n'
+fi
+if [ -n "$config_home_bad" ]; then
+  note "FAIL: setup config-home port invariant regressed:"
+  note "$config_home_bad"
+  fail=1
+else
+  note "ok: setup config-home port invariant; unset/empty defaults and spaced overrides resolve without writes"
+fi
+
 quad_of() { { grep -oE '(claude|codex|grok):[a-z0-9.-]+@(low|medium|high|xhigh|max)' || true; } | tr '\n' ' ' | sed 's/ $//'; }
 canon_panel="$( { grep -m1 '^arena runners:' "$setup" || true; } | quad_of)"
 panel_bad=""
