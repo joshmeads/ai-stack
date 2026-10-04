@@ -34,7 +34,7 @@ export const DEFAULT_ROUTES: Record<Harness, string> = { claude: 'codex:gpt-6.1-
 export const ROUTE = /^(claude|codex|grok):([A-Za-z0-9._-]+)@([a-z]+)$/;
 const SETUP_DESCRIPTOR = 'claude:opus@high';
 
-const rules = (dir: string): string => `Work only inside ${dir}. Do not push, post, open, merge, or modify pull requests, issues, or remote branches, and do not write outside ${dir}. Do not edit any skill, plugin, or configuration file. Do not ask questions: where the skill would ask, choose its documented default and continue.`;
+const rules = (dir: string): string => `Work only inside ${dir}. Do not push, post, open, merge, or modify pull requests, issues, or remote branches, and do not write outside ${dir}. Do not edit any skill, plugin, or configuration file outside ${dir}. Do not ask questions: where the skill would ask, choose its documented default and continue.`;
 
 export function invoke(harness: Harness, skill: string, text: string): string {
   if (harness === 'codex') return `$pstack:${skill} ${text}`;

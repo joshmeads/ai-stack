@@ -336,6 +336,18 @@ describe('headless recipes', () => {
     }
   });
 
+  test('setup runs after every other feature so later checks see the default model sheet', async () => {
+    const { root, installation } = await candidate('codex');
+    const prompts: string[] = [];
+    const record: Session = async (_args, options) => {
+      prompts.push(options.input);
+      await writeFile(options.stdout, claudeStream({ command: 'pstack:architect' })); await writeFile(options.stderr, '');
+      return 1;
+    };
+    await expect(new MacDriver(command, record).exercise(selected(root, installation, ['setup', 'skill-invocation:architect']))).rejects.toThrow();
+    expect(prompts[0]).toContain('$pstack:architect');
+  });
+
   test('default skill recipe records machine-checked assertions from a candidate load and a fixture file', async () => {
     const { root, installation } = await candidate('claude');
     const { record, calls } = stub(claudeStream({ command: 'pstack:architect' }), writeResult);

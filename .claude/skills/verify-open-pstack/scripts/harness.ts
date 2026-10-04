@@ -9,6 +9,7 @@ import { sourceDigest, sourceHash } from './provenance.ts';
 import { publishable } from './verify.ts';
 import { REPO, type Driver, type Harness, type Installation, type Observation, type Receipt, type SessionRecord } from './types.ts';
 
+const setupFeature = (feature: string): boolean => feature === 'setup' || feature === 'skill-invocation:setup-pstack';
 export function launch(harness: Harness, workspace: string, options: { cwd: string; addDirs: string[]; codexSandbox?: 'danger-full-access' }): string[] {
   const addDirs = options.addDirs.flatMap(dir => ['--add-dir', dir]);
   return harness === 'claude'
@@ -133,7 +134,9 @@ export class MacDriver implements Driver {
   async exercise(receipt: Receipt): Promise<Observation[]> {
     // Every selected feature needs a recipe in every harness before the first session starts.
     const plans = receipt.installations.map(installation => ({ installation,
-      features: requiredFeatures(receipt, installation.harness).map(feature => ({ feature, cases: recipe(feature, installation.harness, this.routes) })) }));
+      // Setup rewrites the harness's model sheet, so it runs last and later checks see the default configuration.
+      features: requiredFeatures(receipt, installation.harness).sort((a, b) => Number(setupFeature(a)) - Number(setupFeature(b)))
+        .map(feature => ({ feature, cases: recipe(feature, installation.harness, this.routes) })) }));
     const observations: Observation[] = [];
     for (const { installation, features } of plans) {
       const { harness, home } = installation, workspace = join(home, 'workspace');
@@ -145,7 +148,7 @@ export class MacDriver implements Driver {
         const fixture: Fixture = { harness, dir, workspace, location: installation.location, run: this.candidate(home),
           configHome: harness === 'claude' ? env.CLAUDE_CONFIG_DIR ?? join(env.HOME!, '.claude') : env.CODEX_HOME! };
         const assertions: string[] = [], evidence: string[] = [];
-        if (feature === 'setup' || feature === 'skill-invocation:setup-pstack') this.setup = await snapshotSetup();
+        if (setupFeature(feature)) this.setup = await snapshotSetup();
         try {
           for (const c of cases) {
             await c.prepare?.(fixture);
