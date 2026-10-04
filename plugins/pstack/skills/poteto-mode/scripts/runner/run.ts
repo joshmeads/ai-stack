@@ -416,7 +416,16 @@ export async function discoverSharedGitDir(
       "git executable not found, so the shared git directory cannot be found"
     );
   }
-  const result = await runProcess(git, GIT_COMMON_DIR, cwd, env, "", deadlineAt, cancellation);
+  // The C locale keeps git's "not a git repository" message in the English the check reads.
+  const result = await runProcess(
+    git,
+    GIT_COMMON_DIR,
+    cwd,
+    { ...env, LC_ALL: "C" },
+    "",
+    deadlineAt,
+    cancellation
+  );
   if (result.cancelledBy !== null) {
     return refuse(
       "cancelled",
