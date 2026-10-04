@@ -42,6 +42,11 @@ describe('registry and ownership', () => {
     expect(matches('skills/x/file', 'skills/x/**')).toBe(true);
     expect(matches('skills/xyz/file', 'skills/x/**')).toBe(false);
   });
+  test('repository-root attribution files are not runtime', () => {
+    for (const filename of ['NOTICE.md', 'README-UPSTREAM.md', 'LICENSE-cursor-team-kit', 'LICENSE-superpowers']) {
+      expect(classify([{ filename }], registry).noRuntime).toBe(true);
+    }
+  });
   test('markdown instructions are runtime', () => {
     for (const filename of ['plugins/pstack/skills/architect/SKILL.md', 'plugins/pstack/skills/architect/references/guide.md']) {
       const s = classify([{ filename }], registry);
