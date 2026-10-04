@@ -24,6 +24,56 @@ describe("parseProviderOutput", () => {
     });
   });
 
+  it("extracts the last Claude result event and its terminal metadata", () => {
+    const parsed = parseProviderOutput("claude", JSON.stringify([
+      { type: "system", model: "claude-opus-9" },
+      { type: "result", result: "EARLIER_RESULT" },
+      null,
+      { type: "assistant", message: { content: [{ type: "text", text: "progress" }] } },
+      {
+        type: "result", is_error: false, result: "CLAUDE_ARRAY_OK",
+        session_id: "claude-array-session",
+        usage: { input_tokens: 14, output_tokens: 4, cache_read_input_tokens: 2 },
+        total_cost_usd: 0.03,
+        modelUsage: { "claude-haiku-4-5-20251001": {}, "claude-fable-9-9": {} },
+      },
+      { type: "system", result: "NOT_A_TERMINAL_RESULT" },
+    ]), "", "fable");
+    expect(parsed).toMatchObject({
+      text: "CLAUDE_ARRAY_OK", reportedModel: "claude-fable-9-9",
+      sessionId: "claude-array-session",
+      usage: { inputTokens: 14, outputTokens: 4, cachedInputTokens: 2 },
+      costUsd: 0.03,
+    });
+  });
+
+  it("rejects Claude terminal errors before accepting partial or missing text", () => {
+    for (const result of ["partial text", undefined]) {
+      const terminal = { type: "result", is_error: true, result };
+      for (const raw of [terminal, [{ type: "result", result: "earlier success" }, terminal]]) {
+        expect(() => parseProviderOutput("claude", JSON.stringify(raw), "", "fable"))
+          .toThrow("claude reported an error result");
+      }
+    }
+  });
+
+  it("rejects Claude arrays without a terminal result event", () => {
+    for (const raw of [[], [null, "text"], [{ type: "assistant", result: "progress" }]]) {
+      expect(() => parseProviderOutput("claude", JSON.stringify(raw), "", "fable"))
+        .toThrow("claude result did not contain a terminal event");
+    }
+  });
+
+  it("rejects Claude terminal results without final text", () => {
+    for (const result of [undefined, "", 42]) {
+      const terminal = { type: "result", is_error: false, result };
+      for (const raw of [terminal, [terminal]]) {
+        expect(() => parseProviderOutput("claude", JSON.stringify(raw), "", "fable"))
+          .toThrow("claude result did not contain final text");
+      }
+    }
+  });
+
   it("extracts Codex JSONL without inventing a provider-reported model", () => {
     const parsed = parseProviderOutput(
       "codex",
