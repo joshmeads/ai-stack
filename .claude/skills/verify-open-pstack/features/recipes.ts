@@ -23,6 +23,8 @@ export interface Case {
   cwd?: 'workspace';
   /** Codex parents that launch external provider CLIs need network and their CLI state outside the fixture. */
   codexSandbox?: 'danger-full-access';
+  /** Claude refuses Write into its own config folder in dontAsk mode even with --add-dir; setup must write there. */
+  claudePermission?: 'bypassPermissions';
   prepare?(fixture: Fixture): Promise<void>;
   prompt(fixture: Fixture): string;
   assert(record: SessionRecord, fixture: Fixture): Promise<Evidence>;
@@ -172,6 +174,7 @@ function runner(harness: Harness, routes: string[]): Case[] {
 const setup: Case[] = [{
   id: 'configure',
   codexSandbox: 'danger-full-access',
+  claudePermission: 'bypassPermissions',
   prompt: f => `${invoke(f.harness, 'setup-pstack', `Use these answers and ask nothing else. Role assignments: change every role assigned to a model-matrix family to the Opus family, and keep inherit-parent and auto roles unchanged. Opus requested effort: high. I confirm every write. Write the setup report to ${join(f.dir, 'result.md')}.`)} Do not push, post, or contact GitHub.`,
   async assert(record, f) {
     const sheet = join(f.configHome, 'pstack-models.md'), assertions = [loaded(record, 'pstack:setup-pstack'), await written(record, sheet)];
