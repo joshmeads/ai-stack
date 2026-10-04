@@ -15,7 +15,7 @@ import { dirname, join } from "node:path";
 import { tmpdir } from "node:os";
 import { childEnvironment, runLane, sharedGitDir } from "./run.ts";
 import { main } from "./cli.ts";
-import type { Provider, RunnerOptions, RunnerReceipt } from "./types.ts";
+import { UsageError, type Provider, type RunnerOptions, type RunnerReceipt } from "./types.ts";
 
 let scratch = "";
 let bin = "";
@@ -913,6 +913,33 @@ describe("runLane", () => {
     expect(receipt(retry.receiptPath).status).toBe("complete");
   });
 
+  it("refuses a Claude writer whose shared git directory cannot be denied literally", async () => {
+    const lane = join(scratch, "lane");
+    const shared = join(scratch, "repo[1]");
+    mkdirSync(lane);
+    mkdirSync(join(shared, "wt"), { recursive: true });
+    writeFileSync(join(shared, "wt", "commondir"), "..\n");
+    writeFileSync(join(lane, ".git"), `gitdir: ${join(shared, "wt")}\n`);
+    const preflightStarted = join(scratch, "refused-preflight.started");
+    const modelStarted = join(scratch, "refused-model.started");
+    process.env.FAKE_PREFLIGHT_STARTED_PATH = preflightStarted;
+    process.env.FAKE_MODEL_STARTED_PATH = modelStarted;
+    const input = { ...options("claude"), mode: "isolated-write" as const, cwd: lane };
+    let stderr = "";
+    const exitCode = await main(runnerArgs(input).slice(1), Date.now(), {
+      stdout: () => {},
+      stderr: (value) => {
+        stderr += value;
+      },
+    });
+    expect(exitCode).toBe(64);
+    expect(stderr).toContain("contains a glob or control character");
+    expect(existsSync(preflightStarted)).toBe(false);
+    expect(existsSync(modelStarted)).toBe(false);
+    expect(existsSync(input.outputPath)).toBe(false);
+    expect(existsSync(input.receiptPath)).toBe(false);
+  });
+
   it("rejects same-provider recursion", async () => {
     const input = { ...options("claude"), parent: "claude" as const };
     await expect(runLane(input)).rejects.toThrow("native to parent");
@@ -938,22 +965,30 @@ describe("childEnvironment", () => {
       CLAUDE_CODE_CHILD_SESSION: "1",
       KEEP_ME: "yes",
     };
-    expect(childEnvironment("claude", source)).toEqual({
+    expect(childEnvironment("claude", "read-only", source)).toEqual({
       PATH: "/bin",
       CLAUDECODE: "1",
       CLAUDE_CODE_CHILD_SESSION: "1",
       KEEP_ME: "yes",
     });
-    expect(childEnvironment("codex", source)).toEqual({
+    expect(childEnvironment("codex", "read-only", source)).toEqual({
       PATH: "/bin",
       CODEX_THREAD_ID: "codex",
       CODEX_CI: "1",
       KEEP_ME: "yes",
     });
-    expect(childEnvironment("grok", source)).toEqual({
+    expect(childEnvironment("grok", "read-only", source)).toEqual({
       PATH: "/bin",
       KEEP_ME: "yes",
     });
+  });
+
+  it("drops GIT_* only for a Claude writer", () => {
+    const source = { PATH: "/bin", GIT_DIR: "/elsewhere/.git", GIT_WORK_TREE: "/elsewhere" };
+    expect(childEnvironment("claude", "isolated-write", source)).toEqual({ PATH: "/bin" });
+    expect(childEnvironment("claude", "read-only", source)).toEqual(source);
+    expect(childEnvironment("codex", "isolated-write", source)).toEqual(source);
+    expect(childEnvironment("grok", "isolated-write", source)).toEqual(source);
   });
 });
 
@@ -968,7 +1003,11 @@ describe("sharedGitDir", () => {
         const env = Object.fromEntries(
           Object.entries(process.env).filter(([name]) => !name.startsWith("GIT_"))
         );
-        const result = Bun.spawnSync(["git", ...args], { env, stdout: "ignore", stderr: "pipe" });
+        const result = Bun.spawnSync(["git", "-c", "core.hooksPath=/dev/null", ...args], {
+          env,
+          stdout: "ignore",
+          stderr: "pipe",
+        });
         if (result.exitCode !== 0) throw new Error(result.stderr.toString());
       };
       mkdirSync(main);
@@ -987,6 +1026,24 @@ describe("sharedGitDir", () => {
 
       writeFileSync(join(linked, ".git"), "gitdir: ../main/.git/worktrees/linked\n");
       expect(sharedGitDir(linked)).toBe(join(main, ".git"));
+
+      // A newline inside the gitdir path is kept; only the one trailing newline is removed.
+      const odd = join(root, "odd\nname");
+      mkdirSync(odd);
+      writeFileSync(join(odd, "commondir"), `${join(main, ".git")}\n`);
+      writeFileSync(join(linked, ".git"), `gitdir: ${odd}\n`);
+      expect(sharedGitDir(linked)).toBe(join(main, ".git"));
+
+      writeFileSync(join(linked, ".git"), `gitdir: ${join(root, "missing")}\n`);
+      expect(() => sharedGitDir(linked)).toThrow(UsageError);
+      writeFileSync(join(linked, ".git"), "worktree ../main\n");
+      expect(() => sharedGitDir(linked)).toThrow(UsageError);
+
+      const bracketed = join(root, "repo[1]");
+      mkdirSync(join(bracketed, "wt"), { recursive: true });
+      writeFileSync(join(bracketed, "wt", "commondir"), "..\n");
+      writeFileSync(join(linked, ".git"), `gitdir: ${join(bracketed, "wt")}\n`);
+      expect(() => sharedGitDir(linked)).toThrow(UsageError);
     } finally {
       rmSync(root, { recursive: true, force: true });
     }

@@ -14,6 +14,7 @@ import { invocationCommand, preflightCommand, type CommandSpec } from "./command
 import { versionedClaudeAlias } from "./model-aliases.ts";
 import { parseProviderOutput, reportedModelMatches } from "./parse-output.ts";
 import type {
+  AccessMode,
   Provider,
   ReceiptStatus,
   RunnerOptions,
@@ -135,8 +136,11 @@ const CLAUDE_IDENTITY = [
   "CLAUDE_CODE_EXPERIMENTAL_AGENT_TEAMS",
 ] as const;
 
+// A Claude writer's git must find its repository from the cwd, the same way sharedGitDir did, so
+// an inherited GIT_DIR or GIT_COMMON_DIR cannot route it to an undenied git directory.
 export function childEnvironment(
   provider: Provider,
+  mode: AccessMode,
   source: NodeJS.ProcessEnv = process.env
 ): NodeJS.ProcessEnv {
   const result = { ...source };
@@ -146,6 +150,9 @@ export function childEnvironment(
       ? CLAUDE_IDENTITY
       : [...CODEX_IDENTITY, ...CLAUDE_IDENTITY];
   for (const key of remove) delete result[key];
+  if (provider === "claude" && mode === "isolated-write") {
+    for (const key of Object.keys(result)) if (key.startsWith("GIT_")) delete result[key];
+  }
   return result;
 }
 
@@ -540,7 +547,7 @@ async function executeLane(
 ): Promise<RunResult> {
   const startedAt = new Date(started).toISOString();
   const prompt = readFileSync(options.promptPath, "utf8");
-  const env = childEnvironment(options.provider);
+  const env = childEnvironment(options.provider, options.mode);
   const executable = Bun.which(invocation.command, {
     PATH: env.PATH,
     cwd: options.cwd,
@@ -854,31 +861,52 @@ async function executeLane(
   return { exitCode: statusExitCode(receipt.status), receipt };
 }
 
+// Reads a .git file or commondir as git writes it: an optional prefix, then the path with exactly
+// one trailing newline removed, so a newline inside the path survives.
+function gitPointer(path: string, prefix: string): string {
+  const content = readFileSync(path, "utf8");
+  if (!content.startsWith(prefix)) throw new Error(`${path} does not start with "${prefix}"`);
+  const target = content.slice(prefix.length).replace(/\n$/, "");
+  if (target.length === 0) throw new Error(`${path} names no path`);
+  return target;
+}
+
 // A linked worktree keeps its refs, objects and index in the main repository's git directory,
 // outside the cwd. Returns that directory, or null for a primary checkout or a non-repository.
-// Reads the files git itself reads, so no git binary or version is involved.
+// Reads the files git itself reads, so no git binary or version is involved. Throws a UsageError
+// when a .git exists but its shared directory cannot be resolved exactly or denied literally:
+// denyWrite entries are globs that cannot be escaped, and Claude Code 2.1.288 on Linux drops
+// entries containing * ? [ ].
 export function sharedGitDir(cwd: string): string | null {
-  try {
-    const root = realpathSync(cwd);
-    let dir = root;
-    while (!existsSync(join(dir, ".git"))) {
-      if (dirname(dir) === dir) return null;
-      dir = dirname(dir);
-    }
-    let gitDir = join(dir, ".git");
-    if (!statSync(gitDir).isDirectory()) {
-      const target = /^gitdir: (.+)$/m.exec(readFileSync(gitDir, "utf8"))?.[1]?.trim();
-      if (target === undefined) return null;
-      gitDir = resolve(dir, target);
-    }
-    const commonDir = join(gitDir, "commondir");
-    if (existsSync(commonDir)) gitDir = resolve(gitDir, readFileSync(commonDir, "utf8").trim());
-    const shared = realpathSync(gitDir);
-    const fromCwd = relative(root, shared);
-    return fromCwd.startsWith("..") || isAbsolute(fromCwd) ? shared : null;
-  } catch {
-    return null;
+  const root = realpathSync(cwd);
+  let dir = root;
+  while (!existsSync(join(dir, ".git"))) {
+    if (dirname(dir) === dir) return null;
+    dir = dirname(dir);
   }
+  const dotGit = join(dir, ".git");
+  let shared: string;
+  try {
+    let gitDir = statSync(dotGit).isDirectory()
+      ? dotGit
+      : resolve(dir, gitPointer(dotGit, "gitdir: "));
+    const commonDir = join(gitDir, "commondir");
+    if (existsSync(commonDir)) gitDir = resolve(gitDir, gitPointer(commonDir, ""));
+    shared = realpathSync(gitDir);
+    if (!statSync(shared).isDirectory()) throw new Error(`${shared} is not a directory`);
+  } catch (error) {
+    const message = error instanceof Error ? error.message : String(error);
+    throw new UsageError(`cannot resolve the shared git directory of ${dotGit}: ${message}`);
+  }
+  const fromCwd = relative(root, shared);
+  if (!fromCwd.startsWith("..") && !isAbsolute(fromCwd)) return null;
+  if (/[*?[\]{}\u0000-\u001f\u007f]/.test(shared)) {
+    throw new UsageError(
+      `shared git directory ${JSON.stringify(shared)} contains a glob or control character, ` +
+        "so the Claude writer sandbox cannot deny it literally"
+    );
+  }
+  return shared;
 }
 
 export async function runLane(
@@ -887,6 +915,8 @@ export async function runLane(
 ): Promise<RunResult> {
   validateOptions(options);
   const deadlineAt = options.timeoutMs === null ? null : started + options.timeoutMs;
+  // Discovery runs before cancellation and output reservation, so a refusal is a UsageError like a
+  // missing cwd: exit 64 with the message on stderr, no receipt and no provider process.
   const invocation = invocationCommand(
     options,
     options.provider === "claude" && options.mode === "isolated-write"
