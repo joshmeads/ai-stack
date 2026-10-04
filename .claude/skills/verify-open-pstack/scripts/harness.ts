@@ -154,7 +154,7 @@ export class MacDriver implements Driver {
             await c.prepare?.(fixture);
             const stdout = join(records, `${c.id}.jsonl`), stderr = join(records, `${c.id}.stderr`), cwd = c.cwd === 'workspace' ? workspace : dir;
             const started = Date.now();
-            const exitCode = await this.record(launch(harness, workspace, { cwd, addDirs: cwd === dir ? [] : [dir], codexSandbox: c.codexSandbox }),
+            const exitCode = await this.record(launch(harness, workspace, { cwd, addDirs: [...cwd === dir ? [] : [dir], ...setupFeature(feature) ? [fixture.configHome] : []], codexSandbox: c.codexSandbox }),
               { cwd, env, input: sessionInput(harness, c.prompt(fixture)), stdout, stderr });
             evidence.push(stdout, ...(await stat(stderr)).size ? [stderr] : []);
             let record: SessionRecord, result;
