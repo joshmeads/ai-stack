@@ -49,11 +49,14 @@ async function setupFile(path: string) {
 }
 
 export async function snapshotSetup(): Promise<SetupSnapshot> {
-  const directory = process.env.CLAUDE_CONFIG_DIR ?? join(process.env.HOME!, '.claude');
+  const directories = new Set([join(process.env.HOME!, '.claude'), join(process.env.HOME!, '.codex'),
+    process.env.CLAUDE_CONFIG_DIR, process.env.CODEX_HOME].filter((directory): directory is string => !!directory).map(directory => resolve(directory)));
   const snapshot: SetupSnapshot = [];
-  for (const name of ['pstack-models.md', 'CLAUDE.md']) {
-    const path = join(directory, name), info = await setupFile(path);
-    snapshot.push(info ? { path, bytes: await readFile(path), mode: info.mode & 0o777 } : { path });
+  for (const directory of directories) {
+    for (const name of ['pstack-models.md', 'CLAUDE.md', 'AGENTS.md']) {
+      const path = join(directory, name), info = await setupFile(path);
+      snapshot.push(info ? { path, bytes: await readFile(path), mode: info.mode & 0o777 } : { path });
+    }
   }
   return snapshot;
 }

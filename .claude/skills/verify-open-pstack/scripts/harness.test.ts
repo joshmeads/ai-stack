@@ -217,35 +217,42 @@ describe('isolated harness boundaries', () => {
     }
     expect(JSON.parse(await readFile(join(root, 'doctor.json'), 'utf8')).result).toBe('pass');
   });
-  test.each([false, true])('setup interruption restores exact bytes or forbids publication (restore failure=%s)', async failRestore => {
-    const root = await fixture(), home = join(root, 'state/claude'), workspace = join(home, 'workspace');
-    const config = join(root, 'daily-claude'); process.env.CLAUDE_CONFIG_DIR = config;
+  test.each([['claude', false], ['claude', true], ['codex', false], ['codex', true]] as const)('%s setup interruption restores exact bytes or forbids publication (restore failure=%s)', async (harness, failRestore) => {
+    const root = await fixture(), home = join(root, 'state', harness), workspace = join(home, 'workspace');
+    process.env.HOME = root;
+    const config = join(root, harness === 'claude' ? 'daily-claude' : '.codex'); process.env.CLAUDE_CONFIG_DIR = join(root, 'daily-claude');
+    const instructions = harness === 'claude' ? 'CLAUDE.md' : 'AGENTS.md';
     for (const path of ['plugins/pstack', '.claude/skills/verify-open-pstack', '.agents/skills']) await mkdir(join(workspace, path), { recursive: true });
     await symlink('../../.claude/skills/verify-open-pstack', join(workspace, '.agents/skills/verify-open-pstack'));
     await writeFile(join(workspace, 'plugins/pstack/SKILL.md'), 'candidate setup');
     await mkdir(config);
     const original = Buffer.from([0, 13, 10, 255, 97]);
-    await writeFile(join(config, 'CLAUDE.md'), original);
+    await writeFile(join(config, instructions), original);
+    if (harness === 'codex') await writeFile(join(config, 'pstack-models.md'), original);
     const receipt = newReceipt(111, 'a'.repeat(40), 'b'.repeat(40), false, root);
     receipt.selection = { paths: [], skills: [], features: ['setup'], noRuntime: false };
-    receipt.installations = [{ harness: 'claude', home, location: join(workspace, 'plugins/pstack'), sha: receipt.sha, cliVersion: 'test', pluginVersion: 'test', treeHash: await treeHash(join(workspace, 'plugins/pstack')), sourceHash: await sourceDigest(workspace) }];
+    receipt.installations = [{ harness, home, location: join(workspace, 'plugins/pstack'), sha: receipt.sha, cliVersion: 'test', pluginVersion: 'test', treeHash: await treeHash(join(workspace, 'plugins/pstack')), sourceHash: await sourceDigest(workspace) }];
     const driver = new MacDriver(async args => {
       expect(args[0]).toBe('/usr/bin/script');
-      await writeFile(join(config, 'CLAUDE.md'), 'changed by setup');
+      await writeFile(join(config, instructions), 'changed by setup');
       await writeFile(join(config, 'pstack-models.md'), 'created by setup');
-      if (failRestore) { await rm(join(config, 'CLAUDE.md')); await mkdir(join(config, 'CLAUDE.md')); }
+      if (harness === 'codex') await writeFile(join(config, 'CLAUDE.md'), 'created by setup');
+      if (failRestore) { await rm(join(config, instructions)); await mkdir(join(config, instructions)); }
       throw new Error('interrupted setup');
     }, async () => '');
     await expect(driver.exercise(receipt)).rejects.toThrow(failRestore ? 'Setup restoration requires a regular file' : 'interrupted setup');
     if (failRestore) {
       await expect(driver.cleanup()).rejects.toThrow('Setup restoration requires a regular file');
-      await rm(join(config, 'CLAUDE.md'), { recursive: true });
+      await rm(join(config, instructions), { recursive: true });
       await expect(driver.cleanup()).rejects.toThrow('Setup restoration failed; publication forbidden');
       return;
     }
     await driver.cleanup();
-    expect(await readFile(join(config, 'CLAUDE.md'))).toEqual(original);
-    await expect(stat(join(config, 'pstack-models.md'))).rejects.toThrow('ENOENT');
+    expect(await readFile(join(config, instructions))).toEqual(original);
+    if (harness === 'codex') {
+      expect(await readFile(join(config, 'pstack-models.md'))).toEqual(original);
+      await expect(stat(join(config, 'CLAUDE.md'))).rejects.toThrow('ENOENT');
+    } else await expect(stat(join(config, 'pstack-models.md'))).rejects.toThrow('ENOENT');
   });
   test('exercise re-prompts unsafe evidence and publishes accepted answers verbatim', async () => {
     const root = await fixture(), home = join(root, 'state/claude'), workspace = join(home, 'workspace');

@@ -90,6 +90,26 @@ describe('setup-only snapshot and restoration', () => {
     expect(await Bun.file(instructions).exists()).toBe(false);
   });
 
+  test('restores all default and custom setup targets, including absence', async () => {
+    const { root, claude } = await fixture();
+    const directories = [join(root, '.claude'), join(root, '.codex'), claude, process.env.CODEX_HOME!];
+    const original = Buffer.from([0, 255, 13, 10, 65]);
+    for (const directory of directories) {
+      await mkdir(directory, { recursive: true });
+      for (const name of ['pstack-models.md', 'CLAUDE.md']) await writeFile(join(directory, name), original);
+    }
+    const snapshot = await snapshotSetup();
+    expect(snapshot).toHaveLength(12);
+    for (const { path } of snapshot) await writeFile(path, 'setup mutation');
+    await restoreSetup(snapshot);
+    for (const directory of directories) {
+      for (const name of ['pstack-models.md', 'CLAUDE.md']) expect(await readFile(join(directory, name))).toEqual(original);
+      expect(await Bun.file(join(directory, 'AGENTS.md')).exists()).toBe(false);
+    }
+    process.env.CLAUDE_CONFIG_DIR = directories[0]; process.env.CODEX_HOME = directories[1];
+    expect(await snapshotSetup()).toHaveLength(6);
+  });
+
   test('defaults to HOME/.claude and restores deleted existing files', async () => {
     const { root } = await fixture();
     delete process.env.CLAUDE_CONFIG_DIR;
