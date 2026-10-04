@@ -13,7 +13,7 @@ Claude Code writes `~/.claude/pstack-models.md` and loads it from `~/.claude/CLA
 @~/.claude/pstack-models.md
 ```
 
-Codex writes `~/.codex/pstack-models.md`. Codex has no `@` include, so mirror the sheet's exact bytes inside one bounded block in `~/.codex/AGENTS.md` and retain the sheet as the editable source of truth:
+Codex writes `~/.codex/pstack-models.md`. When `CODEX_HOME` is set, resolve both Codex targets under that directory instead of the `~/.codex` examples here. Codex has no `@` include, so mirror the sheet's exact bytes inside one bounded block in `~/.codex/AGENTS.md` and retain the sheet as the editable source of truth:
 
 ```text
 <!-- pstack:models:begin -->
@@ -49,7 +49,18 @@ Ask one effort question for each assigned family. Name each model, its current o
 
 ### 5. Probe the requested pairs
 
+Before any external CLI availability/authentication check or model probe, resolve the selected families through this parent's route table. On a Codex parent, name the assigned external families (Claude Fable, Claude Opus, and/or Grok) and inspect the parent's effective permission instructions for network access and the actual credential/state paths those CLIs need, including any required outside-workspace writes. Do not inspect credential contents or attempt a denied write to establish permission. `CODEX_SANDBOX_NETWORK_DISABLED=1` in the parent's own environment is evidence that external CLI network access is disabled; inspect it before child-environment scrubbing. `CODEX_SANDBOX` identifies a sandbox backend, not a complete permission policy. Missing markers, a config-file preference, or the name `workspace-write` alone do not prove sufficient access. Use the effective session permissions and required paths, not a blanket ban on every path outside the workspace.
+
+If required access is blocked, explain the affected assigned families and the restriction before invoking their CLIs. If permission information is unavailable or incomplete, call it **unknown**, say which required access cannot be established, and resolve it before external checks or probes. Offer exactly two paths when access is blocked or remains unknown:
+
+1. Restart the parent with suitable permissions, chosen deliberately by the operator; stop this setup without writing. See provider-dispatch's **Host and parent prerequisites**, including Grok's nested-sandbox limitation.
+2. Explicitly choose native-only role assignments for this parent. Show each affected role and proposed replacement and obtain the operator's named changes, then return to steps 2–4 to validate the revised map and efforts before native probes. On Codex, Sol is native; `inherit-parent` and `auto` also stay native. Do not change any lane automatically, reduce its effort, or launch an external CLI for a now-unassigned family. State any reduction in provider diversity.
+
+If all chosen families are native, no external CLI permission check or probe is needed; the separate final-write check still applies. When the effective permissions allow the selected external lanes, proceed with the existing routes and requested efforts unchanged. Never change sandbox settings or escalate permissions as part of setup.
+
 Probe only the selected `provider:model@effort` pair of each assigned family. Run one probe per family in the role map, even when two families share a provider. Do not enumerate or offer older models as substitutes. A failed probe writes nothing: report the failing pair and provider, stop, and keep the active sheet plus parent integration bytes unchanged. A failed first run creates neither artifact.
+
+If a Grok probe fails because the host cannot enforce its bounded sandbox, see [Host and parent prerequisites](../poteto-mode/references/provider-dispatch.md#host-and-parent-prerequisites); keep the active configuration unchanged.
 
 | Family | Pair source | Claude parent route | Codex parent route | Availability proof |
 |---|---|---|---|---|
@@ -79,7 +90,9 @@ Why and Reflect require the parent's live MCP surface. Keep their investigator, 
 
 Every non-alias value must match `<provider>:<model>@<effort>` and must have passed step 5.
 
-After the operator confirms, write the in-memory render from step 6. Never paste the example below as the result. It is only the complete first-run role map used to seed step 2; selected efforts and explicit role changes always replace its example values before writing.
+After the operator confirms, separately check the parent's effective write permission for **both actual destinations** (the sheet and parent integration, resolved through `CODEX_HOME` when set) and any directory creation needed. Render both artifacts in memory and perform this check before the first write or directory creation. Native probes succeeding does not grant configuration-write permission. A restricted parent may still be allowed to write under `CODEX_HOME`; assess each resolved destination rather than rejecting it just because it is outside the workspace. If either destination is denied or its permission remains unknown, stop with the destination-specific explanation: leave every existing artifact byte-identical and create neither artifact on a first run. Do not test permission by overwriting a target, write only the allowed artifact, or automatically request escalation.
+
+Only after both destinations are permitted, write the in-memory render from step 6 using step 8's snapshot and readback procedure. Never paste the example below as the result. It is only the complete first-run role map used to seed step 2; selected efforts and explicit role changes always replace its example values before writing.
 
 ```markdown
 # pstack model configuration
