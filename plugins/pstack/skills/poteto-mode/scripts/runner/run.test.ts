@@ -9,13 +9,14 @@ import {
   realpathSync,
   rmSync,
   statSync,
+  symlinkSync,
   writeFileSync,
 } from "node:fs";
 import { dirname, join } from "node:path";
 import { tmpdir } from "node:os";
-import { childEnvironment, runLane, sharedGitDir } from "./run.ts";
+import { childEnvironment, discoverSharedGitDir, runLane } from "./run.ts";
 import { main } from "./cli.ts";
-import { UsageError, type Provider, type RunnerOptions, type RunnerReceipt } from "./types.ts";
+import type { Provider, RunnerOptions, RunnerReceipt } from "./types.ts";
 
 let scratch = "";
 let bin = "";
@@ -163,6 +164,30 @@ function options(provider: Provider, suffix: string = provider): RunnerOptions {
 
 function receipt(path: string): RunnerReceipt {
   return JSON.parse(readFileSync(path, "utf8")) as RunnerReceipt;
+}
+
+// Fixture git never sees the caller's GIT_* routing or hooks. A ceiling, when given, keeps
+// repositories above the fixture root out of discovery.
+function gitEnv(ceiling: string | null = null): NodeJS.ProcessEnv {
+  const env = childEnvironment("claude", "isolated-write");
+  return ceiling === null ? env : { ...env, GIT_CEILING_DIRECTORIES: ceiling };
+}
+
+function git(env: NodeJS.ProcessEnv, ...args: string[]): void {
+  const result = Bun.spawnSync(["git", "-c", "core.hooksPath=/dev/null", ...args], {
+    env,
+    stdout: "ignore",
+    stderr: "pipe",
+  });
+  if (result.exitCode !== 0) throw new Error(result.stderr.toString());
+}
+
+function gitRepository(env: NodeJS.ProcessEnv, path: string): void {
+  git(env, "-c", "init.defaultBranch=main", "init", "-q", path);
+  git(
+    env, "-C", path, "-c", "user.name=t", "-c", "user.email=t@t", "-c", "commit.gpgsign=false",
+    "commit", "-q", "--allow-empty", "-m", "init"
+  );
 }
 
 function runnerArgs(input: RunnerOptions): string[] {
@@ -913,31 +938,28 @@ describe("runLane", () => {
     expect(receipt(retry.receiptPath).status).toBe("complete");
   });
 
-  it("refuses a Claude writer whose shared git directory cannot be denied literally", async () => {
-    const lane = join(scratch, "lane");
+  it("records a shared git refusal like a preflight failure and starts no provider", async () => {
     const shared = join(scratch, "repo[1]");
-    mkdirSync(lane);
-    mkdirSync(join(shared, "wt"), { recursive: true });
-    writeFileSync(join(shared, "wt", "commondir"), "..\n");
-    writeFileSync(join(lane, ".git"), `gitdir: ${join(shared, "wt")}\n`);
+    const lane = join(scratch, "lane");
+    gitRepository(gitEnv(), shared);
+    git(gitEnv(), "-C", shared, "worktree", "add", "-q", "-b", "lane", lane);
     const preflightStarted = join(scratch, "refused-preflight.started");
     const modelStarted = join(scratch, "refused-model.started");
     process.env.FAKE_PREFLIGHT_STARTED_PATH = preflightStarted;
     process.env.FAKE_MODEL_STARTED_PATH = modelStarted;
     const input = { ...options("claude"), mode: "isolated-write" as const, cwd: lane };
-    let stderr = "";
     const exitCode = await main(runnerArgs(input).slice(1), Date.now(), {
       stdout: () => {},
-      stderr: (value) => {
-        stderr += value;
-      },
+      stderr: () => {},
     });
-    expect(exitCode).toBe(64);
-    expect(stderr).toContain("contains a glob or control character");
+    expect(exitCode).toBe(70);
+    const refused = receipt(input.receiptPath);
+    expect(refused.status).toBe("child-failed");
+    expect(refused.preflight.status).toBe("not-run");
+    expect(refused.error?.message).toContain("contains a glob or control character");
     expect(existsSync(preflightStarted)).toBe(false);
     expect(existsSync(modelStarted)).toBe(false);
     expect(existsSync(input.outputPath)).toBe(false);
-    expect(existsSync(input.receiptPath)).toBe(false);
   });
 
   it("rejects same-provider recursion", async () => {
@@ -992,58 +1014,59 @@ describe("childEnvironment", () => {
   });
 });
 
-describe("sharedGitDir", () => {
-  it("returns the main repository's git directory only for a linked worktree", () => {
+describe("discoverSharedGitDir", () => {
+  const cancellation = { promise: new Promise<never>(() => {}), signal: null, dispose() {} };
+
+  it("uses git's answer and refuses what it cannot deny literally", async () => {
     const root = realpathSync(mkdtempSync(join(tmpdir(), "pstack-shared-git-")));
+    const env = gitEnv(dirname(root));
+    const discover = (cwd: string) => discoverSharedGitDir(cwd, env, null, cancellation);
     try {
       const main = join(root, "main");
       const linked = join(root, "linked");
-      const git = (...args: string[]): void => {
-        // An inherited GIT_DIR or GIT_WORK_TREE would point these commands at the caller's repository.
-        const env = Object.fromEntries(
-          Object.entries(process.env).filter(([name]) => !name.startsWith("GIT_"))
-        );
-        const result = Bun.spawnSync(["git", "-c", "core.hooksPath=/dev/null", ...args], {
-          env,
-          stdout: "ignore",
-          stderr: "pipe",
-        });
-        if (result.exitCode !== 0) throw new Error(result.stderr.toString());
-      };
-      mkdirSync(main);
-      git("-C", main, "-c", "init.defaultBranch=main", "init", "-q");
-      git(
-        "-C", main, "-c", "user.name=t", "-c", "user.email=t@t", "-c", "commit.gpgsign=false", "commit", "-q",
-        "--allow-empty", "-m", "init"
-      );
-      git("-C", main, "worktree", "add", "-q", "-b", "lane", linked);
+      const shared = { kind: "found", sharedGitDir: join(main, ".git") } as const;
+      const none = { kind: "found", sharedGitDir: null } as const;
+      gitRepository(env, main);
+      git(env, "-C", main, "worktree", "add", "-q", "-b", "lane", linked);
       mkdirSync(join(linked, "sub"));
 
-      expect(sharedGitDir(linked)).toBe(join(main, ".git"));
-      expect(sharedGitDir(join(linked, "sub"))).toBe(join(main, ".git"));
-      expect(sharedGitDir(main)).toBeNull();
-      expect(sharedGitDir(root)).toBeNull();
+      expect(await discover(linked)).toEqual(shared);
+      expect(await discover(join(linked, "sub"))).toEqual(shared);
+      expect(await discover(main)).toEqual(none);
+      expect(await discover(root)).toEqual(none);
 
-      writeFileSync(join(linked, ".git"), "gitdir: ../main/.git/worktrees/linked\n");
-      expect(sharedGitDir(linked)).toBe(join(main, ".git"));
+      // An empty .git directory is not a repository to git, which keeps searching upward.
+      mkdirSync(join(linked, "sub", ".git"));
+      expect(await discover(join(linked, "sub"))).toEqual(shared);
 
-      // A newline inside the gitdir path is kept; only the one trailing newline is removed.
-      const odd = join(root, "odd\nname");
-      mkdirSync(odd);
-      writeFileSync(join(odd, "commondir"), `${join(main, ".git")}\n`);
-      writeFileSync(join(linked, ".git"), `gitdir: ${odd}\n`);
-      expect(sharedGitDir(linked)).toBe(join(main, ".git"));
+      // The gitdir names the main repository through a symlink; the deny is the real directory.
+      symlinkSync(main, join(root, "alias"));
+      const aliased = join(root, "alias", ".git", "worktrees", "linked");
+      writeFileSync(join(linked, ".git"), `gitdir: ${aliased}\n`);
+      expect(await discover(linked)).toEqual(shared);
 
-      writeFileSync(join(linked, ".git"), `gitdir: ${join(root, "missing")}\n`);
-      expect(() => sharedGitDir(linked)).toThrow(UsageError);
-      writeFileSync(join(linked, ".git"), "worktree ../main\n");
-      expect(() => sharedGitDir(linked)).toThrow(UsageError);
+      const bare = join(root, "bare.git");
+      git(env, "clone", "-q", "--bare", main, bare);
+      git(env, "-C", bare, "worktree", "add", "-q", join(bare, "nested"));
+      expect(await discover(join(bare, "nested"))).toMatchObject({
+        kind: "refused",
+        status: "child-failed",
+        message: expect.stringContaining("is inside its shared git directory"),
+      });
 
       const bracketed = join(root, "repo[1]");
-      mkdirSync(join(bracketed, "wt"), { recursive: true });
-      writeFileSync(join(bracketed, "wt", "commondir"), "..\n");
-      writeFileSync(join(linked, ".git"), `gitdir: ${join(bracketed, "wt")}\n`);
-      expect(() => sharedGitDir(linked)).toThrow(UsageError);
+      gitRepository(env, bracketed);
+      const bracketedLane = join(root, "bracketed-lane");
+      git(env, "-C", bracketed, "worktree", "add", "-q", "-b", "lane", bracketedLane);
+      expect(await discover(bracketedLane)).toMatchObject({
+        kind: "refused",
+        status: "child-failed",
+        message: expect.stringContaining("contains a glob or control character"),
+      });
+
+      // A .git file naming a missing directory is a broken repository, not a non-repository.
+      writeFileSync(join(linked, ".git"), `gitdir: ${join(root, "missing")}\n`);
+      expect(await discover(linked)).toMatchObject({ kind: "refused", status: "child-failed" });
     } finally {
       rmSync(root, { recursive: true, force: true });
     }

@@ -58,7 +58,7 @@ function grokTools(mode: AccessMode): string {
 // Writers run Bash without prompts inside the OS sandbox, which confines writes to the cwd and a
 // per-user temp directory. The model cannot opt a command out, and Claude refuses to start when
 // the sandbox is unavailable. A linked worktree's shared git directory is otherwise writable, so
-// the caller passes its literal path, already checked by sharedGitDir to hold no glob character.
+// the caller passes its literal path, which discoverSharedGitDir checked for glob characters.
 
 function claudePermissions(mode: AccessMode, sharedGitDir: string | null): string[] {
   if (mode === "read-only") return ["--permission-mode", "plan"];
