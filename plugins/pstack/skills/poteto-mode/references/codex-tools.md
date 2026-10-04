@@ -2,6 +2,17 @@
 
 pstack skills retain Claude Code tool language (`Skill`, `Agent`, `AskUserQuestion`) in shared prose. On Codex the files are the same; only those tool names resolve differently. Model execution is not translated here. Read [`provider-dispatch.md`](provider-dispatch.md) for the parent-owned Claude/Codex/Grok route table and provider-qualified descriptors.
 
+## Harness config homes
+
+Resolve the current parent's config home once: Claude Code uses nonempty `CLAUDE_CONFIG_DIR`, otherwise `$HOME/.claude`; Codex uses nonempty `CODEX_HOME`, otherwise `$HOME/.codex`. The equivalent quoted shell expressions are:
+
+```bash
+"${CLAUDE_CONFIG_DIR:-$HOME/.claude}"
+"${CODEX_HOME:-$HOME/.codex}"
+```
+
+Empty and unset variables both select the default. Preserve spaces in the resolved path by quoting shell file operands. In shared instructions, `<config-home>` means this resolved parent-specific directory, not literal text to write. Use that same home for setup's current-state reads, sheet and integration writes, snapshots, restoration, and readback. Render the Claude include with the actual resolved sheet path, escaping each space with a backslash for Claude's import syntax; never write a shell variable or `<config-home>` placeholder into it.
+
 ## Tool actions
 
 | pstack / Claude action | Codex equivalent |
@@ -21,7 +32,7 @@ pstack skills retain Claude Code tool language (`Skill`, `Agent`, `AskUserQuesti
 | Track tasks (the todolist / `TodoWrite`) | `update_plan` |
 | Ask the human a fixed-choice question (`AskUserQuestion`) | Ask in plain text and let the user answer. Codex has no structured-choice tool. |
 
-Subagent dispatch needs `multi_agent` enabled. Add to `~/.codex/config.toml`:
+Subagent dispatch needs `multi_agent` enabled. Add to `<config-home>/config.toml`, using Codex's [config-home rule](#harness-config-homes):
 
 ```toml
 [features]
@@ -61,4 +72,4 @@ Some triggers name skills that ship with Claude Code, not pstack. They do not ex
 
 ## Instructions file
 
-Where a pstack skill says "your instructions file", on Codex that is `AGENTS.md` (project root, plus `~/.codex/AGENTS.md` global). On Claude Code it is `CLAUDE.md`.
+Where a pstack skill says "your instructions file", on Codex that is `AGENTS.md` (project root, plus `<config-home>/AGENTS.md` global). On Claude Code it is `CLAUDE.md` (project root, plus `<config-home>/CLAUDE.md` global). Resolve the global directory with the [config-home rule](#harness-config-homes).
