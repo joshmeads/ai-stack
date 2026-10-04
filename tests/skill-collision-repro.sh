@@ -81,9 +81,24 @@ dispatch="$repo/plugins/pstack/skills/poteto-mode/references/provider-dispatch.m
 # Config-home port invariant (#120): guard upstream merges against daily-home writes.
 config_mapping="$repo/plugins/pstack/skills/poteto-mode/references/codex-tools.md"
 config_home_bad=""
-if grep -nE '~/(\.claude|\.codex)|\$HOME/(\.claude|\.codex)' "$setup"; then
-  config_home_bad="setup still names a literal default config path"$'\n'
+# The legacy import is rendered text, not a hard-coded write destination.
+if sed 's|@~/.claude/pstack-models.md||g' "$setup" | grep -nE '~/(\.claude|\.codex)|\$HOME/(\.claude|\.codex)'; then
+  config_home_bad="setup still names a literal default config path outside the legacy import"$'\n'
 fi
+for source in "$setup" "$config_mapping"; do
+  grep -Fxq '@~/.claude/pstack-models.md' "$source" || config_home_bad="${config_home_bad}$source lacks the literal legacy default-home import"$'\n'
+  for rule in \
+    'When `<config-home>` is the default home, render exactly' \
+    'Only when `CLAUDE_CONFIG_DIR` redirects the home' \
+    'absolute resolved' \
+    'each space backslash-escaped' \
+    'basename is `pstack-models.md`' \
+    'On a rerun, replace that one line in place, preserving all unrelated bytes.' \
+    'If zero matching import lines exist, append one.' \
+    'If more than one exists, stop and report inconsistent state before either write'; do
+    grep -Fq "$rule" "$source" || config_home_bad="${config_home_bad}$source lacks Claude import rule: $rule"$'\n'
+  done
+done
 grep -Fq '[harness config-home rule](../poteto-mode/references/codex-tools.md#harness-config-homes)' "$setup" || config_home_bad="${config_home_bad}setup does not reference the canonical config-home rule"$'\n'
 for expression in '"${CLAUDE_CONFIG_DIR:-$HOME/.claude}"' '"${CODEX_HOME:-$HOME/.codex}"'; do
   grep -Fxq "$expression" "$config_mapping" || config_home_bad="${config_home_bad}mapping lacks quoted nonempty/default resolution: $expression"$'\n'

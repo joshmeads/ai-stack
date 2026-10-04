@@ -9,11 +9,13 @@ Configure one portable model sheet for the current parent harness. Read [`provid
 
 Resolve `<config-home>` once using the [harness config-home rule](../poteto-mode/references/codex-tools.md#harness-config-homes). Use it for all current-state reads, writes, snapshots, restoration, and readback.
 
-Claude Code writes `<config-home>/pstack-models.md` and loads it from `<config-home>/CLAUDE.md` with the actual resolved sheet path (backslash-escape spaces; the placeholder below is illustrative, not literal file content):
+Claude Code writes `<config-home>/pstack-models.md` and loads it from `<config-home>/CLAUDE.md` using the import rule in step 8. When `<config-home>` is the default home, render exactly the legacy line:
 
 ```text
-@<resolved sheet path>
+@~/.claude/pstack-models.md
 ```
+
+Only when `CLAUDE_CONFIG_DIR` redirects the home, render `@` followed by the absolute resolved sheet path with each space backslash-escaped, never a variable or placeholder.
 
 Codex writes `<config-home>/pstack-models.md`. Codex has no `@` include, so mirror the sheet's exact bytes inside one bounded block in `<config-home>/AGENTS.md` and retain the sheet as the editable source of truth:
 
@@ -107,7 +109,11 @@ interrogate reviewers: claude:opus@max, codex:gpt-5.6-sol@max, grok:grok-4.7@xhi
 
 ### 8. Wire it in
 
-Render the parent integration in memory before either write. On Claude, the integration is the single `@` include of the actual resolved `<config-home>/pstack-models.md` path (backslash-escape spaces, never leave a variable or placeholder) in `<config-home>/CLAUDE.md`. On Codex, it is the exact sheet bytes between one `<!-- pstack:models:begin -->` and `<!-- pstack:models:end -->` pair in `<config-home>/AGENTS.md`. Replace that whole bounded block on a rerun. Insert one block at the end on first run. If either marker is missing, duplicated, or reversed, stop and report inconsistent state instead of guessing a boundary.
+Render the parent integration in memory before either write.
+
+On Claude, the integration is the one `@` import line in `<config-home>/CLAUDE.md` whose target's basename is `pstack-models.md`, regardless of its existing directory or path spelling. When `<config-home>` is the default home, render exactly `@~/.claude/pstack-models.md`, preserving the legacy text. Only when `CLAUDE_CONFIG_DIR` redirects the home, render `@` followed by the absolute resolved `<config-home>/pstack-models.md` path with each space backslash-escaped, never a variable or placeholder. On a rerun, replace that one line in place, preserving all unrelated bytes. If zero matching import lines exist, append one. If more than one exists, stop and report inconsistent state before either write; do not append another import or guess which one to replace.
+
+On Codex, the integration is the exact sheet bytes between one `<!-- pstack:models:begin -->` and `<!-- pstack:models:end -->` pair in `<config-home>/AGENTS.md`. Replace that whole bounded block on a rerun. Insert one block at the end on first run. If either marker is missing, duplicated, or reversed, stop and report inconsistent state instead of guessing a boundary.
 
 Snapshot every target's current bytes. Write the sheet and parent integration only after every requested pair passes and the operator confirms. Read both targets back and compare them with the in-memory render. If either write or readback fails, restore every snapshot and report the failure. An unchanged rerun must produce byte-identical sheet and integration content after normalization.
 
