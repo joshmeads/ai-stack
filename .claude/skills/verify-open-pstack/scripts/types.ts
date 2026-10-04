@@ -20,7 +20,7 @@ export interface Registry {
 export interface Selection { paths: string[]; skills: string[]; features: string[]; noRuntime: boolean }
 export interface Observation {
   harness: Harness; feature: string; surface: string; action: string; observed: string;
-  transcript: string; transcriptHash: string; reviewer: 'operator';
+  transcript: string; transcriptHash: string; reviewer: 'recipe'; assertions: string[];
   artifacts: { path: string; sha256: string }[];
 }
 export interface Installation {
@@ -38,6 +38,14 @@ export interface GitHub {
   files(base: string, head: string): Promise<ChangedFile[]>;
   comment(pr: number, body: string): Promise<string>;
   status(sha: string, state: 'success' | 'failure', target: string, description: string): Promise<void>;
+}
+/** One headless native session, normalized by the trusted parent from the harness's own stream. */
+export interface SessionRecord {
+  harness: Harness; exitCode: number; started: number;
+  /** Claude: `pstack:<name>` or a project command name. Codex: `pstack:<name>` for installed SKILL.md reads, else the path read. */
+  skills: string[];
+  /** Shell commands the harness completed successfully. */
+  commands: string[];
 }
 export interface Driver {
   prepare(receipt: Receipt): Promise<Installation[]>;

@@ -1,24 +1,50 @@
-import { mkdir, readFile, realpath } from 'node:fs/promises';
-import { join } from 'node:path';
-import { createInterface } from 'node:readline/promises';
+import { copyFile, mkdir, readdir, readFile, realpath, stat } from 'node:fs/promises';
+import { basename, join } from 'node:path';
+import { CLAUDE_TOOLS, recipe, type Fixture } from '../features/recipes.ts';
 import { requiredFeatures, requiredHarnesses } from './core.ts';
-import { command, interruption, isolatedEnv, retainedFile, save, treeHash, type Command } from './io.ts';
+import { command, isolatedEnv, retainedFile, save, session, treeHash, type Command, type Session } from './io.ts';
 import { doctor } from './doctor.ts';
 import { assertCodexAuth, linkCodexAuth, removeCodexHome, restoreSetup, snapshotSetup, type SetupSnapshot } from './isolation.ts';
 import { sourceDigest, sourceHash } from './provenance.ts';
-import { EVIDENCE_LIMIT, publishable } from './verify.ts';
-import { HARNESSES, REPO, type Driver, type Harness, type Installation, type Observation, type Receipt } from './types.ts';
+import { publishable } from './verify.ts';
+import { REPO, type Driver, type Harness, type Installation, type Observation, type Receipt, type SessionRecord } from './types.ts';
 
-export type Ask = (question: string) => Promise<string>;
-export const ask: Ask = async question => {
-  if (!process.stdin.isTTY) throw new Error('Operator review requires an interactive terminal');
-  const reader = createInterface({ input: process.stdin, output: process.stdout });
-  try { return (await reader.question(question + '\n> ', { signal: interruption.signal })).trim(); } finally { reader.close(); }
-};
-export function launch(harness: Harness, home: string, workspace: string): string[] {
+export function launch(harness: Harness, workspace: string, options: { cwd: string; addDirs: string[]; codexSandbox?: 'danger-full-access' }): string[] {
+  const addDirs = options.addDirs.flatMap(dir => ['--add-dir', dir]);
   return harness === 'claude'
-    ? ['claude', '--plugin-dir', join(workspace, 'plugins/pstack'), '--settings', '{"enabledPlugins":{"pstack@open-pstack":false}}']
-    : ['codex'];
+    ? ['claude', '-p', '--input-format', 'stream-json', '--replay-user-messages', '--output-format', 'stream-json', '--verbose', '--no-session-persistence',
+      '--plugin-dir', join(workspace, 'plugins/pstack'), '--settings', '{"enabledPlugins":{"pstack@open-pstack":false}}',
+      '--permission-mode', 'dontAsk', ...addDirs, '--allowedTools', CLAUDE_TOOLS]
+    : ['codex', 'exec', '--json', '--skip-git-repo-check', '--dangerously-bypass-hook-trust', '-c', 'approval_policy="never"',
+      '--sandbox', options.codexSandbox ?? 'workspace-write', '--cd', options.cwd, ...addDirs, '-'];
+}
+/** Claude reads its prompt as one stream-json user message so the replayed message shows the slash expansion. */
+export function sessionInput(harness: Harness, prompt: string): string {
+  return harness === 'claude' ? JSON.stringify({ type: 'user', message: { role: 'user', content: prompt } }) + '\n' : prompt;
+}
+type Event = Record<string, any>;
+/** Normalize a recorded native stream into the skills it loaded and the commands it completed. */
+export function parseSession(harness: Harness, text: string, exitCode: number, started: number, rollout = ''): SessionRecord {
+  if (exitCode !== 0) throw new Error(`exit:${exitCode}`);
+  const stream: Event[] = text.split('\n').filter(line => line.trim()).map(line => JSON.parse(line));
+  if (harness === 'claude') {
+    const blocks = stream.filter(e => e.type === 'assistant' || e.type === 'user').flatMap(e => Array.isArray(e.message?.content) ? e.message.content as Event[] : []);
+    const failed = new Set(blocks.filter(b => b.type === 'tool_result' && b.is_error).map(b => b.tool_use_id));
+    const uses = blocks.filter(b => b.type === 'tool_use' && !failed.has(b.id));
+    const commands = stream.filter(e => e.type === 'user' && e.isReplay && typeof e.message?.content === 'string')
+      .flatMap(e => [...(e.message.content as string).matchAll(/<command-name>\/([^<\s]+)<\/command-name>/g)].map(m => m[1]!));
+    return { harness, exitCode, started,
+      skills: [...commands, ...uses.filter(u => u.name === 'Skill' && typeof u.input?.skill === 'string').map(u => u.input.skill as string)],
+      commands: uses.filter(u => u.name === 'Bash' && typeof u.input?.command === 'string').map(u => u.input.command as string) };
+  }
+  const items = stream.filter(e => e.type === 'item.completed' && e.item && typeof e.item === 'object').map(e => e.item as Event);
+  const commands = items.filter(i => i.type === 'command_execution' && i.exit_code === 0 && typeof i.command === 'string').map(i => i.command as string);
+  // Codex's JSON stream omits skill resolution; its rollout records each injected skill's name and SKILL.md path.
+  const texts = rollout.split('\n').filter(line => line.trim()).map(line => JSON.parse(line) as Event)
+    .flatMap(e => e.type === 'response_item' && Array.isArray(e.payload?.content) ? (e.payload.content as Event[]).map(c => String(c.text ?? '')) : []);
+  const skills = texts.flatMap(text => [...text.matchAll(/<skill>\n<name>([^<]+)<\/name>\n<path>([^<]+)<\/path>/g)])
+    .map(([, name, path]) => path!.includes('/plugins/cache/open-pstack/pstack/') ? name! : path!);
+  return { harness, exitCode, started, skills, commands };
 }
 export async function codexInstallation(output: string, home: string, expected: string): Promise<string> {
   const result = JSON.parse(output);
@@ -35,21 +61,11 @@ export function verifyCodexEnabled(output: string): void {
   const plugins = Array.isArray(result.installed) ? result.installed.filter((p: Record<string, unknown>) => p.name === 'pstack' && p.marketplaceName === 'open-pstack') : [];
   if (plugins.length !== 1 || plugins[0].installed !== true || plugins[0].enabled !== true) throw new Error('Isolated Codex plugin is not installed and enabled');
 }
-export async function verifyProjectDoctor(texts: string[], workspace: string): Promise<void> {
-  const expected = await realpath(join(workspace, '.claude/skills/verify-open-pstack'));
-  for (const text of texts) {
-    try {
-      const d = JSON.parse(text);
-      if (d.result === 'pass' && d.candidate === true && typeof d.skill === 'string' && await realpath(d.skill) === expected) return;
-    } catch { /* Other reviewed artifacts need not be doctor reports. */ }
-  }
-  throw new Error('Self-test requires the pinned project skill\'s passing child doctor.json');
-}
 export class MacDriver implements Driver {
   private codexHomes: string[] = [];
   private setup?: SetupSnapshot;
   private restorationFailed = false;
-  constructor(private run: Command = command, private review: Ask = ask) {}
+  constructor(private run: Command = command, private record: Session = session, private routes: string[] = []) {}
   async cleanup(): Promise<void> {
     if (this.setup) await restoreSetup(this.setup);
     if (this.restorationFailed) throw new Error('Setup restoration failed; publication forbidden');
@@ -104,54 +120,71 @@ export class MacDriver implements Driver {
     }
     return installs;
   }
+  /** Copy this session's Codex rollout into the evidence root before the run-owned home is removed. */
+  private async rollout(codexHome: string, stream: string, copy: string): Promise<string> {
+    const thread = JSON.parse(stream.split('\n')[0] || '{}').thread_id;
+    if (typeof thread !== 'string') return '';
+    const sessions = join(codexHome, 'sessions');
+    const name = (await readdir(sessions, { recursive: true })).find(path => path.endsWith(`-${thread}.jsonl`));
+    if (!name) return '';
+    await copyFile(join(sessions, name), copy);
+    return readFile(copy, 'utf8');
+  }
   async exercise(receipt: Receipt): Promise<Observation[]> {
+    // Every selected feature needs a recipe in every harness before the first session starts.
+    const plans = receipt.installations.map(installation => ({ installation,
+      features: requiredFeatures(receipt, installation.harness).map(feature => ({ feature, cases: recipe(feature, installation.harness, this.routes) })) }));
     const observations: Observation[] = [];
-    for (const installation of receipt.installations) {
+    for (const { installation, features } of plans) {
       const { harness, home } = installation, workspace = join(home, 'workspace');
       if (await sourceDigest(workspace) !== installation.sourceHash) throw new Error('Pinned source changed before exercise');
-      const env = isolatedEnv(home, harness), candidateRun = this.candidate(home);
-      const request = { sha: receipt.sha, harness, workspace, features: requiredFeatures(receipt, harness),
-        featureMap: join(workspace, '.claude/skills/verify-open-pstack/features'),
-        selfTest: requiredFeatures(receipt, harness).includes('project-skill') ? `Invoke the candidate project skill natively; run doctor --candidate --output "${join(home, 'self-test')}". Do not invoke run, login, or publication recursively.` : false,
-        isolation: 'Existing operator login; Claude uses session-only candidate plugin settings. Codex uses run-owned configuration with a symlink to existing auth.json. Do not log in. Exercise real requests; quota/auth failures fail closed.' };
-      await save(join(receipt.artifactRoot, `${harness}-request.json`), request);
-      console.log(JSON.stringify(request, null, 2));
-      const raw = join(home, 'surface.raw');
-      console.log('Exercise every requested feature from the native surface, using the maintained feature map. Exit when done.');
-      const setup = requiredFeatures(receipt, harness).some(feature => feature === 'setup' || feature === 'skill-invocation:setup-pstack');
-      if (setup) this.setup = await snapshotSetup();
-      try {
-        await candidateRun(['/usr/bin/script', '-q', raw, ...launch(harness, home, workspace)], { cwd: workspace, env, interactive: true });
-      } finally {
-        if (this.setup) {
-          try { await restoreSetup(this.setup); this.setup = undefined; }
-          catch (error) { this.restorationFailed = true; throw error; }
+      const env = isolatedEnv(home, harness);
+      for (const { feature, cases } of features) {
+        const slug = feature.replace(/[^a-z0-9-]/g, '-'), dir = join(home, 'fixtures', slug), records = join(receipt.artifactRoot, 'sessions', harness, slug);
+        for (const path of [dir, records]) await mkdir(path, { recursive: true, mode: 0o700 });
+        const fixture: Fixture = { harness, dir, workspace, location: installation.location, run: this.candidate(home),
+          configHome: harness === 'claude' ? env.CLAUDE_CONFIG_DIR ?? join(env.HOME!, '.claude') : env.CODEX_HOME! };
+        const assertions: string[] = [], evidence: string[] = [];
+        if (feature === 'setup' || feature === 'skill-invocation:setup-pstack') this.setup = await snapshotSetup();
+        try {
+          for (const c of cases) {
+            await c.prepare?.(fixture);
+            const stdout = join(records, `${c.id}.jsonl`), stderr = join(records, `${c.id}.stderr`), cwd = c.cwd === 'workspace' ? workspace : dir;
+            const started = Date.now();
+            const exitCode = await this.record(launch(harness, workspace, { cwd, addDirs: cwd === dir ? [] : [dir], codexSandbox: c.codexSandbox }),
+              { cwd, env, input: sessionInput(harness, c.prompt(fixture)), stdout, stderr });
+            evidence.push(stdout, ...(await stat(stderr)).size ? [stderr] : []);
+            let record: SessionRecord, result;
+            try {
+              const text = await readFile(stdout, 'utf8');
+              const rollout = harness === 'codex' ? await this.rollout(env.CODEX_HOME!, text, join(records, `${c.id}.rollout.jsonl`)) : '';
+              if (rollout) evidence.push(join(records, `${c.id}.rollout.jsonl`));
+              record = parseSession(harness, text, exitCode, started, rollout);
+              result = await c.assert(record, fixture);
+            } catch (error) { throw new Error(`${harness}/${feature}/${c.id}: ${error instanceof Error ? error.message : String(error)}`); }
+            assertions.push(...['exit-0', ...result.assertions].map(id => `${c.id}:${id}`));
+            for (const file of result.files) {
+              const copy = join(records, `${c.id}.${basename(file)}`);
+              await copyFile(file, copy); evidence.push(copy);
+            }
+          }
+        } finally {
+          if (this.setup) {
+            try { await restoreSetup(this.setup); this.setup = undefined; }
+            catch (error) { this.restorationFailed = true; throw error; }
+          }
         }
+        const [transcript, ...artifacts] = await Promise.all(evidence.map(path => retainedFile(receipt.artifactRoot, path)));
+        const passed = `passed: ${assertions.join(' ')}`;
+        observations.push({ harness, feature, reviewer: 'recipe', assertions,
+          surface: harness === 'claude' ? 'claude -p stream-json with the candidate plugin-dir' : 'codex exec --json with the run-owned candidate installation',
+          action: `recipe ${feature}: ${cases.map(c => c.id).join(', ')}`,
+          observed: publishable(passed) ? passed : `passed ${assertions.length} assertions; ids retained privately`,
+          transcript: transcript!.path, transcriptHash: transcript!.sha256, artifacts });
       }
       if (harness === 'codex') await assertCodexAuth(home);
       if (await treeHash(installation.location, ['skills/poteto-mode/scripts/node_modules']) !== installation.treeHash) throw new Error('Installed tree changed during exercise');
       if (await sourceDigest(workspace) !== installation.sourceHash) throw new Error('Pinned project/plugin source changed during exercise');
-      const transcript = await retainedFile(receipt.artifactRoot, await this.review(`Retain a private copy of ${raw} inside output (outside state), review it, and enter its path. Do not publish raw content:`));
-      for (const feature of requiredFeatures(receipt, harness)) {
-        const answers = { surface: '', action: '', observed: '' };
-        for (const [field, question] of [['surface', `${harness}/${feature}: native surface/discovery entry point?`], ['action', 'Concrete action exercised?'], ['observed', 'Observed assertion/result (not the model\'s success claim)?']] as const) {
-          do { answers[field] = await this.review(`${question} Use printable ASCII, no backtick, < or >, and at most ${EVIDENCE_LIMIT} characters.`); } while (!publishable(answers[field]));
-        }
-        const { surface, action, observed } = answers;
-        const artifacts = [];
-        for (const path of (await this.review('Reviewed artifact paths inside output, one or more separated by commas?')).split(',')) {
-          artifacts.push(await retainedFile(receipt.artifactRoot, path.trim()));
-        }
-        if (feature === 'project-skill') {
-          const doctors = await Promise.all(artifacts.map(a => readFile(join(receipt.artifactRoot, a.path), 'utf8')));
-          await verifyProjectDoctor(doctors, workspace);
-        }
-        if (await this.review(`Operator: type PASS ${feature} only after reviewing the native transcript and artifacts; anything else fails.`) !== `PASS ${feature}`) {
-          throw new Error(`Operator rejected ${harness}/${feature}`);
-        }
-        observations.push({ harness, feature, surface, action, observed,
-          reviewer: 'operator', transcript: transcript.path, transcriptHash: transcript.sha256, artifacts });
-      }
     }
     return observations;
   }

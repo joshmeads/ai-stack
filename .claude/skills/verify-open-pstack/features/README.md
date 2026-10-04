@@ -27,6 +27,7 @@ The feature documents below define sub-features, user entry points, driving inst
 - `runner.md`: parent-to-child provider dispatch and receipts.
 - `shipped-tools.md`: orchestration, watch, plan checks, audit, and evidence logging.
 - `assets.md`: manifest-declared installed assets on actual consuming harnesses.
+- `recipes.ts`: the headless cases and machine-checked assertions for every selectable feature. A selected feature without one fails the run before any session starts.
 
 Consumed `AGENTS.md`/`CLAUDE.md` instructions and `tests/skill-collision-repro.sh` select `project-skill`. `.mergify.yml` is explicitly `nonRuntime`. There are no blanket no-runtime exemptions for `.github/**`, `tests/**`, or `scripts/**`: unregistered instruction/enforcement paths fail closed until their ownership is reviewed and mapped.
 

@@ -32,7 +32,7 @@ function fixture(runtime = false, selfTest = false) {
   };
   const driver: Driver = {
     async prepare(r) { mark('prepare'); return HARNESSES.map(harness => ({ harness, sha: r.sha, cliVersion: 'test', pluginVersion: '1.5.0', treeHash: HASH, location: `/isolated/${harness}/plugin`, home: `/isolated/${harness}` })); },
-    async exercise(r) { mark('exercise'); return HARNESSES.flatMap(harness => requiredFeatures(r).map(feature => ({ harness, feature, surface: 'native surface', action: 'invoke', observed: 'fixture changed', reviewer: 'operator' as const, transcript: 'retained.log', transcriptHash: sha256('reviewed transcript'), artifacts: [{ path: 'fixture.json', sha256: sha256('reviewed artifact') }] }))); },
+    async exercise(r) { mark('exercise'); return HARNESSES.flatMap(harness => requiredFeatures(r).map(feature => ({ harness, feature, surface: 'native surface', action: 'invoke', observed: 'fixture changed', reviewer: 'recipe' as const, assertions: ['invoke:skill-loaded'], transcript: 'retained.log', transcriptHash: sha256('reviewed transcript'), artifacts: [{ path: 'fixture.json', sha256: sha256('reviewed artifact') }] }))); },
   };
   const options = { pr: 123, root, selfTest, publisherRevision: REVISION, registry: validateRegistry(data), github, driver, persist: async (r: Receipt) => { saved.push(structuredClone(r)); } };
   return { options, calls, saved, comments, pull, hook: (fn: typeof hook) => { hook = fn; } };
@@ -57,7 +57,7 @@ describe('exact-head evidence publication', () => {
     for (const feature of requiredFeatures(receipt)) for (const harness of HARNESSES) {
       expect(receipt.observations.filter(record => record.feature === feature && record.harness === harness)).toHaveLength(1);
     }
-    expect(f.comments).toHaveLength(1); expect(f.comments[0]).toContain('operator reviewed');
+    expect(f.comments).toHaveLength(1); expect(f.comments[0]).toContain('assertions machine-checked');
   });
 
   test('self-test alone runs project proof in both harnesses', async () => {

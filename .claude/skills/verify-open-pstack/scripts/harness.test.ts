@@ -3,11 +3,13 @@ import { cp, lstat, mkdtemp, mkdir, readFile, readlink, realpath, rm, stat, syml
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { doctor } from './doctor.ts';
-import { codexInstallation, launch, MacDriver, verifyCodexEnabled, verifyProjectDoctor } from './harness.ts';
+import { codexInstallation, launch, MacDriver, verifyCodexEnabled } from './harness.ts';
+import { verifyProjectDoctor } from '../features/recipes.ts';
 import { newReceipt } from './core.ts';
 import { sourceDigest } from './provenance.ts';
-import { evidence } from './verify.ts';
-import { command, freshRoot, isolatedEnv, retainedFile, treeHash, type Command } from './io.ts';
+import { evidence, verify } from './verify.ts';
+import { command, freshRoot, isolatedEnv, retainedFile, treeHash, type Command, type Session } from './io.ts';
+import { REPO, type Harness, type Installation, type Receipt } from './types.ts';
 const roots: string[] = [];
 async function fixture(): Promise<string> { const root = await realpath(await mkdtemp(join(tmpdir(), 'pstack-test-'))); roots.push(root); return root; }
 const originalEnv = { HOME: process.env.HOME, USER: process.env.USER, LOGNAME: process.env.LOGNAME,
@@ -46,11 +48,14 @@ describe('isolated harness boundaries', () => {
         expect(env.GH_CONFIG_DIR).toBe('/run/state/.config/gh');
         expect(JSON.stringify(env)).not.toContain('/daily/codex');
       }
-      expect(launch('claude', '/run/state', '/candidate')).toEqual(['claude', '--plugin-dir', '/candidate/plugins/pstack', '--settings', '{"enabledPlugins":{"pstack@open-pstack":false}}']);
-      expect(launch('claude', '/run/state', '/candidate').join(' ')).not.toContain('/run/state');
+      const claude = launch('claude', '/candidate', { cwd: '/run/state/fixture', addDirs: [] });
+      expect(claude.slice(0, 2)).toEqual(['claude', '-p']);
+      expect(claude.join(' ')).toContain('--plugin-dir /candidate/plugins/pstack --settings {"enabledPlugins":{"pstack@open-pstack":false}} --permission-mode dontAsk');
+      expect(claude.join(' ')).not.toContain('/run/state');
       delete process.env.CLAUDE_CONFIG_DIR;
       expect(isolatedEnv('/run/state', 'claude').CLAUDE_CONFIG_DIR).toBeUndefined();
-      expect(launch('codex', '/run/state', '/candidate')).toEqual(['codex']);
+      expect(launch('codex', '/candidate', { cwd: '/candidate', addDirs: ['/run/state/fixture'] })).toEqual(['codex', 'exec', '--json', '--skip-git-repo-check',
+        '--dangerously-bypass-hook-trust', '-c', 'approval_policy="never"', '--sandbox', 'workspace-write', '--cd', '/candidate', '--add-dir', '/run/state/fixture', '-']);
     } finally {
       for (const [name, value] of Object.entries(previous)) {
         if (value === undefined) delete process.env[name]; else process.env[name] = value;
@@ -141,14 +146,6 @@ describe('isolated harness boundaries', () => {
         await expect(stat(join(stateHome, '.claude'))).rejects.toThrow('ENOENT');
         await expect(stat(join(stateHome, 'settings.json'))).rejects.toThrow('ENOENT');
       }
-      if (args[0] === '/usr/bin/script') {
-        expect(candidate).toBe(true); expect(options.interactive).toBe(true);
-        const linked = join(env!.CODEX_HOME!, 'auth.json');
-        expect((await lstat(linked)).isSymbolicLink()).toBe(true);
-        expect(await readlink(linked)).toBe(auth);
-        await writeFile(args[2]!, 'retained raw native evidence');
-        throw new Error('fixture native surface reached');
-      }
       if (args[0] === 'git') {
         const local = [...args];
         if (args[1] === 'clone') local[local.length - 2] = repository;
@@ -171,7 +168,17 @@ describe('isolated harness boundaries', () => {
       }
       throw new Error(`Unexpected fixture command: ${args.join(' ')}`);
     };
-    const driver = new MacDriver(run, async () => '');
+    const sessions: string[][] = [];
+    const record: Session = async (args, options) => {
+      sessions.push(args);
+      expect(options.env.CODEX_HOME!.startsWith(join(root, 'state') + '/')).toBe(true); expect(options.env.HOME).toBe(operatorHome);
+      const linked = join(options.env.CODEX_HOME!, 'auth.json');
+      expect((await lstat(linked)).isSymbolicLink()).toBe(true);
+      expect(await readlink(linked)).toBe(auth);
+      await writeFile(options.stdout, 'retained raw native evidence');
+      throw new Error('fixture native surface reached');
+    };
+    const driver = new MacDriver(run, record);
     try {
       Object.defineProperty(process, 'platform', { ...platform, value: 'darwin' });
       process.env.HOME = operatorHome; process.env.USER = 'operator-user'; process.env.LOGNAME = 'operator-login';
@@ -189,7 +196,7 @@ describe('isolated harness boundaries', () => {
           const one = newReceipt(111, sha, sha, true, root); one.installations = [installation];
           await expect(driver.exercise(one)).rejects.toThrow('fixture native surface reached');
         }
-        expect(calls.filter(c => c[0] === '/usr/bin/script')).toHaveLength(2);
+        expect(sessions.map(args => args[0])).toEqual(['claude', 'codex']);
       }
     } finally {
       await mkdir(join(root, 'artifacts'), { mode: 0o700 });
@@ -213,7 +220,7 @@ describe('isolated harness boundaries', () => {
       expect(await readFile(join(home, 'native-state.db'), 'utf8')).toBe('retained candidate state');
       await expect(stat(join(home, '.codex'))).rejects.toThrow('ENOENT');
       await expect(stat(join(home, '.claude'))).rejects.toThrow('ENOENT');
-      if (!failInstall) expect(await readFile(join(home, 'surface.raw'), 'utf8')).toBe('retained raw native evidence');
+      if (!failInstall) expect(await readFile(join(root, 'sessions', harness, 'project-skill/doctor.jsonl'), 'utf8')).toBe('retained raw native evidence');
     }
     expect(JSON.parse(await readFile(join(root, 'doctor.json'), 'utf8')).result).toBe('pass');
   });
@@ -232,14 +239,14 @@ describe('isolated harness boundaries', () => {
     const receipt = newReceipt(111, 'a'.repeat(40), 'b'.repeat(40), false, root);
     receipt.selection = { paths: [], skills: [], features: ['setup'], noRuntime: false };
     receipt.installations = [{ harness, home, location: join(workspace, 'plugins/pstack'), sha: receipt.sha, cliVersion: 'test', pluginVersion: 'test', treeHash: await treeHash(join(workspace, 'plugins/pstack')), sourceHash: await sourceDigest(workspace) }];
-    const driver = new MacDriver(async args => {
-      expect(args[0]).toBe('/usr/bin/script');
+    const driver = new MacDriver(command, async args => {
+      expect(args[0]).toBe(harness);
       await writeFile(join(config, instructions), 'changed by setup');
       await writeFile(join(config, 'pstack-models.md'), 'created by setup');
       if (harness === 'codex') await writeFile(join(config, 'CLAUDE.md'), 'created by setup');
       if (failRestore) { await rm(join(config, instructions)); await mkdir(join(config, instructions)); }
       throw new Error('interrupted setup');
-    }, async () => '');
+    });
     await expect(driver.exercise(receipt)).rejects.toThrow(failRestore ? 'Setup restoration requires a regular file' : 'interrupted setup');
     if (failRestore) {
       await expect(driver.cleanup()).rejects.toThrow('Setup restoration requires a regular file');
@@ -254,30 +261,6 @@ describe('isolated harness boundaries', () => {
       await expect(stat(join(config, 'CLAUDE.md'))).rejects.toThrow('ENOENT');
     } else await expect(stat(join(config, 'pstack-models.md'))).rejects.toThrow('ENOENT');
   });
-  test('exercise re-prompts unsafe evidence and publishes accepted answers verbatim', async () => {
-    const root = await fixture(), home = join(root, 'state/claude'), workspace = join(home, 'workspace');
-    for (const path of ['plugins/pstack', '.claude/skills/verify-open-pstack', '.agents/skills']) await mkdir(join(workspace, path), { recursive: true });
-    await symlink('../../.claude/skills/verify-open-pstack', join(workspace, '.agents/skills/verify-open-pstack'));
-    await writeFile(join(workspace, 'plugins/pstack/SKILL.md'), 'candidate plugin');
-    await writeFile(join(root, 'transcript.txt'), 'reviewed native transcript');
-    await writeFile(join(root, 'artifact.txt'), 'reviewed effect');
-    const receipt = newReceipt(111, 'a'.repeat(40), 'b'.repeat(40), false, root);
-    receipt.selection = { paths: [], skills: ['architect'], features: ['skill-invocation:architect'], noRuntime: false };
-    receipt.installations = [{ harness: 'claude', home, location: join(workspace, 'plugins/pstack'), sha: receipt.sha, cliVersion: 'test', pluginVersion: 'test', treeHash: await treeHash(join(workspace, 'plugins/pstack')), sourceHash: await sourceDigest(workspace) }];
-    const long = 's'.repeat(54), answers = ['transcript.txt', long, '`unsafe`', long, '✓', long, 'artifact.txt', 'PASS skill-invocation:architect'];
-    const questions: string[] = [];
-    const driver = new MacDriver(async () => '', async question => { questions.push(question); return answers.shift()!; });
-    receipt.observations = await driver.exercise(receipt);
-    expect(receipt.observations[0]!.surface).toBe(long);
-    expect(questions.filter(question => question.startsWith('Concrete action'))).toHaveLength(2);
-    expect(questions.filter(question => question.startsWith('Observed assertion'))).toHaveLength(2);
-    for (const question of questions.slice(1, 6)) expect(question).toContain('printable ASCII, no backtick, < or >, and at most 160 characters');
-    const comment = evidence(receipt);
-    expect(comment).toContain(`surface ${long}; action ${long}; result ${long};`);
-    expect(comment).not.toContain('[value omitted]');
-    expect(answers).toHaveLength(0);
-  });
-
   test('Codex exact installed tree and enabled listing are required', async () => {
     const root = await fixture(), plugin = join(root, 'config/plugins/pstack');
     await mkdir(plugin, { recursive: true }); await writeFile(join(plugin, 'SKILL.md'), 'candidate');
@@ -305,5 +288,98 @@ describe('isolated harness boundaries', () => {
     await expect(freshRoot(join(repo, 'output'), repo)).rejects.toThrow('outside');
     await expect(freshRoot(root, repo)).rejects.toThrow();
     expect(await freshRoot(join(root, 'output'), repo)).toBe(join(root, 'output'));
+  });
+});
+
+async function candidate(harness: Harness): Promise<{ root: string; installation: Installation }> {
+  const root = await fixture(), home = join(root, 'state', harness), workspace = join(home, 'workspace');
+  for (const path of ['plugins/pstack', '.claude/skills/verify-open-pstack', '.agents/skills']) await mkdir(join(workspace, path), { recursive: true });
+  await symlink('../../.claude/skills/verify-open-pstack', join(workspace, '.agents/skills/verify-open-pstack'));
+  await writeFile(join(workspace, 'plugins/pstack/SKILL.md'), 'candidate plugin');
+  const location = join(workspace, 'plugins/pstack');
+  return { root, installation: { harness, home, location, sha: 'a'.repeat(40), cliVersion: 'test', pluginVersion: 'test', treeHash: await treeHash(location), sourceHash: await sourceDigest(workspace) } };
+}
+function selected(root: string, installation: Installation, features: string[]): Receipt {
+  const receipt = newReceipt(111, 'a'.repeat(40), 'b'.repeat(40), false, root);
+  receipt.selection = { paths: [], skills: [], features, noRuntime: false };
+  receipt.installations = [installation];
+  return receipt;
+}
+const lines = (events: unknown[]): string => events.map(event => JSON.stringify(event)).join('\n') + '\n';
+function claudeStream(options: { command?: string; skill?: string }): string {
+  const events: unknown[] = [];
+  if (options.command) events.push({ type: 'user', isReplay: true, message: { role: 'user', content: `<command-name>/${options.command}</command-name>` } });
+  if (options.skill) events.push({ type: 'assistant', message: { content: [{ type: 'tool_use', id: 'toolu_1', name: 'Skill', input: { skill: options.skill } }] } });
+  events.push({ type: 'result', subtype: 'success', is_error: false, result: 'It passed.' });
+  return lines(events);
+}
+function stub(stream: string, effect?: (cwd: string) => Promise<void>, exitCode = 0): { record: Session; calls: string[][] } {
+  const calls: string[][] = [];
+  return { calls, record: async (args, options) => {
+    calls.push(args);
+    await writeFile(options.stdout, stream); await writeFile(options.stderr, '');
+    await effect?.(options.cwd);
+    return exitCode;
+  } };
+}
+const writeResult = async (cwd: string) => { await writeFile(join(cwd, 'result.md'), 'the skill result'); };
+
+describe('headless recipes', () => {
+  test('missing or unsupported recipes fail before any session starts', async () => {
+    const { root, installation } = await candidate('codex');
+    for (const [feature, reason] of [['mystery', 'missing-recipe:codex/mystery'], ['assets:codex', 'unsupported-native-consumer'],
+      ['skill-invocation:babysit', 'unsupported-headless:babysit']]) {
+      const { record, calls } = stub(claudeStream({ command: 'pstack:architect' }), writeResult);
+      await expect(new MacDriver(command, record).exercise(selected(root, installation, ['skill-invocation:architect', feature!]))).rejects.toThrow(reason);
+      expect(calls).toHaveLength(0);
+    }
+  });
+
+  test('default skill recipe records machine-checked assertions from a candidate load and a fixture file', async () => {
+    const { root, installation } = await candidate('claude');
+    const { record, calls } = stub(claudeStream({ command: 'pstack:architect' }), writeResult);
+    const receipt = selected(root, installation, ['skill-invocation:architect']);
+    receipt.observations = await new MacDriver(command, record).exercise(receipt);
+    expect(calls[0]!.slice(0, 2)).toEqual(['claude', '-p']);
+    const [observation] = receipt.observations;
+    expect(observation!.reviewer).toBe('recipe');
+    expect(observation!.assertions).toEqual(['invoke:exit-0', 'invoke:skill-loaded', 'invoke:file:result.md']);
+    expect(observation!.transcript).toBe('sessions/claude/skill-invocation-architect/invoke.jsonl');
+    expect(observation!.artifacts.map(a => a.path)).toEqual(['sessions/claude/skill-invocation-architect/invoke.result.md']);
+    const comment = evidence(receipt);
+    expect(comment).toContain(`result ${observation!.observed}; 3 assertions machine-checked`);
+    expect(comment).not.toContain('[value omitted]');
+  });
+
+  test('principle leaves load through the Skill tool', async () => {
+    const { root, installation } = await candidate('claude');
+    const { record } = stub(claudeStream({ skill: 'pstack:principle-prove-it-works' }), writeResult);
+    const receipt = selected(root, installation, ['skill-invocation:principle-prove-it-works']);
+    expect((await new MacDriver(command, record).exercise(receipt))[0]!.assertions).toContain('invoke:skill-loaded');
+  });
+
+  test('a success claim with no fixture file fails', async () => {
+    const { root, installation } = await candidate('claude');
+    const claim = stub(claudeStream({ command: 'pstack:architect' }));
+    await expect(new MacDriver(command, claim.record).exercise(selected(root, installation, ['skill-invocation:architect']))).rejects.toThrow('fixture-file-missing:result.md');
+  });
+
+  test('an assertion failure fails the run and publishes no observation or success', async () => {
+    const { root, installation } = await candidate('claude');
+    const mac = new MacDriver(command, stub(claudeStream({ command: 'pstack:architect' })).record);
+    const comments: string[] = [], statuses: string[] = [], sha = 'a'.repeat(40), base = 'b'.repeat(40);
+    await expect(verify({ pr: 111, selfTest: false, root, publisherRevision: 'c'.repeat(40), persist: async () => {},
+      registry: { skills: ['architect'], shared: [], assets: [], setup: [], runner: [], tools: [], project: [], nonRuntime: [] },
+      github: {
+        async pull() { return { number: 111, head: { sha }, base: { sha: base }, state: 'open', headRepo: REPO }; },
+        async files() { return [{ filename: 'plugins/pstack/skills/architect/SKILL.md' }]; },
+        async comment(_pr, body) { comments.push(body); return `https://github.com/${REPO}/pull/111#issuecomment-1`; },
+        async status(_sha, state) { statuses.push(state); },
+      },
+      driver: { prepare: async () => [installation], exercise: receipt => mac.exercise(receipt), cleanup: () => mac.cleanup() },
+    })).rejects.toThrow('fixture-file-missing:result.md');
+    expect(statuses).toEqual(['failure']);
+    expect(comments.join('\n')).not.toContain('Observation');
+    expect(comments.join('\n')).toContain('FAILED');
   });
 });
