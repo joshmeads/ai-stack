@@ -7,17 +7,21 @@ description: Configure pstack's provider-qualified models, per-family requested 
 
 Configure one portable model sheet for the current parent harness. Read [`provider-dispatch.md`](../poteto-mode/references/provider-dispatch.md) before probing or writing anything. Its model matrix, descriptor grammar, and route table are the contract. Choose one requested effort per assigned matrix family. Do not add a second configuration file, a runtime resolver, or a weaker-model fallback.
 
-Claude Code writes `~/.claude/pstack-models.md` and loads it from `~/.claude/CLAUDE.md` with:
+Resolve `<config-home>` once using the [harness config-home rule](../poteto-mode/references/codex-tools.md#harness-config-homes). Use it for all current-state reads, writes, snapshots, restoration, and readback.
+
+Claude Code writes `<config-home>/pstack-models.md` and loads it from `<config-home>/CLAUDE.md` using the import rule in step 8. When `<config-home>` is the default home, render exactly the legacy line:
 
 ```text
 @~/.claude/pstack-models.md
 ```
 
-Codex writes `~/.codex/pstack-models.md`. When `CODEX_HOME` is set, resolve both Codex targets under that directory instead of the `~/.codex` examples here. Codex has no `@` include, so mirror the sheet's exact bytes inside one bounded block in `~/.codex/AGENTS.md` and retain the sheet as the editable source of truth:
+Only when `CLAUDE_CONFIG_DIR` redirects the home, render exactly `@./pstack-models.md`, relative to the importing file's directory.
+
+Codex writes `<config-home>/pstack-models.md`. Codex has no `@` include, so mirror the sheet's exact bytes inside one bounded block in `<config-home>/AGENTS.md` and retain the sheet as the editable source of truth:
 
 ```text
 <!-- pstack:models:begin -->
-<exact contents of ~/.codex/pstack-models.md>
+<exact contents of the resolved model sheet>
 <!-- pstack:models:end -->
 ```
 
@@ -29,7 +33,7 @@ Use the harness and tool surface running this skill: Claude Code or Codex. Envir
 
 ### 2. Load current state
 
-Read the current parent-specific sheet when it exists. Before matrix validation, normalize only the rolling-alias predecessors that earlier pstack releases generated. A provider-qualified Claude model is migratable when its model component starts with `claude-fable-` or `claude-opus-` and the remaining revision contains only digits and hyphens. Replace that component in memory with `fable` or `opus`, preserving the provider, effort, role, and lane order. Record each original and normalized descriptor for the confirmation in step 7. This migration is valid loaded state and does not require a separate operator choice.
+Inspect `<config-home>/pstack-models.md` and the existing integration: resolve Claude's single model-sheet import, or read Codex's single bounded model block, reporting missing targets and stopping on unreadable, malformed, or ambiguous state. Use the sole surviving configuration, or the editable sheet when both configurations agree; on Codex, the sheet remains authoritative and the block is its mirror, recoverable when the sheet is absent. If surviving configurations differ, show both sources and their differing assignments and require an explicit source choice before normalization or probing, without merging them automatically. Use first-run defaults only when neither source contains recoverable configuration, then apply the existing normalization, role-completion, and validation rules to the selected state. Before matrix validation, normalize only the rolling-alias predecessors that earlier pstack releases generated. A provider-qualified Claude model is migratable when its model component starts with `claude-fable-` or `claude-opus-` and the remaining revision contains only digits and hyphens. Replace that component in memory with `fable` or `opus`, preserving the provider, effort, role, and lane order. Record each original and normalized descriptor for the confirmation in step 7. This migration is valid loaded state and does not require a separate operator choice.
 
 Treat the normalized values as current role-to-family assignments. Overlay those rows on the complete first-run role map in step 7. Materialize any missing documented role row from that map on the next successful write. A duplicate role row is inconsistent state; report it and resolve it before probing. A row whose role is not in the step 7 role map, such as `how critics`, is from a retired role. Drop it and list it at confirmation. A bare host-native slug from an older sheet is also invalid because it does not say which provider owns it. A versioned Claude model outside the two migration families remains inconsistent state. If the sheet is missing, use the complete first-run role map and the model matrix's Default effort cells.
 
@@ -84,7 +88,7 @@ Rewrite every matrix-family descriptor to `provider:model@<requested effort for 
 
 ### 7. Confirm and commit
 
-Show any rolling-alias migrations as original and normalized descriptors and any retired-role rows dropped in step 2. Then show the route table for this parent and every rendered role and descriptor. Ask for confirmation before writing.
+Show any rolling-alias migrations as original and normalized descriptors and any retired-role rows dropped in step 2. Then show the source file read in step 2, the new destination `<config-home>/pstack-models.md`, the route table for this parent, and every rendered role and descriptor. Carry the loaded assignments into the new destination; only explicit role or effort changes and the documented normalization may change them. Ask for confirmation before writing.
 
 Why and Reflect require the parent's live MCP surface. Keep their investigator, reviewer, and synthesizer roles on `inherit-parent` or `auto`; the bounded external runner deliberately omits ambient MCPs. `inherit-parent` and `auto` always validate, but say when they reduce a panel's provider diversity. For panel roles, one lane runs per entry. The list length is the fan-out count. `arena cross-judge pool` is a list from which Arena chooses a provider different from the parent and base candidate when possible. `swarm workers` is the default for every worker unless a race explicitly assigns another descriptor.
 
@@ -118,7 +122,11 @@ interrogate reviewers: claude:opus@max, codex:gpt-5.6-sol@max, grok:grok-4.7@xhi
 
 ### 8. Wire it in
 
-Render the parent integration in memory before either write. On Claude, the integration is the single `@~/.claude/pstack-models.md` include in `~/.claude/CLAUDE.md`. On Codex, it is the exact sheet bytes between one `<!-- pstack:models:begin -->` and `<!-- pstack:models:end -->` pair in `~/.codex/AGENTS.md`. Replace that whole bounded block on a rerun. Insert one block at the end on first run. If either marker is missing, duplicated, or reversed, stop and report inconsistent state instead of guessing a boundary.
+Render the parent integration in memory before either write.
+
+On Claude, the integration is the one `@` import line in `<config-home>/CLAUDE.md` whose target's basename is `pstack-models.md`, regardless of its existing directory or path spelling. When `<config-home>` is the default home, render exactly `@~/.claude/pstack-models.md`, preserving the legacy text. Only when `CLAUDE_CONFIG_DIR` redirects the home, render exactly `@./pstack-models.md`. This relative import resolves from the importing file's directory, where the sheet also lives, so the import line contains no config-directory characters. On a rerun, replace that one line in place, preserving all unrelated bytes. If zero matching import lines exist, append one. If more than one exists, stop and report inconsistent state before either write; do not append another import or guess which one to replace.
+
+On Codex, the integration is the exact sheet bytes between one `<!-- pstack:models:begin -->` and `<!-- pstack:models:end -->` pair in `<config-home>/AGENTS.md`. Replace that whole bounded block on a rerun. Insert one block at the end on first run. If either marker is missing, duplicated, or reversed, stop and report inconsistent state instead of guessing a boundary.
 
 Snapshot every target's current bytes. Write the sheet and parent integration only after every requested pair passes and the operator confirms. Read both targets back and compare them with the in-memory render. If either write or readback fails, restore every snapshot and report the failure. An unchanged rerun must produce byte-identical sheet and integration content after normalization.
 

@@ -2,6 +2,25 @@
 
 pstack skills retain Claude Code tool language (`Skill`, `Agent`, `AskUserQuestion`) in shared prose. On Codex the files are the same; only those tool names resolve differently. Model execution is not translated here. Read [`provider-dispatch.md`](provider-dispatch.md) for the parent-owned Claude/Codex/Grok route table and provider-qualified descriptors.
 
+## Harness config homes
+
+Resolve the current parent's config home once: Claude Code uses nonempty `CLAUDE_CONFIG_DIR`, otherwise `$HOME/.claude`; Codex uses nonempty `CODEX_HOME`, otherwise `$HOME/.codex`. The equivalent quoted shell expressions are:
+
+```bash
+"${CLAUDE_CONFIG_DIR:-$HOME/.claude}"
+"${CODEX_HOME:-$HOME/.codex}"
+```
+
+Empty and unset variables both select the default. Preserve spaces in the resolved path by quoting shell file operands. In shared instructions, `<config-home>` means this resolved parent-specific directory, not literal text to write. Use that same home for setup's sheet and integration writes, snapshots, restoration, and readback.
+
+The Claude integration is the one `@` import line in `<config-home>/CLAUDE.md` whose target's basename is `pstack-models.md`, regardless of its existing directory or path spelling. Select current state using [setup-pstack step 2](../../setup-pstack/SKILL.md#2-load-current-state). When `<config-home>` is the default home, render exactly the legacy line:
+
+```text
+@~/.claude/pstack-models.md
+```
+
+Only when `CLAUDE_CONFIG_DIR` redirects the home, render exactly `@./pstack-models.md`. This relative import resolves from the importing file's directory, where the sheet also lives, so the import line contains no config-directory characters. On a rerun, replace that one line in place, preserving all unrelated bytes. If zero matching import lines exist, append one. If more than one exists, stop and report inconsistent state before either write; do not append another import or guess which one to replace.
+
 ## Tool actions
 
 | pstack / Claude action | Codex equivalent |
@@ -21,7 +40,7 @@ pstack skills retain Claude Code tool language (`Skill`, `Agent`, `AskUserQuesti
 | Track tasks (the todolist / `TodoWrite`) | `update_plan` |
 | Ask the human a fixed-choice question (`AskUserQuestion`) | Ask in plain text and let the user answer. Codex has no structured-choice tool. |
 
-Subagent dispatch needs `multi_agent` enabled. Add to `~/.codex/config.toml`:
+Subagent dispatch needs `multi_agent` enabled. Add to `<config-home>/config.toml`, using Codex's [config-home rule](#harness-config-homes):
 
 ```toml
 [features]
@@ -61,4 +80,4 @@ Some triggers name skills that ship with Claude Code, not pstack. They do not ex
 
 ## Instructions file
 
-Where a pstack skill says "your instructions file", on Codex that is `AGENTS.md` (project root, plus `~/.codex/AGENTS.md` global). On Claude Code it is `CLAUDE.md`.
+Where a pstack skill says "your instructions file", on Codex that is `AGENTS.md` (project root, plus `<config-home>/AGENTS.md` global). On Claude Code it is `CLAUDE.md` (project root, plus `<config-home>/CLAUDE.md` global). Resolve the global directory with the [config-home rule](#harness-config-homes).
