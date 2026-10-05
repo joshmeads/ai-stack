@@ -208,14 +208,17 @@ const PRELOAD_TASK = 'Without invoking Skill or reading any file, reply with the
 const agentPreload: Case = {
   id: 'dispatch',
   prompt: f => `Use the Agent tool exactly once with subagent_type pstack:poteto-agent, and give it exactly this task: "${PRELOAD_TASK}" Then reply with the subagent's reply verbatim. ${rules(f.dir)}`,
-  async assert(record) {
+  async assert(record, f) {
     const agent = record.tools.find(t => t.name === 'Agent' && t.input.subagent_type === 'pstack:poteto-agent' && !t.failed);
     if (!agent) throw new Error('agent-not-dispatched:pstack:poteto-agent');
     // The child answers from the preloaded skill alone: any tool call could load it another way.
     if (record.tools.some(t => t.parent === agent.id)) throw new Error('child-used-tools');
     // Read the child's own reply, not anything the parent wrote.
     if (!agent.result?.includes('Laziness Protocol')) throw new Error('principle-missing:Laziness Protocol');
-    return { assertions: ['agent-dispatched', 'child-no-tools', 'principle-named'], files: [] };
+    // The verifier, not the model, records the child's reply as the retained artifact.
+    const reply = join(f.dir, 'child-reply.txt');
+    await writeFile(reply, agent.result);
+    return { assertions: ['agent-dispatched', 'child-no-tools', 'principle-named'], files: [reply] };
   },
 };
 

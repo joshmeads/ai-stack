@@ -380,7 +380,10 @@ describe('headless recipes', () => {
       { type: 'result', subtype: 'success', is_error: false, result: 'The first is Laziness Protocol.' },
     ]);
     const run = (s: string) => new MacDriver(command, stub(s).record).exercise(selected(root, installation, ['agent-preload:poteto-agent']));
-    expect((await run(stream('The first is **Laziness Protocol**.')))[0]!.assertions).toEqual(['dispatch:exit-0', 'dispatch:agent-dispatched', 'dispatch:child-no-tools', 'dispatch:principle-named']);
+    const [observation] = await run(stream('The first is **Laziness Protocol**.'));
+    expect(observation!.assertions).toEqual(['dispatch:exit-0', 'dispatch:agent-dispatched', 'dispatch:child-no-tools', 'dispatch:principle-named']);
+    // completeEvidence requires at least one retained artifact per observation.
+    expect(observation!.artifacts.map(a => a.path)).toEqual(['sessions/claude/agent-preload-poteto-agent/dispatch.child-reply.txt']);
     await expect(run(stream('The first is **Laziness Protocol**.', { childTool: 'Bash' }))).rejects.toThrow('child-used-tools');
     await expect(run(stream('poteto-mode was not preloaded.'))).rejects.toThrow('principle-missing:Laziness Protocol');
     await expect(run(stream('Laziness Protocol', { error: true }))).rejects.toThrow('agent-not-dispatched');
