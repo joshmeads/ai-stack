@@ -237,7 +237,7 @@ describe('isolated harness boundaries', () => {
     await writeFile(join(config, instructions), original);
     if (harness === 'codex') await writeFile(join(config, 'pstack-models.md'), original);
     const receipt = newReceipt(111, 'a'.repeat(40), 'b'.repeat(40), false, root);
-    receipt.selection = { paths: [], skills: [], features: ['setup'], noRuntime: false };
+    receipt.selection = { paths: [], skills: [], features: [`${harness}:setup`], noRuntime: false };
     receipt.installations = [{ harness, home, location: join(workspace, 'plugins/pstack'), sha: receipt.sha, cliVersion: 'test', pluginVersion: 'test', treeHash: await treeHash(join(workspace, 'plugins/pstack')), sourceHash: await sourceDigest(workspace) }];
     const driver = new MacDriver(command, async args => {
       expect(args[0]).toBe(harness);
@@ -301,7 +301,7 @@ async function candidate(harness: Harness): Promise<{ root: string; installation
 }
 function selected(root: string, installation: Installation, features: string[]): Receipt {
   const receipt = newReceipt(111, 'a'.repeat(40), 'b'.repeat(40), false, root);
-  receipt.selection = { paths: [], skills: [], features, noRuntime: false };
+  receipt.selection = { paths: [], skills: [], features: features.map(feature => `${installation.harness}:${feature}`), noRuntime: false };
   receipt.installations = [installation];
   return receipt;
 }
@@ -371,6 +371,24 @@ describe('headless recipes', () => {
     expect((await new MacDriver(command, record).exercise(receipt))[0]!.assertions).toContain('invoke:skill-loaded');
   });
 
+  test('poteto-agent preload reads the child reply and rejects child tool calls, errors and a missing principle', async () => {
+    const { root, installation } = await candidate('claude');
+    const stream = (reply: string, options: { childTool?: string; error?: boolean } = {}) => lines([
+      { type: 'assistant', parent_tool_use_id: null, message: { content: [{ type: 'tool_use', id: 'toolu_agent', name: 'Agent', input: { subagent_type: 'pstack:poteto-agent' } }] } },
+      ...options.childTool ? [{ type: 'assistant', parent_tool_use_id: 'toolu_agent', message: { content: [{ type: 'tool_use', id: 'toolu_child', name: options.childTool, input: {} }] } }] : [],
+      { type: 'user', message: { content: [{ type: 'tool_result', tool_use_id: 'toolu_agent', is_error: !!options.error, content: [{ type: 'text', text: reply }] }] } },
+      { type: 'result', subtype: 'success', is_error: false, result: 'The first is Laziness Protocol.' },
+    ]);
+    const run = (s: string) => new MacDriver(command, stub(s).record).exercise(selected(root, installation, ['agent-preload:poteto-agent']));
+    const [observation] = await run(stream('The first is **Laziness Protocol**.'));
+    expect(observation!.assertions).toEqual(['dispatch:exit-0', 'dispatch:agent-dispatched', 'dispatch:child-no-tools', 'dispatch:principle-named']);
+    // completeEvidence requires at least one retained artifact per observation.
+    expect(observation!.artifacts.map(a => a.path)).toEqual(['sessions/claude/agent-preload-poteto-agent/dispatch.child-reply.txt']);
+    await expect(run(stream('The first is **Laziness Protocol**.', { childTool: 'Bash' }))).rejects.toThrow('child-used-tools');
+    await expect(run(stream('poteto-mode was not preloaded.'))).rejects.toThrow('principle-missing:Laziness Protocol');
+    await expect(run(stream('Laziness Protocol', { error: true }))).rejects.toThrow('agent-not-dispatched');
+  });
+
   test('a success claim with no fixture file fails', async () => {
     const { root, installation } = await candidate('claude');
     const claim = stub(claudeStream({ command: 'pstack:architect' }));
@@ -381,7 +399,7 @@ describe('headless recipes', () => {
     const { root, installation } = await candidate('claude');
     const mac = new MacDriver(command, stub(claudeStream({ command: 'pstack:architect' })).record);
     const comments: string[] = [], statuses: string[] = [], sha = 'a'.repeat(40), base = 'b'.repeat(40);
-    await expect(verify({ pr: 111, selfTest: false, root, publisherRevision: 'c'.repeat(40), persist: async () => {},
+    await expect(verify({ pr: 111, selfTest: false, features: ['claude:skill-invocation:architect'], root, publisherRevision: 'c'.repeat(40), persist: async () => {},
       registry: { skills: ['architect'], shared: [], assets: [], setup: [], runner: [], tools: [], project: [], nonRuntime: [] },
       github: {
         async pull() { return { number: 111, head: { sha }, base: { sha: base }, state: 'open', headRepo: REPO }; },

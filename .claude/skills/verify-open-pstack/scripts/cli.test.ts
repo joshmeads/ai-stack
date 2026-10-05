@@ -21,7 +21,7 @@ test('publisher revision is recorded independently of candidate proof', async ()
     async status() {},
   };
   try {
-    const receipt = await verify({ pr: 111, selfTest: false, root, publisherRevision, registry: validateRegistry(registry), github,
+    const receipt = await verify({ pr: 111, selfTest: false, features: [], root, publisherRevision, registry: validateRegistry(registry), github,
       driver: { async prepare() { throw new Error('Docs must not prepare harnesses'); }, async exercise() { throw new Error('Docs must not exercise harnesses'); } }, persist: async () => {} });
     expect(receipt.sha).toBe(candidate);
     expect(receipt.publisherRevision).toBe(publisherRevision);
@@ -60,7 +60,7 @@ test('candidate doctor probes only help and versions with private roots already 
 });
 test('run and parent doctor need no credential flags', () => {
   expect(parse(['doctor', '--output', '/fresh/probe'])).toEqual({ mode: 'doctor', output: '/fresh/probe', pr: 0, selfTest: false, candidate: false });
-  expect(parse(['run', '--pr', '123', '--self-test', '--output', '/fresh/run'])).toEqual({ mode: 'run', output: '/fresh/run', pr: 123, selfTest: true, routes: [] });
+  expect(parse(['run', '--pr', '123', '--self-test', '--output', '/fresh/run'])).toEqual({ mode: 'run', output: '/fresh/run', pr: 123, selfTest: true, routes: [], features: [] });
   for (const args of [[], ['wat'], ['run', '--pr', '0', '--output', '/tmp/a'], ['run', '--pr', '1.5', '--output', '/tmp/a'], ['run', '--pr', '9007199254740992', '--output', '/tmp/a'], ['doctor', '--pr', '1', '--output', '/tmp/a'], ['doctor', '--output', '/tmp/a', '--output', '/tmp/b'], ['run', '--pr', '1'], ['doctor', '--output', '--self-test'], ['doctor', '--output', '/tmp/a', '--publish']]) expect(() => parse(args)).toThrow();
 });
 test('credential-directory and account options are removed', () => {

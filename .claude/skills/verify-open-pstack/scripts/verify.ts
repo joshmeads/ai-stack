@@ -15,7 +15,7 @@ export function evidence(receipt: Receipt): string {
     '## Live evidence: Open Pstack',
     `- Candidate SHA: \`${receipt.sha}\``,
     `- Base SHA: \`${receipt.base}\``,
-    `- Result: ${failed ? 'FAILED — verification did not complete; rerun required' : receipt.selection.noRuntime && !receipt.selfTest ? 'PASSED — no runtime change' : 'PASSED — all mapped features verified'}`,
+    `- Result: ${failed ? 'FAILED — verification did not complete; rerun required' : receipt.selection.noRuntime && !receipt.selfTest ? 'PASSED — no runtime change' : 'PASSED — named features verified'}`,
     `- Self-test: ${receipt.selfTest ? failed ? 'required in both harnesses' : 'completed in both harnesses' : 'not requested'}`,
     `- Publisher revision: ${receipt.publisherRevision ? `\`${receipt.publisherRevision}\`` : 'not supplied'}`,
     `- Evidence-set SHA-256: \`${sha256(JSON.stringify({ installations: receipt.installations, observations: receipt.observations }))}\``,
@@ -50,6 +50,8 @@ export async function revalidateEvidence(receipt: Receipt): Promise<void> {
 type VerifyOptions = {
   pr: number;
   selfTest: boolean;
+  /** `<harness>:<feature>` checks the agent named for the PR's changed behavior. */
+  features: string[];
   root: string;
   registry: Registry;
   github: GitHub;
@@ -95,6 +97,11 @@ export async function verify(options: VerifyOptions): Promise<Receipt> {
   if (receipt.selection.features.includes('project-skill') && receipt.publisherRevision !== receipt.sha) {
     throw new Error('Verifier-changing PRs must run from a checkout of the candidate head; rerun from that checkout');
   }
+  if (!receipt.selection.noRuntime && !options.features.length) throw new Error('A runtime change requires at least one --feature <harness>:<feature>');
+  // Only the named features run; classification gates runtime changes and unmapped paths.
+  // Verifier and instruction changes keep their native project-skill proof whatever is named.
+  const project = receipt.selection.features.includes('project-skill') ? ['claude:project-skill', 'codex:project-skill'] : [];
+  receipt.selection.features = receipt.selection.noRuntime ? [] : [...new Set([...options.features, ...project])];
   try {
     await current(); await persist(receipt);
     if (!receipt.selection.noRuntime || receipt.selfTest) {
@@ -107,7 +114,7 @@ export async function verify(options: VerifyOptions): Promise<Receipt> {
     await publishComment();
     await current(); await revalidateEvidence(receipt);
     successAttempted = true;
-    await github.status(receipt.sha, 'success', receipt.commentUrl!, receipt.selection.noRuntime && !receipt.selfTest ? 'No runtime change' : 'All mapped features passed in both harnesses');
+    await github.status(receipt.sha, 'success', receipt.commentUrl!, receipt.selection.noRuntime && !receipt.selfTest ? 'No runtime change' : 'Named features passed');
     receipt.status = 'success'; await persist(receipt); await current(); await revalidateEvidence(receipt);
     return receipt;
   } catch (error) {

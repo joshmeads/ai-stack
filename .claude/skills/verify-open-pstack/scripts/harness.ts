@@ -24,6 +24,10 @@ export function sessionInput(harness: Harness, prompt: string): string {
   return harness === 'claude' ? JSON.stringify({ type: 'user', message: { role: 'user', content: prompt } }) + '\n' : prompt;
 }
 type Event = Record<string, any>;
+function resultText(blocks: Event[], id: string): string | undefined {
+  const content = blocks.find(b => b.type === 'tool_result' && b.tool_use_id === id)?.content;
+  return typeof content === 'string' ? content : Array.isArray(content) ? content.map((c: Event) => String(c.text ?? '')).join('') : undefined;
+}
 /** Normalize a recorded native stream into the skills it loaded and the commands it completed. */
 export function parseSession(harness: Harness, text: string, exitCode: number, started: number, rollout = ''): SessionRecord {
   if (exitCode !== 0) throw new Error(`exit:${exitCode}`);
@@ -36,7 +40,9 @@ export function parseSession(harness: Harness, text: string, exitCode: number, s
       .flatMap(e => [...(e.message.content as string).matchAll(/<command-name>\/([^<\s]+)<\/command-name>/g)].map(m => m[1]!));
     return { harness, exitCode, started,
       skills: [...commands, ...uses.filter(u => u.name === 'Skill' && typeof u.input?.skill === 'string').map(u => u.input.skill as string)],
-      commands: uses.filter(u => u.name === 'Bash' && typeof u.input?.command === 'string').map(u => u.input.command as string) };
+      commands: uses.filter(u => u.name === 'Bash' && typeof u.input?.command === 'string').map(u => u.input.command as string),
+      tools: stream.filter(e => e.type === 'assistant' && Array.isArray(e.message?.content)).flatMap(e => (e.message.content as Event[]).filter(b => b.type === 'tool_use')
+        .map(b => ({ name: String(b.name), id: String(b.id), input: b.input ?? {}, parent: e.parent_tool_use_id ?? null, failed: failed.has(b.id), result: resultText(blocks, b.id) }))) };
   }
   const items = stream.filter(e => e.type === 'item.completed' && e.item && typeof e.item === 'object').map(e => e.item as Event);
   const commands = items.filter(i => i.type === 'command_execution' && i.exit_code === 0 && typeof i.command === 'string').map(i => i.command as string);
@@ -45,7 +51,7 @@ export function parseSession(harness: Harness, text: string, exitCode: number, s
     .flatMap(e => e.type === 'response_item' && Array.isArray(e.payload?.content) ? (e.payload.content as Event[]).map(c => String(c.text ?? '')) : []);
   const skills = texts.flatMap(text => [...text.matchAll(/<skill>\n<name>([^<]+)<\/name>\n<path>([^<]+)<\/path>/g)])
     .map(([, name, path]) => path!.includes('/plugins/cache/open-pstack/pstack/') ? name! : path!);
-  return { harness, exitCode, started, skills, commands };
+  return { harness, exitCode, started, skills, commands, tools: [] };
 }
 export async function codexInstallation(output: string, home: string, expected: string): Promise<string> {
   const result = JSON.parse(output);

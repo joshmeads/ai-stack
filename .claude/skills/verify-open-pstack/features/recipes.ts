@@ -204,6 +204,24 @@ const shippedTools: Case = {
   },
 };
 
+const PRELOAD_TASK = 'Without invoking Skill or reading any file, reply with the first Core principle named in the preloaded poteto-mode skill.';
+const agentPreload: Case = {
+  id: 'dispatch',
+  prompt: f => `Use the Agent tool exactly once with subagent_type pstack:poteto-agent, and give it exactly this task: "${PRELOAD_TASK}" Then reply with the subagent's reply verbatim. ${rules(f.dir)}`,
+  async assert(record, f) {
+    const agent = record.tools.find(t => t.name === 'Agent' && t.input.subagent_type === 'pstack:poteto-agent' && !t.failed);
+    if (!agent) throw new Error('agent-not-dispatched:pstack:poteto-agent');
+    // The child answers from the preloaded skill alone: any tool call could load it another way.
+    if (record.tools.some(t => t.parent === agent.id)) throw new Error('child-used-tools');
+    // Read the child's own reply, not anything the parent wrote.
+    if (!agent.result?.includes('Laziness Protocol')) throw new Error('principle-missing:Laziness Protocol');
+    // The verifier, not the model, records the child's reply as the retained artifact.
+    const reply = join(f.dir, 'child-reply.txt');
+    await writeFile(reply, agent.result);
+    return { assertions: ['agent-dispatched', 'child-no-tools', 'principle-named'], files: [reply] };
+  },
+};
+
 /** Resolve a feature's cases, or fail with a named reason before any session starts. */
 export function recipe(feature: string, harness: Harness, routes: string[] = []): Case[] {
   if (feature === 'assets:codex') throw new Error('unsupported-native-consumer:assets:codex');
@@ -211,6 +229,7 @@ export function recipe(feature: string, harness: Harness, routes: string[] = [])
   if (feature === 'runner') return runner(harness, routes);
   if (feature === 'setup' || feature === 'skill-invocation:setup-pstack') return setup;
   if (feature === 'shipped-tools') return [shippedTools];
+  if (feature === 'agent-preload:poteto-agent' && harness === 'claude') return [agentPreload];
   const skill = /^skill-invocation:([a-z][a-z0-9-]+)$/.exec(feature)?.[1];
   if (!skill) throw new Error(`missing-recipe:${harness}/${feature}`);
   return [overrides[skill] ?? skillCase(skill, 'Apply it to the task in $DIR/TASK.md.')];
