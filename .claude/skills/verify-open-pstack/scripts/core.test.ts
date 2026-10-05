@@ -20,7 +20,7 @@ export function evidence(r: Receipt): void {
       location: '/tmp/candidate/plugin', home: `/tmp/${harness}`, treeHash: 'c'.repeat(64) });
     for (const feature of requiredFeatures(r, harness)) {
       r.observations.push({ harness, feature, surface: 'native skill', action: 'invoke', observed: 'fixture changed',
-        transcript: '/tmp/log', transcriptHash: 'c'.repeat(64), reviewer: 'operator',
+        transcript: '/tmp/log', transcriptHash: 'c'.repeat(64), reviewer: 'recipe', assertions: ['invoke:skill-loaded'],
         artifacts: [{ path: '/tmp/artifact', sha256: 'd'.repeat(64) }] });
     }
   }
@@ -67,6 +67,7 @@ describe('registry and ownership', () => {
     expect(r.selection.noRuntime).toBe(false);
     expect(r.selection.skills).toEqual([]);
     expect(r.selection.features).toEqual(['assets:codex']);
+    r.selection.features = ['codex:assets:codex'];
     expect(requiredHarnesses(r)).toEqual(['codex']);
     expect(requiredFeatures(r, 'claude')).toEqual([]);
     expect(requiredFeatures(r, 'codex')).toEqual(['assets:codex']);
@@ -83,18 +84,15 @@ describe('registry and ownership', () => {
       expect(() => classify([{ filename: 'README.md', previous_filename: filename }], registry)).toThrow('Unmapped asset consumer');
     }
   });
-  test('manifest changes retain shared coverage in both harnesses', () => {
+  test('manifest changes classify as shared runtime', () => {
     for (const filename of ['plugins/pstack/.claude-plugin/plugin.json', 'plugins/pstack/.codex-plugin/plugin.json']) {
-      const r = receipt();
-      r.selection = classify([{ filename }], registry);
-      expect(requiredHarnesses(r)).toEqual(['claude', 'codex']);
-      expect(requiredFeatures(r, 'claude')).toContain('setup');
-      expect(requiredFeatures(r, 'codex')).toContain('setup');
+      expect(classify([{ filename }], registry).features).toContain('setup');
     }
   });
   test('asset self-test requires both harnesses without fictitious Claude asset proof', () => {
     const r = receipt(true);
     r.selection = classify([{ filename: 'plugins/pstack/assets/logo.png' }], registry);
+    r.selection.features = ['codex:assets:codex'];
     expect(requiredHarnesses(r)).toEqual(['claude', 'codex']);
     expect(requiredFeatures(r, 'claude')).toEqual(['project-skill']);
     expect(requiredFeatures(r, 'codex')).toEqual(['assets:codex', 'project-skill']);
@@ -177,6 +175,7 @@ describe('receipt and evidence boundaries', () => {
   test('each selected skill must have its own observation', () => {
     const r = receipt();
     r.selection = classify(registry.skills.slice(0, 2).map(s => ({ filename: `plugins/pstack/skills/${s}/SKILL.md` })), registry);
+    r.selection.features = registry.skills.slice(0, 2).map(s => `claude:skill-invocation:${s}`);
     evidence(r);
     expect(() => completeEvidence(r)).not.toThrow();
     r.observations.pop();
@@ -188,6 +187,7 @@ describe('receipt and evidence boundaries', () => {
       (r: Receipt) => { r.observations.push(r.observations[0]!); },
       (r: Receipt) => { r.observations[0]!.transcriptHash = ''; },
       (r: Receipt) => { r.observations[0]!.observed = ''; },
+      (r: Receipt) => { r.observations[0]!.assertions = []; },
       (r: Receipt) => { r.observations[0]!.artifacts = []; },
       (r: Receipt) => { r.failure = 'provider unavailable'; },
     ]) {

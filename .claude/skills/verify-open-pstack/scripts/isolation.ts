@@ -37,7 +37,7 @@ export async function removeCodexHome(home: string): Promise<void> {
   await rm(await codexDirectory(home), { recursive: true });
 }
 
-export type SetupSnapshot = { path: string; bytes?: Buffer; mode?: number }[];
+export type SetupSnapshot = { path: string; bytes?: Buffer; mode?: number; link?: string; target?: string }[];
 
 async function setupFile(path: string) {
   const info = await lstat(path).catch((error: NodeJS.ErrnoException) => {
@@ -54,20 +54,39 @@ export async function snapshotSetup(): Promise<SetupSnapshot> {
   const snapshot: SetupSnapshot = [];
   for (const directory of directories) {
     for (const name of ['pstack-models.md', 'CLAUDE.md', 'AGENTS.md']) {
-      const path = join(directory, name), info = await setupFile(path);
-      snapshot.push(info ? { path, bytes: await readFile(path), mode: info.mode & 0o777 } : { path });
+      const path = join(directory, name);
+      // An operator's existing link (for example CLAUDE.md kept in a config repository) is restored as
+      // that link plus its target's bytes. Links that appear during the run are still refused.
+      const link = (await lstat(path).catch(() => undefined))?.isSymbolicLink() ? await readlink(path) : undefined;
+      const target = link === undefined ? path : await realpath(path);
+      if (link !== undefined) snapshot.push({ path, link, target });
+      const info = await setupFile(target);
+      snapshot.push(info ? { path: target, bytes: await readFile(target), mode: info.mode & 0o777 } : { path: target });
     }
   }
   return snapshot;
 }
 
 export async function restoreSetup(snapshot: SetupSnapshot): Promise<void> {
-  for (const { path, bytes, mode } of snapshot) {
+  for (const { path, link } of snapshot) {
+    if (link === undefined) continue;
+    if (!(await lstat(path).catch(() => undefined))?.isSymbolicLink() || await readlink(path) !== link) {
+      await rm(path, { force: true, recursive: true });
+      await symlink(link, path);
+    }
+  }
+  for (const { path, bytes, mode, link } of snapshot) {
+    if (link !== undefined) continue;
     await setupFile(path);
     if (bytes === undefined) await rm(path, { force: true });
     else await writeFile(path, bytes, { mode });
   }
-  for (const { path, bytes } of snapshot) {
+  for (const { path, bytes, link, target } of snapshot) {
+    if (link !== undefined) {
+      // The whole chain must still resolve to the snapshot's file, not only the outer link.
+      if (await readlink(path).catch(() => undefined) !== link || await realpath(path).catch(() => undefined) !== target) throw new Error(`Setup restoration verification failed: ${path}`);
+      continue;
+    }
     const info = await setupFile(path);
     if (bytes === undefined ? info !== undefined : !info || !(await readFile(path)).equals(bytes)) {
       throw new Error(`Setup restoration verification failed: ${path}`);
