@@ -121,13 +121,38 @@ describe('setup-only snapshot and restoration', () => {
     expect(await readFile(path, 'utf8')).toBe('original\r\n');
   });
 
-  test('rejects symlink snapshots and failed restoration without following redirected files', async () => {
+  test('restores an operator-linked CLAUDE.md as the same link with its target bytes', async () => {
+    const { root, claude } = await fixture();
+    const path = join(claude, 'CLAUDE.md'), target = join(root, 'config-repo-CLAUDE.md');
+    await writeFile(target, 'operator instructions\n');
+    await symlink(target, path);
+    const snapshot = await snapshotSetup();
+    await writeFile(path, 'setup appended an import\n');
+    await restoreSetup(snapshot);
+    expect(await readlink(path)).toBe(target);
+    expect(await readFile(target, 'utf8')).toBe('operator instructions\n');
+    await rm(path); await writeFile(path, 'setup replaced the link');
+    await restoreSetup(snapshot);
+    expect(await readlink(path)).toBe(target);
+  });
+
+  test('fails restoration when an intermediate link in the chain was redirected', async () => {
+    const { root, claude } = await fixture();
+    const current = join(root, 'current'), other = join(root, 'other');
+    await mkdir(join(root, 'v1')); await mkdir(other);
+    await writeFile(join(root, 'v1/CLAUDE.md'), 'operator instructions\n'); await writeFile(join(other, 'CLAUDE.md'), 'redirected\n');
+    await symlink(join(root, 'v1'), current);
+    await symlink(join(current, 'CLAUDE.md'), join(claude, 'CLAUDE.md'));
+    const snapshot = await snapshotSetup();
+    await rm(current); await symlink(other, current);
+    await expect(restoreSetup(snapshot)).rejects.toThrow('verification failed');
+  });
+
+  test('rejects links that appear during the run without following redirected files', async () => {
     const { root, claude } = await fixture();
     const path = join(claude, 'pstack-models.md'), external = join(root, 'external');
     await writeFile(external, 'untouched');
-    await symlink(external, path);
-    await expect(snapshotSetup()).rejects.toThrow('regular file');
-    await rm(path); await writeFile(path, 'original');
+    await writeFile(path, 'original');
     const snapshot = await snapshotSetup();
     await rm(path); await symlink(external, path);
     await expect(restoreSetup(snapshot)).rejects.toThrow('regular file');

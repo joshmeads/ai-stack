@@ -10,12 +10,12 @@ import { publishable } from './verify.ts';
 import { REPO, type Driver, type Harness, type Installation, type Observation, type Receipt, type SessionRecord } from './types.ts';
 
 const setupFeature = (feature: string): boolean => feature === 'setup' || feature === 'skill-invocation:setup-pstack';
-export function launch(harness: Harness, workspace: string, options: { cwd: string; addDirs: string[]; codexSandbox?: 'danger-full-access' }): string[] {
+export function launch(harness: Harness, workspace: string, options: { cwd: string; addDirs: string[]; codexSandbox?: 'danger-full-access'; claudePermission?: 'bypassPermissions' }): string[] {
   const addDirs = options.addDirs.flatMap(dir => ['--add-dir', dir]);
   return harness === 'claude'
     ? ['claude', '-p', '--input-format', 'stream-json', '--replay-user-messages', '--output-format', 'stream-json', '--verbose', '--no-session-persistence',
       '--plugin-dir', join(workspace, 'plugins/pstack'), '--settings', '{"enabledPlugins":{"pstack@open-pstack":false}}',
-      '--permission-mode', 'dontAsk', ...addDirs, '--allowedTools', CLAUDE_TOOLS]
+      '--permission-mode', options.claudePermission ?? 'dontAsk', ...options.claudePermission ? ['--strict-mcp-config'] : [], ...addDirs, '--allowedTools', CLAUDE_TOOLS]
     : ['codex', 'exec', '--json', '--skip-git-repo-check', '--dangerously-bypass-hook-trust', '-c', 'approval_policy="never"',
       '--sandbox', options.codexSandbox ?? 'workspace-write', '--cd', options.cwd, ...addDirs, '-'];
 }
@@ -154,7 +154,7 @@ export class MacDriver implements Driver {
             await c.prepare?.(fixture);
             const stdout = join(records, `${c.id}.jsonl`), stderr = join(records, `${c.id}.stderr`), cwd = c.cwd === 'workspace' ? workspace : dir;
             const started = Date.now();
-            const exitCode = await this.record(launch(harness, workspace, { cwd, addDirs: cwd === dir ? [] : [dir], codexSandbox: c.codexSandbox }),
+            const exitCode = await this.record(launch(harness, workspace, { cwd, addDirs: cwd === dir ? [] : [dir], codexSandbox: c.codexSandbox, claudePermission: c.claudePermission }),
               { cwd, env, input: sessionInput(harness, c.prompt(fixture)), stdout, stderr });
             evidence.push(stdout, ...(await stat(stderr)).size ? [stderr] : []);
             let record: SessionRecord, result;

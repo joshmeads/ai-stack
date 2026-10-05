@@ -131,7 +131,7 @@ else
   note "ok: setup config-home port invariant; unset/empty defaults and spaced overrides resolve without writes"
 fi
 
-quad_of() { { grep -oE '(claude|codex|grok):[a-z0-9.-]+@(low|medium|high|xhigh|max)' || true; } | tr '\n' ' ' | sed 's/ $//'; }
+quad_of() { { grep -oE '(claude|codex|grok):[a-z0-9.-]+@(low|medium|high|xhigh|max|ultra)' || true; } | tr '\n' ' ' | sed 's/ $//'; }
 canon_panel="$( { grep -m1 '^arena runners:' "$setup" || true; } | quad_of)"
 panel_bad=""
 [ -n "$canon_panel" ] || panel_bad="could not read the canonical panel from $setup"$'\n'

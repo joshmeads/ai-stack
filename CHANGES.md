@@ -5,6 +5,8 @@ This port applies the Cursor → Claude Code substitutions in skill bodies. Earl
 
 ## Unreleased
 
+**GPT-6.1 Sol default and the `ultra` effort.** The Sol row now uses `gpt-6.1-sol`, so the first-run `bug-fix`, `perf-issue`, and `hillclimb` roles and the arena, architect, and interrogate panels name `codex:gpt-6.1-sol@max`. The effort universe adds `ultra`. A row offers it only when its CLI's model entry lists it: Codex lists `ultra` for `gpt-6.1-sol` but not for the Luna models, so only the Sol row offers it. Setup rejects `ultra` on any other row, and the runner passes it to Codex unchanged. An existing sheet that names `codex:gpt-5.6-sol@<effort>` keeps running that model. `/setup-pstack` proposes `gpt-6.1-sol` on the next rerun and keeps the old model if the operator declines. `UPSTREAM.md` keeps the exclusion that leaves these three roles on Sol.
+
 The shipped `pstack-runner` no longer loads the caller project's environment files or `bunfig.toml` at startup. Its POSIX shell launcher clears inherited `BUN_OPTIONS` and `NODE_OPTIONS`, then executes Bun with env-file loading disabled and project Bun configuration ignored while preserving ordinary parent-provided environment variables. It needs no `env -S` or directory-resolution helpers. The TypeScript entry keeps the first-statement deadline capture, and `exec` preserves signal behavior. Direct-executable regressions cover startup isolation, inherited environment, and preflight cancellation.
 
 - Document Linux Landlock and bubblewrap prerequisites for bounded Grok lanes, including affected Claude Code cloud hosts, and link setup failures to the shared host and parent prerequisites without changing runner behavior (#56).

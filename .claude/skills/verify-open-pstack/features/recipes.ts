@@ -23,6 +23,8 @@ export interface Case {
   cwd?: 'workspace';
   /** Codex parents that launch external provider CLIs need network and their CLI state outside the fixture. */
   codexSandbox?: 'danger-full-access';
+  /** Claude refuses Write into its own config folder in dontAsk mode even with --add-dir; setup must write there. */
+  claudePermission?: 'bypassPermissions';
   prepare?(fixture: Fixture): Promise<void>;
   prompt(fixture: Fixture): string;
   assert(record: SessionRecord, fixture: Fixture): Promise<Evidence>;
@@ -34,7 +36,7 @@ export const DEFAULT_ROUTES: Record<Harness, string> = { claude: 'codex:gpt-6.1-
 export const ROUTE = /^(claude|codex|grok):([A-Za-z0-9._-]+)@([a-z]+)$/;
 const SETUP_DESCRIPTOR = 'claude:opus@high';
 
-const rules = (dir: string): string => `Work only inside ${dir}. Do not push, post, open, merge, or modify pull requests, issues, or remote branches, and do not write outside ${dir}. Do not edit any skill, plugin, or configuration file outside ${dir}. Do not ask questions: where the skill would ask, choose its documented default and continue.`;
+const rules = (dir: string): string => `Work only inside ${dir}. Do not push, post, open, merge, or modify pull requests, issues, or remote branches, and do not write outside ${dir}. Do not edit any skill, plugin, or configuration file outside ${dir}. Do not ask questions: where the skill would ask, choose its documented default and continue. This is a headless session that ends at your first final reply and stops any background work still running, so run every command and subagent in the foreground, even where the skill says to use the background, and finish all work before you reply.`;
 
 export function invoke(harness: Harness, skill: string, text: string): string {
   if (harness === 'codex') return `$pstack:${skill} ${text}`;
@@ -157,8 +159,8 @@ function runner(harness: Harness, routes: string[]): Case[] {
       prepare: async f => { await writeFile(lane(f, 'prompt.md'), 'Reply with the single word PONG.\n'); },
       prompt: f => `${invoke(f.harness, 'poteto-mode', `Dispatch exactly one external lane and nothing else. Run the installed launcher ${join(f.location, 'skills/poteto-mode/scripts/runner/pstack-runner')} with these arguments and wait for it to exit: --parent ${harness} --provider ${provider} --model ${model} --effort ${effort} --mode read-only --prompt ${lane(f, 'prompt.md')} --cwd ${f.dir} --output ${lane(f, 'output.md')} --receipt ${lane(f, 'receipt.json')}`)}. ${rules(f.dir)}`,
       async assert(record, f) {
-        const launcher = join(f.location, 'skills/poteto-mode/scripts/runner/pstack-runner');
-        if (!record.commands.some(c => c.includes(launcher))) throw new Error('runner-not-run');
+        // Sessions often call the launcher through a shell variable; the receipt below is written only by the runner.
+        if (!record.commands.some(c => c.includes('pstack-runner'))) throw new Error('runner-not-run');
         const receipt = JSON.parse(await readFile(lane(f, 'receipt.json'), 'utf8'));
         if (receipt.status !== 'complete') throw new Error(`receipt-status:${receipt.status}`);
         if (receipt.parent !== harness || receipt.provider !== provider || receipt.model !== model || receipt.effort !== effort || receipt.mode !== 'read-only') throw new Error('receipt-route-mismatch');
@@ -172,6 +174,7 @@ function runner(harness: Harness, routes: string[]): Case[] {
 const setup: Case[] = [{
   id: 'configure',
   codexSandbox: 'danger-full-access',
+  claudePermission: 'bypassPermissions',
   prompt: f => `${invoke(f.harness, 'setup-pstack', `Use these answers and ask nothing else. Role assignments: change every role assigned to a model-matrix family to the Opus family, and keep inherit-parent and auto roles unchanged. Opus requested effort: high. I confirm every write. Write the setup report to ${join(f.dir, 'result.md')}.`)} Do not push, post, or contact GitHub.`,
   async assert(record, f) {
     const sheet = join(f.configHome, 'pstack-models.md'), assertions = [loaded(record, 'pstack:setup-pstack'), await written(record, sheet)];
@@ -194,7 +197,7 @@ const shippedTools: Case = {
   prompt: f => `${invoke(f.harness, 'show-me-your-work', `Log exactly one decision to ${join(f.dir, 'decisions.tsv')} by running the installed helper ${join(f.location, 'skills/show-me-your-work/scripts/log.sh')} with phase "fixture", decision "=SUM(1,2)", why "check escaping", evidence "TASK.md", and result "logged". Do not write the file any other way.`)} ${rules(f.dir)}`,
   async assert(record, f) {
     const path = join(f.dir, 'decisions.tsv'), assertions = [loaded(record, 'pstack:show-me-your-work'), await written(record, path)];
-    if (!record.commands.some(c => c.includes(join(f.location, 'skills/show-me-your-work/scripts/log.sh')))) throw new Error('tool-not-run:log.sh');
+    if (!record.commands.some(c => c.includes('log.sh'))) throw new Error('tool-not-run:log.sh');
     const rows = (await readFile(path, 'utf8')).trimEnd().split('\n').map(row => row.split('\t'));
     if (rows.length !== 2 || rows[0]!.join(',') !== 'ts,phase,decision,why,evidence,result' || rows[1]![1] !== 'fixture' || rows[1]![2] !== "'=SUM(1,2)") throw new Error('tsv-row-mismatch');
     return { assertions: [...assertions, 'tool-ran:log.sh', 'tsv-row-escaped'], files: [path] };
