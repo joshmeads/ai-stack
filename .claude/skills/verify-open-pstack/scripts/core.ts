@@ -58,9 +58,9 @@ export function newReceipt(pr: number, sha: string, base: string, selfTest: bool
     started: new Date().toISOString(), cleanup: 'Run state retained; operator owns cleanup.' };
 }
 
-export function requiredFeatures(receipt: Receipt, harness?: Harness): string[] {
-  const features = [...new Set([...receipt.selection.features, ...(receipt.selfTest ? ['project-skill'] : [])])];
-  return harness ? features.filter(feature => feature !== 'assets:codex' || harness === 'codex') : features;
+export function requiredFeatures(receipt: Receipt, harness: Harness): string[] {
+  const named = receipt.selection.features.filter(f => f.startsWith(`${harness}:`)).map(f => f.slice(harness.length + 1));
+  return [...new Set([...named, ...(receipt.selfTest ? ['project-skill'] : [])])];
 }
 
 export function requiredHarnesses(receipt: Receipt): Harness[] {
@@ -68,9 +68,8 @@ export function requiredHarnesses(receipt: Receipt): Harness[] {
 }
 
 export function completeEvidence(receipt: Receipt): void {
-  const features = requiredFeatures(receipt);
-  if (!features.length && !receipt.selection.noRuntime) throw new Error('No classification');
   const harnesses = requiredHarnesses(receipt);
+  if (!harnesses.length && !receipt.selection.noRuntime) throw new Error('No features named');
   for (const harness of harnesses) {
     const installs = receipt.installations.filter(i => i.harness === harness && i.sha === receipt.sha);
     if (installs.length !== 1 || !installs[0]!.location || !/^[a-f0-9]{64}$/.test(installs[0]!.treeHash) || !installs[0]!.cliVersion || !installs[0]!.pluginVersion || !installs[0]!.home) throw new Error(`Missing installation: ${harness}`);

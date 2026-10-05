@@ -22,8 +22,10 @@ PR=111 # supplied delivery PR number
 SESSION="$(mktemp -d "${TMPDIR:-/tmp}/open-pstack-evidence.XXXXXX")"
 EVIDENCE="$SESSION/live" # must not exist yet
 .claude/skills/verify-open-pstack/scripts/verify.sh doctor --output "$SESSION/probe"
-.claude/skills/verify-open-pstack/scripts/verify.sh run --pr "$PR" --self-test --output "$EVIDENCE"
+.claude/skills/verify-open-pstack/scripts/verify.sh run --pr "$PR" --feature claude:project-skill --self-test --output "$EVIDENCE"
 ```
+
+Pick the features that exercise the PR's changed behavior and pass each as `--feature <harness>:<feature>`, repeatable. List the same features in the PR body, where review sees them. A runtime change needs at least one `--feature`; the run fails before any install without one. The run exercises only the named features, plus `project-skill` in both harnesses under `--self-test`. It never falls back to the classified set, and a full sweep is never the default.
 
 Reuse the Claude Code and Codex logins you already have; no extra login or credential source flags. Omit `--self-test` for ordinary plugin verification; it is mandatory for this skill's delivery. An agent runs and judges the whole gate from a non-TTY shell; nothing prompts a person. `--runner-route PROVIDER:MODEL@EFFORT`, repeatable, replaces the runner recipe's fixed external route for each parent whose provider differs from the route's.
 
@@ -39,15 +41,15 @@ Temporary, GitHub, and fixture state remain run-owned; Git configuration is disa
 
 ## Drive
 
-Read `features/README.md` and every selected feature document. Runtime instructions, consumed references, shipped tools, and installed assets require coverage on their actual consumers. Shared paths select consumers conservatively. `no runtime change` launches no harness unless `--self-test` is requested.
+Read `features/README.md` and the document for every named feature. Path classification still runs: it decides whether the PR has a runtime change, and an unmapped path fails closed. It does not choose the features; the agent does. `no runtime change` launches no harness unless `--self-test` is requested.
 
-Create detached exact-head candidate checkouts and run-owned temporary/fixture state. Every selected feature resolves to a recipe in `features/recipes.ts` before the first session starts: one or more cases, each with a fixture, a prompt, and an assertion the trusted parent evaluates. A feature without a recipe fails as `missing-recipe:<harness>/<feature>`; `assets:codex` fails as `unsupported-native-consumer` until it has a recipe. Each case runs as one fresh headless session, sequentially, and setup never runs alongside anything.
+Create detached exact-head candidate checkouts and run-owned temporary/fixture state, only for harnesses with a named feature. Every named feature resolves to a recipe in `features/recipes.ts` before the first session starts: one or more cases, each with a fixture, a prompt, and an assertion the trusted parent evaluates. A feature without a recipe fails as `missing-recipe:<harness>/<feature>`; `assets:codex` fails as `unsupported-native-consumer` until it has a recipe. Each case runs as one fresh headless session, sequentially, and setup never runs alongside anything.
 
 Claude runs with normal operator config/login and session-only `claude --plugin-dir <exact-head checkout>/plugins/pstack --settings '{"enabledPlugins":{"pstack@open-pstack":false}}'`, plus `-p --input-format stream-json --replay-user-messages --output-format stream-json --verbose --no-session-persistence --permission-mode dontAsk --allowedTools <recipe tools>`. The prompt arrives on stdin, so the replayed user message shows the slash expansion. A tool outside the pre-authorized list is denied without a prompt. Codex runs `codex exec --json` against the run-owned installation with approvals set to never, `--sandbox workspace-write`, `--add-dir` for a fixture outside its working directory, and `--dangerously-bypass-hook-trust` so the candidate's hooks run for that invocation only. Cases whose parent launches an external provider CLI use `--sandbox danger-full-access`, because those CLIs need network and their own state outside the fixture. Codex installs the exact-head marketplace/plugin in its run-owned home with `codex plugin marketplace add … --ref <sha>` and `codex plugin add`. Verify candidate plugin and project-skill sources against immutable Git provenance before and after exercise; version strings alone are insufficient.
 
 Candidate commands and provider descendants use the recorded native-login arrangement, never GitHub publisher credentials. No extra login, implicit timeout, or weaker-model fallback is permitted. If Claude's plugin flags fail to exclude installed pstack or Codex replaces the auth symlink instead of writing through it, stop and reopen the design.
 
-For every selected feature, exercise each actual consuming native surface and retain real native tool calls and concrete fixture effects. Asset consumers come from the pinned plugin manifests; the current `plugins/pstack/assets/logo.png` is consumed by the Codex manifest only and therefore requires the Codex installed surface, not an invented Claude asset exercise. The session recorder streams each session's stdout and stderr to private files under `sessions/<harness>/<feature>/` in the run root and keeps them on any exit. For Codex it also copies the session's rollout from the run-owned home, because only the rollout records which `SKILL.md` each skill mention resolved to. A nonzero session exit fails the case. The trusted parent then parses the native stream and evaluates the case's assertions on the native skill load, the commands that ran, and files the session wrote in its fixture, and copies those files next to the stream. A model's claim that something passed never counts, and neither do direct CLI tests.
+For every named feature, exercise its native surface and retain real native tool calls and concrete fixture effects. Asset consumers come from the pinned plugin manifests; the current `plugins/pstack/assets/logo.png` is consumed by the Codex manifest only and therefore requires the Codex installed surface, not an invented Claude asset exercise. The session recorder streams each session's stdout and stderr to private files under `sessions/<harness>/<feature>/` in the run root and keeps them on any exit. For Codex it also copies the session's rollout from the run-owned home, because only the rollout records which `SKILL.md` each skill mention resolved to. A nonzero session exit fails the case. The trusted parent then parses the native stream and evaluates the case's assertions on the native skill load, the commands that ran, and files the session wrote in its fixture, and copies those files next to the stream. A model's claim that something passed never counts, and neither do direct CLI tests.
 
 For setup only, snapshot real `${CLAUDE_CONFIG_DIR:-$HOME/.claude}/pstack-models.md` and `CLAUDE.md`, including original absence, before exercise. Restore exact bytes or absence afterwards on success or failure and verify restoration before any publication. Restoration failure stops the run and publishes nothing.
 
@@ -69,10 +71,10 @@ Each headless session exits on its own. Verify any setup restoration before publ
 
 - `scripts/verify.sh doctor --output <fresh-absolute-external-directory>`: parent capability report, no installation/publication.
 - `scripts/verify.sh doctor --candidate --output <fresh-run-owned-directory>`: candidate-safe self-test probe; no publisher authentication probing.
-- `scripts/verify.sh run --pr <positive-number> [--self-test] [--runner-route PROVIDER:MODEL@EFFORT]... --output <fresh-absolute-external-directory>`: headless exact-head verification with machine-checked recipes; no terminal or prompts.
+- `scripts/verify.sh run --pr <positive-number> --feature <harness>:<feature>... [--self-test] [--runner-route PROVIDER:MODEL@EFFORT]... --output <fresh-absolute-external-directory>`: headless exact-head verification of the named features with machine-checked recipes; no terminal or prompts. The evidence comment lists only the features that ran.
 - `features/recipes.ts`: per-feature headless cases and assertions.
 - `bun run test` and `bun run typecheck`: development checks after a separate frozen dependency install, not live proof.
-- `features/registry.json`: maintained path ownership; unknown runtime paths block.
+- `features/registry.json`: maintained path ownership; it decides runtime versus no runtime change, and unknown runtime paths block.
 
 Read receipts as data, never shell input. Do not put credentials in prompts or public artifacts.
 

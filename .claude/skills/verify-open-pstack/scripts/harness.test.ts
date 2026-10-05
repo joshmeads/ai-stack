@@ -237,7 +237,7 @@ describe('isolated harness boundaries', () => {
     await writeFile(join(config, instructions), original);
     if (harness === 'codex') await writeFile(join(config, 'pstack-models.md'), original);
     const receipt = newReceipt(111, 'a'.repeat(40), 'b'.repeat(40), false, root);
-    receipt.selection = { paths: [], skills: [], features: ['setup'], noRuntime: false };
+    receipt.selection = { paths: [], skills: [], features: [`${harness}:setup`], noRuntime: false };
     receipt.installations = [{ harness, home, location: join(workspace, 'plugins/pstack'), sha: receipt.sha, cliVersion: 'test', pluginVersion: 'test', treeHash: await treeHash(join(workspace, 'plugins/pstack')), sourceHash: await sourceDigest(workspace) }];
     const driver = new MacDriver(command, async args => {
       expect(args[0]).toBe(harness);
@@ -301,7 +301,7 @@ async function candidate(harness: Harness): Promise<{ root: string; installation
 }
 function selected(root: string, installation: Installation, features: string[]): Receipt {
   const receipt = newReceipt(111, 'a'.repeat(40), 'b'.repeat(40), false, root);
-  receipt.selection = { paths: [], skills: [], features, noRuntime: false };
+  receipt.selection = { paths: [], skills: [], features: features.map(feature => `${installation.harness}:${feature}`), noRuntime: false };
   receipt.installations = [installation];
   return receipt;
 }
@@ -371,6 +371,20 @@ describe('headless recipes', () => {
     expect((await new MacDriver(command, record).exercise(receipt))[0]!.assertions).toContain('invoke:skill-loaded');
   });
 
+  test('poteto-agent preload rejects a child that called Skill and a reply without the principle', async () => {
+    const { root, installation } = await candidate('claude');
+    const stream = (childTool?: string) => lines([
+      { type: 'assistant', parent_tool_use_id: null, message: { content: [{ type: 'tool_use', id: 'toolu_agent', name: 'Agent', input: { subagent_type: 'pstack:poteto-agent' } }] } },
+      ...childTool ? [{ type: 'assistant', parent_tool_use_id: 'toolu_agent', message: { content: [{ type: 'tool_use', id: 'toolu_child', name: childTool, input: { skill: 'pstack:poteto-mode' } }] } }] : [],
+      { type: 'result', subtype: 'success', is_error: false, result: 'done' },
+    ]);
+    const reply = (text: string) => async (cwd: string) => { await writeFile(join(cwd, 'result.md'), text); };
+    const run = (s: string, text: string) => new MacDriver(command, stub(s, reply(text)).record).exercise(selected(root, installation, ['agent-preload:poteto-agent']));
+    expect((await run(stream(), 'The first is **Laziness Protocol**.'))[0]!.assertions).toEqual(['dispatch:exit-0', 'dispatch:agent-dispatched', 'dispatch:child-no-skill-load', 'dispatch:file:result.md', 'dispatch:principle-named']);
+    await expect(run(stream('Skill'), 'The first is **Laziness Protocol**.')).rejects.toThrow('child-loaded-skill:poteto-mode');
+    await expect(run(stream(), 'The SKILL.md was not preloaded.')).rejects.toThrow('principle-missing:Laziness Protocol');
+  });
+
   test('a success claim with no fixture file fails', async () => {
     const { root, installation } = await candidate('claude');
     const claim = stub(claudeStream({ command: 'pstack:architect' }));
@@ -381,7 +395,7 @@ describe('headless recipes', () => {
     const { root, installation } = await candidate('claude');
     const mac = new MacDriver(command, stub(claudeStream({ command: 'pstack:architect' })).record);
     const comments: string[] = [], statuses: string[] = [], sha = 'a'.repeat(40), base = 'b'.repeat(40);
-    await expect(verify({ pr: 111, selfTest: false, root, publisherRevision: 'c'.repeat(40), persist: async () => {},
+    await expect(verify({ pr: 111, selfTest: false, features: ['claude:skill-invocation:architect'], root, publisherRevision: 'c'.repeat(40), persist: async () => {},
       registry: { skills: ['architect'], shared: [], assets: [], setup: [], runner: [], tools: [], project: [], nonRuntime: [] },
       github: {
         async pull() { return { number: 111, head: { sha }, base: { sha: base }, state: 'open', headRepo: REPO }; },
