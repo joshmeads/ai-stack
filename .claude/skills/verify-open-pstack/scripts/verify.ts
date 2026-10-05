@@ -99,7 +99,9 @@ export async function verify(options: VerifyOptions): Promise<Receipt> {
   }
   if (!receipt.selection.noRuntime && !options.features.length) throw new Error('A runtime change requires at least one --feature <harness>:<feature>');
   // Only the named features run; classification gates runtime changes and unmapped paths.
-  receipt.selection.features = receipt.selection.noRuntime ? [] : options.features;
+  // Verifier and instruction changes keep their native project-skill proof whatever is named.
+  const project = receipt.selection.features.includes('project-skill') ? ['claude:project-skill', 'codex:project-skill'] : [];
+  receipt.selection.features = receipt.selection.noRuntime ? [] : [...new Set([...options.features, ...project])];
   try {
     await current(); await persist(receipt);
     if (!receipt.selection.noRuntime || receipt.selfTest) {

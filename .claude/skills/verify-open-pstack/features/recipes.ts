@@ -207,15 +207,15 @@ const shippedTools: Case = {
 const PRELOAD_TASK = 'Without invoking Skill or reading any file, reply with the first Core principle named in the preloaded poteto-mode skill.';
 const agentPreload: Case = {
   id: 'dispatch',
-  prompt: f => `Use the Agent tool exactly once with subagent_type pstack:poteto-agent, and give it exactly this task: "${PRELOAD_TASK}" Then write the subagent's reply verbatim to ${join(f.dir, 'result.md')}. ${rules(f.dir)}`,
-  async assert(record, f) {
-    const agent = record.tools.find(t => t.name === 'Agent' && t.input.subagent_type === 'pstack:poteto-agent');
+  prompt: f => `Use the Agent tool exactly once with subagent_type pstack:poteto-agent, and give it exactly this task: "${PRELOAD_TASK}" Then reply with the subagent's reply verbatim. ${rules(f.dir)}`,
+  async assert(record) {
+    const agent = record.tools.find(t => t.name === 'Agent' && t.input.subagent_type === 'pstack:poteto-agent' && !t.failed);
     if (!agent) throw new Error('agent-not-dispatched:pstack:poteto-agent');
-    // The child must answer from the preloaded skill, not by loading it.
-    if (record.tools.some(t => t.parent === agent.id && (t.name === 'Skill' || t.name === 'Read' && String(t.input.file_path).endsWith('poteto-mode/SKILL.md')))) throw new Error('child-loaded-skill:poteto-mode');
-    const path = join(f.dir, 'result.md'), file = await written(record, path);
-    if (!(await readFile(path, 'utf8')).includes('Laziness Protocol')) throw new Error('principle-missing:Laziness Protocol');
-    return { assertions: ['agent-dispatched', 'child-no-skill-load', file, 'principle-named'], files: [path] };
+    // The child answers from the preloaded skill alone: any tool call could load it another way.
+    if (record.tools.some(t => t.parent === agent.id)) throw new Error('child-used-tools');
+    // Read the child's own reply, not anything the parent wrote.
+    if (!agent.result?.includes('Laziness Protocol')) throw new Error('principle-missing:Laziness Protocol');
+    return { assertions: ['agent-dispatched', 'child-no-tools', 'principle-named'], files: [] };
   },
 };
 

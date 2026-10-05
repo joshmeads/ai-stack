@@ -24,6 +24,10 @@ export function sessionInput(harness: Harness, prompt: string): string {
   return harness === 'claude' ? JSON.stringify({ type: 'user', message: { role: 'user', content: prompt } }) + '\n' : prompt;
 }
 type Event = Record<string, any>;
+function resultText(blocks: Event[], id: string): string | undefined {
+  const content = blocks.find(b => b.type === 'tool_result' && b.tool_use_id === id)?.content;
+  return typeof content === 'string' ? content : Array.isArray(content) ? content.map((c: Event) => String(c.text ?? '')).join('') : undefined;
+}
 /** Normalize a recorded native stream into the skills it loaded and the commands it completed. */
 export function parseSession(harness: Harness, text: string, exitCode: number, started: number, rollout = ''): SessionRecord {
   if (exitCode !== 0) throw new Error(`exit:${exitCode}`);
@@ -38,7 +42,7 @@ export function parseSession(harness: Harness, text: string, exitCode: number, s
       skills: [...commands, ...uses.filter(u => u.name === 'Skill' && typeof u.input?.skill === 'string').map(u => u.input.skill as string)],
       commands: uses.filter(u => u.name === 'Bash' && typeof u.input?.command === 'string').map(u => u.input.command as string),
       tools: stream.filter(e => e.type === 'assistant' && Array.isArray(e.message?.content)).flatMap(e => (e.message.content as Event[]).filter(b => b.type === 'tool_use')
-        .map(b => ({ name: String(b.name), id: String(b.id), input: b.input ?? {}, parent: e.parent_tool_use_id ?? null }))) };
+        .map(b => ({ name: String(b.name), id: String(b.id), input: b.input ?? {}, parent: e.parent_tool_use_id ?? null, failed: failed.has(b.id), result: resultText(blocks, b.id) }))) };
   }
   const items = stream.filter(e => e.type === 'item.completed' && e.item && typeof e.item === 'object').map(e => e.item as Event);
   const commands = items.filter(i => i.type === 'command_execution' && i.exit_code === 0 && typeof i.command === 'string').map(i => i.command as string);

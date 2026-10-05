@@ -371,18 +371,19 @@ describe('headless recipes', () => {
     expect((await new MacDriver(command, record).exercise(receipt))[0]!.assertions).toContain('invoke:skill-loaded');
   });
 
-  test('poteto-agent preload rejects a child that called Skill and a reply without the principle', async () => {
+  test('poteto-agent preload reads the child reply and rejects child tool calls, errors and a missing principle', async () => {
     const { root, installation } = await candidate('claude');
-    const stream = (childTool?: string) => lines([
+    const stream = (reply: string, options: { childTool?: string; error?: boolean } = {}) => lines([
       { type: 'assistant', parent_tool_use_id: null, message: { content: [{ type: 'tool_use', id: 'toolu_agent', name: 'Agent', input: { subagent_type: 'pstack:poteto-agent' } }] } },
-      ...childTool ? [{ type: 'assistant', parent_tool_use_id: 'toolu_agent', message: { content: [{ type: 'tool_use', id: 'toolu_child', name: childTool, input: { skill: 'pstack:poteto-mode' } }] } }] : [],
-      { type: 'result', subtype: 'success', is_error: false, result: 'done' },
+      ...options.childTool ? [{ type: 'assistant', parent_tool_use_id: 'toolu_agent', message: { content: [{ type: 'tool_use', id: 'toolu_child', name: options.childTool, input: {} }] } }] : [],
+      { type: 'user', message: { content: [{ type: 'tool_result', tool_use_id: 'toolu_agent', is_error: !!options.error, content: [{ type: 'text', text: reply }] }] } },
+      { type: 'result', subtype: 'success', is_error: false, result: 'The first is Laziness Protocol.' },
     ]);
-    const reply = (text: string) => async (cwd: string) => { await writeFile(join(cwd, 'result.md'), text); };
-    const run = (s: string, text: string) => new MacDriver(command, stub(s, reply(text)).record).exercise(selected(root, installation, ['agent-preload:poteto-agent']));
-    expect((await run(stream(), 'The first is **Laziness Protocol**.'))[0]!.assertions).toEqual(['dispatch:exit-0', 'dispatch:agent-dispatched', 'dispatch:child-no-skill-load', 'dispatch:file:result.md', 'dispatch:principle-named']);
-    await expect(run(stream('Skill'), 'The first is **Laziness Protocol**.')).rejects.toThrow('child-loaded-skill:poteto-mode');
-    await expect(run(stream(), 'The SKILL.md was not preloaded.')).rejects.toThrow('principle-missing:Laziness Protocol');
+    const run = (s: string) => new MacDriver(command, stub(s).record).exercise(selected(root, installation, ['agent-preload:poteto-agent']));
+    expect((await run(stream('The first is **Laziness Protocol**.')))[0]!.assertions).toEqual(['dispatch:exit-0', 'dispatch:agent-dispatched', 'dispatch:child-no-tools', 'dispatch:principle-named']);
+    await expect(run(stream('The first is **Laziness Protocol**.', { childTool: 'Bash' }))).rejects.toThrow('child-used-tools');
+    await expect(run(stream('poteto-mode was not preloaded.'))).rejects.toThrow('principle-missing:Laziness Protocol');
+    await expect(run(stream('Laziness Protocol', { error: true }))).rejects.toThrow('agent-not-dispatched');
   });
 
   test('a success claim with no fixture file fails', async () => {

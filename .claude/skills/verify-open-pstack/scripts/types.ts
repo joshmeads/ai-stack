@@ -47,7 +47,7 @@ export interface SessionRecord {
   /** Shell commands the harness completed successfully. */
   commands: string[];
   /** Claude only: every tool call, with `parent` set to the Agent call's id for a subagent's own calls. */
-  tools: { name: string; id: string; input: Record<string, any>; parent: string | null }[];
+  tools: { name: string; id: string; input: Record<string, any>; parent: string | null; result?: string; failed: boolean }[];
 }
 export interface Driver {
   prepare(receipt: Receipt): Promise<Installation[]>;

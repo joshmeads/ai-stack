@@ -81,8 +81,11 @@ describe('exact-head evidence publication', () => {
         await expect(verify(f.options)).rejects.toThrow('rerun from that checkout');
         expect(f.calls.some(call => ['prepare', 'exercise', 'cleanup', 'comment'].includes(call) || call.startsWith('status:'))).toBe(false);
       } else {
-        expect((await verify(f.options)).status).toBe('success');
+        const receipt = await verify(f.options);
+        expect(receipt.status).toBe('success');
         expect(f.calls).toContain('prepare'); expect(f.calls).toContain('exercise');
+        // A verifier change keeps native project proof in both harnesses even when only another feature is named.
+        expect(receipt.observations.map(record => `${record.harness}/${record.feature}`).sort()).toEqual(['claude/project-skill', 'claude/skill-invocation:architect', 'codex/project-skill']);
       }
     }
   });
