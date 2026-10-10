@@ -121,6 +121,27 @@ Give it:
   bathtub — if the topsides come out as parallel slab sides, keep working."
   Naming the failure mode is the single most effective line in a brief.
 
+## Faceting that reads as a style, not a broken mesh
+
+Stylised low-poly is a few large planes with crisp edges and consistent
+shading. Random vertex noise followed by decimation and flat shading gives the
+opposite: a confetti of small triangles that each catch the light differently,
+which reads as a broken mesh at any distance. For rocks, cliffs and other
+faceted forms:
+
+- Shape with planes: cut a block with a handful of bisect or boolean planes,
+  or fracture it into chunks (cell fracture), then cut a few secondary bevels.
+  Do not displace with high-frequency noise.
+- Merge coplanar and near-coplanar faces (limited dissolve around 5-10
+  degrees) so every visible facet is a deliberate plane. At the gameplay
+  camera a facet should span a clear part of the silhouette, not a few pixels.
+- Shade smooth with split normals at a sharp angle (about 30-40 degrees): the
+  big planes stay flat and crisp, tiny angle changes stop flickering.
+- Put fine detail (cracks, grain, strata) in textures, normal maps or the
+  material, not in geometry.
+- Check a close-up render: alternating light and dark slivers inside one face
+  of the rock mean the facets are noise, not design.
+
 ## Work out the fidelity budget before you model anything
 
 One object gets one UV square, so the detail it can ever carry is fixed before
