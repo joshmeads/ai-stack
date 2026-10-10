@@ -32,7 +32,7 @@ All work runs through one orchestrator and its subagents. Only the orchestrator 
 | QA (`.codex/agents/qa.toml`) | `gpt-6-astra`, high | Decides whether a task or a tier is done; runs the game, captures, probes and tests itself | Edits source files; passes work because "it's close" |
 
 ## Workflow
-1. **Plan.** The orchestrator writes `PLAN.md` (at most 200 lines): module boundaries, types, state shape, events, and the task list. Each task names its files, dependencies and acceptance, copied from the GDD. Tasks that run in parallel touch disjoint files.
+1. **Plan.** The orchestrator writes `PLAN.md` (at most 200 lines): module boundaries, types, state shape, events, and the task list. Each task names its files, dependencies and acceptance, copied from the GDD. Tasks that run in parallel touch disjoint files. Split each tier into 2–4 tasks that can run at once, for example simulation and rules, rendering and art, and UI and audio. Never put a whole tier in one task.
 2. **Worktree per task.** `git worktree add .worktrees/<task> -b task/<task> integration`. The orchestrator gives the implementer the absolute worktree path. The implementer runs every command from that path.
 3. **Implement.** The implementer builds the task, commits on its branch, and returns: what changed, how to see it, and its own check results.
 4. **QA the task.** The orchestrator spawns a fresh QA agent on the task branch, with the task's acceptance criteria. QA returns `PASS` or `FAIL` with a numbered defect list and evidence (capture paths, probe output, steps to reproduce).
@@ -48,6 +48,8 @@ All work runs through one orchestrator and its subagents. Only the orchestrator 
 2. The game runs end to end with no stuck points or errors.
 3. Everything else: tooling, telemetry, docs, tests.
 Work on a lower priority only when it directly unblocks a higher one. No task or milestone consists only of harnesses, contracts, telemetry or "evidence".
+
+Look work uses the engine's look skill when it is installed: `threejs-aaa-graphics-builder` for three.js, and the "Look and feel" section of `phaser-4` for Phaser. QA uses the look review in `web-game-qa`. Compare captures against `refs/` at the same camera.
 
 ## Do what was asked, literally
 - If the GDD names a ruleset, game, technique or reference, implement exactly that. Do not substitute a simpler "inspired" version. If you cannot, write it in JOSH.md and continue with everything else.
@@ -96,6 +98,7 @@ A feature is not done until it is imported and reachable from the entry point, a
 ## Verification budget
 - **Per task:** one capture set of the affected views, and one FPS check of 60 seconds or less.
 - **Per tier:** one full run per quality level.
+- **Missing hardware:** checks that need absent hardware or software (a physical gamepad, a specific GPU, a browser that is not installed) are "verify if available; otherwise report as unverified". They never block a tier, QA verdict or merge to `main`.
 - **Do not build, unless the GDD asks:** build-identity or dirty-diff hashes, clean-clone reinstall checks, byte-reproducible exports, licence ledgers with saved web pages, corrupted-file tests, or repeated full-length real-time runs.
 - **No log polling.** Start a long command, do other work, then read the result once.
 - **Before FPS runs,** check disk space, other GPU jobs and that the machine is on power. Discard numbers taken under contention.

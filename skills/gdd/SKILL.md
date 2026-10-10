@@ -66,7 +66,7 @@ Keep asking until the open-question list is empty, or until the user tells you t
 - **When the user says to use your judgement,** decide. Record each such decision in the GDD's **Assumptions** section with the choice and a one-line reason, so the user can scan and override them later.
 - **Final round.** List every decision you made on your own, then ask once whether anything is wrong or missing. Write the files only after that answer, or after "go".
 
-If no user can answer (non-interactive run), write the GDD with every guess marked in **Assumptions**. List the unanswered questions in `JOSH.md`, and say so in your final message.
+If no user can answer (non-interactive run), write the GDD with every guess marked in **Assumptions**. Still give the build a visual target: generate 2–4 concept frames with `image_gen` at gameplay cameras, save them in `refs/`, and label them "self-selected, not user-approved" in **References**. List the unanswered questions in `JOSH.md`, and say so in your final message.
 
 ## 3. Write GDD.md
 
@@ -75,7 +75,9 @@ Follow `references/gdd-template.md`. These rules apply to every line:
 - **Concrete and testable.** Use numbers with units and limits: "max 2 player shots on screen", "turn rate 90°/s, ease-in 0.25 s", "1920×1080 at 60 FPS on an RTX 5080, p99 frame ≤ 20 ms". An adjective needs a measure or a reference image.
 - **Acceptance describes what a player sees or does.** For example: "the log stays fully in frame on every bend and during free look", or "rocks rest on the ground: no gap or overlap visible at gameplay cameras".
 - **Quality bar.** Write it as reference images plus a defect list, not as adjectives. The list holds the things that would make the user call the game bad.
-- **Scope in tiers.** Tier 1 is the smallest complete, playable game in the real art direction, not a grey-box prototype. Each tier lists its features with acceptance. Add the rules "Never break a lower tier to work on a higher one" and "Unfinished features are hidden behind flags, not left broken". Write an explicit **Out of scope** list.
+- **Derived numbers agree.** Before finishing, compute what the stated numbers imply and check it against the stated targets: level length ÷ speed gives level duration, levels × duration gives run length, spawn rate × duration gives counts, and the score ceiling follows from the scoring rules. Fix any mismatch in the GDD. *(One GDD set 2,560–3,840 px levels at 180 px/s against a 3–5 minute run target; the built campaign lasted under a minute.)*
+- **Hardware-only checks never gate a tier.** Acceptance that needs hardware or software that may be absent (a physical gamepad, a specific GPU, a browser that is not installed) is written as "verify if available; otherwise report as unverified". The game behaviour itself still gates the tier.
+- **Scope in tiers.** Tier 1 is the smallest complete, playable game in the real art direction, not a grey-box prototype. The look work (assets, variants, lighting, palette) is part of tier 1 as its own items, not polish deferred to a later tier. Each tier lists its features with acceptance. Add the rules "Never break a lower tier to work on a higher one" and "Unfinished features are hidden behind flags, not left broken". Write an explicit **Out of scope** list.
 - **Core mechanic first.** Describe the core mechanic's physical or rules behaviour exactly, for example "the tow line applies equal and opposite impulses to boat and capsule".
 - **Assets.** Unless the user restricted them, the GDD allows these without asking:
   - CC0 asset libraries (Poly Haven, ambientCG, Kenney, CC0 OpenGameArt);
