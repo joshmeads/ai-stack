@@ -81,7 +81,7 @@ false economy.
 The brief audit runs in full at every level. A missing structure is structural
 whatever the effort, and low effort is where it is most likely to slip past.
 
-    /blender-model a wayside cross, waist high, seen at 22 m --effort low
+    $jm:games:tools:blender-model a wayside cross, waist high, seen at 22 m --effort low
 
 ## What to put in the brief
 
