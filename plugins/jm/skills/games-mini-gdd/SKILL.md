@@ -65,7 +65,10 @@ For each style, save to `concepts/<style-name>/`:
 - `prompt.md`: the prompts used.
 
 Look at every image. Regenerate any that misses the prompt, shows text you did
-not ask for, or looks like a different game from its siblings.
+not ask for, or looks like a different game from its siblings. A style named
+after a technique must show it plainly (a "cel" or "toon" style needs visible
+flat colour bands and outlines; "pixel art" needs a visible pixel grid), and
+the styles must be told apart at thumbnail size.
 
 ## 4. Condense into GDD.md
 
@@ -100,7 +103,9 @@ sprites, Blender models, shaders, CC0 assets; relative effort; risk).
 Pending: waiting for the user's choice.
 ```
 
-Each concept option takes 40-70 words.
+Open each of the six paragraphs with its label in bold (**Concept.**, **Core
+loop.**, **Controls.**, **Art and audio.**, **Scope.**, **Risks.**) so the
+document scans. Each concept option takes 40-70 words.
 
 ## 5. Log, commit, stop
 
