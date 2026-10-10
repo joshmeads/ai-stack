@@ -49,7 +49,7 @@ All work runs through one orchestrator and its subagents. Only the orchestrator 
 3. Everything else: tooling, telemetry, docs, tests.
 Work on a lower priority only when it directly unblocks a higher one. No task or milestone consists only of harnesses, contracts, telemetry or "evidence".
 
-Look work uses the engine's look skill when it is installed: `jm:games-tools-threejs-look` for three.js, and the "Look and feel" section of `jm:games-tools-phaser` for Phaser. QA uses the look review in `jm:games-tools-web-qa`. Compare captures against `refs/` at the same camera.
+Look work uses the engine's look skill when it is installed: `jm:games:tools:threejs-look` for three.js, and the "Look and feel" section of `jm:games:tools:phaser` for Phaser. QA uses the look review in `jm:games:tools:web-qa`. Compare captures against `refs/` at the same camera.
 
 ## Do what was asked, literally
 - If the GDD names a ruleset, game, technique or reference, implement exactly that. Do not substitute a simpler "inspired" version. If you cannot, write it in JOSH.md and continue with everything else.
