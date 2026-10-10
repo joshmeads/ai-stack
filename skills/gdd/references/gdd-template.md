@@ -52,6 +52,9 @@ Every gameplay number lives here and in one config module in the code (for examp
 - Quality bar: matches `refs/` at similar cameras.
 - Defect list: <the user's "would look bad if" answers>.
 - Mood: the feeling the art and audio together should create.
+- Variety: every repeated prop, hazard, tile or enemy has at least 3 variants, and identical neighbours never sit side by side.
+- Depth: for side or top-down 2D views, at least three depth layers (background, midground, play layer); for 3D, near, mid and far detail.
+- Levels: when there are several levels or areas, each has its own palette or lighting change.
 
 ## Audio
 - Music, sound effects, generation method, start-after-input, toggles, pause behaviour.
