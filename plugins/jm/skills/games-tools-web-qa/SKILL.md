@@ -170,7 +170,9 @@ node scripts/compare.cjs --out qa/look/levels.png --cols 3 \
   a missing glow, not a style choice. Hard rectangular cut-offs, seams and
   repeated pieces show up at the edges. On a near 3D object, many small
   triangles of alternating brightness inside what should be one surface are
-  broken faceting, not a style: report it.
+  broken faceting, not a style: report it. Stair-stepped silhouette
+  edges in a 3D game usually mean anti-aliasing is off (common once a
+  post-processing composer is used): report it.
 - **Across levels.** One sheet with start, middle and late captures of every
   level. If two levels are hard to tell apart at thumbnail size, or their
   average brightness and warmth differ by only a few points, Variety is below
