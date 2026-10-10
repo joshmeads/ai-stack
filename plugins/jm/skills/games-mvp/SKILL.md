@@ -58,7 +58,9 @@ Time-box it: the look slice gets about a third of the MVP session (or 45
 minutes, whichever is shorter). The MVP has to show the direction, not finish
 it. Move on when the capture reads as the approved style at a glance: same
 palette and light direction, same composition and framing, real modelled or
-generated assets (no placeholders in the main view). List the remaining
+generated assets (no placeholders in the main view), every depth layer the
+concept shows (background, middle and foreground framing, not a flat fill),
+and no run of identical tiles or props side by side. List the remaining
 differences in `shots/look/REVIEW.md`; `games:final` closes them. Look QA in
 this stage judges against that bar, not against every closable difference.
 
