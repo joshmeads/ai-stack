@@ -1,52 +1,106 @@
 ---
 name: try-to-break
-description: Adversarially exercise a feature, change, or integration when asked to try to break it, test adversarially, or check logic and security failures. Produce reproducible evidence; not a generic style or architecture audit.
+description: >
+  Try to break a feature, change or integration on purpose, and report what
+  failed with reproducible evidence. Use when asked to try to break something,
+  test adversarially, look for logic, state or security failures, or check an
+  integration branch before merge. Works for web apps and games, native and
+  desktop apps, CLIs and APIs. Not a style or architecture review.
 ---
 
 # Try to break it
 
-Complement `stack:principle-prove-it-works` and normal functional verification with focused attempts to violate expected behavior. Apply across web, native/iOS, desktop/Electron, CLI, and backend/API applications, including the combined behavior of an integration branch. Scale the work to the change; do not impose an exhaustive audit on trivial edits.
+Normal verification shows the intended path works. This skill attacks the
+paths around it: bad input, wrong order, repeated or interrupted actions,
+missing permissions, failing dependencies. Scale the effort to the change; a
+one-line fix gets a few targeted attempts, a new feature or an integration
+branch gets more.
 
-## Respect the task and routing
+Before acting, read and follow
+`/home/me/.local/share/open-pstack/skills/task-discipline/SKILL.md` for scope,
+autonomy, tests and model routing. A standalone invocation only reports; it
+does not change product code.
 
-Read the shared [task-discipline](/home/me/.local/share/open-pstack/skills/task-discipline/SKILL.md) skill before acting. Retain its scope, autonomy, testing, and model preferences. Review and architecture use Astra high; Fable high is allowed only on documented Astra unavailability, subject to explicit user overrides. Prefer an independent eligible reviewer when available. The parent selects and records routing; children neither delegate nor reroute themselves. Never quietly substitute an unauthorized model. Report any blocked review role and complete independent authorized checks. Repairs within authorized implementation follow task-discipline's implementation model policy.
+## 1. Decide what must hold
 
-## Establish what must hold
+Read the request, the diff or revision, the relevant code and contracts, and
+the real entry points (UI, API routes, CLI commands, game input). Treat green
+tests and an implementer's summary as leads, not proof.
 
-Identify the requested behavior, actual revision or working-tree changes, integration base and combined scope, relevant environment, and real entrypoints. Read applicable repository instructions and inspect the implementation and contracts. Treat implementer summaries and green tests as leads, not proof.
+Write down the few rules that matter, in one line each. For example: "only the
+owner can delete a project"; "a level-complete screen awards the bonus once";
+"a crash mid-save leaves the old save intact". For an integration branch, add
+the rules that only show up when features combine (shared state, ordering,
+two features writing the same thing).
 
-State the boundaries and invariants that matter: who may act on which data, valid state transitions, ownership of side effects, and what must survive failure. Follow nearby code only into dependencies relevant to changed behavior. For integrations, examine shared state and ordering across features rather than assuming isolated feature checks prove their combination.
+## 2. Pick attacks
 
-## Choose concrete attempts
+Choose the attacks a real user, a hostile user or a bad network would trigger
+against those rules. Pick by impact, not by list:
 
-Select plausible, high-impact scenarios proportionately to exposed boundaries and consequences. Use relevant lenses, not a mandatory checklist:
+| Lens | Examples |
+| --- | --- |
+| Permissions and input | another user's ID in the URL; script or path tricks in a text field reaching a query, the DOM or the filesystem |
+| Repetition and order | double-click submit; replay a request after a lost response; two tabs editing the same record; pressing jump and pause in the same frame |
+| Interruption | close the window mid-write; kill a CLI halfway, then rerun it; go offline and reconnect with stale edits; tab away mid-transition |
+| Bad state | restart from the results screen during the fade; resize during a level load; a value at its limit (0 lives, full inventory, empty list) |
+| Dependencies | the API returns 500 or times out; an asset fails to load; storage is full |
+| Load | rapid input for 30 seconds; a large file; many items on screen, if performance matters |
 
-- Authorization and tenant boundaries; untrusted input reaching privileged operations, queries, rendering, or filesystem sinks.
-- Duplicate or partial operations, retries, concurrent requests, and invalid or stale state.
-- Cancellation, restart, offline operation, reconnect, and dependency failures.
-- Resource use or performance where material; interactions among integrated features.
+Only use attacks the actual behaviour makes plausible.
 
-For example, replay an API mutation after a lost response; reconnect an iOS client with stale edits; close an Electron window during a write; interrupt a CLI operation and retry. Choose only examples supported by the actual behavior and contracts.
+## 3. Run them safely
 
-## Execute and preserve evidence
+Exercise the real code through its real entry points: existing tests, a
+scratch probe script, the UI or API, or injected faults. For browser games,
+the `games:tools:web-qa` probe can script rapid input, focus loss and resize.
 
-Exercise actual code and entrypoints using existing tests, temporary probes, UI/API flows, or fault injection. Inspect relevant contracts at the boundary being tested. For each meaningful attempt, record the revision/environment, setup and inputs, expected versus actual result, reproducible steps or command, and relevant code locations or captured output.
+- Run disruptive attempts only against local or synthetic environments, with
+  bounded retries, data sizes and concurrency, and clean up afterwards.
+- Never touch production, third-party systems or real users' records, and
+  never send real messages or make real purchases, without explicit
+  permission.
+- If an essential check needs access you do not have, finish the rest and name
+  exactly what is missing. Never fake the result or quietly swap in a mock.
 
-Run disruptive probes only in isolated synthetic/local test environments. Bound concurrency, data size, retries, and cleanup to prevent runaway load or external side effects. Do not probe production, third-party systems, real-user records, send real messages, or make real purchases without explicit authorization. If an essential live check is unavailable, finish independent checks and identify the exact missing boundary and access/environment requirement. Never fabricate evidence or silently replace that boundary with mocks.
+## 4. Record evidence
 
-Keep evidence states distinct:
+For each attempt that matters: revision and environment, steps or command,
+expected versus actual result, and the relevant code location or output. Keep
+four kinds separate:
 
-- **Reproduced/confirmed:** observed failure, with supporting reproduction or direct evidence.
-- **Grounded but unverified:** a specific code or contract concern, with the missing confirming check stated.
-- **Cleared:** the attempted scenario met its expectation in the tested conditions.
-- **Untested:** a relevant path not exercised, with the reason.
+- **Broken:** observed failure with a reproduction.
+- **Suspected:** a specific code or contract concern you could not confirm,
+  and the check that would confirm it.
+- **Held:** the attempt behaved correctly under the tested conditions.
+- **Not tried:** a relevant path you did not exercise, and why.
 
-Do not manufacture findings or provide a hypothetical vulnerability list. A clean run is not a correctness or security guarantee.
+Report only what you saw or can point to. No hypothetical vulnerability lists.
+Zero failures is a valid result; it is not a guarantee.
 
-## Repair only within authorization, then finish
+## 5. Fix or hand back
 
-A standalone invocation reports findings without changing product code. During already-authorized implementation, return confirmed defects in requested behavior for scoped repair; repeat each failing scenario and affected normal verification after repair. Report unrelated pre-existing issues as follow-ups without fixing them.
+- Standalone: report, do not fix.
+- Inside an already authorised build: send confirmed failures in the requested
+  behaviour back for repair, then rerun the failing attempt and the normal
+  checks it touches.
+- Pre-existing problems outside the change: list them as follow-ups.
 
-Scratch checks need not be committed. Add permanent tests only when requested or when the repository already keeps this kind of test, matching neighboring tests and stated behaviors. Follow task-discipline rather than creating an always-test rule.
+Keep scratch probes out of the repository unless the user asked for tests or
+the repository already keeps tests of that kind.
 
-Stop after proportionate relevant scenarios and scoped rechecks, or concrete access/environment limits. Report findings by severity and impact with evidence and reproduction, then tested coverage, cleared cases, unverified concerns, and remaining gaps. Zero findings is valid; describe exactly what was tested.
+## Report
+
+```markdown
+## Try to break: <feature or branch> @ <revision>
+Rules checked: <the one-line rules from step 1>
+
+Broken
+1. <severity> <what broke> — steps: ... — expected ... got ... — <file:line or output>
+
+Suspected
+- <concern> — would confirm with: ...
+
+Held: <attempts that passed, one line each>
+Not tried: <path> — <reason>
+```
