@@ -1,106 +1,35 @@
 ---
 name: try-to-break
 description: >
-  Try to break a feature, change or integration on purpose, and report what
-  failed with reproducible evidence. Use when asked to try to break something,
-  test adversarially, look for logic, state or security failures, or check an
-  integration branch before merge. Works for web apps and games, native and
-  desktop apps, CLIs and APIs. Not a style or architecture review.
+  Try to break a feature, change or integration on purpose and report what
+  fails, with evidence. Use when asked to try to break something, test
+  adversarially, or look for logic, state or security failures before a merge
+  or release. Any kind of app or game. Not a style or architecture review.
 ---
 
 # Try to break it
 
-Normal verification shows the intended path works. This skill attacks the
-paths around it: bad input, wrong order, repeated or interrupted actions,
-missing permissions, failing dependencies. Scale the effort to the change; a
-one-line fix gets a few targeted attempts, a new feature or an integration
-branch gets more.
+Normal checks show the intended path works. Your job is the opposite: find
+where it doesn't. Think like a careless user, a hostile user and an unreliable
+network, and aim at what the change is supposed to guarantee. Spend effort in
+proportion to the change and its risk.
 
-Before acting, read and follow
-`/home/me/.local/share/open-pstack/skills/task-discipline/SKILL.md` for scope,
-autonomy, tests and model routing. A standalone invocation only reports; it
-does not change product code.
+Follow `/home/me/.local/share/open-pstack/skills/task-discipline/SKILL.md` for
+scope, autonomy and model routing.
 
-## 1. Decide what must hold
+Use your judgement on what to attack and how. A few things are not optional:
 
-Read the request, the diff or revision, the relevant code and contracts, and
-the real entry points (UI, API routes, CLI commands, game input). Treat green
-tests and an implementer's summary as leads, not proof.
+- **Real behaviour, not assumptions.** Exercise the actual code through its
+  real entry points. Passing tests and summaries are leads, not proof.
+- **Safe targets only.** Disruptive attempts run against local or test
+  environments. Never touch production, third-party systems or real users'
+  data without explicit permission. If a check needs access you don't have,
+  say exactly what's missing rather than faking it.
+- **Honest evidence.** Report what you saw, with enough to reproduce it.
+  Keep confirmed failures, unconfirmed suspicions and untested areas clearly
+  apart. Finding nothing is a valid result, not a guarantee.
+- **Report, don't fix,** unless you are inside a build that already
+  authorises repairs; then fix only the requested behaviour and recheck it.
 
-Write down the few rules that matter, in one line each. For example: "only the
-owner can delete a project"; "a level-complete screen awards the bonus once";
-"a crash mid-save leaves the old save intact". For an integration branch, add
-the rules that only show up when features combine (shared state, ordering,
-two features writing the same thing).
-
-## 2. Pick attacks
-
-Choose the attacks a real user, a hostile user or a bad network would trigger
-against those rules. Pick by impact, not by list:
-
-| Lens | Examples |
-| --- | --- |
-| Permissions and input | another user's ID in the URL; script or path tricks in a text field reaching a query, the DOM or the filesystem |
-| Repetition and order | double-click submit; replay a request after a lost response; two tabs editing the same record; pressing jump and pause in the same frame |
-| Interruption | close the window mid-write; kill a CLI halfway, then rerun it; go offline and reconnect with stale edits; tab away mid-transition |
-| Bad state | restart from the results screen during the fade; resize during a level load; a value at its limit (0 lives, full inventory, empty list) |
-| Dependencies | the API returns 500 or times out; an asset fails to load; storage is full |
-| Load | rapid input for 30 seconds; a large file; many items on screen, if performance matters |
-
-Only use attacks the actual behaviour makes plausible.
-
-## 3. Run them safely
-
-Exercise the real code through its real entry points: existing tests, a
-scratch probe script, the UI or API, or injected faults. For browser games,
-the `games:tools:web-qa` probe can script rapid input, focus loss and resize.
-
-- Run disruptive attempts only against local or synthetic environments, with
-  bounded retries, data sizes and concurrency, and clean up afterwards.
-- Never touch production, third-party systems or real users' records, and
-  never send real messages or make real purchases, without explicit
-  permission.
-- If an essential check needs access you do not have, finish the rest and name
-  exactly what is missing. Never fake the result or quietly swap in a mock.
-
-## 4. Record evidence
-
-For each attempt that matters: revision and environment, steps or command,
-expected versus actual result, and the relevant code location or output. Keep
-four kinds separate:
-
-- **Broken:** observed failure with a reproduction.
-- **Suspected:** a specific code or contract concern you could not confirm,
-  and the check that would confirm it.
-- **Held:** the attempt behaved correctly under the tested conditions.
-- **Not tried:** a relevant path you did not exercise, and why.
-
-Report only what you saw or can point to. No hypothetical vulnerability lists.
-Zero failures is a valid result; it is not a guarantee.
-
-## 5. Fix or hand back
-
-- Standalone: report, do not fix.
-- Inside an already authorised build: send confirmed failures in the requested
-  behaviour back for repair, then rerun the failing attempt and the normal
-  checks it touches.
-- Pre-existing problems outside the change: list them as follow-ups.
-
-Keep scratch probes out of the repository unless the user asked for tests or
-the repository already keeps tests of that kind.
-
-## Report
-
-```markdown
-## Try to break: <feature or branch> @ <revision>
-Rules checked: <the one-line rules from step 1>
-
-Broken
-1. <severity> <what broke> — steps: ... — expected ... got ... — <file:line or output>
-
-Suspected
-- <concern> — would confirm with: ...
-
-Held: <attempts that passed, one line each>
-Not tried: <path> — <reason>
-```
+End with a short report: what broke and how to reproduce it, what you
+suspect but couldn't confirm, and what you didn't cover.
