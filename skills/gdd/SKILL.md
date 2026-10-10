@@ -50,7 +50,7 @@ Many of these trace back to vague GDD wording: adjectives instead of numbers, ar
    - Is there an existing GDD, AGENTS.md or code?
    - Do sibling projects set conventions to carry over (package manager, renderer, ports, remote)?
 3. Walk every section of `references/gdd-template.md` and every area in `references/question-bank.md`. Wherever you would have to guess, add an entry to an **open-question list**. Do not guess silently.
-4. If the user gave no reference images for the look, offer to generate 2–4 concept images with Codex's built-in `image_gen` tool (the `imagegen` skill). Let the user pick or reject them during the interview. Approved images go in `refs/`.
+4. If the user gave no reference images for the look, offer to generate 2–4 concept images with Codex's built-in `image_gen` tool (the `imagegen` skill). Each frame looks like an in-game screenshot of this game at a gameplay camera, with the HUD visible. Use the stated art style, at a detail level the chosen engine and asset pipeline can reach. Do not use matte paintings or film stills: reviewers cannot match them and learn to ignore them. Let the user pick or reject them during the interview. Approved images go in `refs/`.
 
 ## 2. Grill the user
 
@@ -66,7 +66,7 @@ Keep asking until the open-question list is empty, or until the user tells you t
 - **When the user says to use your judgement,** decide. Record each such decision in the GDD's **Assumptions** section with the choice and a one-line reason, so the user can scan and override them later.
 - **Final round.** List every decision you made on your own, then ask once whether anything is wrong or missing. Write the files only after that answer, or after "go".
 
-If no user can answer (non-interactive run), write the GDD with every guess marked in **Assumptions**. Still give the build a visual target: generate 2–4 concept frames with `image_gen` at gameplay cameras, save them in `refs/`, and label them "self-selected, not user-approved" in **References**. List the unanswered questions in `JOSH.md`, and say so in your final message.
+If no user can answer (non-interactive run), write the GDD with every guess marked in **Assumptions**. Still give the build a visual target: generate 2–4 concept frames with `image_gen` by the same rule as step 1.4, save them in `refs/`, and label them "self-selected, not user-approved" in **References**. List the unanswered questions in `JOSH.md`, and say so in your final message.
 
 ## 3. Write GDD.md
 

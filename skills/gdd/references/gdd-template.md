@@ -49,7 +49,7 @@ Every gameplay number lives here and in one config module in the code (for examp
 ## Art direction
 - Style, palette, lighting, time of day.
 - Asset sources: CC0 libraries, headless Blender scripts and `image_gen` artwork, logged in `ASSETS.md`.
-- Quality bar: matches `refs/` at similar cameras.
+- Quality bar: matches `refs/` at similar cameras. QA puts each capture next to its reference (`web-game-qa` `scripts/compare.cjs` when installed). It treats differences the pipeline could close as defects: light colour and direction, glow, palette, and prop density.
 - Defect list: <the user's "would look bad if" answers>.
 - Mood: the feeling the art and audio together should create.
 - Variety: every repeated prop, hazard, tile or enemy has at least 3 variants, and identical neighbours never sit side by side.
