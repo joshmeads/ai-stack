@@ -57,7 +57,7 @@ Do not call external generation services (paid image, 3D or audio APIs). The too
 | Surface | Options that work well |
 | --- | --- |
 | Hero (vehicle, character, signature prop) | A Blender model with bevels, panel cuts and separate parts, UV-unwrapped and exported as GLB, inspected from a turntable render before import; trim and decal textures from `image_gen`. |
-| Rocks, cliffs, terrain pieces | Poly Haven or ambientCG scans, or Blender scripts (displaced, cracked, decimated, with baked normal and AO); several distinct forms. Shader detail on top: triplanar texture, strata, edge wear, height tint. |
+| Rocks, cliffs, terrain pieces | Poly Haven or ambientCG scans, or Blender models built from large planar cuts or fracture chunks with merged coplanar faces and smooth shading split at sharp angles (see "Faceting" in `games-tools-blender-model`), with baked normal and AO; several distinct forms. Shader detail on top: triplanar texture, strata, edge wear, height tint. Never random-noise displacement plus decimation with flat shading: it reads as a broken mesh. |
 | Sky, sun, horizon, haze | A sky shader (gradient, sun disc and glow) with height fog and distance haze tinted to the concept; an `image_gen` panorama or backdrop painting on a far sphere or cards for distant formations. |
 | Clouds, smoke, water, energy | Shaders (layered-noise billboards, soft particles, fresnel, scrolling noise) or `image_gen` cut-out sprites in an atlas. |
 | Pickups and VFX | Shader materials (emissive core, fresnel rim, additive trails) and pooled particles. |
