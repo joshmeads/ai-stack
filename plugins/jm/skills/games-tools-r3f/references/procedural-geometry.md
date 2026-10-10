@@ -2,7 +2,7 @@
 
 This skill's templates use AI-generated GLBs (via Blender MCP) as one path. **The other path is pure code** — primitives, math, vertex shaders, and Blender Python procedural. For 80–90% of award-level aesthetics, hand-coded geometry is **enough, faster, and more controllable** than reaching for AI.
 
-This file documents the procedural toolkit. Cross-reference with `shaders.md` (which has runtime usage) and the `games-tools-blender-model` skill (headless Blender modelling and GLB export).
+This file documents the procedural toolkit. Cross-reference with `shaders.md` (which has runtime usage) and the `games:tools:blender-model` skill (headless Blender modelling and GLB export).
 
 ---
 
@@ -16,7 +16,7 @@ This file documents the procedural toolkit. Cross-reference with `shaders.md` (w
 - Determinism matters (same seed → same shape)
 - Mobile budget is tight (a `SphereGeometry(1, 32, 32)` is 6× lighter than a 64-poly AI sphere)
 
-**Reach for a modelled asset (headless Blender via the `games-tools-blender-model` skill, or a CC0 library such as Poly Haven, Kenney or ambientCG) when:**
+**Reach for a modelled asset (headless Blender via the `games:tools:blender-model` skill, or a CC0 library such as Poly Haven, Kenney or ambientCG) when:**
 - You need a real-world specific object (a particular bottle, a specific car model)
 - You need detailed organic forms (faces, animals, sculptures)
 - The shape needs authored UVs, rigging or baked textures
@@ -469,7 +469,7 @@ function poissonDisc2D(w, h, r) {
 
 ## 7. Blender Python — beyond Recipe 1-4
 
-The `games-tools-blender-model` skill covers headless Blender modelling and GLB export. Here are advanced procedural patterns that go further.
+The `games:tools:blender-model` skill covers headless Blender modelling and GLB export. Here are advanced procedural patterns that go further.
 
 ### Geometry Nodes (Blender 3.4+)
 
@@ -618,7 +618,7 @@ Is the shape symmetric / mathematically describable?
 └── NO → Is it a real-world specific object?
     ├── YES (a particular brand bottle, a known person) → AI 3D or photogrammetry
     └── NO → Can you sketch it from primitives + boolean + bevel?
-        ├── YES → write Blender Python (`games-tools-blender-model` skill)
+        ├── YES → write Blender Python (`games:tools:blender-model` skill)
         └── NO → Is it a "vibe" object (creature, blob, organic)?
             ├── YES → start procedural (this file § 5/7), add AI only if time-pressed
             └── NO → AI 3D as a starting point, then refine in Blender
@@ -652,5 +652,5 @@ Pair any of these with the canonical post chain (`references/postprocessing-pass
 ## See also
 
 - `references/shaders.md` — vertex/fragment shader building blocks
-- the `games-tools-blender-model` skill — headless Blender modelling when you want to go beyond pure code
+- the `games:tools:blender-model` skill — headless Blender modelling when you want to go beyond pure code
 - Every primitive here is used in a verified template; pair code geometry with the polish chain in `references/polish-chain.md`.

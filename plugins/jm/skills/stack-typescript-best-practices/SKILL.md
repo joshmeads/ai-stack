@@ -1,5 +1,5 @@
 ---
-name: stack-typescript-best-practices
+name: stack:typescript-best-practices
 description: TypeScript best practices. Use when reading or editing any .ts or .tsx file.
 paths: ["**/*.ts", "**/*.tsx"]
 ---

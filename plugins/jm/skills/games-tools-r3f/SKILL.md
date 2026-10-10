@@ -1,5 +1,5 @@
 ---
-name: games-tools-r3f
+name: games:tools:r3f
 description: >-
   Production-grade governance for 3D web on React Three Fiber + Three.js +
   Zustand + Next.js. Treats the 3D canvas as a runtime GPU with explicit
@@ -16,7 +16,7 @@ description: >-
 license: MIT
 ---
 
-# games-tools-r3f — production 3D web, audited
+# games:tools:r3f — production 3D web, audited
 
 A 3D scene is a runtime with a GPU budget, not a decorative animation library. The non-negotiable contract: 3D must be **progressive, observable, accessible, and always replaceable by a 2D fallback**. This skill turns that contract into concrete steps, hard rules, and an audit scorecard.
 
@@ -67,7 +67,7 @@ Read `references/canvas-architecture.md`: CanvasShell with adaptive DPR, `framel
 
 ### Step 3 — Asset pipeline
 
-GLB is a compiled artifact: Blender (headless scripts: see the `games-tools-blender-model` skill) -> GLB with Draco -> gltf-transform (KTX2) -> validate -> CDN. Low/mid/high LOD, `useGLTF` + gltfjsx for JSX graphs, nested `Suspense` for progressive loading. Details in the `games-tools-blender-model` skill and `references/procedural-geometry.md` (code-only geometry is the default before AI generators).
+GLB is a compiled artifact: Blender (headless scripts: see the `games:tools:blender-model` skill) -> GLB with Draco -> gltf-transform (KTX2) -> validate -> CDN. Low/mid/high LOD, `useGLTF` + gltfjsx for JSX graphs, nested `Suspense` for progressive loading. Details in the `games:tools:blender-model` skill and `references/procedural-geometry.md` (code-only geometry is the default before AI generators).
 
 ### Step 4 — Polish chain (in this order)
 
@@ -128,7 +128,7 @@ Core (written for this skill, enterprise standard):
 Asset and shader (MIT, derived from public awwwards-3d references):
 - `references/procedural-geometry.md` — code-only geometry (primitives, displacement, math shapes)
 - `references/shaders.md` — GLSL building blocks + production `onBeforeCompile` appendix (cache key, dissolve edge glow)
-- Blender modeling and GLB export: use the `games-tools-blender-model` skill
+- Blender modeling and GLB export: use the `games:tools:blender-model` skill
 - `scripts/export_glb.py` — headless Blender -> Draco GLB export (+ `--meshopt` flag)
 
 Vendor API reference (kept with attribution + errata headers, see CREDITS.md):

@@ -1,8 +1,8 @@
 ---
-name: games-delivery
+name: games:delivery
 description: >
-  The delivery contract for every browser game built with the games-mini-gdd,
-  games-mvp and games-final stage skills: fidelity to the task prompt, platform,
+  The delivery contract for every browser game built with the games:mini-gdd,
+  games:mvp and games:final stage skills: fidelity to the task prompt, platform,
   permitted tools, assets, quality bar, per-stage scope, hosting on ChatGPT
   Sites, project hygiene, exact README sections and the end-of-session routine.
   Read it at the start of any game stage, and whenever checking whether a game
@@ -12,7 +12,7 @@ description: >
 # Game delivery requirements
 
 These requirements are mandatory at every stage. The stage is whichever stage
-skill is running: `games-mini-gdd` (GDD), `games-mvp` (MVP) or `games-final`
+skill is running: `games:mini-gdd` (GDD), `games:mvp` (MVP) or `games:final`
 (FINAL). Where a stage skill and this contract differ, this contract wins.
 
 ## Fidelity

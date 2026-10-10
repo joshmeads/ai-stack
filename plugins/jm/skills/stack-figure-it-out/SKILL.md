@@ -1,6 +1,6 @@
 ---
-name: stack-figure-it-out
-description: "Design an auditable playbook when no narrower one fits: a large migration, an ambitious multi-part change, or work a human reviews after stepping away. Scales rigor to the task, runs a hypothesis loop, and logs decisions via stack-show-me-your-work. Use for /figure-it-out, 'figure it out', a large migration, or when no narrower playbook applies."
+name: stack:figure-it-out
+description: "Design an auditable playbook when no narrower one fits: a large migration, an ambitious multi-part change, or work a human reviews after stepping away. Scales rigor to the task, runs a hypothesis loop, and logs decisions via stack:show-me-your-work. Use for /figure-it-out, 'figure it out', a large migration, or when no narrower playbook applies."
 ---
 
 # Figure it out
@@ -9,7 +9,7 @@ When the task matches no playbook, design one. The deliverable before any code i
 
 ## Start
 
-Open a todolist whose first item is to read the Principles section of the **stack-poteto-mode** skill. Then add the phases below as todos.
+Open a todolist whose first item is to read the Principles section of the **stack:poteto-mode** skill. Then add the phases below as todos.
 
 ## Phase A: Frame
 
@@ -43,7 +43,7 @@ Apply the **sequence-verifiable-units** principle skill, verifying each unit bef
 
 ## Phase D: Keep the audit trail
 
-Log the run via the **stack-show-me-your-work** skill, one canonical TSV with a row per decision and per unit, evidence as links. stack-figure-it-out's work is usually ambitious enough to commit the trail so the reviewer can read it in the PR. Commit it when confidence has to be shown. Prefer evidence produced by committed scripts. The trail plus the diff is what lets the human come back and trust the work.
+Log the run via the **stack:show-me-your-work** skill, one canonical TSV with a row per decision and per unit, evidence as links. stack:figure-it-out's work is usually ambitious enough to commit the trail so the reviewer can read it in the PR. Commit it when confidence has to be shown. Prefer evidence produced by committed scripts. The trail plus the diff is what lets the human come back and trust the work.
 
 ## Phase E: Verify and hand back
 

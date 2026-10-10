@@ -1,5 +1,5 @@
 ---
-name: stack-get-pr-comments
+name: stack:get-pr-comments
 description: Fetch and summarize review comments from the active pull request
 ---
 

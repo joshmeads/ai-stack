@@ -44,7 +44,7 @@ Match the genre: arcade racers need speed and status readability, fighters need 
 
 Codex's built-in image generation (the `image_gen` tool) covers what hand-coded CSS and icons cannot: faction logos, team crests, title marks; pickup/ability/weapon/inventory/achievement/objective icons; hazard signs, decals, lane glyphs, cockpit labels, item badges; menu, loading, and background plates; GUI material references such as glass panels, metal frames, holographic strips, parchment, tactical screens.
 
-UI that needs a real 3D object — rotating character preview, vehicle garage, weapon inspect, trophy, diorama, diegetic menu prop — uses a model from headless Blender (`games-tools-blender-model` skill), a CC0 library, or procedural geometry.
+UI that needs a real 3D object — rotating character preview, vehicle garage, weapon inspect, trophy, diorama, diegetic menu prop — uses a model from headless Blender (`games:tools:blender-model` skill), a CC0 library, or procedural geometry.
 
 ## State wiring
 

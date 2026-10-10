@@ -1,23 +1,23 @@
 ---
-name: games-final
+name: games:final
 description: >
   Stage 3 of a browser game: take the MVP to a complete, publishable game with
   all feedback in FEEDBACK.md applied, package the submission, update the same
   ChatGPT Site and verify the live build matches the local one. Use after
-  games-mvp when asked for the final build, polish pass, release or
+  games:mvp when asked for the final build, polish pass, release or
   submission build of a designed game, or when this skill is invoked.
 ---
 
 # Final build (stage: FINAL)
 
-Read `games-delivery` (the delivery contract) first; everything in it applies,
+Read `games:delivery` (the delivery contract) first; everything in it applies,
 with the FINAL scope. Then read `GDD.md`, `docs/gdd-full.md`,
 `REQUIREMENTS.md`, `AGENTS.md`, `DEPLOY.md`, `refs/` and `FEEDBACK.md` (or
-`feedback.md`) if present. Use the same skills as `games-mvp` (see its table)
+`feedback.md`) if present. Use the same skills as `games:mvp` (see its table)
 and follow `AGENTS.md` for roles, models, worktrees and independent QA.
 
 If there is no MVP or no `DEPLOY.md` with a Site `project_id`, say so and ask
-whether to run `games-mvp` first.
+whether to run `games:mvp` first.
 
 ## 1. Turn feedback into requirements
 
@@ -43,7 +43,7 @@ prompt wins: record the conflict in the table and tell the user.
 - Look: every level and screen matches the approved style, not just the first
   view. Compose the key moments of each level (start, reveals, checkpoints,
   ending) like the concept frames, give each level its own palette or light
-  where the GDD says so, and compare them with `games-tools-web-qa` as in the
+  where the GDD says so, and compare them with `games:tools:web-qa` as in the
   MVP stage.
 - Feel: tune controls, camera, feedback and difficulty by playing, and record
   the tuned numbers in the GDD.

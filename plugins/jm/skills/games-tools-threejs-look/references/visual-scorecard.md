@@ -50,7 +50,7 @@ Any one of these means the work is not premium yet, whatever the individual scor
 
 ## Measured evidence
 
-Capture the target viewports with the `games-tools-web-qa` probe (`--viewport WxH`) and score from those screenshots plus its frame timing. Measurements are advisory signals; a low value needs an explanation, not a higher score. Do not add noise, clutter, or particles just to raise pixel metrics; an intentional clean composition may legitimately measure low.
+Capture the target viewports with the `games:tools:web-qa` probe (`--viewport WxH`) and score from those screenshots plus its frame timing. Measurements are advisory signals; a low value needs an explanation, not a higher score. Do not add noise, clutter, or particles just to raise pixel metrics; an intentional clean composition may legitimately measure low.
 
 - `colorEntropyBits` below ~3.0, or `dominantColorShare` above ~0.6 — sparse flat scene. Evidence against World or Materials above 2.
 - `edgeDensity` below ~0.04 — primitive-dominant or empty framing. Evidence against World and Hero above 2.

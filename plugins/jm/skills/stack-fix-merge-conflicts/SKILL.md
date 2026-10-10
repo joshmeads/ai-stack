@@ -1,5 +1,5 @@
 ---
-name: stack-fix-merge-conflicts
+name: stack:fix-merge-conflicts
 description: Resolve merge conflicts non-interactively, validate build and tests, and finalize conflict resolution
 ---
 

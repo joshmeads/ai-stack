@@ -1,5 +1,5 @@
 ---
-name: stack-principle-test-behavior-not-implementation
+name: stack:principle-test-behavior-not-implementation
 description: "Apply when you write, change, or keep a test. Call the code the way its users do and assert the observable result or contract. Check whether a relevant defect makes the test fail. Keep useful negative-path and relational contract tests."
 user-invocable: false
 ---

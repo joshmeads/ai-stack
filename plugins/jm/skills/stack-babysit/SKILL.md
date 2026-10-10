@@ -1,5 +1,5 @@
 ---
-name: stack-babysit
+name: stack:babysit
 description: Watch an open PR — fix failing CI, handle the straightforward review comments, and drive it to a mergeable state. Claude Code analog of Cursor's built-in /babysit. Use after opening a PR when the user wants the agent to shepherd it without re-prompting.
 ---
 
@@ -9,11 +9,11 @@ Claude Code analog of Cursor's built-in `/babysit`. The implementation is a loop
 
 **Platform note.** On Codex or another non-Claude runtime, the Claude tool names and Claude built-in skills named below (`loop`, `AskUserQuestion`) are Claude defaults. Resolve them via [`codex-tools.md`](../stack-poteto-mode/references/codex-tools.md).
 
-Inside stack-poteto-mode, the **Babysit** playbook ([`../stack-poteto-mode/playbooks/babysit.md`](../stack-poteto-mode/playbooks/babysit.md)) supersedes this skill: it owns mode declaration, the merge frontier, stack safety, and the `watch-pr` watcher. This skill stays the standalone `/babysit` entry point for a single PR outside a stack-poteto-mode run.
+Inside stack:poteto-mode, the **Babysit** playbook ([`../stack-poteto-mode/playbooks/babysit.md`](../stack-poteto-mode/playbooks/babysit.md)) supersedes this skill: it owns mode declaration, the merge frontier, stack safety, and the `watch-pr` watcher. This skill stays the standalone `/babysit` entry point for a single PR outside a stack:poteto-mode run.
 
 ## When to use
 
-- There's an open PR and the user explicitly wants it kept green, and you are not already inside a stack-poteto-mode run (the playbook owns that case).
+- There's an open PR and the user explicitly wants it kept green, and you are not already inside a stack:poteto-mode run (the playbook owns that case).
 - The user invokes `/babysit` directly.
 - A subagent that opens a PR does NOT babysit — return to the parent and let the parent decide.
 
@@ -53,9 +53,9 @@ Inside stack-poteto-mode, the **Babysit** playbook ([`../stack-poteto-mode/playb
 
 ## Cross-refs
 
-- `stack-poteto-mode` opens here after a PR is opened.
-- Use `stack-interrogate` before opening if the diff is contested; once open, babysit takes over.
-- Use `stack-unslop` on any prose you write here (PR comments, commit messages, status reports).
+- `stack:poteto-mode` opens here after a PR is opened.
+- Use `stack:interrogate` before opening if the diff is contested; once open, babysit takes over.
+- Use `stack:unslop` on any prose you write here (PR comments, commit messages, status reports).
 
 ## Provenance
 

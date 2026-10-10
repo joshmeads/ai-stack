@@ -1,34 +1,34 @@
 ---
-name: games-mvp
+name: games:mvp
 description: >
   Stage 2 of a browser game: build the playable MVP from the approved GDD.md
   and concept style, with the look matched to the chosen concept first and the
   core loop playable end to end, then host it on ChatGPT Sites and record the
-  live URL. Use after games-mini-gdd once a style is chosen, when asked to
+  live URL. Use after games:mini-gdd once a style is chosen, when asked to
   build the MVP, first playable or prototype of a designed game, or when this
   skill is invoked.
 ---
 
 # MVP (stage: MVP)
 
-Read `games-delivery` (the delivery contract) first; its MVP scope, quality
+Read `games:delivery` (the delivery contract) first; its MVP scope, quality
 bar, hygiene and README rules all apply. Then read `GDD.md`,
 `docs/gdd-full.md`, `REQUIREMENTS.md`, `AGENTS.md` and `refs/`.
 
 If `GDD.md` has no chosen style, stop: the user has to pick one in
-`games-mini-gdd` first.
+`games:mini-gdd` first.
 
 ## Skills to use
 
 | Need | Skill |
 | --- | --- |
-| Phaser 4 | `games-tools-phaser` |
-| three.js look (assets, camera, framing, lighting) | `games-tools-threejs-look` |
-| three.js gameplay, UI, debugging | `games-tools-threejs-gameplay`, `games-tools-threejs-ui`, `games-tools-threejs-debug` |
-| React Three Fiber | `games-tools-r3f`, `games-tools-postprocessing` |
-| 3D models | `games-tools-blender-model` |
-| Sound and music | `games-tools-audio` |
-| Running, checking and comparing the game | `games-tools-web-qa` |
+| Phaser 4 | `games:tools:phaser` |
+| three.js look (assets, camera, framing, lighting) | `games:tools:threejs-look` |
+| three.js gameplay, UI, debugging | `games:tools:threejs-gameplay`, `games:tools:threejs-ui`, `games:tools:threejs-debug` |
+| React Three Fiber | `games:tools:r3f`, `games:tools:postprocessing` |
+| 3D models | `games:tools:blender-model` |
+| Sound and music | `games:tools:audio` |
+| Running, checking and comparing the game | `games:tools:web-qa` |
 | Hosting | `sites` (ChatGPT Sites plugin) |
 
 Follow `AGENTS.md` for roles, models, worktrees and independent QA. The MVP is
@@ -50,7 +50,7 @@ scene: the real player, a stretch of the world, the HUD and the light, made the
 way the engine's look skill describes (generated art, Blender models, shaders,
 CC0 assets, mixed as the result needs). Work in rounds of a few minutes. After
 each round, capture at 1920x1080 at the reference's camera, compare with
-`games-tools-web-qa` (side by side, `--grid 5` for composition, `--crop` on the
+`games:tools:web-qa` (side by side, `--grid 5` for composition, `--crop` on the
 player, light sources and edges; for 3D, measured camera values), commit, and
 keep the latest capture in `shots/look/`.
 
@@ -59,7 +59,7 @@ minutes, whichever is shorter). The MVP has to show the direction, not finish
 it. Move on when the capture reads as the approved style at a glance: same
 palette and light direction, same composition and framing, real modelled or
 generated assets (no placeholders in the main view). List the remaining
-differences in `shots/look/REVIEW.md`; `games-final` closes them. Look QA in
+differences in `shots/look/REVIEW.md`; `games:final` closes them. Look QA in
 this stage judges against that bar, not against every closable difference.
 
 Keep generated originals and model scripts in the repository so later rounds
@@ -75,7 +75,7 @@ for secondary pieces; the main view keeps the look from step 2.
 ## 4. Test and fix
 
 After each significant change, run the game, capture it with Playwright, look
-at the captures and play the main loop. Use the `games-tools-web-qa` probe at
+at the captures and play the main loop. Use the `games:tools:web-qa` probe at
 the game's native size, 1280x720 and 1920x1080. Check movement, collisions,
 scoring, progression, restart, window resize, focus loss and rapid input. Zero
 console errors on load and during play. Fix what is broken or unclear; do not
@@ -110,4 +110,4 @@ check.
    and `ASSETS.md`.
 4. Report: what was built, requirements status, known issues, the live URL,
    and next steps: collect feedback (`feedback` skill writes `FEEDBACK.md`),
-   then `games-final`.
+   then `games:final`.

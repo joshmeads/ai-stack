@@ -1,5 +1,5 @@
 ---
-name: stack-setup-pstack
+name: stack:setup-pstack
 description: Configure pstack's provider-qualified models, per-family requested effort, and parent-owned routes per role. Verifies native and external Claude, Codex, and Grok lanes before writing the override sheet. Use for /setup-pstack, "configure pstack models", or changing pstack's model choices.
 ---
 

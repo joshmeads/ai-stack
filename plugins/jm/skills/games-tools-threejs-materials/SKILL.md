@@ -1,13 +1,13 @@
 ---
-name: games-tools-threejs-materials
+name: games:tools:threejs-materials
 description: >
   Light and shade a three.js scene: choose materials (MeshStandardMaterial PBR vs
   unlit MeshBasicMaterial), add ambient/hemisphere/directional/point/spot lights,
   turn on shadow maps, and use an environment map (IBL) for realistic reflections.
   Use when a three.js model looks black, flat, or wrong — when the user mentions
   three.js materials, MeshStandardMaterial, lights, shadows, envMap, or PBR. For
-  renderer/loop setup use games-tools-threejs-scene; for loading models use
-  games-tools-threejs-gltf.
+  renderer/loop setup use games:tools:threejs-scene; for loading models use
+  games:tools:threejs-gltf.
 ---
 
 # three.js Materials & Lighting
@@ -23,10 +23,10 @@ against **r186** (lighting is physically based by default since r155).
 - Use when code constructs `MeshStandardMaterial`, `DirectionalLight`, etc., or sets
   `renderer.shadowMap.enabled` or `scene.environment`.
 
-**When *not* to use:** the renderer/camera/loop → `games-tools-threejs-scene`. Loading
-models (whose PBR materials this complements) → `games-tools-threejs-gltf`. Custom
+**When *not* to use:** the renderer/camera/loop → `games:tools:threejs-scene`. Loading
+models (whose PBR materials this complements) → `games:tools:threejs-gltf`. Custom
 GLSL/`ShaderMaterial` is its own topic; see the shader cookbook in
-`games-tools-threejs-look`.
+`games:tools:threejs-look`.
 
 ## Core workflow
 
@@ -165,7 +165,7 @@ renderer.toneMappingExposure = 1.0;
 
 ## Related skills
 
-- `games-tools-threejs-scene` — renderer, camera, and loop (set `shadowMap`, tone mapping).
-- `games-tools-threejs-gltf` — models arrive with PBR materials this skill tunes.
-- `games-tools-postprocessing` — bloom, tone mapping and other screen effects.
-- `games-tools-threejs-look` — art direction, material library, shader cookbook.
+- `games:tools:threejs-scene` — renderer, camera, and loop (set `shadowMap`, tone mapping).
+- `games:tools:threejs-gltf` — models arrive with PBR materials this skill tunes.
+- `games:tools:postprocessing` — bloom, tone mapping and other screen effects.
+- `games:tools:threejs-look` — art direction, material library, shader cookbook.

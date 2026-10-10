@@ -36,7 +36,7 @@ gltf-transform uastc - - | gltf-transform meshopt - out.glb
 8. **DRACO/KTX2 decoders are created ONCE**, reused, then `.dispose()`d (WASM leak). Host in `/public/draco/` and `/public/basis/`, never a CDN in production.
 9. **Never overwrite the original.** `assets/src/` (source) -> `public/models/` (artifact).
 
-## Blender export (summary; headless scripts in the `games-tools-blender-model` skill)
+## Blender export (summary; headless scripts in the `games:tools:blender-model` skill)
 
 +Y up, apply modifiers, apply transforms; named materials (gltfjsx uses them); no camera/lights in the production GLB; animations: bake and use speaking names.
 

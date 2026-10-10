@@ -1,5 +1,5 @@
 ---
-name: games-tools-web-qa
+name: games:tools:web-qa
 description: >
   Decide whether a browser game actually works, using evidence from the running
   game: clean-checkout run from the README, headless Chromium probe for errors,
@@ -122,7 +122,7 @@ would notice, or say there are none. Score each 0-3:
 
 Anything below 2 is a defect for the look work, with the capture path as
 evidence. For three.js games, use the 10-category scorecard in
-`games-tools-threejs-look` as well when that skill is installed.
+`games:tools:threejs-look` as well when that skill is installed.
 
 Two comparisons make the scores concrete. `scripts/compare.cjs` tiles images
 into one labelled sheet and prints each image's average colour, brightness

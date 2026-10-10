@@ -1,5 +1,5 @@
 ---
-name: stack-architect
+name: stack:architect
 description: "Sketch types, signatures, and module structure before code, then stay in the loop while implementation fills in. Use for /architect, 'architect this', 'design this', or non-trivial work where jumping to code would lock in the wrong shape."
 ---
 
@@ -23,7 +23,7 @@ Open a todolist with one entry per phase before starting.
 
 Build a real mental model of every system the new code touches. Run the **how** skill over the relevant subsystems.
 
-Naming a file isn't grounding. Produce the traced model `stack-how` prescribes. If the design redefines ownership or layering, also run the **why** skill on the existing shape so the rationale becomes a constraint, not a guess.
+Naming a file isn't grounding. Produce the traced model `stack:how` prescribes. If the design redefines ownership or layering, also run the **why** skill on the existing shape so the rationale becomes a constraint, not a guess.
 
 Skip Phase A only when the work is genuinely greenfield with no surrounding system to integrate.
 
