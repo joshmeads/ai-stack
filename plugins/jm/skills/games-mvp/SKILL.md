@@ -52,8 +52,15 @@ CC0 assets, mixed as the result needs). Work in rounds of a few minutes. After
 each round, capture at 1920x1080 at the reference's camera, compare with
 `games-tools-web-qa` (side by side, `--grid 5` for composition, `--crop` on the
 player, light sources and edges; for 3D, measured camera values), commit, and
-keep the latest capture in `shots/look/`. Move on when no difference a player
-would notice in the first seconds remains that the pipeline could close.
+keep the latest capture in `shots/look/`.
+
+Time-box it: the look slice gets about a third of the MVP session (or 45
+minutes, whichever is shorter). The MVP has to show the direction, not finish
+it. Move on when the capture reads as the approved style at a glance: same
+palette and light direction, same composition and framing, real modelled or
+generated assets (no placeholders in the main view). List the remaining
+differences in `shots/look/REVIEW.md`; `games-final` closes them. Look QA in
+this stage judges against that bar, not against every closable difference.
 
 Keep generated originals and model scripts in the repository so later rounds
 and the final stage reuse them instead of regenerating.
