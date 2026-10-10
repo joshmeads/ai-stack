@@ -1,5 +1,5 @@
 ---
-name: games-tools-postprocessing
+name: games:tools:postprocessing
 description: Add or fix post-processing in a vanilla Three.js game that uses the pmndrs `postprocessing` package (EffectComposer, RenderPass, EffectPass, bloom, tone mapping, SMAA, vignette, chromatic aberration, depth of field). Use when a project depends on `postprocessing`, or when the user asks for bloom, glow, color grading, or screen effects in a plain Three.js project. Not for `three/addons/postprocessing` or React Three Fiber.
 ---
 

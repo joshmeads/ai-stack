@@ -1,5 +1,5 @@
 ---
-name: stack-principle-attack-the-premise
+name: stack:principle-attack-the-premise
 description: "Apply when two or more fixes that share one premise have failed the same gate. Question the shared premise before the next fix. For imbalance problems, take a census per actor and test the asymmetry hypothesis."
 user-invocable: false
 ---

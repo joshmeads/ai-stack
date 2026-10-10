@@ -105,7 +105,7 @@ Resist the urge to:
 
 ## The Sycophancy Trap
 
-Users often phrase `stack-why` questions with an embedded hypothesis: "Why do we do it this way, I assume it's for performance?" Don't simply confirm it. Treat it as one candidate among others and check the evidence independently. If the evidence supports it, say so with citations. If not, say so and present what the evidence *does* support.
+Users often phrase `stack:why` questions with an embedded hypothesis: "Why do we do it this way, I assume it's for performance?" Don't simply confirm it. Treat it as one candidate among others and check the evidence independently. If the evidence supports it, say so with citations. If not, say so and present what the evidence *does* support.
 
 The user's guess is a prompt for investigation, not a conclusion to validate.
 

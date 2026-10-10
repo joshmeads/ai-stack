@@ -1,5 +1,5 @@
 ---
-name: games-tools-threejs-gameplay
+name: games:tools:threejs-gameplay
 description: "Build and iterate playable Three.js game systems: starter scaffold, architecture, design briefs, core loops, level and encounter design, entities, input, camera, collision and physics, scoring, objectives, and game feel. Use for first playable slices, new Vite/TypeScript/Three.js setups, level/arena/track/wave/hole/puzzle design, combat encounters, difficulty tuning, and juice."
 ---
 
@@ -29,7 +29,7 @@ Copies `assets/threejs-vite-game/`, rewrites the project name, and gives the gam
 
 ## Look and feel
 
-Gameplay systems alone make a prototype. From the first playable onward, follow `games-tools-threejs-look` for art direction, authored forms, materials, lighting, VFX and its visual scorecard, and `games-tools-threejs-ui` for HUD and menus. Plan look work as tasks of their own, not as polish after the campaign is built.
+Gameplay systems alone make a prototype. From the first playable onward, follow `games:tools:threejs-look` for art direction, authored forms, materials, lighting, VFX and its visual scorecard, and `games:tools:threejs-ui` for HUD and menus. Plan look work as tasks of their own, not as polish after the campaign is built.
 
 ## Design first
 
@@ -55,7 +55,7 @@ For broad game creation or a substantial design change, write three short artifa
 
 For coordinated work, define input intents, entity/asset interfaces, and events before delegating independent modules. Report changed behavior and local checks to the lead, who owns the consolidated browser pass. When a user changes requirements, update the existing brief and pending tasks instead of restarting completed work.
 
-Gameplay code emits audio events; the `games-tools-audio` skill covers the Web Audio bus graph, SFX variation and adaptive music that consume them.
+Gameplay code emits audio events; the `games:tools:audio` skill covers the Web Audio bus graph, SFX variation and adaptive music that consume them.
 
 ## Stack
 

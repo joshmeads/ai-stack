@@ -1,5 +1,5 @@
 ---
-name: games-tools-threejs-look
+name: games:tools:threejs-look
 description: "Upgrade Three.js games from prototype visuals to premium browser graphics: art-direction critique, procedural model building, material and texture libraries, world prop kits, shaders, VFX, lighting and render pipeline, LOD and instancing, render budgets, and a 10-category visual scorecard. Use for the art direction and look of any new Three.js game from its first playable onward, and whenever a brief asks for polished, indie-quality, release-ready, premium, AAA, high-fidelity or showcase visuals, or screenshots still look basic, flat or repetitive."
 ---
 
@@ -46,18 +46,18 @@ Glow does not make primitives look AAA. Build authored forms first, then materia
    - **Atmosphere:** fog or distance haze tinted to the horizon colour, so far objects fade into the sky instead of staying dark. Sun disc with a soft glow, and bloom on the sun and emissive parts.
    - **Exposure:** ACES or AgX tone mapping and an exposure that keeps the brightest sky just below white.
    - **Local light:** emissive parts (engines, crystals, lanterns) cast a small point light on nearby surfaces.
-   Evenly lit objects that look pasted onto the background mean the light is wrong, even when every texture is good. Measure it like the camera, with `games-tools-web-qa`'s `compare.cjs --crop` on the same regions of reference and capture: a near rock's lit side and its shaded side (brightness and warmth of each, and the difference between them), a rock edge against the sky (is there a bright rim in the sun's colour), and the sun (size and brightness of the glow around it). Write the numbers side by side and adjust key, fill, rim, fog and bloom until the lit/shade contrast and warmth agree within about 20%. When levels change time of day or mood, change the key colour and direction, fog, sky and exposure together.
+   Evenly lit objects that look pasted onto the background mean the light is wrong, even when every texture is good. Measure it like the camera, with `games:tools:web-qa`'s `compare.cjs --crop` on the same regions of reference and capture: a near rock's lit side and its shaded side (brightness and warmth of each, and the difference between them), a rock edge against the sky (is there a bright rim in the sun's colour), and the sun (size and brightness of the glow around it). Write the numbers side by side and adjust key, fill, rim, fog and bloom until the lit/shade contrast and warmth agree within about 20%. When levels change time of day or mood, change the key colour and direction, fog, sky and exposure together.
 9. Add event-driven VFX tied to gameplay state.
-10. Re-score against the calibration anchors, citing screenshots from the `games-tools-web-qa` probe at fixed viewports. Keep going until every premium category is at least 2, or name the exact blocker.
+10. Re-score against the calibration anchors, citing screenshots from the `games:tools:web-qa` probe at fixed viewports. Keep going until every premium category is at least 2, or name the exact blocker.
 
 ## Asset sourcing
 
-Do not call external generation services (paid image, 3D or audio APIs). The tools available are headless Blender (`games-tools-blender-model` skill; Blender is installed), custom shaders, Codex's built-in `image_gen` (`imagegen` skill), CC0 libraries (Poly Haven, ambientCG, Kenney) and code. Use your judgement per surface and combine them; the table lists options that have worked, not rules.
+Do not call external generation services (paid image, 3D or audio APIs). The tools available are headless Blender (`games:tools:blender-model` skill; Blender is installed), custom shaders, Codex's built-in `image_gen` (`imagegen` skill), CC0 libraries (Poly Haven, ambientCG, Kenney) and code. Use your judgement per surface and combine them; the table lists options that have worked, not rules.
 
 | Surface | Options that work well |
 | --- | --- |
 | Hero (vehicle, character, signature prop) | A Blender model with bevels, panel cuts and separate parts, UV-unwrapped and exported as GLB, inspected from a turntable render before import; trim and decal textures from `image_gen`. |
-| Rocks, cliffs, terrain pieces | Poly Haven or ambientCG scans, or Blender models built from large planar cuts or fracture chunks with merged coplanar faces and smooth shading split at sharp angles (see "Faceting" in `games-tools-blender-model`), with baked normal and AO; several distinct forms. Shader detail on top: triplanar texture, strata, edge wear, height tint. Never random-noise displacement plus decimation with flat shading: it reads as a broken mesh. |
+| Rocks, cliffs, terrain pieces | Poly Haven or ambientCG scans, or Blender models built from large planar cuts or fracture chunks with merged coplanar faces and smooth shading split at sharp angles (see "Faceting" in `games:tools:blender-model`), with baked normal and AO; several distinct forms. Shader detail on top: triplanar texture, strata, edge wear, height tint. Never random-noise displacement plus decimation with flat shading: it reads as a broken mesh. |
 | Sky, sun, horizon, haze | A sky shader (gradient, sun disc and glow) with height fog and distance haze tinted to the concept; an `image_gen` panorama or backdrop painting on a far sphere or cards for distant formations. |
 | Clouds, smoke, water, energy | Shaders (layered-noise billboards, soft particles, fresnel, scrolling noise) or `image_gen` cut-out sprites in an atlas. |
 | Pickups and VFX | Shader materials (emissive core, fresnel rim, additive trails) and pooled particles. |
@@ -66,7 +66,7 @@ Do not call external generation services (paid image, 3D or audio APIs). The too
 
 Keep generated originals and the Blender scripts in the repository so assets can be rebuilt. Log every asset's source, prompt or script, and licence in `ASSETS.md`.
 
-Build the concept frame first: before the content kit grows, assemble the view of one concept frame in the engine with real assets, shaders and lighting, capture it at the same camera, and compare it side by side (`games-tools-web-qa`). Iterate on that one view until a player would call it the same game.
+Build the concept frame first: before the content kit grows, assemble the view of one concept frame in the engine with real assets, shaders and lighting, capture it at the same camera, and compare it side by side (`games:tools:web-qa`). Iterate on that one view until a player would call it the same game.
 
 For animated assets inspect motion as well as silhouettes: locomotion, blend transitions, foot contacts, hit timing, and secondary motion in real gameplay. A focused independent critique may identify defects after a substantial pass; the lead remains responsible for the final score and integration.
 

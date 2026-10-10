@@ -5,7 +5,7 @@ import { createRequire } from 'node:module';
 import path from 'node:path';
 import { pathToFileURL } from 'node:url';
 
-// Starting-point render budgets (see games-tools-threejs-look
+// Starting-point render budgets (see games:tools:threejs-look
 // references/technical-art.md). Over-budget rows are reported, not fatal.
 const RENDER_BUDGETS = {
   desktop: { calls: 300, triangles: 750_000, geometries: 300, textures: 60 },

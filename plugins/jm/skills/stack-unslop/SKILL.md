@@ -1,5 +1,5 @@
 ---
-name: stack-unslop
+name: stack:unslop
 description: Cut AI tells from any writing. Must always apply.
 ---
 

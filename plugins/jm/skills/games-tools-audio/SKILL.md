@@ -1,5 +1,5 @@
 ---
-name: games-tools-audio
+name: games:tools:audio
 description: >
   Implement game audio for browser games with the Web Audio API: bus/mixer
   layout, volume sliders in decibels, ducking, SFX variation, beat-synced
@@ -182,5 +182,5 @@ sound.gain.disconnect(); sound.gain.connect(buses.sfx);   // route into a bus
 
 ## Related skills
 
-- `games-tools-phaser` — Phaser's sound manager and its AudioContext.
-- `games-tools-threejs-scene` — where the AudioListener attaches to the camera.
+- `games:tools:phaser` — Phaser's sound manager and its AudioContext.
+- `games:tools:threejs-scene` — where the AudioListener attaches to the camera.

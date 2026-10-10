@@ -1,5 +1,5 @@
 ---
-name: games-mini-gdd
+name: games:mini-gdd
 description: >
   Stage 1 of a browser game: turn the task prompt into a condensed GDD.md
   (500-700 words), REQUIREMENTS.md and 3-4 concept styles generated with image
@@ -11,7 +11,7 @@ description: >
 
 # Mini GDD (stage: GDD)
 
-Before anything else, read `games-delivery` (the delivery contract). Its GDD
+Before anything else, read `games:delivery` (the delivery contract). Its GDD
 stage scope applies here. This stage writes no game code.
 
 ## 1. Requirements first
@@ -134,4 +134,4 @@ document scans. Each concept option takes 40-70 words.
    `docs/gdd-full.md` to match.
 2. Copy the chosen style's images into `refs/` as the build's visual target,
    with a `refs/README.md` line saying the user approved them on that date.
-3. Commit, then tell the user the next stage is `games-mvp`.
+3. Commit, then tell the user the next stage is `games:mvp`.

@@ -1,6 +1,6 @@
 ### Babysit
 
-**You own the merge frontier. Declare a mode, clear one PR at a time, stop where the human's call begins.** This playbook supersedes the bundled **babysit** skill for these requests, so do not route there even though its description matches the same words. `/babysit` stays the standalone entry point outside stack-poteto-mode. A request to land or ship is `playbooks/shipping.md`, which begins where this playbook ends.
+**You own the merge frontier. Declare a mode, clear one PR at a time, stop where the human's call begins.** This playbook supersedes the bundled **babysit** skill for these requests, so do not route there even though its description matches the same words. `/babysit` stays the standalone entry point outside stack:poteto-mode. A request to land or ship is `playbooks/shipping.md`, which begins where this playbook ends.
 
 Babysitting starts when the user asks for it, which is normally once a phase or a whole stack is built, not when a PR opens. Finish the stack, get it green here, then land it through Shipping.
 

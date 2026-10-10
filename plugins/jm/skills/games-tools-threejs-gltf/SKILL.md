@@ -1,12 +1,12 @@
 ---
-name: games-tools-threejs-gltf
+name: games:tools:threejs-gltf
 description: >
   Load glTF/GLB models in three.js with GLTFLoader and play their skinned
   animations with AnimationMixer, including DRACO/Meshopt-compressed meshes and
   KTX2 textures. Use when importing 3D models into three.js — when the user
   mentions glTF, GLB, GLTFLoader, AnimationMixer, animation clips, DRACOLoader, or
-  "load a 3D model". For scene/camera/renderer setup use games-tools-threejs-scene; for
-  materials and lights use games-tools-threejs-materials.
+  "load a 3D model". For scene/camera/renderer setup use games:tools:threejs-scene; for
+  materials and lights use games:tools:threejs-materials.
 ---
 
 # three.js glTF Loading
@@ -22,9 +22,9 @@ compressed geometry (DRACO/Meshopt) and textures (KTX2). Patterns target
 - Use when files are `.gltf`/`.glb`, or code imports `GLTFLoader` /
   `DRACOLoader` / `KTX2Loader` from `three/addons/loaders/...`.
 
-**When *not* to use:** creating the renderer/camera/loop → `games-tools-threejs-scene`.
+**When *not* to use:** creating the renderer/camera/loop → `games:tools:threejs-scene`.
 Tuning surface look, lights, or shadows on the loaded model →
-`games-tools-threejs-materials`. Authoring/exporting the model itself (Blender) is out
+`games:tools:threejs-materials`. Authoring/exporting the model itself (Blender) is out
 of scope; prefer glTF over OBJ/FBX for runtime.
 
 ## Core workflow
@@ -174,7 +174,7 @@ function unloadModel(root, mixer) {
 
 - **Model loads but is invisible** → it has lit (PBR) materials and the scene has no
   light or environment. Add a light or `scene.environment` (see
-  `games-tools-threejs-materials`), and check scale — glTF is in metres, so a 0.01-scaled
+  `games:tools:threejs-materials`), and check scale — glTF is in metres, so a 0.01-scaled
   asset is tiny.
 - **`load` is async** → `gltf` only exists inside the callback; declare `mixer`/refs
   outside and assign them in the callback, or use `await loader.loadAsync(url)`.
@@ -202,6 +202,6 @@ function unloadModel(root, mixer) {
 
 ## Related skills
 
-- `games-tools-threejs-scene` — the renderer, camera, and loop this model renders into.
-- `games-tools-threejs-materials` — lighting/environment so PBR models look right.
-- `games-tools-blender-model` — build and export your own GLB models headlessly.
+- `games:tools:threejs-scene` — the renderer, camera, and loop this model renders into.
+- `games:tools:threejs-materials` — lighting/environment so PBR models look right.
+- `games:tools:blender-model` — build and export your own GLB models headlessly.

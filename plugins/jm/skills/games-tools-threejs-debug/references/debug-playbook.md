@@ -45,7 +45,7 @@ Measure in production preview when user-facing performance matters.
 
 `InstancedMesh` for repeated detail · shared geometries/materials/textures · object pools for effects, bullets, pickups, debris · frustum and distance culling · LOD for background props and world kits · DPR cap or adaptive quality · cheaper shadows (fewer casters, smaller maps, contact alternatives) · fewer post passes · texture atlases, compression, mipmaps · no per-frame allocations or layout reads · simpler colliders, sleeping, collision groups, pooled bodies · explicit disposal of geometries, materials, textures, render targets, audio.
 
-Before deleting hero readability, try decimation in Blender (`games-tools-blender-model` skill), a lower LOD, or a lower texture quality variant.
+Before deleting hero readability, try decimation in Blender (`games:tools:blender-model` skill), a lower LOD, or a lower texture quality variant.
 
 ## Diagnostics object
 

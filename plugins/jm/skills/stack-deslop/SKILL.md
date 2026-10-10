@@ -1,5 +1,5 @@
 ---
-name: stack-deslop
+name: stack:deslop
 description: Remove AI-generated code slop and clean up code style
 ---
 

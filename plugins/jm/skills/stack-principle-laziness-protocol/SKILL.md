@@ -1,5 +1,5 @@
 ---
-name: stack-principle-laziness-protocol
+name: stack:principle-laziness-protocol
 description: "Apply when refactoring, evaluating diff size, or tempted to add abstractions, layers, or signal threading. Bias toward deletion and the smallest change that solves the problem."
 user-invocable: false
 ---

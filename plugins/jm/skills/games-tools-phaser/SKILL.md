@@ -1,5 +1,5 @@
 ---
-name: games-tools-phaser
+name: games:tools:phaser
 description: >
   Build or fix a Phaser 4 browser game using the official Phaser skills that
   ship inside the project's node_modules/phaser/skills, plus verified fixes for
@@ -108,7 +108,7 @@ from the first playable, as tasks of their own:
 
 - **Concept frames.** When the design asks for generated concept frames, ask
   for an in-game screenshot at the gameplay camera and the game's resolution
-  and style, with the HUD. They are the target: `games-tools-web-qa` compares
+  and style, with the HUD. They are the target: `games:tools:web-qa` compares
   captures with them side by side, and light colour, glow, palette and prop
   density the build could match but does not are defects.
 - **Art source: whatever gets closest to the concept.** The goal is the
@@ -136,7 +136,7 @@ from the first playable, as tasks of their own:
   prompt in `ASSETS.md`.
 - **Build the concept frame first.** Before content grows, assemble the
   scene of one concept frame in the engine from the generated kit, capture
-  it at the same camera and compare it side by side (`games-tools-web-qa`). Iterate
+  it at the same camera and compare it side by side (`games:tools:web-qa`). Iterate
   on that one scene until a player would call it the same game.
 - **Framing.** Copy the concept's composition, not just its pieces: dark
   foreground silhouettes (roots, pillars, rock overhangs) on the frame edges
@@ -146,7 +146,7 @@ from the first playable, as tasks of their own:
   the level design instead, with placement rules for framing pieces (edge
   layer, spacing, never over the play band) and composed set pieces at key
   moments (level start, reveals, checkpoints, exits). Check those moments.
-  `compare.cjs --grid 5` (games-tools-web-qa) compares the large light and dark
+  `compare.cjs --grid 5` (games:tools:web-qa) compares the large light and dark
   masses of reference and capture.
 - **Depth.** At least three parallax layers (far, middle, foreground framing)
   with different scroll factors and values, plus a gameplay layer that always
@@ -169,7 +169,7 @@ from the first playable, as tasks of their own:
   // shrink the light with fuel: this.lamp.setRadius(r); this.halo.setScale(r / 64);
   ```
   Unlit objects (UI, the halo itself) ignore the lights, so keep HUD text unlit.
-  Check it with a cropped comparison around the player (`games-tools-web-qa`,
+  Check it with a cropped comparison around the player (`games:tools:web-qa`,
   `compare.cjs --crop`): the reference's warm pool on the ground and the
   player's near side must show in the capture's crop, not only a bright lamp
   sprite.
@@ -179,11 +179,11 @@ from the first playable, as tasks of their own:
 - **Feedback.** Particles (`particles`), tweens (`tweens`), camera shake or
   flash (`cameras`) and a distinct sound for every collect, hit, death and
   dash or jump. Short hit-stop follows pitfall 5 above.
-- **Check it** with the look review in `games-tools-web-qa` at the start, middle and
+- **Check it** with the look review in `games:tools:web-qa` at the start, middle and
   end of every level.
 
 ## 5. Verify in a browser
 
-Use the `games-tools-web-qa` skill: build, run the game, and probe it in headless
+Use the `games:tools:web-qa` skill: build, run the game, and probe it in headless
 Chromium. Phaser logs its banner (`Phaser v4.x (WebGL | Web Audio)`) on boot;
 any other console error is a defect.

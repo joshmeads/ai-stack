@@ -11,7 +11,7 @@ description: >
 # Feedback log
 
 Write the feedback down exactly as given so later work (for example the
-`games-final` stage) can act on it. Do not start changing the project.
+`games:final` stage) can act on it. Do not start changing the project.
 
 ## File
 

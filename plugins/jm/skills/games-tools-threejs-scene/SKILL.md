@@ -1,12 +1,12 @@
 ---
-name: games-tools-threejs-scene
+name: games:tools:threejs-scene
 description: >
   Stand up a three.js scene: import maps and the three/addons path, the
   Scene/PerspectiveCamera/WebGLRenderer trio, the setAnimationLoop render loop,
   responsive resize, and OrbitControls. Use when starting or debugging a three.js
   app — when the user mentions three.js, THREE.Scene, WebGLRenderer,
   PerspectiveCamera, the render loop, resizing, or OrbitControls. For models use
-  games-tools-threejs-gltf; for materials/lights use games-tools-threejs-materials.
+  games:tools:threejs-gltf; for materials/lights use games:tools:threejs-materials.
 ---
 
 # three.js Scene Setup
@@ -24,8 +24,8 @@ changing an existing project because examples and addons move across releases.
   'three'`.
 
 **When *not* to use:** loading `.gltf`/`.glb` models or skinned animation →
-`games-tools-threejs-gltf`. Materials, lights, shadows, environment maps →
-`games-tools-threejs-materials`. 2D games → `games-tools-phaser`. React projects → `games-tools-r3f`.
+`games:tools:threejs-gltf`. Materials, lights, shadows, environment maps →
+`games:tools:threejs-materials`. 2D games → `games:tools:phaser`. React projects → `games:tools:r3f`.
 
 ## Core workflow
 
@@ -36,7 +36,7 @@ changing an existing project because examples and addons move across releases.
    aspect, near, far)` moved back from the origin, and a `WebGLRenderer` whose
    `domElement` is in the DOM. Set size and `pixelRatio`.
 3. **Add a mesh.** `new Mesh(geometry, material)` and `scene.add(mesh)`. With a
-   lit material you also need a light (see `games-tools-threejs-materials`).
+   lit material you also need a light (see `games:tools:threejs-materials`).
 4. **Drive a render loop with `renderer.setAnimationLoop(fn)`.** It's the modern,
    WebXR-/WebGPU-safe replacement for hand-rolled `requestAnimationFrame`. Use a
    `Timer` for delta time (`Clock` is deprecated since r183).
@@ -164,7 +164,7 @@ renderer.setAnimationLoop(() => {
 
 ## Related skills
 
-- `games-tools-threejs-materials` — give surfaces a lit look (lights, shadows, PBR).
-- `games-tools-threejs-gltf` — load 3D models and play their animations.
-- `games-tools-threejs-gameplay` — a full Vite + TypeScript game scaffold with input, camera, HUD and tests.
-- `games-tools-r3f` — the same scene in React Three Fiber.
+- `games:tools:threejs-materials` — give surfaces a lit look (lights, shadows, PBR).
+- `games:tools:threejs-gltf` — load 3D models and play their animations.
+- `games:tools:threejs-gameplay` — a full Vite + TypeScript game scaffold with input, camera, HUD and tests.
+- `games:tools:r3f` — the same scene in React Three Fiber.

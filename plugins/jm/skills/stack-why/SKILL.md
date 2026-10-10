@@ -1,5 +1,5 @@
 ---
-name: stack-why
+name: stack:why
 description: "Use for 'why does X work this way', 'why we picked Y', design rationale, regressions, postmortems, or data-backed thresholds. Discovers available MCPs and queries each evidence category (source control, issue tracker, long-form docs, real-time chat, infrastructure observability, error tracking, product analytics warehouse) in parallel, then returns a cited read on decisions and tradeoffs. Use how for runtime behavior."
 ---
 
@@ -7,7 +7,7 @@ description: "Use for 'why does X work this way', 'why we picked Y', design rati
 
 Investigate the motivation and intent behind code.
 
-Companion to the `stack-how` skill. `stack-how` answers what the code does and how it works. `stack-why` answers what forces led to its shape.
+Companion to the `stack:how` skill. `stack:how` answers what the code does and how it works. `stack:why` answers what forces led to its shape.
 
 **Dispatch contract.** Resolve every configured role through [`provider-dispatch.md`](../stack-poteto-mode/references/provider-dispatch.md). Investigators require the parent's live MCP surface, so the default and supported portable route is `inherit-parent` (or its `auto` alias). Pass the code anchor by path. On Codex, resolve remaining Claude tool names via [`codex-tools.md`](../stack-poteto-mode/references/codex-tools.md).
 
@@ -133,7 +133,7 @@ Take the synthesizer's output and present it to the user. You may lightly edit f
 
 The output structure is the one in `references/synthesizer-prompt.md`: The Question, The Code in Question, What We Found, What We Can Reasonably Infer, Competing Hypotheses, What We Don't Know, Sources Consulted, Confidence Summary. Adapt as needed, but keep the confidence separation intact, and keep Sources Consulted as one line per investigator, including the ones that returned nothing or were skipped, with the reason.
 
-After the Sources Consulted block, if the user's `stack-why` question is a precursor to actually changing this code, convert the lineage findings into a Preserve / Change / Avoid / Risk constraint set suitable for planning the change.
+After the Sources Consulted block, if the user's `stack:why` question is a precursor to actually changing this code, convert the lineage findings into a Preserve / Change / Avoid / Risk constraint set suitable for planning the change.
 
 ## Common Failure Modes to Avoid
 

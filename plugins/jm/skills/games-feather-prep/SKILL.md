@@ -1,5 +1,5 @@
 ---
-name: games-feather-prep
+name: games:feather-prep
 description: >
   Prepare a Codex-built web game for submission on an OpenAI Feather task,
   entirely locally: package the project, check the screenshot and recording,
@@ -31,7 +31,7 @@ Scripts:
   last Codex turn (Python 3.11+, standard library; `ffprobe` for media).
 - The `codex-session-export` skill: find, export and verify the Codex
   sessions.
-- The `games-tools-web-qa` skill: run the game from its README and record evidence
+- The `games:tools:web-qa` skill: run the game from its README and record evidence
   for the run instructions and remaining issues.
 
 Keep everything in one private working folder outside the game project, for
@@ -72,7 +72,7 @@ python3 scripts/prep.py package --project <game> --out <work>/upload/<game>.zip 
   need the built output.
 - Open the archive's manifest and check that every source, asset and lockfile
   the game needs is present. Then follow the README from the extracted
-  archive, using the `games-tools-web-qa` skill. The archive passes only if the game
+  archive, using the `games:tools:web-qa` skill. The archive passes only if the game
   runs from it.
 
 ## 4. Media
@@ -104,7 +104,7 @@ form order. Fill from evidence:
   manual coding if `after` found changes or the user describes edits; other
   tools only when the user names them.
 - **How to run and review:** the exact commands, versions and URL from the
-  `games-tools-web-qa` run, the controls, the objective, and the QA report's
+  `games:tools:web-qa` run, the controls, the objective, and the QA report's
   remaining issues.
 - **Sessions:** one entry per row of `sessions.md`, with the exact values.
 - **Starting materials, outside work, post-Codex changes:** draft from repo

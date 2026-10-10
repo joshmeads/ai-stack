@@ -1,5 +1,5 @@
 ---
-name: games-tools-threejs-ui
+name: games:tools:threejs-ui
 description: "Design premium Three.js game UI: HUDs, menus, overlays, pause/win/lose screens, settings, icon controls, touch UI, typography, responsive layout, safe areas, text fit, and UI/world cohesion."
 ---
 
@@ -13,7 +13,7 @@ Preserve the user's requested scope and style. For a narrow HUD fix, retain the 
 
 `references/ui-patterns.md` — hierarchy and required states, HUD zones, menus, touch controls, responsive constraints, style cohesion, and state wiring. Read it before designing HUDs, menus, overlays, touch controls, or responsive layout.
 
-Use Codex's built-in image generation (the `image_gen` tool) when logos, icons, GUI art, faction marks, menu backgrounds, or 2D HUD assets would raise the quality, and record each generated file in `ASSETS.md`. Genuine 3D menu objects and diegetic props come from Blender (`games-tools-blender-model` skill), CC0 libraries, or procedural geometry.
+Use Codex's built-in image generation (the `image_gen` tool) when logos, icons, GUI art, faction marks, menu backgrounds, or 2D HUD assets would raise the quality, and record each generated file in `ASSETS.md`. Genuine 3D menu objects and diegetic props come from Blender (`games:tools:blender-model` skill), CC0 libraries, or procedural geometry.
 
 ## Workflow
 

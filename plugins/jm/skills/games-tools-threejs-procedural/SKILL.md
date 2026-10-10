@@ -1,5 +1,5 @@
 ---
-name: games-tools-threejs-procedural
+name: games:tools:threejs-procedural
 description: Build well-crafted production procedural meshes in Three.js. Use for complete hard-surface assemblies and humanoid robots, profile extrusion, parameter-curve and spine lofts, pillow panels, exact polygon cuts, inset, revolve, sweep, solidify, bevels and fillets, shell thickness, direct-topology apertures, semantic mesh writers, or diagnosing primitive-built forms, coplanar flicker, loose/non-manifold geometry, detached parts, interpenetration, support, clearance, and swept-envelope defects.
 ---
 
