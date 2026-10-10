@@ -146,7 +146,9 @@ node scripts/compare.cjs --out qa/look/levels.png --cols 3 \
   a cool, flat reveal). Detail beyond what the engine and art pipeline can
   produce is not a defect; say which differences are of that kind. A look
   task does not pass while a closable difference a player would notice in the
-  first seconds remains (a dark or empty background where the reference shows
+  first seconds remains, unless the stage or task sets a lower bar (an MVP or
+  prototype passes on matching style, light and composition, with the rest
+  listed for later) (a dark or empty background where the reference shows
   a lit cave or sky, missing set dressing, wrong light colour), whatever the
   scores say. Check `ASSETS.md` too: when the gap is in art that is all
   drawn by code while the reference is painted or modelled, say so and suggest
