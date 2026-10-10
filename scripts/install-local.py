@@ -23,7 +23,6 @@ sources = [
     (repo / 'skills', home / '.codex/skills'),
     (repo / 'skills', home / '.cursor/skills'),
     (repo / 'plugins/pstack/skills', home / '.claude/skills'),
-    (repo / 'plugins/pstack/skills', home / '.codex/skills'),
     (repo / 'plugins/pstack/agents', home / '.claude/agents'),
     (repo / 'vendor/cursor-pstack/skills', home / '.cursor/skills'),
     (repo / 'vendor/cursor-pstack/agents', home / '.cursor/agents'),
