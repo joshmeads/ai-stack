@@ -1,0 +1,9 @@
+{
+  "name": "jm",
+  "displayName": "jm",
+  "version": "0.1.0",
+  "description": "Josh Meads's skills, namespaced by area: games-* for browser game production plus general helpers such as feedback.",
+  "author": {
+    "name": "Josh Meads"
+  }
+}

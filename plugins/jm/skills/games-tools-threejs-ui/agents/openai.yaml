@@ -1,0 +1,4 @@
+interface:
+  display_name: "Three.js Game UI Designer"
+  short_description: "Design premium Three.js game UI"
+  default_prompt: "Use the games-tools-threejs-ui skill to improve this game's interface and check the affected states on its target viewports."

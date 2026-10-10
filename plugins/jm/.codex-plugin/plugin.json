@@ -1,0 +1,19 @@
+{
+  "name": "jm",
+  "version": "0.1.0",
+  "description": "Josh Meads's skills, namespaced by area: games-* for browser game production (mini GDD, MVP, final build, delivery contract and the tool skills they use), plus general helpers such as feedback.",
+  "author": {
+    "name": "Josh Meads"
+  },
+  "repository": "https://github.com/joshmeads/ai-stack",
+  "license": "MIT",
+  "keywords": ["games", "phaser", "threejs", "gdd", "workflow"],
+  "skills": "./skills/",
+  "interface": {
+    "displayName": "jm",
+    "shortDescription": "Josh's skills: game production stages and tools, feedback log",
+    "developerName": "Josh Meads",
+    "category": "Developer Tools",
+    "capabilities": ["Interactive", "Read", "Write"]
+  }
+}
