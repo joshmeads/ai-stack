@@ -142,6 +142,18 @@ faceted forms:
 - Check a close-up render: alternating light and dark slivers inside one face
   of the rock mean the facets are noise, not design.
 
+`scripts/rock_kit.py` builds a starting kit this way (convex hulls of random
+points, a few plane cuts, merged faces, thin bevels, split normals) and
+renders a lit contact sheet:
+
+```sh
+blender --background --python scripts/rock_kit.py -- --out art/rocks --kind cliff --count 4 --seed 1 --sheet
+```
+
+Kinds: `boulder`, `slab`, `spire`, `cliff` (stacked strata shelves) and
+`column` (basalt prisms). Use it as a base and adapt shapes and proportions
+to the concept; look at the sheet before exporting more.
+
 ## Work out the fidelity budget before you model anything
 
 One object gets one UV square, so the detail it can ever carry is fixed before
