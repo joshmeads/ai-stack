@@ -70,6 +70,15 @@ after a technique must show it plainly (a "cel" or "toon" style needs visible
 flat colour bands and outlines; "pixel art" needs a visible pixel grid), and
 the styles must be told apart at thumbnail size.
 
+Then check each style against the build pipeline. For every visible element
+of its `gameplay.png` (surface detail, light effects such as glowing cracks or
+god rays, foliage, water, particles, UI), name how it would be made: generated
+sprite or texture, Blender model, shader, CC0 asset or code. If an element has
+no realistic source, regenerate the frame without it. Grade production cost
+from that list, not from the style's name: a frame that needs sculpted
+surface detail, many unique hero assets or several custom shaders is High,
+even if it looks like the others.
+
 ## 4. Condense into GDD.md
 
 Write `GDD.md` from `docs/gdd-full.md`: 500-700 words, never more than about
