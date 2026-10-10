@@ -13,7 +13,24 @@
       "policy": {
         "installation": "AVAILABLE",
         "authentication": "ON_INSTALL",
-        "products": ["CODEX"]
+        "products": [
+          "CODEX"
+        ]
+      },
+      "category": "Developer Tools"
+    },
+    {
+      "name": "jm",
+      "source": {
+        "source": "local",
+        "path": "./plugins/jm"
+      },
+      "policy": {
+        "installation": "AVAILABLE",
+        "authentication": "ON_INSTALL",
+        "products": [
+          "CODEX"
+        ]
       },
       "category": "Developer Tools"
     }
