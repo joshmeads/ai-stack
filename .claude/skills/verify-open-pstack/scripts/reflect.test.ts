@@ -159,6 +159,28 @@ test('Claude proves the read with a fixture nonce from any completed parent tool
   await expect(c.assert(record, f)).rejects.toThrow('reflect-transcript-not-read');
 });
 
+test('Claude reports must have exactly the expected fields and no fixture text', async () => {
+  const [located, fallback] = recipe('skill-invocation:reflect', 'claude');
+  for (const [c, available] of [[located!, true], [fallback!, false]] as const) {
+    const f = await fixture('claude'), report = join(f.dir, 'result.json');
+    await c.prepare!(f);
+    const record = await simulatedRecord(f, available), good = JSON.parse(await readFile(report, 'utf8'));
+    await c.assert(record, f);
+    const mismatch = available ? 'reflect-opening-mismatch' : 'reflect-fallback-mismatch';
+    for (const [changed, reason] of [
+      [{ ...good, requested_opening: opening }, 'reflect-message-text-exposed'],
+      [{ ...good, note: 'An unrelated synthetic opening.' }, 'reflect-message-text-exposed'],
+      [{ ...good, note: 'Fixture only.' }, 'reflect-message-text-exposed'],
+      [{ ...good, checked: true }, mismatch],
+      [Object.fromEntries(Object.entries(good).slice(1)), mismatch],
+      ...available ? [[{ ...good, opening_user_message: { ...good.opening_user_message, record_type: 'user' } }, mismatch]] : [],
+    ] as const) {
+      await writeFile(report, JSON.stringify(changed));
+      await expect(c.assert(record, f)).rejects.toThrow(reason);
+    }
+  }
+});
+
 test('Claude accepts a completed Bash read in the native stream and rejects a failed or pending one', async () => {
   const f = await fixture('claude'), c = recipe('skill-invocation:reflect', 'claude')[0]!;
   await c.prepare!(f); const record = await simulatedRecord(f, true), content = await readFile(transcript(f), 'utf8');

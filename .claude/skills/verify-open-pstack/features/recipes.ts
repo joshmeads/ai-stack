@@ -127,6 +127,8 @@ const REFLECT_CHAT = '00000000-1111-2222-3333-444444444444';
 const REFLECT_OPENING = 'Reflect on the corrections in this disposable session.';
 const REFLECT_UNRELATED = 'An unrelated synthetic opening.';
 const RESOLVER = 'skills/poteto-mode/scripts/resolve-codex-transcript.ts';
+const exposesFixtureText = (output: string) => [REFLECT_OPENING, REFLECT_UNRELATED, 'Fixture only.'].some(message => output.includes(message));
+const keys = (value: unknown) => value && typeof value === 'object' ? Object.keys(value).sort().join() : '';
 
 const WORD = String.raw`(?:'[^']*'|"[^"]*"|[^\s'"])+`;
 
@@ -192,7 +194,7 @@ function reflect(harness: Harness): Case[] {
           const runs = await Promise.all(record.tools.map(async tool => tool.name === 'command' && !tool.failed && typeof tool.result === 'string' && await resolverRun(tool.input.command, f)));
           const output = record.tools.find((_, i) => runs[i])?.result;
           if (output === undefined) throw new Error('reflect-resolver-not-run');
-          if ([REFLECT_OPENING, REFLECT_UNRELATED, 'Fixture only.'].some(message => output.includes(message))) throw new Error('reflect-message-text-exposed');
+          if (exposesFixtureText(output)) throw new Error('reflect-message-text-exposed');
           // Both cases resolve the chat; only the opener it reports differs.
           const expected = { status: 'resolved', chat_id: REFLECT_CHAT, path: transcript(f),
             opening_user_message: { line: 3, record_type: 'response_item', characters: text.length, sha256: sha256(text) } };
@@ -207,12 +209,14 @@ function reflect(harness: Harness): Case[] {
           if (available && !record.tools.some(tool => tool.parent === null && !tool.failed && tool.result?.includes(nonce))) throw new Error('reflect-transcript-not-read');
           assertions.push(await written(record, report(f)));
           if ((await lstat(report(f))).size > 5000) throw new Error('reflect-result-budget');
-          const result = JSON.parse(await readFile(report(f), 'utf8')), opening = result.opening_user_message;
-          if (JSON.stringify(result).includes(text)) throw new Error('reflect-message-text-exposed');
-          if (available ? result.status !== 'resolved' || result.path !== transcript(f) || opening?.line !== 2 ||
-              opening?.characters !== REFLECT_OPENING.length || opening?.sha256 !== sha256(REFLECT_OPENING)
-            : result.status !== 'unresolved' || result.reason !== 'opening_message_mismatch' || result.fallback !== 'session_digest' ||
-              result.path !== undefined) throw new Error(available ? 'reflect-opening-mismatch' : 'reflect-fallback-mismatch');
+          const reportText = await readFile(report(f), 'utf8');
+          if (exposesFixtureText(reportText)) throw new Error('reflect-message-text-exposed');
+          const result = JSON.parse(reportText), opening = result.opening_user_message;
+          if (available ? keys(result) !== 'opening_user_message,path,status' || keys(opening) !== 'characters,line,sha256' ||
+              result.status !== 'resolved' || result.path !== transcript(f) || opening.line !== 2 ||
+              opening.characters !== REFLECT_OPENING.length || opening.sha256 !== sha256(REFLECT_OPENING)
+            : keys(result) !== 'fallback,reason,status' || result.status !== 'unresolved' || result.reason !== 'opening_message_mismatch' ||
+              result.fallback !== 'session_digest') throw new Error(available ? 'reflect-opening-mismatch' : 'reflect-fallback-mismatch');
           paths.push(report(f));
         }
         if (available) {
