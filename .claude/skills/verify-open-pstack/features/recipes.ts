@@ -1,8 +1,9 @@
 // Headless recipes for every selectable feature. The trusted parent runs each case as one fresh
 // native session and evaluates `assert` against the parsed record and the fixture it created.
-import { lstat, mkdir, readFile, realpath, writeFile } from 'node:fs/promises';
+import { Database } from 'bun:sqlite';
+import { lstat, mkdir, readFile, realpath, rm, writeFile } from 'node:fs/promises';
 import { basename, join } from 'node:path';
-import type { Command } from '../scripts/io.ts';
+import { sha256, type Command } from '../scripts/io.ts';
 import type { Harness, SessionRecord } from '../scripts/types.ts';
 
 export interface Fixture {
@@ -122,6 +123,93 @@ const overrides: Record<string, Case> = {
   },
 };
 
+const REFLECT_CHAT = '00000000-1111-2222-3333-444444444444';
+const REFLECT_OPENING = 'Reflect on the corrections in this disposable session.';
+const REFLECT_UNRELATED = 'An unrelated synthetic opening.';
+const RESOLVER = 'skills/poteto-mode/scripts/resolve-codex-transcript';
+
+function parseJson(text: string | undefined): unknown {
+  try { return JSON.parse(text ?? ''); } catch { return undefined; }
+}
+
+function reflect(harness: Harness): Case[] {
+  return [true, false].map(available => {
+    const home = (f: Fixture) => join(f.dir, 'transcript-home');
+    // A per-run nonce keeps a transcript path or record the prompt never names: Codex in the
+    // rollout's file name, Claude on the opening user record.
+    let nonce = '';
+    const transcript = (f: Fixture) => join(home(f), harness === 'codex' ? `sessions/2026/10/11/rollout-${nonce}.jsonl` : 'projects/fixture/known.jsonl');
+    const index = (f: Fixture) => join(home(f), 'state_5.sqlite');
+    const report = (f: Fixture) => join(f.dir, 'result.json');
+    const digest = (f: Fixture) => join(f.dir, 'digest.md');
+    const text = available ? REFLECT_OPENING : REFLECT_UNRELATED;
+    return {
+      id: available ? 'locate-transcript' : 'digest-fallback',
+      async prepare(f) {
+        nonce = crypto.randomUUID();
+        const records = harness === 'codex' ? [
+          { type: 'session_meta', payload: { id: REFLECT_CHAT } },
+          { type: 'response_item', payload: { type: 'message', role: 'user', content: [{ type: 'input_text', text: `# AGENTS.md instructions for ${f.dir}\n\n<INSTRUCTIONS>\nFixture only.\n</INSTRUCTIONS>` }] } },
+          { type: 'response_item', payload: { type: 'message', role: 'user', content: [{ type: 'input_text', text }] } },
+        ] : [{ type: 'system', subtype: 'fixture_metadata' }, { type: 'user', uuid: nonce, message: { role: 'user', content: [{ type: 'text', text }] } }];
+        await files(f.dir, { [transcript(f).slice(f.dir.length + 1)]: records.map(record => JSON.stringify(record)).join('\n') + '\n' });
+        if (harness === 'codex') {
+          await rm(index(f), { force: true });
+          const database = new Database(index(f));
+          database.run('CREATE TABLE threads (id TEXT PRIMARY KEY, rollout_path TEXT NOT NULL)');
+          database.run('INSERT INTO threads VALUES (?, ?)', [REFLECT_CHAT, transcript(f)]);
+          database.close();
+        }
+      },
+      prompt(f) {
+        const request = `Exercise only step 1 with this disposable synthetic fixture. Do not fan out reviewers, apply edits, or inspect real chats. The conversation's opening prompt to verify is ${JSON.stringify(REFLECT_OPENING)}. `;
+        const where = harness === 'codex'
+          ? `The fixture's known parent chat ID is ${REFLECT_CHAT}. Run the transcript lookup with CODEX_HOME set to ${home(f)} for that command only. `
+          : `For this fixture, the system-named per-project transcript directory is ${join(home(f), 'projects/fixture')}. Write only JSON to ${report(f)}: when a transcript verifies, its status "resolved", path, and opening_user_message with line, characters, and sha256; otherwise status "unresolved", reason "opening_message_mismatch", and fallback "session_digest". Do not include message text in ${report(f)}. `;
+        return `${invoke(harness, 'reflect', `${request}${where}If the transcript cannot be verified, write the session digest, at most 2,000 words and covering only this fixture request, to ${digest(f)}.`)} ${rules(f.dir)}`;
+      },
+      async assert(record, f) {
+        const assertions = [loaded(record, 'pstack:reflect')];
+        const paths: string[] = [];
+        if (harness === 'codex') {
+          // Both cases resolve the chat; only the opener it reports differs. The output is the harness's capture.
+          const expected = { status: 'resolved', chat_id: REFLECT_CHAT, path: transcript(f),
+            opening_user_message: { line: 3, record_type: 'response_item', characters: text.length, sha256: sha256(text) } };
+          const installed = [RESOLVER, `${RESOLVER}.ts`].map(path => join(f.location, path));
+          const names = [...installed, ...await Promise.all(installed.map(path => realpath(path)))];
+          const output = record.tools.find(tool => tool.name === 'command' && !tool.failed && names.some(name => tool.input.command.includes(name)) &&
+            Bun.deepEquals(parseJson(tool.result), expected))?.result;
+          if (output === undefined) throw new Error('reflect-resolver-not-run');
+          const retained = join(f.dir, 'resolver-output.json');
+          await writeFile(retained, output);
+          paths.push(retained); assertions.push('resolver-ran');
+        } else {
+          if (!record.tools.some(tool => tool.parent === null && !tool.failed && tool.result?.includes(nonce))) throw new Error('reflect-transcript-not-read');
+          assertions.push(await written(record, report(f)));
+          if ((await lstat(report(f))).size > 5000) throw new Error('reflect-result-budget');
+          const result = JSON.parse(await readFile(report(f), 'utf8')), opening = result.opening_user_message;
+          if (available ? result.status !== 'resolved' || result.path !== transcript(f) || opening?.line !== 2 ||
+              opening?.characters !== REFLECT_OPENING.length || opening?.sha256 !== sha256(REFLECT_OPENING)
+            : result.status !== 'unresolved' || result.reason !== 'opening_message_mismatch' || result.fallback !== 'session_digest' ||
+              result.path !== undefined) throw new Error(available ? 'reflect-opening-mismatch' : 'reflect-fallback-mismatch');
+          paths.push(report(f));
+        }
+        if (available) {
+          if (await lstat(digest(f)).catch(() => undefined)) throw new Error('reflect-unneeded-fallback');
+          assertions.push('opening-verified');
+        } else {
+          assertions.push(await written(record, digest(f)));
+          const words = (await readFile(digest(f), 'utf8')).trim();
+          if (!words) throw new Error('reflect-digest-empty');
+          if (words.split(/\s+/).length > 2000) throw new Error('reflect-digest-budget');
+          paths.push(digest(f)); assertions.push('digest-fallback');
+        }
+        return { assertions, files: paths };
+      },
+    };
+  });
+}
+
 export async function verifyProjectDoctor(texts: string[], workspace: string): Promise<void> {
   const expected = await realpath(join(workspace, '.claude/skills/verify-open-pstack'));
   for (const text of texts) {
@@ -230,6 +318,7 @@ export function recipe(feature: string, harness: Harness, routes: string[] = [])
   if (feature === 'setup' || feature === 'skill-invocation:setup-pstack') return setup;
   if (feature === 'shipped-tools') return [shippedTools];
   if (feature === 'agent-preload:poteto-agent' && harness === 'claude') return [agentPreload];
+  if (feature === 'skill-invocation:reflect') return reflect(harness);
   const skill = /^skill-invocation:([a-z][a-z0-9-]+)$/.exec(feature)?.[1];
   if (!skill) throw new Error(`missing-recipe:${harness}/${feature}`);
   return [overrides[skill] ?? skillCase(skill, 'Apply it to the task in $DIR/TASK.md.')];

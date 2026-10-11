@@ -21,6 +21,22 @@ The Claude integration is the one `@` import line in `<config-home>/CLAUDE.md` w
 
 Only when `CLAUDE_CONFIG_DIR` redirects the home, render exactly `@./pstack-models.md`. This relative import resolves from the importing file's directory, where the sheet also lives, so the import line contains no config-directory characters. On a rerun, replace that one line in place, preserving all unrelated bytes. If zero matching import lines exist, append one. If more than one exists, stop and report inconsistent state before either write; do not append another import or guess which one to replace.
 
+## Active transcripts
+
+Reflect passes reviewers this conversation's transcript only after the parent verifies it. Metadata records can come before the first user message in either harness, so never assume the first JSONL record is the opening message.
+
+**Claude Code.** Look only in the per-project directory that the system prompt names under `<config-home>/projects/<encoded-cwd>/`. Do not glob across `<config-home>/projects/`, because that reads private chats from unrelated workspaces. Three layouts exist in that directory: flat (`<id>.jsonl`), nested (`<id>/<id>.jsonl`), and subagent (`<parent>/subagents/<child>.jsonl`). Inspect at most ten candidates, newest first. Read each with a line limit of at most 500. Stop scanning a candidate at 500 records, 2 MiB in total, or a 256 KiB record. Take the candidate whose first actual user message is this conversation's opening prompt.
+
+**Codex.** Run the read-only resolver with the parent's known chat ID. Substitute the absolute plugin root and the chat UUID:
+
+```bash
+"<plugin-root>/skills/poteto-mode/scripts/resolve-codex-transcript" "<chat-id>"
+```
+
+The resolver reads the [Codex config home](#harness-config-homes) and looks up that exact ID in the `threads` table of its `state_*.sqlite` index. It checks that the rollout is inside `<config-home>/sessions/` and belongs to that chat. It then scans at most 500 records, 2 MiB in total, or a 256 KiB record for the first user message, skipping injected AGENTS.md and environment context. On success it exits 0 and prints the chat ID, the rollout path, and the opening message's line, record type, character count, and SHA-256. It never prints message text. If it cannot verify the transcript, it exits 1 and prints an `unresolved` reason. Before passing the path, compare the character count and SHA-256 with this conversation's opening prompt. Do not search by chat title or by time.
+
+**Fallback.** If the chat ID, index, ownership, path, or opening prompt cannot be verified within these limits, pass a tight session digest instead. Keep it to at most 2,000 words and include only relevant decisions, corrections, evidence paths, and unresolved work. Do not widen transcript discovery to replace missing evidence.
+
 ## Tool actions
 
 | pstack / Claude action | Codex equivalent |
