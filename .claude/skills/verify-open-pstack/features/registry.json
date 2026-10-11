@@ -1,12 +1,12 @@
 {
   "skills": [
-    "architect", "arena", "automate-me", "babysit", "blast-radius", "bro",
+    "architect", "arena", "automate-me", "babysit", "benchmark-checklist", "blast-radius", "bro", "correct",
     "create-verification-skill", "deslop", "figure-it-out", "fix-ci", "fix-merge-conflicts",
-    "get-pr-comments", "how", "interrogate", "maintain-verification-skill",
-    "make-pr-easy-to-review", "no-comments", "poteto-mode",
+    "get-pr-comments", "how", "interrogate", "ketchup", "maintain-verification-skill",
+    "make-pr-easy-to-review", "no-comments", "poteto-help", "poteto-mode",
     "principle-attack-the-premise", "principle-boundary-discipline", "principle-build-the-lever",
     "principle-encode-lessons-in-structure", "principle-exhaust-the-design-space",
-    "principle-experience-first", "principle-fix-root-causes", "principle-foundational-thinking",
+    "principle-experience-first", "principle-explain-the-number", "principle-fix-root-causes", "principle-foundational-thinking",
     "principle-guard-the-context-window", "principle-laziness-protocol",
     "principle-make-operations-idempotent", "principle-migrate-callers-then-delete-legacy-apis",
     "principle-minimize-reader-load", "principle-model-the-domain", "principle-never-block-on-the-human",
