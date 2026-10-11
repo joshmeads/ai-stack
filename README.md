@@ -222,7 +222,7 @@ This repository also keeps:
 
 ## Staying close to Lauren's pstack
 
-Open Pstack 1.4.1 tracks pstack 0.15.1 at Cursor commit [`f8abeddd1862dc73704e3d719dd73df0d51b8c71`](https://github.com/cursor/plugins/commit/f8abeddd1862dc73704e3d719dd73df0d51b8c71).
+This personal fork source sync tracks pstack 0.15.5 at Cursor commit [`adf3218ca2f5b9971eedc07a76bef22df7701539`](https://github.com/cursor/plugins/commit/adf3218ca2f5b9971eedc07a76bef22df7701539) (last pstack change `12d587dfb207`). Open Pstack package metadata remains 1.4.1; this sync is not a tagged release. The shared Claude/Codex port retains its provider adapters and explicit task-discipline model policy; see [UPSTREAM.md](UPSTREAM.md) for exceptions.
 
 The two projects have separate version numbers. The pstack version identifies Lauren's upstream content. The Open Pstack version identifies the Claude Code and Codex package built from it.
 

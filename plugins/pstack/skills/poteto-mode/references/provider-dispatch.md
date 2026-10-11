@@ -6,6 +6,18 @@ pstack model choices are provider-qualified descriptors:
 <provider>:<model>@<effort>
 ```
 
+## Explicit model policy takes precedence
+
+Resolve the user's role policy before reading legacy defaults or normalizing a model sheet. Under task-discipline, architecture and review use Astra (`gpt-6-astra`) at high effort, with Fable 5.1 (`claude-fable-5-1`) high only when Astra is unavailable. Implementation uses Opus 5.5 (`claude-opus-5-5`) high, then Astra medium, then Sol (`gpt-6-sol`) high. Record evidence of unavailability before each allowed fallback. Do not launch a mixed-model review panel under this policy; independent review lanes use the approved review model. An explicit effort in the current request takes precedence.
+
+The matrix below describes the older bundled runner's supported selectors, not this user policy. Its defaults and their copies in skills and setup are compatibility examples. Do not send Astra, Sol 6, or explicit Opus 5.5 pins through that runner, rewrite a user pin to a rolling alias, or substitute a matrix model to satisfy a role. The parent may use an authorized native or provider CLI route that guarantees the exact assigned model and effort, retaining its process and evidence. If none exists, report the blocked role. Children never reroute themselves. Setup must not overwrite an explicit role policy with this matrix or run its mixed-panel smoke under that policy.
+
+## Resolve model-rule lines
+
+Read the current parent's sheet (`~/.claude/pstack-models.md` or `~/.codex/pstack-models.md`) once before dispatch. On Codex, require its bytes to agree with the bounded models block in `~/.codex/AGENTS.md`; disagreement is inconsistent state, not permission to choose one. Explicit user policy overrides sheet values and skill defaults. Otherwise, use the named role line, using a skill's documented default only when the sheet or line is missing. A present but invalid or rejected entry is a reported dropout, never permission to choose a family default or a closest slug.
+
+Keep the port's combined role rows: `feature, refactoring`, `why investigators, synthesizer`, and `reflect tooling, judgment, divergent, synthesizer`. How reads `how explorer` and `how explainer`. Architect passes `architect runners` to Arena in place of `arena runners`; Arena's judge reads `arena cross-judge pool`. Interrogate reads `interrogate reviewers`; Swarm and plan live lanes read `swarm workers`. `hardest tasks` and `judgment and prose` are separate rows. Lists retain their order and lane count. `inherit-parent` and `auto` select native parent-model execution without an override, only when that model and effort satisfy the explicit role policy. Preserve the MCP requirements of Why and Reflect; report a blocked role if the approved route cannot supply them.
+
 ## Model matrix
 
 | Family | Upstream pstack choice | Provider | Model | Default effort | Selectable efforts | Claude-native agent stem |

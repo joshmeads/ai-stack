@@ -7,7 +7,7 @@ description: "Use for \"how does X work\", code walkthroughs before changing som
 
 Explore the codebase to answer "how does X work?" questions. Produce architectural explanations at the level of a senior engineer onboarding onto a subsystem, enough to build a working mental model, not so much that it reads like annotated source code.
 
-**Dispatch contract.** Resolve every configured role through [`provider-dispatch.md`](../poteto-mode/references/provider-dispatch.md). Values are provider-qualified descriptors; the parent chooses native versus external execution. On Codex, resolve remaining Claude tool names via [`codex-tools.md`](../poteto-mode/references/codex-tools.md).
+**Dispatch contract.** Resolve every configured role through [`provider-dispatch.md`](../poteto-mode/references/provider-dispatch.md). Values are provider-qualified descriptors; the parent chooses native versus external execution. On Codex, resolve remaining Claude tool names via [`codex-tools.md`](../poteto-mode/references/codex-tools.md). Read the named role line using the model-rule resolution and explicit-policy precedence in that reference. A missing line uses the documented default; an invalid or rejected entry remains a dropout, with no closest-model fallback.
 
 ## Step 1. Assess Complexity
 
@@ -20,19 +20,19 @@ When in doubt, take the simple path.
 
 ## Step 2a. Explore (complex questions only)
 
-Decompose the question into 2 to 4 exploration angles, each a distinct slice of the subsystem. Start all explorers in one fan-out phase through provider dispatch. Use your configured how-explorer descriptor (default `grok:grok-4.6@xhigh`) in `read-only` mode. A native lane uses the parent subagent primitive; an external lane uses the launcher directly.
+Decompose the question into 2 to 4 exploration angles, each a distinct slice of the subsystem. Start all explorers in one fan-out phase through provider dispatch. Use the `how explorer` descriptor (default `grok:grok-4.6@xhigh`) in `read-only` mode. A native lane uses the parent subagent primitive; an external lane uses the launcher directly.
 
 Each explorer gets the prompt in `references/explorer-prompt.md` with its angle filled in. Then go to Step 3.
 
 ## Step 2b. Direct Explain (simple questions)
 
-Dispatch one read-only lane that explores and explains in one pass using your configured how-explainer descriptor (default `claude:fable@max`).
+Dispatch one read-only lane that explores and explains in one pass using the `how explainer` descriptor (default `claude:fable@max`).
 
 Build its prompt from `references/explainer-prompt.md` without the explorer-findings section. Go to Step 4.
 
 ## Step 3. Synthesize (complex questions only)
 
-Once all explorers have returned, dispatch one read-only lane to synthesize their findings into one explanation using your configured how-explainer descriptor (default `claude:fable@max`).
+Once all explorers have returned, dispatch one read-only lane to synthesize their findings into one explanation using the `how explainer` descriptor (default `claude:fable@max`).
 
 Build its prompt from `references/explainer-prompt.md` with every explorer's findings filled in.
 
