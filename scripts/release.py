@@ -19,6 +19,7 @@ from pathlib import Path
 from typing import NamedTuple
 
 REPO = "ericlitman/open-pstack"
+MANIFEST = "plugins/pstack/.claude-plugin/plugin.json"
 ROOT = Path(__file__).resolve().parents[1]
 
 
@@ -63,6 +64,7 @@ def notes(text, version):
 
 class Facts(NamedTuple):
     version: str
+    changes: str
     clean: bool
     head: str
     origin_main: str
@@ -104,14 +106,12 @@ def ok(*args):
     return subprocess.run(args, cwd=ROOT, capture_output=True).returncode == 0
 
 
-def manifest_version():
-    return json.loads((ROOT / "plugins/pstack/.claude-plugin/plugin.json").read_text())["version"]
-
-
-def gather(text, version):
+def gather():
     run("git", "fetch", "--quiet", "--tags", "origin", "main")
     head = run("git", "rev-parse", "HEAD")
-    pr_head = run("git", "rev-parse", "HEAD^2") if ok("git", "rev-parse", "--verify", "--quiet", "HEAD^2") else None
+    text = run("git", "show", f"{head}:CHANGES.md")
+    version = json.loads(run("git", "show", f"{head}:{MANIFEST}"))["version"]
+    pr_head = run("git", "rev-parse", f"{head}^2") if ok("git", "rev-parse", "--verify", "--quiet", f"{head}^2") else None
     try:
         version_section(text, version)
         section_error = None
@@ -124,6 +124,7 @@ def gather(text, version):
         live_gate = states.splitlines()[0] if states else None
     return Facts(
         version=version,
+        changes=text,
         clean=run("git", "status", "--porcelain", "--untracked-files=all") == "",
         head=head,
         origin_main=run("git", "rev-parse", "origin/main"),
@@ -133,21 +134,22 @@ def gather(text, version):
         or bool(run("git", "ls-remote", "--tags", "origin", f"refs/tags/v{version}")),
         pr_head=pr_head,
         live_gate=live_gate,
-        same_tree=bool(pr_head) and run("git", "rev-parse", "HEAD^{tree}") == run("git", "rev-parse", f"{pr_head}^{{tree}}"),
+        same_tree=bool(pr_head) and run("git", "rev-parse", f"{head}^{{tree}}") == run("git", "rev-parse", f"{pr_head}^{{tree}}"),
     )
 
 
-def publish(text, version):
-    facts = gather(text, version)
+def publish():
+    facts = gather()
     found = refusals(facts)
     if found:
         print("refusing to release:\n" + "\n".join(f"- {reason}" for reason in found), file=sys.stderr)
         return 2
+    version = facts.version
     title = f"Open Pstack {version}"
     run("git", "tag", "-a", f"v{version}", "-m", title, facts.pr_head)
     run("git", "push", "--quiet", "origin", f"refs/tags/v{version}")
     subprocess.run(["gh", "release", "create", f"v{version}", "--repo", REPO, "--verify-tag",
-                    "--title", title, "--notes-file", "-"], cwd=ROOT, input=notes(text, version), text=True, check=True)
+                    "--title", title, "--notes-file", "-"], cwd=ROOT, input=notes(facts.changes, version), text=True, check=True)
     return 0
 
 
@@ -155,15 +157,15 @@ def main(argv):
     if argv not in (["notes"], ["publish"]):
         print(__doc__, file=sys.stderr)
         return 2
-    text, version = (ROOT / "CHANGES.md").read_text(), manifest_version()
-    if argv == ["notes"]:
-        try:
-            sys.stdout.write(notes(text, version))
-        except ValueError as error:
-            print(error, file=sys.stderr)
-            return 1
-        return 0
-    return publish(text, version)
+    if argv == ["publish"]:
+        return publish()
+    version = json.loads((ROOT / MANIFEST).read_text())["version"]
+    try:
+        sys.stdout.write(notes((ROOT / "CHANGES.md").read_text(), version))
+    except ValueError as error:
+        print(error, file=sys.stderr)
+        return 1
+    return 0
 
 
 if __name__ == "__main__":

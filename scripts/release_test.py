@@ -51,7 +51,9 @@ Not part of the 1.6.0 notes.
 Older entry.
 """
 
-GOOD = Facts(version="1.6.0", clean=True, head="a" * 40, origin_main="a" * 40, unreleased=False,
+RELEASED = CHANGES.replace("## Unreleased\n\n- Pending entry.\n\n", "")
+
+GOOD = Facts(version="1.6.0", changes=RELEASED, clean=True, head="a" * 40, origin_main="a" * 40, unreleased=False,
              section_error=None, tag_exists=False, pr_head="b" * 40, live_gate="success", same_tree=True)
 
 
@@ -114,7 +116,7 @@ class Publish(unittest.TestCase):
         with mock.patch.object(release, "gather", return_value=facts), \
                 mock.patch.object(release, "run") as run, \
                 mock.patch.object(release.subprocess, "run") as gh:
-            code = release.publish(CHANGES.replace("## Unreleased\n\n- Pending entry.\n\n", ""), "1.6.0")
+            code = release.publish()
         return code, run.call_args_list, gh.call_args_list
 
     def test_tags_the_live_gated_pr_head_not_head(self):
@@ -127,6 +129,41 @@ class Publish(unittest.TestCase):
     def test_refusal_writes_nothing(self):
         code, git_calls, gh_calls = self.publish(GOOD._replace(live_gate="failure"))
         self.assertEqual((code, git_calls, gh_calls), (2, [], []))
+
+
+class Gather(unittest.TestCase):
+    def test_every_fact_comes_from_the_captured_commit(self):
+        head, pr_head = "a" * 40, "b" * 40
+        outputs = {
+            ("git", "fetch", "--quiet", "--tags", "origin", "main"): "",
+            ("git", "rev-parse", "HEAD"): head,
+            ("git", "show", f"{head}:CHANGES.md"): RELEASED,
+            ("git", "show", f"{head}:{release.MANIFEST}"): '{"version": "1.6.0"}',
+            ("git", "rev-parse", f"{head}^2"): pr_head,
+            ("gh", "api", f"repos/{release.REPO}/commits/{pr_head}/status",
+             "--jq", '.statuses[] | select(.context == "live-gate") | .state'): "success",
+            ("git", "status", "--porcelain", "--untracked-files=all"): "",
+            ("git", "rev-parse", "origin/main"): head,
+            ("git", "ls-remote", "--tags", "origin", "refs/tags/v1.6.0"): "",
+            ("git", "rev-parse", f"{head}^{{tree}}"): "t" * 40,
+            ("git", "rev-parse", f"{pr_head}^{{tree}}"): "t" * 40,
+        }
+        succeeds = {("git", "rev-parse", "--verify", "--quiet", f"{head}^2")}
+        calls = []
+
+        def run(*args):
+            calls.append(args)
+            return outputs[args]
+
+        def ok(*args):
+            calls.append(args)
+            return args in succeeds
+
+        with mock.patch.object(release, "run", side_effect=run), mock.patch.object(release, "ok", side_effect=ok):
+            facts = release.gather()
+        self.assertEqual(facts, GOOD._replace(head=head, origin_main=head, pr_head=pr_head))
+        after_capture = calls[calls.index(("git", "rev-parse", "HEAD")) + 1:]
+        self.assertFalse([call for call in after_capture if any("HEAD" in arg for arg in call)])
 
 
 if __name__ == "__main__":
