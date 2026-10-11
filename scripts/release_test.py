@@ -2,8 +2,10 @@
 import sys
 import unittest
 from pathlib import Path
+from unittest import mock
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
+import release
 from release import Facts, anchor, has_unreleased, notes, refusals, version_section
 
 # Anchors GitHub rendered for these CHANGES.md headings at v1.6.0.
@@ -105,6 +107,26 @@ class PublishRefusals(unittest.TestCase):
             found = refusals(facts)
             self.assertEqual(len(found), 1, (expected, found))
             self.assertIn(expected, found[0])
+
+
+class Publish(unittest.TestCase):
+    def publish(self, facts):
+        with mock.patch.object(release, "gather", return_value=facts), \
+                mock.patch.object(release, "run") as run, \
+                mock.patch.object(release.subprocess, "run") as gh:
+            code = release.publish(CHANGES.replace("## Unreleased\n\n- Pending entry.\n\n", ""), "1.6.0")
+        return code, run.call_args_list, gh.call_args_list
+
+    def test_tags_the_live_gated_pr_head_not_head(self):
+        code, git_calls, gh_calls = self.publish(GOOD)
+        self.assertEqual(code, 0)
+        self.assertEqual(git_calls[0].args, ("git", "tag", "-a", "v1.6.0", "-m", "Open Pstack 1.6.0", GOOD.pr_head))
+        self.assertEqual(git_calls[1].args, ("git", "push", "--quiet", "origin", "refs/tags/v1.6.0"))
+        self.assertIn("v1.6.0", gh_calls[0].args[0])
+
+    def test_refusal_writes_nothing(self):
+        code, git_calls, gh_calls = self.publish(GOOD._replace(live_gate="failure"))
+        self.assertEqual((code, git_calls, gh_calls), (2, [], []))
 
 
 if __name__ == "__main__":

@@ -3,12 +3,14 @@
 
 `notes` prints the release body for the version in the Claude plugin manifest: that
 version's CHANGES.md section, then a link to the section at the tag. `publish` checks
-every precondition before it writes anything, then creates the annotated tag, pushes
-it, and creates the GitHub release with that body.
+every precondition before it writes anything, then tags the PR head whose live gate
+passed, pushes the tag, and creates the GitHub release with that body.
 
     python3 scripts/release.py notes
     python3 scripts/release.py publish
 """
+from __future__ import annotations
+
 import json
 import re
 import subprocess
@@ -136,12 +138,13 @@ def gather(text, version):
 
 
 def publish(text, version):
-    found = refusals(gather(text, version))
+    facts = gather(text, version)
+    found = refusals(facts)
     if found:
         print("refusing to release:\n" + "\n".join(f"- {reason}" for reason in found), file=sys.stderr)
         return 2
     title = f"Open Pstack {version}"
-    run("git", "tag", "-a", f"v{version}", "-m", title, "HEAD")
+    run("git", "tag", "-a", f"v{version}", "-m", title, facts.pr_head)
     run("git", "push", "--quiet", "origin", f"refs/tags/v{version}")
     subprocess.run(["gh", "release", "create", f"v{version}", "--repo", REPO, "--verify-tag",
                     "--title", title, "--notes-file", "-"], cwd=ROOT, input=notes(text, version), text=True, check=True)

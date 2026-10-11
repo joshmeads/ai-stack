@@ -3,9 +3,11 @@
 Mergify auto-queue is live: ready PRs to main require passing verify, Unfret and exact-head live-gate; workflow changes require operator queueing.
 This port applies the Cursor → Claude Code substitutions in skill bodies. Earlier drafts left them flagged; this revision resolves them. A later pass added a Codex build that shares the same skills; see [Codex port](#codex-port) below.
 
-## Unreleased
+## 1.6.1 adds a release script
 
-**Release script.** `python3 scripts/release.py notes` prints the release body for the manifest version: its `CHANGES.md` section and a link to that section at the tag. `python3 scripts/release.py publish` creates the annotated tag, pushes it, and creates the GitHub release with that body. Before it writes anything, it refuses on a dirty checkout, a `HEAD` other than `origin/main`, an `Unreleased` section, a missing or empty version section, or an existing tag. It also refuses unless `HEAD` is a merge commit whose PR head has `live-gate` success and the same tree. The static invariants run its tests and build the notes for the current version (#147).
+Open Pstack 1.6.1 keeps the Cursor pstack 0.15.17 sync and changes no skill.
+
+**Release script.** `python3 scripts/release.py notes` prints the release body for the manifest version: its `CHANGES.md` section and a link to that section at the tag. `python3 scripts/release.py publish` tags the PR head whose live gate passed, pushes the tag, and creates the GitHub release with that body. The tag goes on that PR head, not on the merge commit, because merge commits never carry a `live-gate` status. Before it writes anything, it refuses on a dirty checkout, a `HEAD` other than `origin/main`, an `Unreleased` section, a missing or empty version section, or an existing tag. It also refuses unless `HEAD` is a merge commit whose PR head has `live-gate` success and the same tree. It runs on Python 3.9 and later, including macOS's `/usr/bin/python3`. The static invariants run its tests and build the notes for the current version (#147).
 
 ## 1.6.0 syncs to Cursor pstack 0.15.17
 
