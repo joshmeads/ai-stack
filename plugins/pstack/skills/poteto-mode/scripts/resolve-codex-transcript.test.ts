@@ -2,6 +2,7 @@ import { Database } from "bun:sqlite";
 import { afterEach, beforeEach, describe, expect, it } from "bun:test";
 import { createHash } from "node:crypto";
 import {
+  existsSync,
   mkdirSync,
   mkdtempSync,
   readdirSync,
@@ -17,6 +18,7 @@ import { tmpdir } from "node:os";
 import { dirname, join, relative } from "node:path";
 
 const RESOLVER = join(import.meta.dir, "resolve-codex-transcript.ts");
+const LAUNCHER = join(import.meta.dir, "resolve-codex-transcript");
 const CHAT = "00000000-1111-2222-3333-444444444444";
 const OTHER = "00000000-1111-2222-3333-555555555555";
 const OPENING = "Reflect on this synthetic request.";
@@ -306,6 +308,32 @@ describe("resolve-codex-transcript", () => {
   it("stops at a record over 256 KiB", () => {
     writeRecords([metadata(), { type: "event_msg", payload: { pad: "x".repeat(256 * 1024) } }, user()]);
     expectUnresolved("rollout_line_budget");
+  });
+
+  it("launches without the project's Bun config or .env", () => {
+    const project = join(root, "project");
+    const decoy = join(root, "decoy-home");
+    const marker = join(root, "preload.ran");
+    mkdirSync(project);
+    mkdirSync(decoy);
+    writeFileSync(join(project, "bunfig.toml"), 'preload = ["./project-preload.ts"]\n');
+    writeFileSync(
+      join(project, "project-preload.ts"),
+      `await Bun.write(${JSON.stringify(marker)}, "ran");\nconsole.log("preload stdout");\n`
+    );
+    writeFileSync(join(project, ".env"), `CODEX_HOME=${decoy}\n`);
+    symlinkSync(home, join(root, ".codex"));
+    const env = { PATH: process.env.PATH!, HOME: root };
+    const direct = Bun.spawnSync(["bun", RESOLVER, CHAT], { cwd: project, env });
+    expect(existsSync(marker)).toBe(true);
+    expect(direct.stdout.toString()).toContain("preload stdout");
+    expect(direct.stdout.toString()).toContain('"reason":"index_missing"');
+    rmSync(marker);
+    const launched = Bun.spawnSync([LAUNCHER, CHAT], { cwd: project, env });
+    expect(launched.stderr.toString()).toBe("");
+    expect(existsSync(marker)).toBe(false);
+    expect(JSON.parse(launched.stdout.toString())).toMatchObject({ status: "resolved", path: rollout });
+    expect(launched.exitCode).toBe(0);
   });
 
   it("stops at 2 MiB in total", () => {

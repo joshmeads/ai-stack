@@ -30,7 +30,7 @@ Reflect passes reviewers this conversation's transcript only after the parent ve
 **Codex.** Run the read-only resolver with the parent's known chat ID. Substitute the absolute plugin root and the chat UUID:
 
 ```bash
-bun "<plugin-root>/skills/poteto-mode/scripts/resolve-codex-transcript.ts" "<chat-id>"
+"<plugin-root>/skills/poteto-mode/scripts/resolve-codex-transcript" "<chat-id>"
 ```
 
 The resolver reads the [Codex config home](#harness-config-homes) and looks up that exact ID in the `threads` table of its `state_*.sqlite` index. It checks that the rollout is inside `<config-home>/sessions/` and belongs to that chat. It then scans at most 500 records, 2 MiB in total, or a 256 KiB record for the first user message, skipping injected AGENTS.md and environment context. On success it exits 0 and prints the chat ID, the rollout path, and the opening message's line, record type, character count, and SHA-256. It never prints message text. If it cannot verify the transcript, it exits 1 and prints an `unresolved` reason. Before passing the path, compare the character count and SHA-256 with this conversation's opening prompt. Do not search by chat title or by time.

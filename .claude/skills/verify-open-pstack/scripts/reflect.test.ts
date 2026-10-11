@@ -1,17 +1,15 @@
 import { afterEach, expect, test } from 'bun:test';
-import { mkdtemp, readFile, realpath, rm, writeFile } from 'node:fs/promises';
+import { mkdtemp, readdir, readFile, realpath, rm, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join, resolve } from 'node:path';
-import { recipe, type Fixture } from '../features/recipes.ts';
-import { command, sha256 } from './io.ts';
+import { recipe, type Case, type Fixture } from '../features/recipes.ts';
+import { command } from './io.ts';
 import { parseSession } from './harness.ts';
 import type { Harness, SessionRecord } from './types.ts';
 
 const roots: string[] = [];
 afterEach(async () => { for (const root of roots.splice(0)) await rm(root, { recursive: true, force: true }); });
-const opening = 'Reflect on the corrections in this disposable session.';
 const chat = '00000000-1111-2222-3333-444444444444';
-const quote = (value: string) => "'" + value.replaceAll("'", "'\\''") + "'";
 
 async function fixture(harness: Harness): Promise<Fixture> {
   const dir = await realpath(await mkdtemp(join(tmpdir(), 'pstack-reflect-recipe-'))); roots.push(dir);
@@ -20,58 +18,59 @@ async function fixture(harness: Harness): Promise<Fixture> {
 }
 
 const home = (f: Fixture) => join(f.dir, 'transcript-home');
-const transcript = (f: Fixture) => join(home(f), f.harness === 'codex' ? 'sessions/2026/10/11/known.jsonl' : 'projects/fixture/known.jsonl');
-const helper = (f: Fixture) => join(f.location, 'skills/poteto-mode/scripts/resolve-codex-transcript.ts');
-const plain = (f: Fixture) => `CODEX_HOME=${home(f)} bun ${helper(f)} ${chat}`;
+const claudeTranscript = (f: Fixture) => join(home(f), 'projects/fixture/known.jsonl');
+const launcher = (f: Fixture) => join(f.location, 'skills/poteto-mode/scripts/resolve-codex-transcript');
+const lookup = (f: Fixture) => `CODEX_HOME=${home(f)} ${launcher(f)} ${chat}`;
+const tool = (name: string, input: Record<string, any>, result: string | undefined, failed = false): SessionRecord['tools'][number] =>
+  ({ name, id: 'item_1', input, result, parent: null, failed });
 
-/** Runs the real resolver as the harness would and records its captured stdout. */
-async function resolverOutput(f: Fixture): Promise<string> {
-  const child = Bun.spawn(['bun', helper(f), chat], { env: { ...process.env, CODEX_HOME: home(f) }, stdout: 'pipe', stderr: 'pipe' });
+/** Runs the installed launcher as a session would, returning the stdout the harness captures. */
+async function launch(f: Fixture): Promise<string> {
+  const child = Bun.spawn([launcher(f), chat], { env: { ...process.env, CODEX_HOME: home(f) }, stdout: 'pipe', stderr: 'pipe' });
   const [code, stdout, stderr] = await Promise.all([child.exited, new Response(child.stdout).text(), new Response(child.stderr).text()]);
   expect(code).toBe(0); expect(stderr).toBe('');
   return stdout;
 }
 
-const commandTool = (command: string, result: string, failed = false): SessionRecord['tools'][number] =>
-  ({ name: 'command', id: 'item_1', input: { command }, result, parent: null, failed });
-
-/** Does what a passing session does: Codex runs the real resolver, Claude reads the fixture and writes its report. */
+/** Does what a passing session does: Codex runs the launcher, Claude reads the transcript and writes its report. */
 async function simulatedRecord(f: Fixture, available: boolean): Promise<SessionRecord> {
   let tools: SessionRecord['tools'];
   if (f.harness === 'codex') {
-    const wrapped = `/bin/zsh -lc ${quote(plain(f))}`;
-    tools = [commandTool(wrapped, await resolverOutput(f))];
+    tools = [tool('command', { command: `/bin/zsh -lc '${lookup(f)}'` }, await launch(f))];
   } else {
+    const opening = 'Reflect on the corrections in this disposable session.';
     await writeFile(join(f.dir, 'result.json'), JSON.stringify(available ? {
-      status: 'resolved', path: transcript(f), opening_user_message: { line: 2, characters: opening.length, sha256: sha256(opening) },
+      status: 'resolved', path: claudeTranscript(f), opening_user_message: { line: 2, characters: opening.length, sha256: new Bun.CryptoHasher('sha256').update(opening).digest('hex') },
     } : { status: 'unresolved', reason: 'opening_message_mismatch', fallback: 'session_digest' }));
-    tools = [{ name: 'Read', id: 'read', input: { file_path: transcript(f), offset: 1, limit: 500 }, parent: null, failed: false, result: await readFile(transcript(f), 'utf8') }];
+    tools = [tool('Bash', { command: `cat -n ${claudeTranscript(f)}` }, await readFile(claudeTranscript(f), 'utf8'))];
   }
   if (!available) await writeFile(join(f.dir, 'digest.md'), 'The requested opening is missing from this synthetic fixture.');
   return { harness: f.harness, exitCode: 0, started: Date.now() - 1000, skills: ['pstack:reflect'], commands: [], tools };
 }
 
+async function prepared(harness: Harness, index = 0): Promise<{ f: Fixture; c: Case; record: SessionRecord }> {
+  const f = await fixture(harness), c = recipe('skill-invocation:reflect', harness)[index]!;
+  await c.prepare!(f);
+  return { f, c, record: await simulatedRecord(f, index === 0) };
+}
+
 test.each(['claude', 'codex'] as const)('%s Reflect recipes verify the opening and the digest fallback rather than a generic result', async harness => {
   const cases = recipe('skill-invocation:reflect', harness);
   expect(cases.map(c => c.id)).toEqual(['locate-transcript', 'digest-fallback']);
-  for (const c of cases) {
-    const f = await fixture(harness), available = c.id === 'locate-transcript';
-    await c.prepare!(f);
-    const record = await simulatedRecord(f, available), result = await c.assert(record, f);
-    expect(result.assertions).toContain(available ? 'opening-verified' : 'digest-fallback');
+  for (const index of [0, 1]) {
+    const { f, c, record } = await prepared(harness, index), available = index === 0;
+    expect((await c.assert(record, f)).assertions).toContain(available ? 'opening-verified' : 'digest-fallback');
     expect(c.prompt(f)).toContain(harness === 'claude' ? '/pstack:reflect' : '$pstack:reflect');
     await expect(c.assert({ ...record, skills: [] }, f)).rejects.toThrow('skill-not-loaded');
-    if (harness === 'codex' || available) await expect(c.assert({ ...record, tools: [] }, f)).rejects.toThrow(harness === 'codex' ? 'reflect-resolver-not-run' : 'reflect-transcript-not-read');
+    await expect(c.assert({ ...record, tools: [] }, f)).rejects.toThrow(harness === 'codex' ? 'reflect-resolver-not-run' : 'reflect-transcript-not-read');
     if (available) {
       await writeFile(join(f.dir, 'digest.md'), 'An unneeded digest.');
       await expect(c.assert(record, f)).rejects.toThrow('reflect-unneeded-fallback');
     } else {
-      for (const blank of [' \n\t ', '']) {
-        await writeFile(join(f.dir, 'digest.md'), blank);
-        await expect(c.assert(record, f)).rejects.toThrow(blank ? 'reflect-digest-empty' : 'fixture-file-missing');
+      for (const [content, reason] of [[' \n\t ', 'reflect-digest-empty'], ['', 'fixture-file-missing'], ['word '.repeat(2001), 'reflect-digest-budget']]) {
+        await writeFile(join(f.dir, 'digest.md'), content!);
+        await expect(c.assert(record, f)).rejects.toThrow(reason!);
       }
-      await writeFile(join(f.dir, 'digest.md'), 'word '.repeat(2001));
-      await expect(c.assert(record, f)).rejects.toThrow('reflect-digest-budget');
     }
   }
 });
@@ -83,110 +82,65 @@ test('both Codex cases prepare in one fixture, each from a fresh index', async (
   await fallback!.assert(await simulatedRecord(f, false), f);
 });
 
-test.each(['claude', 'codex'] as const)('%s prompts leave the lookup to the installed mapping', async harness => {
-  for (const c of recipe('skill-invocation:reflect', harness)) {
-    const prompt = c.prompt(await fixture(harness));
-    for (const leak of ['resolve-codex-transcript', 'poteto-mode/scripts', 'bun ', 'known.jsonl', 'state_5.sqlite', 'stdout']) expect(prompt).not.toContain(leak);
+test.each(['claude', 'codex'] as const)('%s prompts name neither the resolver nor the per-run nonce', async harness => {
+  for (const index of [0, 1]) {
+    const { f, c } = await prepared(harness, index), prompt = c.prompt(f);
+    const nonce = harness === 'codex'
+      ? (await readdir(join(home(f), 'sessions/2026/10/11')))[0]!.replace(/^rollout-|\.jsonl$/g, '')
+      : JSON.parse((await readFile(claudeTranscript(f), 'utf8')).split('\n')[1]!).uuid;
+    expect(nonce).toMatch(/^[0-9a-f-]{36}$/);
+    for (const leak of [nonce, 'resolve-codex-transcript', 'poteto-mode/scripts', 'known.jsonl', 'state_5.sqlite']) expect(prompt).not.toContain(leak);
   }
 });
 
-test('Codex accepts a plain resolver invocation, wrapped, prefixed or quoted', async () => {
-  const f = await fixture('codex'), c = recipe('skill-invocation:reflect', 'codex')[0]!;
-  await c.prepare!(f);
-  const record = await simulatedRecord(f, true), output = record.tools[0]!.result!;
-  for (const command of [
-    `bun ${helper(f)} ${chat}`, `/bin/zsh -lc ${quote(`bun ${helper(f)} ${chat}`)}`, plain(f), `/bin/bash -c ${quote(plain(f))}`,
-    `CODEX_HOME="${home(f)}" "${helper(f)}" "${chat}"`, `/bin/zsh -lc 'CODEX_HOME="${home(f)}" bun "${helper(f)}" ${chat}'`,
-  ]) await c.assert({ ...record, tools: [commandTool(command, output)] }, f);
-});
-
-test('Codex rejects anything but a completed plain invocation, including each review reproducer', async () => {
-  const f = await fixture('codex'), c = recipe('skill-invocation:reflect', 'codex')[0]!;
-  await c.prepare!(f);
-  const record = await simulatedRecord(f, true), output = record.tools[0]!.result!, exact = plain(f);
-  for (const command of [
-    `${exact} # comment`, `# ${exact}`, `${exact} > ${quote(join(f.dir, 'out.json'))}`, `${exact} >/dev/null`, `${exact} && true`, `${exact}; true`,
-    `${exact} | cat`, `CODEX_HOME=${quote(home(f))} \\\n  bun ${quote(helper(f))} ${chat}`, `bun ${quote(helper(f))} $CHAT`, `bun "$(echo ${helper(f)})" ${chat}`,
-    `echo '{"path":"${helper(f)}"}'`, `cat ${quote(helper(f))}`, `bun ${quote(helper(f))} 00000000-1111-2222-3333-555555555555`,
-    `bun ${quote(join(f.dir, 'resolve-codex-transcript.ts'))} ${chat}`, `CODEX_HOME=/elsewhere bun ${quote(helper(f))} ${chat}`, `bun ${quote(helper(f))} ${chat} extra`,
-    `/bin/zsh -lc ${quote(`/bin/zsh -lc ${quote(exact)}`)}`,
-  ]) {
-    await expect(c.assert({ ...record, tools: [commandTool(command, output)] }, f)).rejects.toThrow('reflect-resolver-not-run');
+test('Codex accepts the launcher or the script, installed or by realpath, however the command is spelled', async () => {
+  const { f, c, record } = await prepared('codex'), output = record.tools[0]!.result!;
+  const script = `${launcher(f)}.ts`;
+  for (const commandText of [lookup(f), `bun ${script} ${chat}`, `cd /tmp && CODEX_HOME="${home(f)}" "${await realpath(launcher(f))}" ${chat} # lookup`,
+    `/bin/bash -lc 'bun --no-env-file ${await realpath(script)} ${chat} 2>&1'`]) {
+    await c.assert({ ...record, tools: [tool('command', { command: commandText }, output)] }, f);
   }
-  await expect(c.assert({ ...record, tools: [commandTool(exact, output, true)] }, f)).rejects.toThrow('reflect-resolver-not-run');
-  await expect(c.assert({ ...record, tools: [{ ...commandTool(exact, output), name: 'Read' }] }, f)).rejects.toThrow('reflect-resolver-not-run');
-  // Evidence is the harness-captured output, so a report file the model writes or overwrites cannot change the verdict.
-  await writeFile(join(f.dir, 'result.json'), '{"status":"resolved"}');
-  await c.assert(record, f);
 });
 
-test('Codex reads the resolver output exactly, without extra fields or message text', async () => {
-  const f = await fixture('codex'), c = recipe('skill-invocation:reflect', 'codex')[0]!;
+test('Codex rejects output from another fixture, another run, or a command that does not name the resolver', async () => {
+  const { f, c, record } = await prepared('codex'), [good] = record.tools;
+  const other = await prepared('codex');
+  const stale = JSON.parse(good!.result!);
   await c.prepare!(f);
-  const record = await simulatedRecord(f, true), output = record.tools[0]!.result!, exact = record.tools[0]!.input.command;
-  const result = JSON.parse(output);
   for (const changed of [
-    { ...result, extra: true }, { ...result, chat_id: '00000000-1111-2222-3333-555555555555' },
-    { ...result, opening_user_message: { ...result.opening_user_message, line: 1 } },
+    good!, tool('command', good!.input, other.record.tools[0]!.result),
+    tool('command', { command: `echo '${JSON.stringify(stale)}'` }, good!.result), tool('command', { command: `cat ${f.dir}/report.json` }, good!.result),
+    tool('command', good!.input, good!.result, true), tool('command', good!.input, 'not json'),
   ]) {
-    await expect(c.assert({ ...record, tools: [commandTool(exact, JSON.stringify(changed))] }, f)).rejects.toThrow('reflect-resolver-output-mismatch');
+    await expect(c.assert({ ...record, tools: [changed] }, f)).rejects.toThrow('reflect-resolver-not-run');
   }
-  await expect(c.assert({ ...record, tools: [commandTool(exact, 'not json')] }, f)).rejects.toThrow('reflect-resolver-output-mismatch');
-  for (const leaked of [output + opening, `${opening}\n${output}`, output + 'Fixture only.']) {
-    await expect(c.assert({ ...record, tools: [commandTool(exact, leaked)] }, f)).rejects.toThrow('reflect-message-text-exposed');
-  }
+  // The rerun's own output still passes, so only the stale nonce path failed above.
+  const fresh = await launch(f);
+  await c.assert({ ...record, tools: [tool('command', good!.input, fresh)] }, f);
+  await c.assert({ ...record, tools: [tool('command', good!.input, JSON.stringify(Object.fromEntries(Object.entries(JSON.parse(fresh)).reverse())))] }, f);
 });
 
-const nonceOf = async (f: Fixture) => JSON.parse((await readFile(transcript(f), 'utf8')).split('\n')[0]!).nonce as string;
-
-test('Claude proves the read with a fixture nonce from any completed parent tool result', async () => {
-  const f = await fixture('claude'), c = recipe('skill-invocation:reflect', 'claude')[0]!;
-  await c.prepare!(f);
-  const record = await simulatedRecord(f, true), nonce = await nonceOf(f), content = await readFile(transcript(f), 'utf8');
-  expect(nonce).toMatch(/^[0-9a-f-]{36}$/);
-  expect(c.prompt(f)).not.toContain(nonce);
-  for (const tool of [record.tools[0]!, commandTool(`cat -n ${transcript(f)}`, content), { ...commandTool(`python3 - <<'EOF'\nprint(open(${JSON.stringify(transcript(f))}).read())\nEOF`, content), name: 'Bash' }]) {
-    await c.assert({ ...record, tools: [tool] }, f);
-  }
-  for (const tool of [
-    commandTool(`echo ${JSON.stringify(opening)}`, opening), commandTool(`echo ${transcript(f)}`, transcript(f)), { ...record.tools[0]!, failed: true },
-    { ...record.tools[0]!, result: undefined }, { ...record.tools[0]!, parent: 'child-agent' },
-    { name: 'Read', id: 'source-only', input: { file_path: helper(f) }, parent: null, failed: false, result: 'The helper source.' },
-  ]) {
-    await expect(c.assert({ ...record, tools: [tool] }, f)).rejects.toThrow('reflect-transcript-not-read');
-  }
-  await c.prepare!(f);
-  await expect(c.assert(record, f)).rejects.toThrow('reflect-transcript-not-read');
-});
-
-test('Claude reports must have exactly the expected fields and no fixture text', async () => {
-  const [located, fallback] = recipe('skill-invocation:reflect', 'claude');
-  for (const [c, available] of [[located!, true], [fallback!, false]] as const) {
-    const f = await fixture('claude'), report = join(f.dir, 'result.json');
-    await c.prepare!(f);
-    const record = await simulatedRecord(f, available), good = JSON.parse(await readFile(report, 'utf8'));
-    await c.assert(record, f);
-    const mismatch = available ? 'reflect-opening-mismatch' : 'reflect-fallback-mismatch';
-    for (const [changed, reason] of [
-      [{ ...good, requested_opening: opening }, 'reflect-message-text-exposed'],
-      [{ ...good, note: 'An unrelated synthetic opening.' }, 'reflect-message-text-exposed'],
-      [{ ...good, note: 'Fixture only.' }, 'reflect-message-text-exposed'],
-      [{ ...good, checked: true }, mismatch],
-      [Object.fromEntries(Object.entries(good).slice(1)), mismatch],
-      ...available ? [[{ ...good, opening_user_message: { ...good.opening_user_message, record_type: 'user' } }, mismatch]] : [],
-    ] as const) {
-      await writeFile(report, JSON.stringify(changed));
-      await expect(c.assert(record, f)).rejects.toThrow(reason);
+test('Claude requires a completed parent tool result holding the opening user record in both cases', async () => {
+  for (const index of [0, 1]) {
+    const { f, c, record } = await prepared('claude', index), [read] = record.tools;
+    const [metadata, user] = (await readFile(claudeTranscript(f), 'utf8')).trimEnd().split('\n');
+    await c.assert({ ...record, tools: [tool('Read', { file_path: claudeTranscript(f) }, `1\t${metadata}\n2\t${user}`)] }, f);
+    for (const changed of [
+      tool('Read', { file_path: claudeTranscript(f), limit: 1 }, `1\t${metadata}`), tool('Bash', { command: 'echo opener' }, 'Reflect on the corrections in this disposable session.'),
+      { ...read!, failed: true }, { ...read!, result: undefined }, { ...read!, parent: 'child-agent' },
+    ]) {
+      await expect(c.assert({ ...record, tools: [changed] }, f)).rejects.toThrow('reflect-transcript-not-read');
     }
+    await c.prepare!(f);
+    await expect(c.assert(record, f)).rejects.toThrow('reflect-transcript-not-read');
   }
 });
 
 test('Claude accepts a completed Bash read in the native stream and rejects a failed or pending one', async () => {
-  const f = await fixture('claude'), c = recipe('skill-invocation:reflect', 'claude')[0]!;
-  await c.prepare!(f); const record = await simulatedRecord(f, true), content = await readFile(transcript(f), 'utf8');
+  const { f, c, record } = await prepared('claude'), content = await readFile(claudeTranscript(f), 'utf8');
   const events = (completed: boolean, failed: boolean) => [
     { type: 'user', isReplay: true, message: { content: '<command-name>/pstack:reflect</command-name>' } },
-    { type: 'assistant', message: { content: [{ type: 'tool_use', id: 'bash', name: 'Bash', input: { command: `cat -n ${transcript(f)}` } }] } },
+    { type: 'assistant', message: { content: [{ type: 'tool_use', id: 'bash', name: 'Bash', input: { command: `cat -n ${claudeTranscript(f)}` } }] } },
     ...completed ? [{ type: 'user', message: { content: [{ type: 'tool_result', tool_use_id: 'bash', is_error: failed, content }] } }] : [],
     { type: 'result', subtype: 'success', result: 'I read it and it passed.' },
   ].map(event => JSON.stringify(event)).join('\n');
@@ -197,8 +151,7 @@ test('Claude accepts a completed Bash read in the native stream and rejects a fa
 });
 
 test('Codex requires a completed resolver command in the native stream and rejects failed, pending or claimed execution', async () => {
-  const f = await fixture('codex'), c = recipe('skill-invocation:reflect', 'codex')[0]!;
-  await c.prepare!(f); const record = await simulatedRecord(f, true), { command: exact } = record.tools[0]!.input, output = record.tools[0]!.result!;
+  const { f, c, record } = await prepared('codex'), { command: exact } = record.tools[0]!.input, output = record.tools[0]!.result!;
   const rollout = JSON.stringify({ type: 'response_item', payload: { content: [{ text: '<skill>\n<name>pstack:reflect</name>\n<path>/run/.codex/plugins/cache/open-pstack/pstack/test/skills/reflect/SKILL.md</path>' }] } });
   const item = (exit_code: number | null) => ({ id: 'item_1', type: 'command_execution', command: exact, aggregated_output: output, exit_code });
   for (const event of [

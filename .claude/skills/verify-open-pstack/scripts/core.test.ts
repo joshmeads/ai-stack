@@ -110,7 +110,7 @@ describe('registry and ownership', () => {
   });
   test('the transcript resolver belongs to Reflect rather than unrelated shipped tools', () => {
     const path = 'plugins/pstack/skills/poteto-mode/scripts/resolve-codex-transcript.ts';
-    for (const file of [{ filename: path }, { filename: 'docs/removed-resolver.md', previous_filename: path }]) {
+    for (const file of [{ filename: path }, { filename: path.replace('.ts', '') }, { filename: 'docs/removed-resolver.md', previous_filename: path }]) {
       const s = classify([file], registry);
       expect(s.skills).toEqual(['reflect']);
       expect(s.features).toEqual(['skill-invocation:reflect']);

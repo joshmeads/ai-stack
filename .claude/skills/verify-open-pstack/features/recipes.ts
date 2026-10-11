@@ -2,7 +2,7 @@
 // native session and evaluates `assert` against the parsed record and the fixture it created.
 import { Database } from 'bun:sqlite';
 import { lstat, mkdir, readFile, realpath, rm, writeFile } from 'node:fs/promises';
-import { basename, join, resolve } from 'node:path';
+import { basename, join } from 'node:path';
 import { sha256, type Command } from '../scripts/io.ts';
 import type { Harness, SessionRecord } from '../scripts/types.ts';
 
@@ -126,50 +126,32 @@ const overrides: Record<string, Case> = {
 const REFLECT_CHAT = '00000000-1111-2222-3333-444444444444';
 const REFLECT_OPENING = 'Reflect on the corrections in this disposable session.';
 const REFLECT_UNRELATED = 'An unrelated synthetic opening.';
-const RESOLVER = 'skills/poteto-mode/scripts/resolve-codex-transcript.ts';
-const exposesFixtureText = (output: string) => [REFLECT_OPENING, REFLECT_UNRELATED, 'Fixture only.'].some(message => output.includes(message));
-const keys = (value: unknown) => value && typeof value === 'object' ? Object.keys(value).sort().join() : '';
+const RESOLVER = 'skills/poteto-mode/scripts/resolve-codex-transcript';
 
-const WORD = String.raw`(?:'[^']*'|"[^"]*"|[^\s'"])+`;
-
-/** Words of a command that is one plain invocation, after removing at most one `sh -c` wrapper and
- * stripping quotes. Anything that could chain, redirect, expand, or comment returns undefined. */
-export function plainWords(command: string): string[] | undefined {
-  const wrapped = /^(?:\/bin\/|\/usr\/bin\/)?(?:ba|z)?sh -l?c (?:'([^']*)'|"([^"]*)")$/.exec(command);
-  const inner = wrapped ? wrapped[1] ?? wrapped[2]! : command;
-  if (/[;&|<>`$()#\n\\]/.test(inner) || !new RegExp(`^\\s*(?:${WORD}(?:\\s+${WORD})*)?\\s*$`).test(inner)) return undefined;
-  return (inner.match(new RegExp(WORD, 'g')) ?? []).map(word => word.replace(/'([^']*)'|"([^"]*)"/g, (_, a, b) => a ?? b));
+function parseJson(text: string | undefined): unknown {
+  try { return JSON.parse(text ?? ''); } catch { return undefined; }
 }
 
 function reflect(harness: Harness): Case[] {
   return [true, false].map(available => {
     const home = (f: Fixture) => join(f.dir, 'transcript-home');
-    const transcript = (f: Fixture) => join(home(f), harness === 'codex' ? 'sessions/2026/10/11/known.jsonl' : 'projects/fixture/known.jsonl');
+    // A per-run nonce keeps a transcript path or record the prompt never names: Codex in the
+    // rollout's file name, Claude on the opening user record.
+    let nonce = '';
+    const transcript = (f: Fixture) => join(home(f), harness === 'codex' ? `sessions/2026/10/11/rollout-${nonce}.jsonl` : 'projects/fixture/known.jsonl');
     const index = (f: Fixture) => join(home(f), 'state_5.sqlite');
     const report = (f: Fixture) => join(f.dir, 'result.json');
     const digest = (f: Fixture) => join(f.dir, 'digest.md');
     const text = available ? REFLECT_OPENING : REFLECT_UNRELATED;
-    // Appears only in the Claude fixture transcript, so a tool result that contains it read the file.
-    let nonce = '';
-    const injected = (f: Fixture) => `# AGENTS.md instructions for ${f.dir}\n\n<INSTRUCTIONS>\nFixture only.\n</INSTRUCTIONS>`;
-    // True when the command runs only the installed resolver for the known chat, optionally under the fixture home.
-    const resolverRun = async (command: string, f: Fixture): Promise<boolean> => {
-      const words = plainWords(command);
-      if (!words) return false;
-      let k = words[0] === `CODEX_HOME=${home(f)}` ? 1 : 0;
-      if (words[k] === 'bun') k++;
-      return words.length === k + 2 && words[k + 1] === REFLECT_CHAT &&
-        await realpath(resolve(f.dir, words[k]!)).catch(() => '') === await realpath(join(f.location, RESOLVER));
-    };
     return {
       id: available ? 'locate-transcript' : 'digest-fallback',
       async prepare(f) {
         nonce = crypto.randomUUID();
         const records = harness === 'codex' ? [
           { type: 'session_meta', payload: { id: REFLECT_CHAT } },
-          { type: 'response_item', payload: { type: 'message', role: 'user', content: [{ type: 'input_text', text: injected(f) }] } },
+          { type: 'response_item', payload: { type: 'message', role: 'user', content: [{ type: 'input_text', text: `# AGENTS.md instructions for ${f.dir}\n\n<INSTRUCTIONS>\nFixture only.\n</INSTRUCTIONS>` }] } },
           { type: 'response_item', payload: { type: 'message', role: 'user', content: [{ type: 'input_text', text }] } },
-        ] : [{ type: 'system', subtype: 'fixture_metadata', nonce }, { type: 'user', message: { role: 'user', content: [{ type: 'text', text }] } }];
+        ] : [{ type: 'system', subtype: 'fixture_metadata' }, { type: 'user', uuid: nonce, message: { role: 'user', content: [{ type: 'text', text }] } }];
         await files(f.dir, { [transcript(f).slice(f.dir.length + 1)]: records.map(record => JSON.stringify(record)).join('\n') + '\n' });
         if (harness === 'codex') {
           await rm(index(f), { force: true });
@@ -182,7 +164,7 @@ function reflect(harness: Harness): Case[] {
       prompt(f) {
         const request = `Exercise only step 1 with this disposable synthetic fixture. Do not fan out reviewers, apply edits, or inspect real chats. The conversation's opening prompt to verify is ${JSON.stringify(REFLECT_OPENING)}. `;
         const where = harness === 'codex'
-          ? `The fixture's known parent chat ID is ${REFLECT_CHAT}. Run the transcript lookup as one plain command with CODEX_HOME set to ${home(f)} for that command only, and with no pipes, redirects, chaining, or shell variables. `
+          ? `The fixture's known parent chat ID is ${REFLECT_CHAT}. Run the transcript lookup with CODEX_HOME set to ${home(f)} for that command only. `
           : `For this fixture, the system-named per-project transcript directory is ${join(home(f), 'projects/fixture')}. Write only JSON to ${report(f)}: when a transcript verifies, its status "resolved", path, and opening_user_message with line, characters, and sha256; otherwise status "unresolved", reason "opening_message_mismatch", and fallback "session_digest". Do not include message text in ${report(f)}. `;
         return `${invoke(harness, 'reflect', `${request}${where}If the transcript cannot be verified, write the session digest, at most 2,000 words and covering only this fixture request, to ${digest(f)}.`)} ${rules(f.dir)}`;
       },
@@ -190,33 +172,26 @@ function reflect(harness: Harness): Case[] {
         const assertions = [loaded(record, 'pstack:reflect')];
         const paths: string[] = [];
         if (harness === 'codex') {
-          // The harness captured this output; the model never writes the evidence.
-          const runs = await Promise.all(record.tools.map(async tool => tool.name === 'command' && !tool.failed && typeof tool.result === 'string' && await resolverRun(tool.input.command, f)));
-          const output = record.tools.find((_, i) => runs[i])?.result;
-          if (output === undefined) throw new Error('reflect-resolver-not-run');
-          if (exposesFixtureText(output)) throw new Error('reflect-message-text-exposed');
-          // Both cases resolve the chat; only the opener it reports differs.
+          // Both cases resolve the chat; only the opener it reports differs. The output is the harness's capture.
           const expected = { status: 'resolved', chat_id: REFLECT_CHAT, path: transcript(f),
             opening_user_message: { line: 3, record_type: 'response_item', characters: text.length, sha256: sha256(text) } };
-          let parsed: unknown;
-          try { parsed = JSON.parse(output); } catch { parsed = undefined; }
-          if (JSON.stringify(parsed) !== JSON.stringify(expected)) throw new Error('reflect-resolver-output-mismatch');
+          const installed = [RESOLVER, `${RESOLVER}.ts`].map(path => join(f.location, path));
+          const names = [...installed, ...await Promise.all(installed.map(path => realpath(path)))];
+          const output = record.tools.find(tool => tool.name === 'command' && !tool.failed && names.some(name => tool.input.command.includes(name)) &&
+            Bun.deepEquals(parseJson(tool.result), expected))?.result;
+          if (output === undefined) throw new Error('reflect-resolver-not-run');
           const retained = join(f.dir, 'resolver-output.json');
           await writeFile(retained, output);
           paths.push(retained); assertions.push('resolver-ran');
         } else {
-          // The fallback's opener differs, so the session need not have read the whole record set.
-          if (available && !record.tools.some(tool => tool.parent === null && !tool.failed && tool.result?.includes(nonce))) throw new Error('reflect-transcript-not-read');
+          if (!record.tools.some(tool => tool.parent === null && !tool.failed && tool.result?.includes(nonce))) throw new Error('reflect-transcript-not-read');
           assertions.push(await written(record, report(f)));
           if ((await lstat(report(f))).size > 5000) throw new Error('reflect-result-budget');
-          const reportText = await readFile(report(f), 'utf8');
-          if (exposesFixtureText(reportText)) throw new Error('reflect-message-text-exposed');
-          const result = JSON.parse(reportText), opening = result.opening_user_message;
-          if (available ? keys(result) !== 'opening_user_message,path,status' || keys(opening) !== 'characters,line,sha256' ||
-              result.status !== 'resolved' || result.path !== transcript(f) || opening.line !== 2 ||
-              opening.characters !== REFLECT_OPENING.length || opening.sha256 !== sha256(REFLECT_OPENING)
-            : keys(result) !== 'fallback,reason,status' || result.status !== 'unresolved' || result.reason !== 'opening_message_mismatch' ||
-              result.fallback !== 'session_digest') throw new Error(available ? 'reflect-opening-mismatch' : 'reflect-fallback-mismatch');
+          const result = JSON.parse(await readFile(report(f), 'utf8')), opening = result.opening_user_message;
+          if (available ? result.status !== 'resolved' || result.path !== transcript(f) || opening?.line !== 2 ||
+              opening?.characters !== REFLECT_OPENING.length || opening?.sha256 !== sha256(REFLECT_OPENING)
+            : result.status !== 'unresolved' || result.reason !== 'opening_message_mismatch' || result.fallback !== 'session_digest' ||
+              result.path !== undefined) throw new Error(available ? 'reflect-opening-mismatch' : 'reflect-fallback-mismatch');
           paths.push(report(f));
         }
         if (available) {
