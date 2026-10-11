@@ -33,7 +33,7 @@ The publisher revision is recorded separately from the candidate SHA and must eq
 
 ## Doctor
 
-The parent doctor checks Bun, git, both native harness CLIs, and required capabilities. There are no credential-source flags or source-directory authentication checks. Candidate-mode doctor checks only candidate-safe capabilities, not publisher authentication. Capability checks do not prove installation or live behavior; missing requirements fail closed.
+The parent doctor checks Bun, git, both native harness CLIs, required capabilities, and each harness's login state: `claude auth status` must print `"loggedIn": true`, and `codex login status` must exit 0 with a probe `CODEX_HOME` whose `auth.json` links to the operator's file. It reads only what the CLIs print and never reads or copies credential files or Keychain items. `verify.sh run` performs these checks for the required harnesses before any install or GitHub write. A failed check exits nonzero with the fix on stderr and publishes nothing. There are no credential-source flags. Candidate-mode doctor checks only candidate-safe capabilities, not logins or publisher authentication. Capability checks do not prove installation or live behavior; missing requirements fail closed.
 
 Candidates retain real `HOME`, `USER`, and `LOGNAME`. Claude uses normal operator config/login. Codex uses a run-owned `CODEX_HOME` with `auth.json` symlinked to the operator's `${CODEX_HOME:-$HOME/.codex}/auth.json`, resolving the daily home before overriding the environment. If that source file is absent, stop with a plain message that this tool needs file-based Codex auth; do not start login. Refresh writes through the symlink to the single existing login file.
 
@@ -69,7 +69,7 @@ Each headless session exits on its own. Verify any setup restoration before publ
 
 ## Helpers
 
-- `scripts/verify.sh doctor --output <fresh-absolute-external-directory>`: parent capability report, no installation/publication.
+- `scripts/verify.sh doctor --output <fresh-absolute-external-directory>`: parent capability and login-state report, no installation/publication.
 - `scripts/verify.sh doctor --candidate --output <fresh-run-owned-directory>`: candidate-safe self-test probe; no publisher authentication probing.
 - `scripts/verify.sh run --pr <positive-number> --feature <harness>:<feature>... [--self-test] [--runner-route PROVIDER:MODEL@EFFORT]... --output <fresh-absolute-external-directory>`: headless exact-head verification of the named features with machine-checked recipes; no terminal or prompts. The evidence comment lists only the features that ran.
 - `features/recipes.ts`: per-feature headless cases and assertions.
