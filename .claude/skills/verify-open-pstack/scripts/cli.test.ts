@@ -22,7 +22,7 @@ test('publisher revision is recorded independently of candidate proof', async ()
   };
   try {
     const receipt = await verify({ pr: 111, selfTest: false, features: [], root, publisherRevision, registry: validateRegistry(registry), github,
-      driver: { async prepare() { throw new Error('Docs must not prepare harnesses'); }, async exercise() { throw new Error('Docs must not exercise harnesses'); } }, persist: async () => {} });
+      driver: { async preflight() { throw new Error('Docs must not check harness logins'); }, async prepare() { throw new Error('Docs must not prepare harnesses'); }, async exercise() { throw new Error('Docs must not exercise harnesses'); } }, persist: async () => {} });
     expect(receipt.sha).toBe(candidate);
     expect(receipt.publisherRevision).toBe(publisherRevision);
     expect(receipt.publisherRevision).not.toBe(receipt.sha);

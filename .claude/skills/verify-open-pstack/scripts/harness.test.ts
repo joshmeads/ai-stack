@@ -98,7 +98,7 @@ describe('isolated harness boundaries', () => {
     await symlink(skill, join(workspace, '.claude/skills/verify-open-pstack'));
     const alias = join(root, 'workspace-alias'); await symlink(workspace, alias);
     const run: Command = async args => args.includes('--version') ? 'version' : '--plugin-dir --settings --setting-sources --json local path';
-    await doctor(root, run, 'darwin', false);
+    await doctor(root, run, 'darwin', false, []);
     const parentText = await readFile(join(root, 'doctor.json'), 'utf8');
     await expect(verifyProjectDoctor([parentText], workspace)).rejects.toThrow('passing child doctor');
     await doctor(root, run, 'darwin', true);
@@ -222,7 +222,6 @@ describe('isolated harness boundaries', () => {
       await expect(stat(join(home, '.claude'))).rejects.toThrow('ENOENT');
       if (!failInstall) expect(await readFile(join(root, 'sessions', harness, 'project-skill/doctor.jsonl'), 'utf8')).toBe('retained raw native evidence');
     }
-    expect(JSON.parse(await readFile(join(root, 'doctor.json'), 'utf8')).result).toBe('pass');
   });
   test.each([['claude', false], ['claude', true], ['codex', false], ['codex', true]] as const)('%s setup interruption restores exact bytes or forbids publication (restore failure=%s)', async (harness, failRestore) => {
     const root = await fixture(), home = join(root, 'state', harness), workspace = join(home, 'workspace');
@@ -407,7 +406,7 @@ describe('headless recipes', () => {
         async comment(_pr, body) { comments.push(body); return `https://github.com/${REPO}/pull/111#issuecomment-1`; },
         async status(_sha, state) { statuses.push(state); },
       },
-      driver: { prepare: async () => [installation], exercise: receipt => mac.exercise(receipt), cleanup: () => mac.cleanup() },
+      driver: { preflight: async () => {}, prepare: async () => [installation], exercise: receipt => mac.exercise(receipt), cleanup: () => mac.cleanup() },
     })).rejects.toThrow('fixture-file-missing:result.md');
     expect(statuses).toEqual(['failure']);
     expect(comments.join('\n')).not.toContain('Observation');

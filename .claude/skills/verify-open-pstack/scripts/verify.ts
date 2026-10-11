@@ -1,4 +1,4 @@
-import { classify, completeEvidence, newReceipt } from './core.ts';
+import { classify, completeEvidence, newReceipt, requiredHarnesses } from './core.ts';
 import { retainedFile, sha256 } from './io.ts';
 import { REPO, type Driver, type GitHub, type Pull, type Receipt, type Registry } from './types.ts';
 
@@ -102,6 +102,7 @@ export async function verify(options: VerifyOptions): Promise<Receipt> {
   // Verifier and instruction changes keep their native project-skill proof whatever is named.
   const project = receipt.selection.features.includes('project-skill') ? ['claude:project-skill', 'codex:project-skill'] : [];
   receipt.selection.features = receipt.selection.noRuntime ? [] : [...new Set([...options.features, ...project])];
+  if (requiredHarnesses(receipt).length) await driver.preflight(receipt);
   try {
     await current(); await persist(receipt);
     if (!receipt.selection.noRuntime || receipt.selfTest) {
