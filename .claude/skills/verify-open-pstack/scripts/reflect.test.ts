@@ -61,7 +61,7 @@ test.each(['claude', 'codex'] as const)('%s Reflect recipes verify the opening a
     expect(result.assertions).toContain(available ? 'opening-verified' : 'digest-fallback');
     expect(c.prompt(f)).toContain(harness === 'claude' ? '/pstack:reflect' : '$pstack:reflect');
     await expect(c.assert({ ...record, skills: [] }, f)).rejects.toThrow('skill-not-loaded');
-    await expect(c.assert({ ...record, tools: [] }, f)).rejects.toThrow(harness === 'codex' ? 'reflect-resolver-not-run' : 'reflect-transcript-not-read');
+    if (harness === 'codex' || available) await expect(c.assert({ ...record, tools: [] }, f)).rejects.toThrow(harness === 'codex' ? 'reflect-resolver-not-run' : 'reflect-transcript-not-read');
     if (available) {
       await writeFile(join(f.dir, 'digest.md'), 'An unneeded digest.');
       await expect(c.assert(record, f)).rejects.toThrow('reflect-unneeded-fallback');
@@ -137,29 +137,35 @@ test('Codex reads the resolver output exactly, without extra fields or message t
   }
 });
 
-test('Claude echoed paths and source reads cannot prove the bounded Read', async () => {
+const nonceOf = async (f: Fixture) => JSON.parse((await readFile(transcript(f), 'utf8')).split('\n')[0]!).nonce as string;
+
+test('Claude proves the read with a fixture nonce from any completed parent tool result', async () => {
   const f = await fixture('claude'), c = recipe('skill-invocation:reflect', 'claude')[0]!;
   await c.prepare!(f);
-  const record = await simulatedRecord(f, true);
-  for (const tools of [[], [commandTool(`echo ${transcript(f)}`, transcript(f))],
-    [{ name: 'Read', id: 'source-only', input: { file_path: helper(f), offset: 1, limit: 500 }, parent: null, failed: false, result: 'The helper source.' }]]) {
-    await expect(c.assert({ ...record, tools }, f)).rejects.toThrow('reflect-transcript-not-read');
+  const record = await simulatedRecord(f, true), nonce = await nonceOf(f), content = await readFile(transcript(f), 'utf8');
+  expect(nonce).toMatch(/^[0-9a-f-]{36}$/);
+  expect(c.prompt(f)).not.toContain(nonce);
+  for (const tool of [record.tools[0]!, commandTool(`cat -n ${transcript(f)}`, content), { ...commandTool(`python3 - <<'EOF'\nprint(open(${JSON.stringify(transcript(f))}).read())\nEOF`, content), name: 'Bash' }]) {
+    await c.assert({ ...record, tools: [tool] }, f);
   }
+  for (const tool of [
+    commandTool(`echo ${JSON.stringify(opening)}`, opening), commandTool(`echo ${transcript(f)}`, transcript(f)), { ...record.tools[0]!, failed: true },
+    { ...record.tools[0]!, result: undefined }, { ...record.tools[0]!, parent: 'child-agent' },
+    { name: 'Read', id: 'source-only', input: { file_path: helper(f) }, parent: null, failed: false, result: 'The helper source.' },
+  ]) {
+    await expect(c.assert({ ...record, tools: [tool] }, f)).rejects.toThrow('reflect-transcript-not-read');
+  }
+  await c.prepare!(f);
+  await expect(c.assert(record, f)).rejects.toThrow('reflect-transcript-not-read');
 });
 
-test('Claude requires a completed successful bounded parent Read containing the actual records', async () => {
+test('Claude accepts a completed Bash read in the native stream and rejects a failed or pending one', async () => {
   const f = await fixture('claude'), c = recipe('skill-invocation:reflect', 'claude')[0]!;
-  await c.prepare!(f); const record = await simulatedRecord(f, true), read = record.tools[0]!;
-  for (const changed of [
-    { failed: true }, { result: undefined }, { result: 'I read it and it passed.' }, { result: '' }, { parent: 'child-agent' },
-    { input: { ...read.input, limit: undefined } }, { input: { ...read.input, limit: 501 } }, { input: { ...read.input, offset: 2 } },
-  ]) {
-    await expect(c.assert({ ...record, tools: [{ ...read, ...changed }] }, f)).rejects.toThrow('reflect-transcript-not-read');
-  }
+  await c.prepare!(f); const record = await simulatedRecord(f, true), content = await readFile(transcript(f), 'utf8');
   const events = (completed: boolean, failed: boolean) => [
     { type: 'user', isReplay: true, message: { content: '<command-name>/pstack:reflect</command-name>' } },
-    { type: 'assistant', message: { content: [{ type: 'tool_use', id: 'read', name: 'Read', input: read.input }] } },
-    ...completed ? [{ type: 'user', message: { content: [{ type: 'tool_result', tool_use_id: 'read', is_error: failed, content: read.result }] } }] : [],
+    { type: 'assistant', message: { content: [{ type: 'tool_use', id: 'bash', name: 'Bash', input: { command: `cat -n ${transcript(f)}` } }] } },
+    ...completed ? [{ type: 'user', message: { content: [{ type: 'tool_result', tool_use_id: 'bash', is_error: failed, content }] } }] : [],
     { type: 'result', subtype: 'success', result: 'I read it and it passed.' },
   ].map(event => JSON.stringify(event)).join('\n');
   for (const [completed, failed] of [[false, false], [true, true]]) {

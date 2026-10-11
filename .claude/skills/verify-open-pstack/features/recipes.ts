@@ -147,6 +147,8 @@ function reflect(harness: Harness): Case[] {
     const report = (f: Fixture) => join(f.dir, 'result.json');
     const digest = (f: Fixture) => join(f.dir, 'digest.md');
     const text = available ? REFLECT_OPENING : REFLECT_UNRELATED;
+    // Appears only in the Claude fixture transcript, so a tool result that contains it read the file.
+    let nonce = '';
     const injected = (f: Fixture) => `# AGENTS.md instructions for ${f.dir}\n\n<INSTRUCTIONS>\nFixture only.\n</INSTRUCTIONS>`;
     // True when the command runs only the installed resolver for the known chat, optionally under the fixture home.
     const resolverRun = async (command: string, f: Fixture): Promise<boolean> => {
@@ -160,11 +162,12 @@ function reflect(harness: Harness): Case[] {
     return {
       id: available ? 'locate-transcript' : 'digest-fallback',
       async prepare(f) {
+        nonce = crypto.randomUUID();
         const records = harness === 'codex' ? [
           { type: 'session_meta', payload: { id: REFLECT_CHAT } },
           { type: 'response_item', payload: { type: 'message', role: 'user', content: [{ type: 'input_text', text: injected(f) }] } },
           { type: 'response_item', payload: { type: 'message', role: 'user', content: [{ type: 'input_text', text }] } },
-        ] : [{ type: 'system', subtype: 'fixture_metadata' }, { type: 'user', message: { role: 'user', content: [{ type: 'text', text }] } }];
+        ] : [{ type: 'system', subtype: 'fixture_metadata', nonce }, { type: 'user', message: { role: 'user', content: [{ type: 'text', text }] } }];
         await files(f.dir, { [transcript(f).slice(f.dir.length + 1)]: records.map(record => JSON.stringify(record)).join('\n') + '\n' });
         if (harness === 'codex') {
           await rm(index(f), { force: true });
@@ -200,11 +203,8 @@ function reflect(harness: Harness): Case[] {
           await writeFile(retained, output);
           paths.push(retained); assertions.push('resolver-ran');
         } else {
-          const records = (await readFile(transcript(f), 'utf8')).trimEnd().split('\n');
-          const read = record.tools.some(tool => tool.name === 'Read' && tool.parent === null && !tool.failed &&
-            tool.input.file_path === transcript(f) && (tool.input.offset ?? 1) <= 1 && Number.isInteger(tool.input.limit) &&
-            tool.input.limit >= 1 && tool.input.limit <= 500 && typeof tool.result === 'string' && records.every(line => tool.result!.includes(line)));
-          if (!read) throw new Error('reflect-transcript-not-read');
+          // The fallback's opener differs, so the session need not have read the whole record set.
+          if (available && !record.tools.some(tool => tool.parent === null && !tool.failed && tool.result?.includes(nonce))) throw new Error('reflect-transcript-not-read');
           assertions.push(await written(record, report(f)));
           if ((await lstat(report(f))).size > 5000) throw new Error('reflect-result-budget');
           const result = JSON.parse(await readFile(report(f), 'utf8')), opening = result.opening_user_message;
