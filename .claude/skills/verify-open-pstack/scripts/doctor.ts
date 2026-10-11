@@ -1,8 +1,13 @@
 import { mkdir, realpath } from 'node:fs/promises';
 import { join } from 'node:path';
 import { command, isolatedEnv, save, type Command } from './io.ts';
+import { linkCodexAuth, removeCodexHome } from './isolation.ts';
+import { HARNESSES, type Harness } from './types.ts';
 
-export async function doctor(root: string, run: Command = command, platform = process.platform, candidate = false): Promise<void> {
+export class LoginRequired extends Error {}
+const CLAUDE_FIX = 'run `claude auth login` from a shell on this Mac, not over SSH', CODEX_FIX = 'run `codex login` on this Mac';
+
+export async function doctor(root: string, run: Command = command, platform = process.platform, candidate = false, harnesses: readonly Harness[] = HARNESSES): Promise<void> {
   const report: Record<string, unknown> = { platform, candidate, date: new Date().toISOString(), skill: await realpath(join(import.meta.dir, '..')), checks: {} };
   const checks = report.checks as Record<string, string>;
   try {
@@ -19,6 +24,19 @@ export async function doctor(root: string, run: Command = command, platform = pr
       if (!help.includes('--json')) throw new Error('Codex local plugin installation interface unavailable');
       if (args.includes('marketplace') && !/local path|local or Git|local marketplace/i.test(help)) throw new Error('Codex local marketplace interface unavailable');
       checks[args.join(' ')] = help;
+    }
+    // Login state comes only from what each CLI prints; credential files and Keychain items are never read.
+    if (!candidate && harnesses.includes('claude')) {
+      let loggedIn: unknown;
+      try { loggedIn = JSON.parse(await run(['claude', 'auth', 'status'], { env })).loggedIn; } catch {}
+      if (loggedIn !== true) throw new LoginRequired(`Claude login check failed: \`claude auth status\` did not report "loggedIn": true; ${CLAUDE_FIX}`);
+      checks['claude login'] = 'logged in';
+    }
+    if (!candidate && harnesses.includes('codex')) {
+      let linked = false;
+      try { await linkCodexAuth(home); linked = true; checks['codex login'] = await run(['codex', 'login', 'status'], { env }); }
+      catch { throw new LoginRequired(`Codex login check failed (file-based auth.json and \`codex login status\` required); ${CODEX_FIX}`); }
+      finally { if (linked) await removeCodexHome(home); }
     }
     report.result = 'pass';
   } catch (error) {

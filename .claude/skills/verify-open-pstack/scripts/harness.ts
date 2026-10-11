@@ -82,9 +82,11 @@ export class MacDriver implements Driver {
   private candidate(home: string): Command {
     return (args, options = {}) => this.run(args, { ...options, env: isolatedEnv(home) });
   }
+  async preflight(receipt: Receipt): Promise<void> {
+    await doctor(receipt.artifactRoot, this.run, process.platform, false, requiredHarnesses(receipt));
+  }
   async prepare(receipt: Receipt): Promise<Installation[]> {
     const root = receipt.artifactRoot;
-    await doctor(root, this.run);
     // Fetch a separate immutable reference for pinned-source comparisons.
     const referenceHome = join(root, 'source-home'), reference = join(referenceHome, 'workspace');
     await mkdir(join(referenceHome, 'tmp'), { recursive: true, mode: 0o700 });

@@ -2,7 +2,7 @@ import { readFile } from 'node:fs/promises';
 import { join, resolve } from 'node:path';
 import { ROUTE } from '../features/recipes.ts';
 import { validateRegistry } from './core.ts';
-import { doctor } from './doctor.ts';
+import { doctor, LoginRequired } from './doctor.ts';
 import { Publisher } from './github.ts';
 import { MacDriver } from './harness.ts';
 import { command, freshRoot, interruption, interruptCommands, save, session } from './io.ts';
@@ -61,6 +61,7 @@ async function main(): Promise<void> {
   } catch (error) {
     const failure = error instanceof Error ? error.message : String(error);
     if (root) await save(join(root, 'failure.json'), { result: 'failed', reason: failure });
+    if (error instanceof LoginRequired) console.error(failure);
     console.error(root ? 'Verification failed; inspect retained failure.json.' : 'Verification failed before evidence could be retained.');
     process.exitCode = interrupted === 'SIGINT' ? 130 : interrupted === 'SIGTERM' ? 143 : 1;
   } finally {

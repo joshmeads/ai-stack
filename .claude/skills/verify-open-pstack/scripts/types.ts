@@ -50,6 +50,7 @@ export interface SessionRecord {
   tools: { name: string; id: string; input: Record<string, any>; parent: string | null; result?: string; failed: boolean }[];
 }
 export interface Driver {
+  preflight(receipt: Receipt): Promise<void>;
   prepare(receipt: Receipt): Promise<Installation[]>;
   exercise(receipt: Receipt): Promise<Observation[]>;
   cleanup?(receipt: Receipt): Promise<void>;
