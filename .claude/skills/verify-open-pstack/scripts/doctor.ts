@@ -34,7 +34,7 @@ export async function doctor(root: string, run: Command = command, platform = pr
     }
     if (!candidate && harnesses.includes('codex')) {
       let linked = false;
-      try { await linkCodexAuth(home); linked = true; checks['codex login'] = await run(['codex', 'login', 'status'], { env }); }
+      try { await linkCodexAuth(home); linked = true; await run(['codex', 'login', 'status'], { env }); checks['codex login'] = 'logged in'; }
       catch { throw new LoginRequired(`Codex login check failed (file-based auth.json and \`codex login status\` required); ${CODEX_FIX}`); }
       finally { if (linked) await removeCodexHome(home); }
     }

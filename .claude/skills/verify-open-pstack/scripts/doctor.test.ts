@@ -35,14 +35,14 @@ test('parent doctor records both harness login checks from CLI output only', asy
   const root = await fixture(), calls: string[][] = []; await loggedInCodex(root);
   const run: Command = async (args, options) => {
     calls.push(args);
-    if (args.join(' ') === 'codex login status') { expect(await readlink(join(options!.env!.CODEX_HOME!, 'auth.json'))).toBe(join(root, 'daily-codex/auth.json')); return 'Logged in using ChatGPT'; }
+    if (args.join(' ') === 'codex login status') { expect(await readlink(join(options!.env!.CODEX_HOME!, 'auth.json'))).toBe(join(root, 'daily-codex/auth.json')); return ''; }
     if (args.join(' ') === 'claude auth status') { expect(options!.env!.HOME).toBe(process.env.HOME!); return '{"loggedIn": true, "email": "operator@example.com"}'; }
     return capability(args)!;
   };
   await doctor(root, run, 'darwin');
   const text = await readFile(join(root, 'doctor.json'), 'utf8'), report = JSON.parse(text);
   expect(report.result).toBe('pass'); expect(calls.some(args => args[0] === 'gh')).toBe(true);
-  expect(report.checks['claude login']).toBe('logged in'); expect(text).not.toContain('operator@example.com'); expect(report.checks['codex login']).toBe('Logged in using ChatGPT');
+  expect(report.checks['claude login']).toBe('logged in'); expect(text).not.toContain('operator@example.com'); expect(report.checks['codex login']).toBe('logged in');
   await expect(stat(join(root, 'probe-home/.codex'))).rejects.toThrow('ENOENT');
   expect(await readFile(join(root, 'daily-codex/auth.json'), 'utf8')).toBe('opaque existing login');
 });

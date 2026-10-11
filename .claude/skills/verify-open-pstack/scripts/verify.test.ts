@@ -77,7 +77,10 @@ describe('exact-head evidence publication', () => {
       return args.includes('--version') ? 'version' : '--plugin-dir --settings --setting-sources --json local path';
     };
     f.options.driver = new MacDriver(run, async () => { throw new Error('no session expected'); });
-    await expect(verify(f.options)).rejects.toThrow('Claude login check failed: `claude auth status` did not report "loggedIn": true; run `claude auth login` from a shell on this Mac, not over SSH');
+    const platform = Object.getOwnPropertyDescriptor(process, 'platform')!;
+    Object.defineProperty(process, 'platform', { ...platform, value: 'darwin' });
+    try { await expect(verify(f.options)).rejects.toThrow('Claude login check failed: `claude auth status` did not report "loggedIn": true; run `claude auth login` from a shell on this Mac, not over SSH'); }
+    finally { Object.defineProperty(process, 'platform', platform); }
     expect(f.calls.some(call => call === 'comment' || call.startsWith('status:'))).toBe(false);
     expect(calls.some(args => args.join(' ').startsWith('git clone') || args.join(' ').startsWith('codex plugin ') && !args.includes('--help'))).toBe(false);
     expect(calls).toContainEqual(['claude', 'auth', 'status']);
