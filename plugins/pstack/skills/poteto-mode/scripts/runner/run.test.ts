@@ -902,7 +902,7 @@ process.exit(1);
   }
 
   it("executes Grok after one API-key-authenticated exact-model preflight", async () => {
-    process.env.FAKE_GROK_PREFLIGHT_OUTPUT = "You are using XAI_API_KEY.\nAvailable models: [grok-4.6] (default)";
+    process.env.FAKE_GROK_PREFLIGHT_OUTPUT = "You are using XAI_API_KEY.\nAvailable models:\n  * [grok-4.6] (default)";
     const preflightLog = join(scratch, "grok-api-key.log");
     const modelStarted = join(scratch, "grok-api-key.started");
     process.env.FAKE_GROK_PREFLIGHT_LOG_PATH = preflightLog;
@@ -923,7 +923,7 @@ process.exit(1);
 
   for (const auth of ["You are using XAI_API_KEY.", "You are logged in."]) {
     it(`rejects an explicitly unsupported Grok model despite ${auth}`, async () => {
-      process.env.FAKE_GROK_PREFLIGHT_OUTPUT = `${auth}\nAvailable models: grok-4.6`;
+      process.env.FAKE_GROK_PREFLIGHT_OUTPUT = `${auth}\nAvailable models:\n  * grok-4.6`;
       process.env.FAKE_GROK_PREFLIGHT_ERROR = "model grok-4.6 is not supported";
       const preflightLog = join(scratch, "grok-unsupported.log");
       const modelStarted = join(scratch, "grok-unsupported.started");
@@ -945,7 +945,7 @@ process.exit(1);
 
   for (const failure of ["unauthenticated", "You are not authenticated."]) {
     it(`fails closed on contradictory Grok API-key authentication: ${failure}`, async () => {
-      process.env.FAKE_GROK_PREFLIGHT_OUTPUT = "You are using XAI_API_KEY.\nYou are logged in.\nAvailable models: grok-4.6";
+      process.env.FAKE_GROK_PREFLIGHT_OUTPUT = "You are using XAI_API_KEY.\nYou are logged in.\nAvailable models:\n  * grok-4.6";
       process.env.FAKE_GROK_PREFLIGHT_ERROR = failure;
       const preflightLog = join(scratch, "grok-api-key-unauth.log");
       const modelStarted = join(scratch, "grok-api-key-unauth.started");
@@ -967,7 +967,7 @@ process.exit(1);
 
   for (const listed of ["grok-4.60", "xgrok-4.6", "grok-4.6-build", "grok-4x6"]) {
     it(`does not accept neighboring Grok model token ${listed}`, async () => {
-      process.env.FAKE_GROK_PREFLIGHT_OUTPUT = `You are logged in.\nAvailable models: ${listed}`;
+      process.env.FAKE_GROK_PREFLIGHT_OUTPUT = `You are logged in.\nAvailable models:\n  * ${listed}`;
       const preflightLog = join(scratch, "grok-neighbor.log");
       const modelStarted = join(scratch, "grok-neighbor.started");
       process.env.FAKE_GROK_PREFLIGHT_LOG_PATH = preflightLog;
@@ -982,6 +982,48 @@ process.exit(1);
       expect(receipt(input.receiptPath)).toMatchObject({
         status: "unavailable-model", preflight: { status: "failed" },
       });
+    });
+  }
+
+  for (const { name, output, passes } of [
+    {
+      name: "a deployment-key login",
+      output: "You are authenticated via deployment key.\nAvailable models:\n  * grok-4.7 (default)",
+      passes: true,
+    },
+    {
+      name: "an unlisted default model",
+      output: "You are logged in with grok.com.\nDefault model: grok-4.7 (not in the list below)\n"
+        + "Available models:\n  * grok-4.6",
+      passes: false,
+    },
+    {
+      name: "a model named only on the default line",
+      output: "You are logged in.\nDefault model: grok-4.7\nAvailable models:\n  * grok-4.5 (default)",
+      passes: false,
+    },
+    {
+      name: "a neighbouring listed slug",
+      output: "You are logged in.\nAvailable models:\n  * grok-4.7-mini (default)",
+      passes: false,
+    },
+    { name: "a missing models header", output: "You are logged in.\n  * grok-4.7", passes: false },
+  ]) {
+    it(`${passes ? "accepts" : "rejects"} a Grok preflight with ${name}`, async () => {
+      process.env.FAKE_GROK_PREFLIGHT_OUTPUT = output;
+      const preflightLog = join(scratch, "grok-listing.log");
+      const modelStarted = join(scratch, "grok-listing.started");
+      process.env.FAKE_GROK_PREFLIGHT_LOG_PATH = preflightLog;
+      process.env.FAKE_MODEL_STARTED_PATH = modelStarted;
+      const input = { ...options("grok", "grok-listing"), model: "grok-4.7" };
+      const result = await runLane(input);
+
+      expect(result.exitCode).toBe(passes ? 0 : 69);
+      expect(readFileSync(preflightLog, "utf8")).toBe("attempt\n");
+      expect(existsSync(modelStarted)).toBe(passes);
+      expect(receipt(input.receiptPath)).toMatchObject(passes
+        ? { status: "complete", reportedModel: "grok-4.7-build", preflight: { status: "passed" } }
+        : { status: "unavailable-model", preflight: { status: "failed" } });
     });
   }
 

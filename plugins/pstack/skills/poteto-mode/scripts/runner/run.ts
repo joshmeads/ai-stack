@@ -510,9 +510,15 @@ export async function discoverSharedGitDir(
   return { kind: "found", sharedGitDir: shared };
 }
 
+// grok names its configured default above the list even when the account cannot use it,
+// so only the lines under the header count.
 function grokModelAvailable(value: string, model: string): boolean {
+  const lines = value.split("\n");
+  const header = lines.findIndex((line) => /^\s*Available models:/.test(line));
+  if (header < 0) return false;
   const escaped = model.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
-  return new RegExp(`(^|[^A-Za-z0-9_.-])${escaped}($|[^A-Za-z0-9_.-])`).test(value);
+  const listed = new RegExp(`(^|[^A-Za-z0-9_.-])${escaped}($|[^A-Za-z0-9_.-])`);
+  return lines.slice(header + 1).some((line) => listed.test(line));
 }
 
 function preflightPassed(provider: Provider, model: string, result: ProcessResult): boolean {
@@ -535,7 +541,8 @@ function preflightPassed(provider: Provider, model: string, result: ProcessResul
       return /logged in/i.test(combined);
     case "grok":
       return unavailableStatus(combined) === "child-failed"
-        && /\blogged in\b|\bYou are using XAI_API_KEY\./i.test(combined)
+        && /\blogged in\b|\bYou are using XAI_API_KEY\.|\bYou are authenticated via deployment key\./i
+          .test(combined)
         && grokModelAvailable(combined, model);
   }
 }
