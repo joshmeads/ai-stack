@@ -19,7 +19,7 @@ Asset ownership is consumer-driven, not blanket shared ownership. Inspect the ex
 
 `bootstrap.ts` belongs to `tools`; exercise its actual consumers, `orch` and `watch-pr`, including dependency bootstrapping rather than the unrelated external runner.
 
-Skill-owned `SKILL.md`, `references/**`, and `playbooks/**` select their skill. Additional executable paths must be registered explicitly. Shared consumed mappings select every dependent skill conservatively. The coverage test inventories tracked plugin files; new unmapped files block CI and runs. Deleted skill surfaces cannot silently disappear from evidence: choose a surviving documented entry point demonstrating the intended removal, or report blocked.
+Skill-owned `SKILL.md`, `references/**`, and `playbooks/**` select their skill. Additional executable paths must be registered explicitly. `core.ts` assigns the Codex transcript resolver, `poteto-mode/scripts/resolve-codex-transcript.ts`, to `reflect` by its exact path, so a change to it selects `skill-invocation:reflect` rather than the unrelated shipped-tool recipe. Shared consumed mappings select every dependent skill conservatively. The coverage test inventories tracked plugin files; new unmapped files block CI and runs. Deleted skill surfaces cannot silently disappear from evidence: choose a surviving documented entry point demonstrating the intended removal, or report blocked.
 
 The feature documents below define sub-features, user entry points, driving instructions, and gotchas. Review each changed sub-feature in the diff. Record all changed sub-feature actions in the feature's transcript and artifact. Do not run destructive application work in the maintainer checkout.
 

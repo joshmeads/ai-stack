@@ -1,8 +1,9 @@
 // Headless recipes for every selectable feature. The trusted parent runs each case as one fresh
 // native session and evaluates `assert` against the parsed record and the fixture it created.
+import { Database } from 'bun:sqlite';
 import { lstat, mkdir, readFile, realpath, writeFile } from 'node:fs/promises';
-import { basename, join } from 'node:path';
-import type { Command } from '../scripts/io.ts';
+import { basename, join, resolve } from 'node:path';
+import { sha256, type Command } from '../scripts/io.ts';
 import type { Harness, SessionRecord } from '../scripts/types.ts';
 
 export interface Fixture {
@@ -122,6 +123,132 @@ const overrides: Record<string, Case> = {
   },
 };
 
+const REFLECT_CHAT = '00000000-1111-2222-3333-444444444444';
+const REFLECT_OPENING = 'Reflect on the corrections in this disposable session.';
+const REFLECT_UNRELATED = 'An unrelated synthetic opening.';
+const RESOLVER = 'skills/poteto-mode/scripts/resolve-codex-transcript.ts';
+
+/** Splits a shell script into `&&`-joined simple commands of unquoted words. Any other control
+ * operator returns undefined, so a completed command's exit status of 0 is every command's own. */
+export function shellCommands(script: string): string[][] | undefined {
+  const commands: string[][] = [[]];
+  let word: string | undefined;
+  const end = () => { if (word !== undefined) commands.at(-1)!.push(word); word = undefined; };
+  for (let i = 0; i < script.length;) {
+    const c = script[i]!;
+    if (c === "'") {
+      const close = script.indexOf("'", i + 1);
+      if (close < 0) return undefined;
+      word = (word ?? '') + script.slice(i + 1, close); i = close + 1;
+    } else if (c === '"') {
+      let j = i + 1, text = '';
+      for (; j < script.length && script[j] !== '"'; j++) {
+        if (script[j] === '\\' && '"\\$`'.includes(script[j + 1] ?? '')) j++;
+        text += script[j];
+      }
+      if (j >= script.length) return undefined;
+      word = (word ?? '') + text; i = j + 1;
+    } else if (c === '\\') { word = (word ?? '') + (script[i + 1] ?? ''); i += 2; }
+    else if (script.startsWith('&&', i)) { end(); commands.push([]); i += 2; }
+    else if (';|&\n()`<'.includes(c)) return undefined;
+    else if (c === '>') {
+      const fd = word === '1' || word === '2' ? word : '';
+      if (fd) word = undefined; else end();
+      word = fd + (script[i + 1] === '>' ? '>>' : '>'); end(); i += script[i + 1] === '>' ? 2 : 1;
+    } else if (/\s/.test(c)) { end(); i++; }
+    else { word = (word ?? '') + c; i++; }
+  }
+  end();
+  return commands.some(command => !command.length) ? undefined : commands;
+}
+
+/** True when a completed Codex command ran the installed resolver for `chat` with stdout redirected to `report`. */
+export async function ranResolver(command: string, f: Fixture, chat: string, report: string): Promise<boolean> {
+  const commands = shellCommands(command);
+  if (!commands) return false;
+  const [only] = commands;
+  if (commands.length === 1 && only!.length === 3 && /^(?:\/bin\/|\/usr\/bin\/)?(?:ba|z)?sh$/.test(only![0]!) && ['-c', '-lc'].includes(only![1]!)) return ranResolver(only![2]!, f, chat, report);
+  const same = async (path: string, expected: string) => await realpath(resolve(f.dir, path)).catch(() => '') === await realpath(expected);
+  for (const words of commands) {
+    let k = 0;
+    while (/^[A-Za-z_][A-Za-z0-9_]*=/.test(words[k] ?? '')) k++;
+    if (words[k] === 'env') for (k++; /^[A-Za-z_][A-Za-z0-9_]*=/.test(words[k] ?? ''); k++);
+    if (words[k] === 'bun') k += words[k + 1] === 'run' ? 2 : 1;
+    if (!words[k] || !await same(words[k]!, join(f.location, RESOLVER)) || words[k + 1] !== chat) continue;
+    const redirect = words.findIndex((w, i) => i > k + 1 && (w === '>' || w === '1>'));
+    if (redirect > 0 && words[redirect + 1] && await same(words[redirect + 1]!, report)) return true;
+  }
+  return false;
+}
+
+function reflect(harness: Harness): Case[] {
+  return [true, false].map(available => {
+    const home = (f: Fixture) => join(f.dir, 'transcript # home');
+    const transcript = (f: Fixture) => join(home(f), harness === 'codex' ? 'sessions/2026/10/11/known.jsonl' : 'projects/fixture/known.jsonl');
+    const report = (f: Fixture) => join(f.dir, 'result.json');
+    const digest = (f: Fixture) => join(f.dir, 'digest.md');
+    const text = available ? REFLECT_OPENING : REFLECT_UNRELATED;
+    return {
+      id: available ? 'locate-transcript' : 'digest-fallback',
+      async prepare(f) {
+        const records = harness === 'codex' ? [
+          { type: 'session_meta', payload: { id: REFLECT_CHAT } },
+          { type: 'response_item', payload: { type: 'message', role: 'user', content: [{ type: 'input_text', text: `# AGENTS.md instructions for ${f.dir}\n\n<INSTRUCTIONS>\nFixture only.\n</INSTRUCTIONS>` }] } },
+          { type: 'response_item', payload: { type: 'message', role: 'user', content: [{ type: 'input_text', text }] } },
+        ] : [{ type: 'system', subtype: 'fixture_metadata' }, { type: 'user', message: { role: 'user', content: [{ type: 'text', text }] } }];
+        await files(f.dir, { [transcript(f).slice(f.dir.length + 1)]: records.map(record => JSON.stringify(record)).join('\n') + '\n' });
+        if (harness === 'codex') {
+          const index = new Database(join(home(f), 'state_5.sqlite'));
+          index.run('CREATE TABLE threads (id TEXT PRIMARY KEY, rollout_path TEXT NOT NULL)');
+          index.run('INSERT INTO threads VALUES (?, ?)', [REFLECT_CHAT, transcript(f)]);
+          index.close();
+        }
+      },
+      prompt(f) {
+        const request = `Exercise only step 1 with this disposable synthetic fixture. Do not fan out reviewers, apply edits, or inspect real chats. The conversation's opening prompt to verify is ${JSON.stringify(REFLECT_OPENING)}. `;
+        const where = harness === 'codex'
+          ? `The fixture's known parent chat ID is ${REFLECT_CHAT}. Set CODEX_HOME to ${home(f)} only for the transcript lookup. Save the lookup's raw JSON stdout unchanged to ${report(f)}. `
+          : `For this fixture, the system-named per-project transcript directory is ${join(home(f), 'projects/fixture')}. Write only JSON to ${report(f)}: when a transcript verifies, its status "resolved", path, and opening_user_message with line, characters, and sha256; otherwise status "unresolved", reason "opening_message_mismatch", and fallback "session_digest". `;
+        return `${invoke(harness, 'reflect', `${request}${where}Do not include message text in ${report(f)}. If the transcript cannot be verified, also write the session digest, at most 2,000 words and covering only this fixture request, to ${digest(f)}.`)} ${rules(f.dir)}`;
+      },
+      async assert(record, f) {
+        const assertions = [loaded(record, 'pstack:reflect'), await written(record, report(f))];
+        if ((await lstat(report(f))).size > 5000) throw new Error('reflect-result-budget');
+        const result = JSON.parse(await readFile(report(f), 'utf8'));
+        if (harness === 'codex') {
+          const ran = await Promise.all(record.commands.map(command => ranResolver(command, f, REFLECT_CHAT, report(f))));
+          if (!ran.includes(true)) throw new Error('reflect-resolver-not-run');
+        } else {
+          const records = (await readFile(transcript(f), 'utf8')).trimEnd().split('\n');
+          const read = record.tools.some(tool => tool.name === 'Read' && tool.parent === null && !tool.failed &&
+            tool.input.file_path === transcript(f) && (tool.input.offset ?? 1) <= 1 && Number.isInteger(tool.input.limit) &&
+            tool.input.limit >= 1 && tool.input.limit <= 500 && typeof tool.result === 'string' && records.every(line => tool.result!.includes(line)));
+          if (!read) throw new Error('reflect-transcript-not-read');
+        }
+        if (JSON.stringify(result).includes(text)) throw new Error('reflect-message-text-exposed');
+        const opening = result.opening_user_message;
+        // Codex keeps the resolver's own output in both cases; only the opener it reports differs.
+        if (harness === 'codex' && (result.status !== 'resolved' || result.chat_id !== REFLECT_CHAT || result.path !== transcript(f) ||
+            opening?.line !== 3 || opening?.characters !== text.length || opening?.sha256 !== sha256(text))) throw new Error('reflect-resolver-output-mismatch');
+        const paths = [report(f)];
+        if (available) {
+          if (result.status !== 'resolved' || result.path !== transcript(f) || opening?.line !== (harness === 'codex' ? 3 : 2) ||
+              opening?.characters !== REFLECT_OPENING.length || opening?.sha256 !== sha256(REFLECT_OPENING)) throw new Error('reflect-opening-mismatch');
+          if (await lstat(digest(f)).catch(() => undefined)) throw new Error('reflect-unneeded-fallback');
+          assertions.push('opening-verified');
+        } else {
+          if (harness === 'claude' && (result.status !== 'unresolved' || result.reason !== 'opening_message_mismatch' ||
+              result.fallback !== 'session_digest' || result.path !== undefined)) throw new Error('reflect-fallback-mismatch');
+          assertions.push(await written(record, digest(f)));
+          if ((await readFile(digest(f), 'utf8')).trim().split(/\s+/).length > 2000) throw new Error('reflect-digest-budget');
+          paths.push(digest(f)); assertions.push('digest-fallback');
+        }
+        return { assertions, files: paths };
+      },
+    };
+  });
+}
+
 export async function verifyProjectDoctor(texts: string[], workspace: string): Promise<void> {
   const expected = await realpath(join(workspace, '.claude/skills/verify-open-pstack'));
   for (const text of texts) {
@@ -230,6 +357,7 @@ export function recipe(feature: string, harness: Harness, routes: string[] = [])
   if (feature === 'setup' || feature === 'skill-invocation:setup-pstack') return setup;
   if (feature === 'shipped-tools') return [shippedTools];
   if (feature === 'agent-preload:poteto-agent' && harness === 'claude') return [agentPreload];
+  if (feature === 'skill-invocation:reflect') return reflect(harness);
   const skill = /^skill-invocation:([a-z][a-z0-9-]+)$/.exec(feature)?.[1];
   if (!skill) throw new Error(`missing-recipe:${harness}/${feature}`);
   return [overrides[skill] ?? skillCase(skill, 'Apply it to the task in $DIR/TASK.md.')];
