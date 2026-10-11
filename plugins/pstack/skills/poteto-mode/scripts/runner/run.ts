@@ -159,6 +159,34 @@ const CLAUDE_IDENTITY = [
   "CLAUDE_CODE_EXPERIMENTAL_AGENT_TEAMS",
 ] as const;
 
+const GROK_ENVIRONMENT = new Set([
+  "PATH",
+  "HOME",
+  "USER",
+  "LOGNAME",
+  "SHELL",
+  "TMPDIR",
+  "LANG",
+  "TERM",
+  "COLORTERM",
+  "TZ",
+  "HTTP_PROXY",
+  "HTTPS_PROXY",
+  "NO_PROXY",
+  "ALL_PROXY",
+  "http_proxy",
+  "https_proxy",
+  "no_proxy",
+  "all_proxy",
+  "SSL_CERT_FILE",
+  "SSL_CERT_DIR",
+  "NODE_EXTRA_CA_CERTS",
+]);
+
+const GROK_ENVIRONMENT_PREFIXES = ["LC_", "XDG_", "GROK_", "XAI_"] as const;
+
+// A Grok lane's shell can read every variable it inherits in both access modes, so it gets
+// only what grok needs to start, authenticate and reach the network.
 // A Claude writer's git must find its repository from the cwd, as discovery's git did, so
 // an inherited GIT_DIR or GIT_COMMON_DIR cannot route it to an undenied git directory.
 export function childEnvironment(
@@ -166,13 +194,13 @@ export function childEnvironment(
   mode: AccessMode,
   source: NodeJS.ProcessEnv = process.env
 ): NodeJS.ProcessEnv {
+  if (provider === "grok") {
+    return Object.fromEntries(Object.entries(source).filter(([key]) =>
+      GROK_ENVIRONMENT.has(key) || GROK_ENVIRONMENT_PREFIXES.some((prefix) => key.startsWith(prefix))
+    ));
+  }
   const result = { ...source };
-  const remove = provider === "claude"
-    ? CODEX_IDENTITY
-    : provider === "codex"
-      ? CLAUDE_IDENTITY
-      : [...CODEX_IDENTITY, ...CLAUDE_IDENTITY];
-  for (const key of remove) delete result[key];
+  for (const key of provider === "claude" ? CODEX_IDENTITY : CLAUDE_IDENTITY) delete result[key];
   if (provider === "claude" && mode === "isolated-write") {
     for (const key of Object.keys(result)) if (key.startsWith("GIT_")) delete result[key];
   }
@@ -510,9 +538,15 @@ export async function discoverSharedGitDir(
   return { kind: "found", sharedGitDir: shared };
 }
 
+// grok names its configured default above the list even when the account cannot use it,
+// so only the lines under the header count.
 function grokModelAvailable(value: string, model: string): boolean {
+  const lines = value.split("\n");
+  const header = lines.findIndex((line) => /^\s*Available models:/.test(line));
+  if (header < 0) return false;
   const escaped = model.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
-  return new RegExp(`(^|[^A-Za-z0-9_.-])${escaped}($|[^A-Za-z0-9_.-])`).test(value);
+  const listed = new RegExp(`(^|[^A-Za-z0-9_.-])${escaped}($|[^A-Za-z0-9_.-])`);
+  return lines.slice(header + 1).some((line) => listed.test(line));
 }
 
 function preflightPassed(provider: Provider, model: string, result: ProcessResult): boolean {
@@ -535,7 +569,8 @@ function preflightPassed(provider: Provider, model: string, result: ProcessResul
       return /logged in/i.test(combined);
     case "grok":
       return unavailableStatus(combined) === "child-failed"
-        && /\blogged in\b|\bYou are using XAI_API_KEY\./i.test(combined)
+        && /\blogged in\b|\bYou are using XAI_API_KEY\.|\bYou are authenticated via deployment key\./i
+          .test(combined)
         && grokModelAvailable(combined, model);
   }
 }
@@ -546,14 +581,19 @@ function successfulPreflightEvidence(provider: Provider, model: string): string 
     : "authenticated";
 }
 
+// Only preflight output is read for authentication; a failed model call's output can quote
+// the child's own work.
 function unavailableStatus(value: string): ReceiptStatus {
   if (/not logged in|not authenticated|unauthenticated|authentication|sign in|login required/i.test(value)) {
     return "unauthenticated";
   }
-  if (/model.{0,40}(not found|unknown|unavailable|unsupported|not supported|invalid)|invalid.{0,20}model/i.test(value)) {
-    return "unavailable-model";
-  }
-  return "child-failed";
+  return modelFailureStatus(value);
+}
+
+function modelFailureStatus(value: string): "unavailable-model" | "child-failed" {
+  return /model.{0,40}(not found|unknown|unavailable|unsupported|not supported|invalid)|invalid.{0,20}model/i.test(value)
+    ? "unavailable-model"
+    : "child-failed";
 }
 
 function preflightFailureStatus(
@@ -988,7 +1028,7 @@ async function executeLane(
       ? "cancelled"
       : result.timedOut
         ? "timed-out"
-        : providerFailure?.status ?? unavailableStatus(rawFailureEvidence);
+        : providerFailure?.status ?? modelFailureStatus(rawFailureEvidence);
     const sandboxHint = status === "child-failed" && providerFailure === null && parentNetworkDisabled
       ? "likely cause: Codex parent sandbox has network disabled; see provider-dispatch.md#host-and-parent-prerequisites"
       : null;
