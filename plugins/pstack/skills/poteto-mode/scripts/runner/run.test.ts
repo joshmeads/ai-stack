@@ -38,32 +38,32 @@ const isPreflight =
   (name === "grok" && args[0] === "models");
 const stage = isPreflight ? "preflight" : "model";
 const startedPath = isPreflight
-  ? process.env.FAKE_PREFLIGHT_STARTED_PATH
-  : process.env.FAKE_MODEL_STARTED_PATH;
+  ? process.env.GROK_FAKE_PREFLIGHT_STARTED_PATH
+  : process.env.GROK_FAKE_MODEL_STARTED_PATH;
 if (startedPath) writeFileSync(startedPath, String(process.pid));
-const cancelStage = process.env.FAKE_CANCEL_STAGE ??
-  (process.env.FAKE_CANCEL === "1" ? "model" : "");
+const cancelStage = process.env.GROK_FAKE_CANCEL_STAGE ??
+  (process.env.GROK_FAKE_CANCEL === "1" ? "model" : "");
 if (cancelStage === stage) {
   const stop = (signal) => {
-    writeFileSync(process.env.FAKE_TERMINATED_PATH, signal);
-    if (process.env.FAKE_IGNORE_SIGNAL !== "1") process.exit(0);
+    writeFileSync(process.env.GROK_FAKE_TERMINATED_PATH, signal);
+    if (process.env.GROK_FAKE_IGNORE_SIGNAL !== "1") process.exit(0);
   };
   process.on("SIGINT", () => stop("SIGINT"));
   process.on("SIGTERM", () => stop("SIGTERM"));
-  writeFileSync(process.env.FAKE_STARTED_PATH, String(process.pid));
+  writeFileSync(process.env.GROK_FAKE_STARTED_PATH, String(process.pid));
   await Bun.sleep(5_000);
 }
 const delay = Number(
   stage === "preflight"
-    ? process.env.FAKE_PREFLIGHT_DELAY_MS ?? 0
-    : process.env.FAKE_MODEL_DELAY_MS ?? 0
+    ? process.env.GROK_FAKE_PREFLIGHT_DELAY_MS ?? 0
+    : process.env.GROK_FAKE_MODEL_DELAY_MS ?? 0
 );
 if (delay > 0) await Bun.sleep(delay);
-if (process.env.FAKE_TIMEOUT === "1" && !args.includes("status") && !args.includes("models")) {
+if (process.env.GROK_FAKE_TIMEOUT === "1" && !args.includes("status") && !args.includes("models")) {
   await Bun.sleep(5_000);
 }
 if (name === "claude" && args[0] === "auth") {
-  if (process.env.FAKE_REMOVE_EXECUTABLE_AFTER_PREFLIGHT === "1") {
+  if (process.env.GROK_FAKE_REMOVE_EXECUTABLE_AFTER_PREFLIGHT === "1") {
     unlinkSync(process.argv[1]);
   }
   console.log(JSON.stringify({loggedIn:true}));
@@ -74,26 +74,26 @@ if (name === "codex" && args[0] === "login") {
   process.exit(0);
 }
 if (name === "grok" && args[0] === "models") {
-  if (process.env.FAKE_GROK_PREFLIGHT_LOG_PATH) {
-    appendFileSync(process.env.FAKE_GROK_PREFLIGHT_LOG_PATH, "attempt\\n");
+  if (process.env.GROK_FAKE_GROK_PREFLIGHT_LOG_PATH) {
+    appendFileSync(process.env.GROK_FAKE_GROK_PREFLIGHT_LOG_PATH, "attempt\\n");
   }
-  if (process.env.FAKE_GROK_PREFLIGHT_OUTPUT !== undefined) {
-    console.log(process.env.FAKE_GROK_PREFLIGHT_OUTPUT);
-    if (process.env.FAKE_GROK_PREFLIGHT_ERROR) console.error(process.env.FAKE_GROK_PREFLIGHT_ERROR);
+  if (process.env.GROK_FAKE_GROK_PREFLIGHT_OUTPUT !== undefined) {
+    console.log(process.env.GROK_FAKE_GROK_PREFLIGHT_OUTPUT);
+    if (process.env.GROK_FAKE_GROK_PREFLIGHT_ERROR) console.error(process.env.GROK_FAKE_GROK_PREFLIGHT_ERROR);
     process.exit(0);
   }
-  const transientMarker = process.env.FAKE_GROK_TRANSIENT_UNAUTH_PATH;
+  const transientMarker = process.env.GROK_FAKE_GROK_TRANSIENT_UNAUTH_PATH;
   if (transientMarker && !existsSync(transientMarker)) {
     writeFileSync(transientMarker, String(process.pid));
     console.log("Available models:\\n  * grok-4.6 (default)");
     console.error("You are not authenticated.");
     process.exit(0);
   }
-  if (process.env.FAKE_GROK_MISSING_MODEL === "1") {
+  if (process.env.GROK_FAKE_GROK_MISSING_MODEL === "1") {
     console.log("You are logged in with grok.com.\\nAvailable models:\\n  * grok-4.5 (default)");
     process.exit(0);
   }
-  if (process.env.FAKE_GROK_UNAUTH === "1") {
+  if (process.env.GROK_FAKE_GROK_UNAUTH === "1") {
     console.error("Not logged in. Run grok auth login.");
     process.exit(1);
   }
@@ -107,24 +107,24 @@ const reportedModel = model === "fable"
   : model === "opus"
     ? "claude-opus-9"
     : model;
-if (process.env.FAKE_INVALID_MODEL === "1") {
+if (process.env.GROK_FAKE_INVALID_MODEL === "1") {
   console.error("The requested model is not supported with this account.");
   process.exit(1);
 }
-if (stage === "model" && process.env.FAKE_DESCENDANT_HOLDS_PIPES_MS) {
-  const seconds = Number(process.env.FAKE_DESCENDANT_HOLDS_PIPES_MS) / 1000;
+if (stage === "model" && process.env.GROK_FAKE_DESCENDANT_HOLDS_PIPES_MS) {
+  const seconds = Number(process.env.GROK_FAKE_DESCENDANT_HOLDS_PIPES_MS) / 1000;
   const descendant = Bun.spawn(["/bin/sh", "-c", "sleep " + seconds], {
     stdin: "ignore",
     stdout: "inherit",
     stderr: "inherit",
   });
-  if (process.env.FAKE_DESCENDANT_PID_PATH) {
-    writeFileSync(process.env.FAKE_DESCENDANT_PID_PATH, String(descendant.pid));
+  if (process.env.GROK_FAKE_DESCENDANT_PID_PATH) {
+    writeFileSync(process.env.GROK_FAKE_DESCENDANT_PID_PATH, String(descendant.pid));
   }
   descendant.unref();
 }
-if (stage === "model" && process.env.FAKE_SELF_SIGNAL) {
-  process.kill(process.pid, process.env.FAKE_SELF_SIGNAL);
+if (stage === "model" && process.env.GROK_FAKE_SELF_SIGNAL) {
+  process.kill(process.pid, process.env.GROK_FAKE_SELF_SIGNAL);
   await Bun.sleep(5_000);
 }
 if (name === "claude") {
@@ -133,15 +133,15 @@ if (name === "claude") {
   console.log(JSON.stringify({type:"thread.started",thread_id:"o1"}));
   console.log(JSON.stringify({type:"item.completed",item:{type:"agent_message",text:"CODEX_OK"}}));
   console.log(JSON.stringify({type:"turn.completed",usage:{input_tokens:20,cached_input_tokens:5,output_tokens:3,reasoning_output_tokens:1}}));
-} else if (process.env.FAKE_GROK_ERROR_RESULT === "1") {
+} else if (process.env.GROK_FAKE_GROK_ERROR_RESULT === "1") {
   console.log(JSON.stringify({type:"system",subtype:"init",skills:Array(500).fill("skill-name")}));
   console.log(JSON.stringify({type:"result",subtype:"error_during_execution",is_error:true,stop_reason:"cancelled",errors:["cancelled"]}));
 } else {
   console.log(JSON.stringify({type:"assistant",message:{content:[{type:"text",text:"progress"}]}}));
   console.log(JSON.stringify({type:"result",subtype:"success",is_error:false,result:"GROK_OK",session_id:"g1",usage:{input_tokens:30,output_tokens:4,total_tokens:34},total_cost_usd:0.02,modelUsage:{[model + "-build"]:{}}}));
 }
-if (process.env.FAKE_MODEL_EXITING_PATH) {
-  writeFileSync(process.env.FAKE_MODEL_EXITING_PATH, String(process.pid));
+if (process.env.GROK_FAKE_MODEL_EXITING_PATH) {
+  writeFileSync(process.env.GROK_FAKE_MODEL_EXITING_PATH, String(process.pid));
 }
 `;
 
@@ -264,56 +264,56 @@ beforeEach(() => {
   for (const name of ["claude", "codex", "grok"]) makeExecutable(name);
   previousPath = process.env.PATH;
   process.env.PATH = `${bin}:${dirname(process.execPath)}:${previousPath ?? ""}`;
-  delete process.env.FAKE_TIMEOUT;
-  delete process.env.FAKE_INVALID_MODEL;
-  delete process.env.FAKE_CANCEL;
-  delete process.env.FAKE_CANCEL_STAGE;
-  delete process.env.FAKE_IGNORE_SIGNAL;
-  delete process.env.FAKE_PREFLIGHT_DELAY_MS;
-  delete process.env.FAKE_MODEL_DELAY_MS;
-  delete process.env.FAKE_STARTED_PATH;
-  delete process.env.FAKE_TERMINATED_PATH;
-  delete process.env.FAKE_PREFLIGHT_STARTED_PATH;
-  delete process.env.FAKE_MODEL_STARTED_PATH;
-  delete process.env.FAKE_MODEL_EXITING_PATH;
-  delete process.env.FAKE_REMOVE_EXECUTABLE_AFTER_PREFLIGHT;
-  delete process.env.FAKE_GROK_UNAUTH;
-  delete process.env.FAKE_GROK_PREFLIGHT_OUTPUT;
-  delete process.env.FAKE_GROK_PREFLIGHT_ERROR;
-  delete process.env.FAKE_GROK_TRANSIENT_UNAUTH_PATH;
-  delete process.env.FAKE_GROK_PREFLIGHT_LOG_PATH;
-  delete process.env.FAKE_GROK_MISSING_MODEL;
-  delete process.env.FAKE_DESCENDANT_HOLDS_PIPES_MS;
-  delete process.env.FAKE_DESCENDANT_PID_PATH;
-  delete process.env.FAKE_SELF_SIGNAL;
-  delete process.env.FAKE_GROK_ERROR_RESULT;
+  delete process.env.GROK_FAKE_TIMEOUT;
+  delete process.env.GROK_FAKE_INVALID_MODEL;
+  delete process.env.GROK_FAKE_CANCEL;
+  delete process.env.GROK_FAKE_CANCEL_STAGE;
+  delete process.env.GROK_FAKE_IGNORE_SIGNAL;
+  delete process.env.GROK_FAKE_PREFLIGHT_DELAY_MS;
+  delete process.env.GROK_FAKE_MODEL_DELAY_MS;
+  delete process.env.GROK_FAKE_STARTED_PATH;
+  delete process.env.GROK_FAKE_TERMINATED_PATH;
+  delete process.env.GROK_FAKE_PREFLIGHT_STARTED_PATH;
+  delete process.env.GROK_FAKE_MODEL_STARTED_PATH;
+  delete process.env.GROK_FAKE_MODEL_EXITING_PATH;
+  delete process.env.GROK_FAKE_REMOVE_EXECUTABLE_AFTER_PREFLIGHT;
+  delete process.env.GROK_FAKE_GROK_UNAUTH;
+  delete process.env.GROK_FAKE_GROK_PREFLIGHT_OUTPUT;
+  delete process.env.GROK_FAKE_GROK_PREFLIGHT_ERROR;
+  delete process.env.GROK_FAKE_GROK_TRANSIENT_UNAUTH_PATH;
+  delete process.env.GROK_FAKE_GROK_PREFLIGHT_LOG_PATH;
+  delete process.env.GROK_FAKE_GROK_MISSING_MODEL;
+  delete process.env.GROK_FAKE_DESCENDANT_HOLDS_PIPES_MS;
+  delete process.env.GROK_FAKE_DESCENDANT_PID_PATH;
+  delete process.env.GROK_FAKE_SELF_SIGNAL;
+  delete process.env.GROK_FAKE_GROK_ERROR_RESULT;
 });
 
 afterEach(() => {
   process.env.PATH = previousPath;
-  delete process.env.FAKE_TIMEOUT;
-  delete process.env.FAKE_INVALID_MODEL;
-  delete process.env.FAKE_CANCEL;
-  delete process.env.FAKE_CANCEL_STAGE;
-  delete process.env.FAKE_IGNORE_SIGNAL;
-  delete process.env.FAKE_PREFLIGHT_DELAY_MS;
-  delete process.env.FAKE_MODEL_DELAY_MS;
-  delete process.env.FAKE_STARTED_PATH;
-  delete process.env.FAKE_TERMINATED_PATH;
-  delete process.env.FAKE_PREFLIGHT_STARTED_PATH;
-  delete process.env.FAKE_MODEL_STARTED_PATH;
-  delete process.env.FAKE_MODEL_EXITING_PATH;
-  delete process.env.FAKE_REMOVE_EXECUTABLE_AFTER_PREFLIGHT;
-  delete process.env.FAKE_GROK_UNAUTH;
-  delete process.env.FAKE_GROK_PREFLIGHT_OUTPUT;
-  delete process.env.FAKE_GROK_PREFLIGHT_ERROR;
-  delete process.env.FAKE_GROK_TRANSIENT_UNAUTH_PATH;
-  delete process.env.FAKE_GROK_PREFLIGHT_LOG_PATH;
-  delete process.env.FAKE_GROK_MISSING_MODEL;
-  delete process.env.FAKE_DESCENDANT_HOLDS_PIPES_MS;
-  delete process.env.FAKE_DESCENDANT_PID_PATH;
-  delete process.env.FAKE_SELF_SIGNAL;
-  delete process.env.FAKE_GROK_ERROR_RESULT;
+  delete process.env.GROK_FAKE_TIMEOUT;
+  delete process.env.GROK_FAKE_INVALID_MODEL;
+  delete process.env.GROK_FAKE_CANCEL;
+  delete process.env.GROK_FAKE_CANCEL_STAGE;
+  delete process.env.GROK_FAKE_IGNORE_SIGNAL;
+  delete process.env.GROK_FAKE_PREFLIGHT_DELAY_MS;
+  delete process.env.GROK_FAKE_MODEL_DELAY_MS;
+  delete process.env.GROK_FAKE_STARTED_PATH;
+  delete process.env.GROK_FAKE_TERMINATED_PATH;
+  delete process.env.GROK_FAKE_PREFLIGHT_STARTED_PATH;
+  delete process.env.GROK_FAKE_MODEL_STARTED_PATH;
+  delete process.env.GROK_FAKE_MODEL_EXITING_PATH;
+  delete process.env.GROK_FAKE_REMOVE_EXECUTABLE_AFTER_PREFLIGHT;
+  delete process.env.GROK_FAKE_GROK_UNAUTH;
+  delete process.env.GROK_FAKE_GROK_PREFLIGHT_OUTPUT;
+  delete process.env.GROK_FAKE_GROK_PREFLIGHT_ERROR;
+  delete process.env.GROK_FAKE_GROK_TRANSIENT_UNAUTH_PATH;
+  delete process.env.GROK_FAKE_GROK_PREFLIGHT_LOG_PATH;
+  delete process.env.GROK_FAKE_GROK_MISSING_MODEL;
+  delete process.env.GROK_FAKE_DESCENDANT_HOLDS_PIPES_MS;
+  delete process.env.GROK_FAKE_DESCENDANT_PID_PATH;
+  delete process.env.GROK_FAKE_SELF_SIGNAL;
+  delete process.env.GROK_FAKE_GROK_ERROR_RESULT;
   rmSync(scratch, { recursive: true, force: true });
 });
 
@@ -474,9 +474,9 @@ process.exit(1);
       process.env.CODEX_SANDBOX_NETWORK_DISABLED = "1";
       const input = { ...options("grok"), parent: "codex" as const,
         timeoutMs: status === "timed-out" ? 150 : null };
-      if (status === "unavailable-model") process.env.FAKE_INVALID_MODEL = "1";
-      if (status === "unauthenticated") process.env.FAKE_GROK_UNAUTH = "1";
-      if (status === "timed-out") process.env.FAKE_TIMEOUT = "1";
+      if (status === "unavailable-model") process.env.GROK_FAKE_INVALID_MODEL = "1";
+      if (status === "unauthenticated") process.env.GROK_FAKE_GROK_UNAUTH = "1";
+      if (status === "timed-out") process.env.GROK_FAKE_TIMEOUT = "1";
       const result = await runLane(input);
       expect(result.receipt.status).toBe(status);
       expect(result.receipt.error?.message).not.toContain("Codex parent sandbox");
@@ -645,7 +645,7 @@ process.exit(${scenario.endsWith("nonzero") ? 1 : 0});
       writeFileSync(join(bin, "grok"), fake.replace(
         'console.log(JSON.stringify({type:"result",subtype:"error_during_execution",is_error:true,stop_reason:"cancelled",errors:["cancelled"]}));',
         `process.stdout.write(${JSON.stringify(stdout)}); process.exit(${exitCode});`));
-      process.env.FAKE_GROK_ERROR_RESULT = "1";
+      process.env.GROK_FAKE_GROK_ERROR_RESULT = "1";
       const result = await runLane(input);
       expect(result.exitCode).toBe(exitCode === 0 ? 65 : 70);
       expect(result.receipt).toMatchObject({
@@ -696,7 +696,7 @@ process.exit(${scenario.endsWith("nonzero") ? 1 : 0});
     writeFileSync(join(bin, "grok"), fake.replace(
       'console.log(JSON.stringify({type:"result",subtype:"error_during_execution",is_error:true,stop_reason:"cancelled",errors:["cancelled"]}));',
       'console.log(JSON.stringify({type:"result",subtype:"api_error",is_error:true,errors:["API unavailable"]})); process.exit(1);'));
-    process.env.FAKE_GROK_ERROR_RESULT = "1";
+    process.env.GROK_FAKE_GROK_ERROR_RESULT = "1";
     const result = await runLane(input);
     expect(result.exitCode).toBe(70);
     expect(result.receipt).toMatchObject({
@@ -840,7 +840,7 @@ printf '%s\\n' '{"type":"thread.started","thread_id":"isolated"}' '{"type":"item
   });
 
   it("keeps Grok's terminal cancellation reason in bounded evidence", async () => {
-    process.env.FAKE_GROK_ERROR_RESULT = "1";
+    process.env.GROK_FAKE_GROK_ERROR_RESULT = "1";
     const input = options("grok", "grok-error-result");
     const result = await runLane(input);
     expect(result.exitCode).toBe(130);
@@ -856,7 +856,7 @@ printf '%s\\n' '{"type":"thread.started","thread_id":"isolated"}' '{"type":"item
   });
 
   it("classifies an unavailable model without falling back", async () => {
-    process.env.FAKE_INVALID_MODEL = "1";
+    process.env.GROK_FAKE_INVALID_MODEL = "1";
     const input = options("codex");
     const result = await runLane(input);
     expect(result.exitCode).toBe(69);
@@ -902,11 +902,11 @@ process.exit(1);
   }
 
   it("executes Grok after one API-key-authenticated exact-model preflight", async () => {
-    process.env.FAKE_GROK_PREFLIGHT_OUTPUT = "You are using XAI_API_KEY.\nAvailable models:\n  * [grok-4.6] (default)";
+    process.env.GROK_FAKE_GROK_PREFLIGHT_OUTPUT = "You are using XAI_API_KEY.\nAvailable models:\n  * [grok-4.6] (default)";
     const preflightLog = join(scratch, "grok-api-key.log");
     const modelStarted = join(scratch, "grok-api-key.started");
-    process.env.FAKE_GROK_PREFLIGHT_LOG_PATH = preflightLog;
-    process.env.FAKE_MODEL_STARTED_PATH = modelStarted;
+    process.env.GROK_FAKE_GROK_PREFLIGHT_LOG_PATH = preflightLog;
+    process.env.GROK_FAKE_MODEL_STARTED_PATH = modelStarted;
     const input = options("grok", "grok-api-key");
     const result = await runLane(input);
 
@@ -923,12 +923,12 @@ process.exit(1);
 
   for (const auth of ["You are using XAI_API_KEY.", "You are logged in."]) {
     it(`rejects an explicitly unsupported Grok model despite ${auth}`, async () => {
-      process.env.FAKE_GROK_PREFLIGHT_OUTPUT = `${auth}\nAvailable models:\n  * grok-4.6`;
-      process.env.FAKE_GROK_PREFLIGHT_ERROR = "model grok-4.6 is not supported";
+      process.env.GROK_FAKE_GROK_PREFLIGHT_OUTPUT = `${auth}\nAvailable models:\n  * grok-4.6`;
+      process.env.GROK_FAKE_GROK_PREFLIGHT_ERROR = "model grok-4.6 is not supported";
       const preflightLog = join(scratch, "grok-unsupported.log");
       const modelStarted = join(scratch, "grok-unsupported.started");
-      process.env.FAKE_GROK_PREFLIGHT_LOG_PATH = preflightLog;
-      process.env.FAKE_MODEL_STARTED_PATH = modelStarted;
+      process.env.GROK_FAKE_GROK_PREFLIGHT_LOG_PATH = preflightLog;
+      process.env.GROK_FAKE_MODEL_STARTED_PATH = modelStarted;
       const input = options("grok", "grok-unsupported");
       const result = await runLane(input);
 
@@ -945,12 +945,12 @@ process.exit(1);
 
   for (const failure of ["unauthenticated", "You are not authenticated."]) {
     it(`fails closed on contradictory Grok API-key authentication: ${failure}`, async () => {
-      process.env.FAKE_GROK_PREFLIGHT_OUTPUT = "You are using XAI_API_KEY.\nYou are logged in.\nAvailable models:\n  * grok-4.6";
-      process.env.FAKE_GROK_PREFLIGHT_ERROR = failure;
+      process.env.GROK_FAKE_GROK_PREFLIGHT_OUTPUT = "You are using XAI_API_KEY.\nYou are logged in.\nAvailable models:\n  * grok-4.6";
+      process.env.GROK_FAKE_GROK_PREFLIGHT_ERROR = failure;
       const preflightLog = join(scratch, "grok-api-key-unauth.log");
       const modelStarted = join(scratch, "grok-api-key-unauth.started");
-      process.env.FAKE_GROK_PREFLIGHT_LOG_PATH = preflightLog;
-      process.env.FAKE_MODEL_STARTED_PATH = modelStarted;
+      process.env.GROK_FAKE_GROK_PREFLIGHT_LOG_PATH = preflightLog;
+      process.env.GROK_FAKE_MODEL_STARTED_PATH = modelStarted;
       const input = options("grok", "grok-api-key-unauth");
       const result = await runLane(input);
 
@@ -967,11 +967,11 @@ process.exit(1);
 
   for (const listed of ["grok-4.60", "xgrok-4.6", "grok-4.6-build", "grok-4x6"]) {
     it(`does not accept neighboring Grok model token ${listed}`, async () => {
-      process.env.FAKE_GROK_PREFLIGHT_OUTPUT = `You are logged in.\nAvailable models:\n  * ${listed}`;
+      process.env.GROK_FAKE_GROK_PREFLIGHT_OUTPUT = `You are logged in.\nAvailable models:\n  * ${listed}`;
       const preflightLog = join(scratch, "grok-neighbor.log");
       const modelStarted = join(scratch, "grok-neighbor.started");
-      process.env.FAKE_GROK_PREFLIGHT_LOG_PATH = preflightLog;
-      process.env.FAKE_MODEL_STARTED_PATH = modelStarted;
+      process.env.GROK_FAKE_GROK_PREFLIGHT_LOG_PATH = preflightLog;
+      process.env.GROK_FAKE_MODEL_STARTED_PATH = modelStarted;
       const input = options("grok", "grok-neighbor");
       const result = await runLane(input);
 
@@ -1010,11 +1010,11 @@ process.exit(1);
     { name: "a missing models header", output: "You are logged in.\n  * grok-4.7", passes: false },
   ]) {
     it(`${passes ? "accepts" : "rejects"} a Grok preflight with ${name}`, async () => {
-      process.env.FAKE_GROK_PREFLIGHT_OUTPUT = output;
+      process.env.GROK_FAKE_GROK_PREFLIGHT_OUTPUT = output;
       const preflightLog = join(scratch, "grok-listing.log");
       const modelStarted = join(scratch, "grok-listing.started");
-      process.env.FAKE_GROK_PREFLIGHT_LOG_PATH = preflightLog;
-      process.env.FAKE_MODEL_STARTED_PATH = modelStarted;
+      process.env.GROK_FAKE_GROK_PREFLIGHT_LOG_PATH = preflightLog;
+      process.env.GROK_FAKE_MODEL_STARTED_PATH = modelStarted;
       const input = { ...options("grok", "grok-listing"), model: "grok-4.7" };
       const result = await runLane(input);
 
@@ -1027,13 +1027,36 @@ process.exit(1);
     });
   }
 
+  for (const mode of ["read-only", "isolated-write"] as const) {
+    it(`gives the Grok preflight and model call only allowlisted variables (${mode})`, async () => {
+      const captured = join(scratch, "grok-env");
+      writeFileSync(join(bin, "grok"), fake.replace("const startedPath =",
+        `appendFileSync(${JSON.stringify(captured)}, stage + " " + Object.keys(process.env)
+  .filter((name) => name.includes("PSTACK_CANARY")).sort().join(",") + "\\n");
+const startedPath =`));
+      process.env.PSTACK_CANARY = "do-not-leak";
+      process.env.GROK_PSTACK_CANARY = "kept";
+      try {
+        const input = { ...options("grok", `grok-env-${mode}`), mode };
+        const result = await runLane(input);
+        expect(result.exitCode).toBe(0);
+        expect(readFileSync(captured, "utf8")).toBe(
+          "preflight GROK_PSTACK_CANARY\nmodel GROK_PSTACK_CANARY\n"
+        );
+      } finally {
+        delete process.env.PSTACK_CANARY;
+        delete process.env.GROK_PSTACK_CANARY;
+      }
+    });
+  }
+
   it("retries a contradictory Grok authentication preflight before running the model", async () => {
     const transientMarker = join(scratch, "grok-transient-unauth.seen");
     const preflightLog = join(scratch, "grok-transient-unauth.log");
-    process.env.FAKE_GROK_TRANSIENT_UNAUTH_PATH = transientMarker;
-    process.env.FAKE_GROK_PREFLIGHT_LOG_PATH = preflightLog;
+    process.env.GROK_FAKE_GROK_TRANSIENT_UNAUTH_PATH = transientMarker;
+    process.env.GROK_FAKE_GROK_PREFLIGHT_LOG_PATH = preflightLog;
     const modelStarted = join(scratch, "grok-transient-model.started");
-    process.env.FAKE_MODEL_STARTED_PATH = modelStarted;
+    process.env.GROK_FAKE_MODEL_STARTED_PATH = modelStarted;
     const input = options("grok", "grok-transient-unauth");
     const result = await runLane(input);
 
@@ -1053,11 +1076,11 @@ process.exit(1);
   }, 10_000);
 
   it("classifies Grok authentication failure after two consecutive preflights", async () => {
-    process.env.FAKE_GROK_UNAUTH = "1";
+    process.env.GROK_FAKE_GROK_UNAUTH = "1";
     const preflightLog = join(scratch, "grok-unauthenticated.log");
-    process.env.FAKE_GROK_PREFLIGHT_LOG_PATH = preflightLog;
+    process.env.GROK_FAKE_GROK_PREFLIGHT_LOG_PATH = preflightLog;
     const modelStarted = join(scratch, "grok-model.started");
-    process.env.FAKE_MODEL_STARTED_PATH = modelStarted;
+    process.env.GROK_FAKE_MODEL_STARTED_PATH = modelStarted;
     const input = options("grok", "grok-unauthenticated");
     const result = await runLane(input);
 
@@ -1076,10 +1099,10 @@ process.exit(1);
   it("counts the Grok retry delay against the wrapper deadline", async () => {
     const transientMarker = join(scratch, "grok-deadline-unauth.seen");
     const preflightLog = join(scratch, "grok-deadline-unauth.log");
-    process.env.FAKE_GROK_TRANSIENT_UNAUTH_PATH = transientMarker;
-    process.env.FAKE_GROK_PREFLIGHT_LOG_PATH = preflightLog;
+    process.env.GROK_FAKE_GROK_TRANSIENT_UNAUTH_PATH = transientMarker;
+    process.env.GROK_FAKE_GROK_PREFLIGHT_LOG_PATH = preflightLog;
     const modelStarted = join(scratch, "grok-deadline-model.started");
-    process.env.FAKE_MODEL_STARTED_PATH = modelStarted;
+    process.env.GROK_FAKE_MODEL_STARTED_PATH = modelStarted;
     const input = {
       ...options("grok", "grok-preflight-retry-deadline"),
       timeoutMs: 700,
@@ -1106,8 +1129,8 @@ process.exit(1);
       cwd: scratch,
       env: {
         ...process.env,
-        FAKE_GROK_TRANSIENT_UNAUTH_PATH: transientMarker,
-        FAKE_GROK_PREFLIGHT_LOG_PATH: preflightLog,
+        GROK_FAKE_GROK_TRANSIENT_UNAUTH_PATH: transientMarker,
+        GROK_FAKE_GROK_PREFLIGHT_LOG_PATH: preflightLog,
       },
       stdout: "pipe",
       stderr: "pipe",
@@ -1132,11 +1155,11 @@ process.exit(1);
   });
 
   it("does not retry a Grok preflight with a missing model", async () => {
-    process.env.FAKE_GROK_MISSING_MODEL = "1";
+    process.env.GROK_FAKE_GROK_MISSING_MODEL = "1";
     const preflightLog = join(scratch, "grok-missing-model.log");
-    process.env.FAKE_GROK_PREFLIGHT_LOG_PATH = preflightLog;
+    process.env.GROK_FAKE_GROK_PREFLIGHT_LOG_PATH = preflightLog;
     const modelStarted = join(scratch, "grok-missing-model.started");
-    process.env.FAKE_MODEL_STARTED_PATH = modelStarted;
+    process.env.GROK_FAKE_MODEL_STARTED_PATH = modelStarted;
     const input = options("grok", "grok-missing-model");
     const result = await runLane(input);
 
@@ -1150,7 +1173,7 @@ process.exit(1);
   });
 
   it("kills a timed-out child and preserves a failure receipt", async () => {
-    process.env.FAKE_TIMEOUT = "1";
+    process.env.GROK_FAKE_TIMEOUT = "1";
     const input = { ...options("claude"), timeoutMs: 30 };
     const result = await runLane(input);
     expect(result.exitCode).toBe(124);
@@ -1165,8 +1188,8 @@ process.exit(1);
       cwd: scratch,
       env: {
         ...process.env,
-        FAKE_PREFLIGHT_DELAY_MS: "1000",
-        FAKE_MODEL_STARTED_PATH: modelStarted,
+        GROK_FAKE_PREFLIGHT_DELAY_MS: "1000",
+        GROK_FAKE_MODEL_STARTED_PATH: modelStarted,
       },
       stdout: "pipe",
       stderr: "pipe",
@@ -1188,7 +1211,7 @@ process.exit(1);
     const input = options("claude", "unbounded-default");
     const runner = Bun.spawn(runnerArgs(input), {
       cwd: scratch,
-      env: { ...process.env, FAKE_MODEL_DELAY_MS: "400" },
+      env: { ...process.env, GROK_FAKE_MODEL_DELAY_MS: "400" },
       stdout: "pipe",
       stderr: "pipe",
     });
@@ -1211,7 +1234,7 @@ process.exit(1);
     };
     const runner = Bun.spawn(runnerArgs(input), {
       cwd: scratch,
-      env: { ...process.env, FAKE_MODEL_DELAY_MS: "100" },
+      env: { ...process.env, GROK_FAKE_MODEL_DELAY_MS: "100" },
       stdout: "pipe",
       stderr: "pipe",
     });
@@ -1230,8 +1253,8 @@ process.exit(1);
   it("counts wrapper import and parsing time against an explicit deadline", async () => {
     const preflightStarted = join(scratch, "expired-preflight.started");
     const modelStarted = join(scratch, "expired-model.started");
-    process.env.FAKE_PREFLIGHT_STARTED_PATH = preflightStarted;
-    process.env.FAKE_MODEL_STARTED_PATH = modelStarted;
+    process.env.GROK_FAKE_PREFLIGHT_STARTED_PATH = preflightStarted;
+    process.env.GROK_FAKE_MODEL_STARTED_PATH = modelStarted;
     const input = { ...options("claude", "expired-at-entry"), timeoutMs: 100 };
     const stdout: string[] = [];
     const stderr: string[] = [];
@@ -1257,8 +1280,8 @@ process.exit(1);
   });
 
   it("spends one explicit deadline across preflight and model execution", async () => {
-    process.env.FAKE_PREFLIGHT_DELAY_MS = "1200";
-    process.env.FAKE_MODEL_DELAY_MS = "1200";
+    process.env.GROK_FAKE_PREFLIGHT_DELAY_MS = "1200";
+    process.env.GROK_FAKE_MODEL_DELAY_MS = "1200";
     const input = { ...options("claude"), timeoutMs: 1_500 };
     const result = await runLane(input);
     const recorded = receipt(input.receiptPath);
@@ -1276,8 +1299,8 @@ process.exit(1);
       cwd: scratch,
       env: {
         ...process.env,
-        FAKE_DESCENDANT_HOLDS_PIPES_MS: "5000",
-        FAKE_DESCENDANT_PID_PATH: descendantPidPath,
+        GROK_FAKE_DESCENDANT_HOLDS_PIPES_MS: "5000",
+        GROK_FAKE_DESCENDANT_PID_PATH: descendantPidPath,
       },
       stdout: "pipe",
       stderr: "pipe",
@@ -1307,9 +1330,9 @@ process.exit(1);
       cwd: scratch,
       env: {
         ...process.env,
-        FAKE_DESCENDANT_HOLDS_PIPES_MS: "5000",
-        FAKE_DESCENDANT_PID_PATH: descendantPidPath,
-        FAKE_SELF_SIGNAL: "SIGTERM",
+        GROK_FAKE_DESCENDANT_HOLDS_PIPES_MS: "5000",
+        GROK_FAKE_DESCENDANT_PID_PATH: descendantPidPath,
+        GROK_FAKE_SELF_SIGNAL: "SIGTERM",
       },
       stdout: "pipe",
       stderr: "pipe",
@@ -1338,9 +1361,9 @@ process.exit(1);
       cwd: scratch,
       env: {
         ...process.env,
-        FAKE_DESCENDANT_HOLDS_PIPES_MS: "5000",
-        FAKE_DESCENDANT_PID_PATH: descendantPidPath,
-        FAKE_MODEL_EXITING_PATH: modelExiting,
+        GROK_FAKE_DESCENDANT_HOLDS_PIPES_MS: "5000",
+        GROK_FAKE_DESCENDANT_PID_PATH: descendantPidPath,
+        GROK_FAKE_MODEL_EXITING_PATH: modelExiting,
       },
       stdout: "pipe",
       stderr: "pipe",
@@ -1394,9 +1417,9 @@ process.exit(1);
       cwd: scratch,
       env: {
         ...process.env,
-        FAKE_CANCEL_STAGE: "preflight",
-        FAKE_STARTED_PATH: started,
-        FAKE_TERMINATED_PATH: terminated,
+        GROK_FAKE_CANCEL_STAGE: "preflight",
+        GROK_FAKE_STARTED_PATH: started,
+        GROK_FAKE_TERMINATED_PATH: terminated,
       },
       stdout: "pipe",
       stderr: "pipe",
@@ -1425,10 +1448,10 @@ process.exit(1);
       cwd: scratch,
       env: {
         ...process.env,
-        FAKE_CANCEL: "1",
-        FAKE_IGNORE_SIGNAL: "1",
-        FAKE_STARTED_PATH: started,
-        FAKE_TERMINATED_PATH: terminated,
+        GROK_FAKE_CANCEL: "1",
+        GROK_FAKE_IGNORE_SIGNAL: "1",
+        GROK_FAKE_STARTED_PATH: started,
+        GROK_FAKE_TERMINATED_PATH: terminated,
       },
       stdout: "pipe",
       stderr: "pipe",
@@ -1458,9 +1481,9 @@ process.exit(1);
     const terminated = join(scratch, "cancelled-child.terminated");
     const env = {
       ...process.env,
-      FAKE_CANCEL: "1",
-      FAKE_STARTED_PATH: started,
-      FAKE_TERMINATED_PATH: terminated,
+      GROK_FAKE_CANCEL: "1",
+      GROK_FAKE_STARTED_PATH: started,
+      GROK_FAKE_TERMINATED_PATH: terminated,
     };
     const runner = Bun.spawn(runnerArgs(input), {
       cwd: scratch,
@@ -1572,8 +1595,8 @@ process.exit(1);
       cwd: scratch,
       env: {
         ...process.env,
-        FAKE_REMOVE_EXECUTABLE_AFTER_PREFLIGHT: "1",
-        FAKE_MODEL_STARTED_PATH: modelStarted,
+        GROK_FAKE_REMOVE_EXECUTABLE_AFTER_PREFLIGHT: "1",
+        GROK_FAKE_MODEL_STARTED_PATH: modelStarted,
       },
       stdout: "pipe",
       stderr: "pipe",
@@ -1602,8 +1625,8 @@ process.exit(1);
     git(gitEnv(), "-C", shared, "worktree", "add", "-q", "-b", "lane", lane);
     const preflightStarted = join(scratch, "refused-preflight.started");
     const modelStarted = join(scratch, "refused-model.started");
-    process.env.FAKE_PREFLIGHT_STARTED_PATH = preflightStarted;
-    process.env.FAKE_MODEL_STARTED_PATH = modelStarted;
+    process.env.GROK_FAKE_PREFLIGHT_STARTED_PATH = preflightStarted;
+    process.env.GROK_FAKE_MODEL_STARTED_PATH = modelStarted;
     const input = { ...options("claude"), mode: "isolated-write" as const, cwd: lane };
     const exitCode = await main(runnerArgs(input).slice(1), Date.now(), {
       stdout: () => {},
@@ -1656,10 +1679,39 @@ describe("childEnvironment", () => {
       CODEX_CI: "1",
       KEEP_ME: "yes",
     });
-    expect(childEnvironment("grok", "read-only", source)).toEqual({
-      PATH: "/bin",
-      KEEP_ME: "yes",
-    });
+  });
+
+  it("passes a Grok lane only allowlisted variables in both modes", () => {
+    const cases: [name: string, kept: boolean][] = [
+      ["PATH", true],
+      ["TZ", true],
+      ["LC_ALL", true],
+      ["XDG_CONFIG_HOME", true],
+      ["GROK_HOME", true],
+      ["XAI_API_KEY", true],
+      ["HTTPS_PROXY", true],
+      ["https_proxy", true],
+      ["NODE_EXTRA_CA_CERTS", true],
+      ["GITHUB_TOKEN", false],
+      ["ANTHROPIC_API_KEY", false],
+      ["XAIX_KEY", false],
+      ["PATHS", false],
+      ["CODEX_THREAD_ID", false],
+      ["CLAUDECODE", false],
+    ];
+    const source = Object.fromEntries(cases.map(([name]) => [name, `${name}-value`]));
+    const kept = Object.fromEntries(
+      cases.filter(([, keep]) => keep).map(([name]) => [name, `${name}-value`])
+    );
+    for (const mode of ["read-only", "isolated-write"] as const) {
+      expect(childEnvironment("grok", mode, source)).toEqual(kept);
+    }
+    const { CODEX_THREAD_ID: _codex, ...withoutCodex } = source;
+    const { CLAUDECODE: _claude, ...withoutClaude } = source;
+    for (const mode of ["read-only", "isolated-write"] as const) {
+      expect(childEnvironment("claude", mode, source)).toEqual(withoutCodex);
+      expect(childEnvironment("codex", mode, source)).toEqual(withoutClaude);
+    }
   });
 
   it("drops GIT_* only for a Claude writer", () => {
@@ -1667,7 +1719,6 @@ describe("childEnvironment", () => {
     expect(childEnvironment("claude", "isolated-write", source)).toEqual({ PATH: "/bin" });
     expect(childEnvironment("claude", "read-only", source)).toEqual(source);
     expect(childEnvironment("codex", "isolated-write", source)).toEqual(source);
-    expect(childEnvironment("grok", "isolated-write", source)).toEqual(source);
   });
 });
 

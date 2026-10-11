@@ -159,6 +159,34 @@ const CLAUDE_IDENTITY = [
   "CLAUDE_CODE_EXPERIMENTAL_AGENT_TEAMS",
 ] as const;
 
+const GROK_ENVIRONMENT = new Set([
+  "PATH",
+  "HOME",
+  "USER",
+  "LOGNAME",
+  "SHELL",
+  "TMPDIR",
+  "LANG",
+  "TERM",
+  "COLORTERM",
+  "TZ",
+  "HTTP_PROXY",
+  "HTTPS_PROXY",
+  "NO_PROXY",
+  "ALL_PROXY",
+  "http_proxy",
+  "https_proxy",
+  "no_proxy",
+  "all_proxy",
+  "SSL_CERT_FILE",
+  "SSL_CERT_DIR",
+  "NODE_EXTRA_CA_CERTS",
+]);
+
+const GROK_ENVIRONMENT_PREFIXES = ["LC_", "XDG_", "GROK_", "XAI_"] as const;
+
+// A Grok lane's shell can read every variable it inherits in both access modes, so it gets
+// only what grok needs to start, authenticate and reach the network.
 // A Claude writer's git must find its repository from the cwd, as discovery's git did, so
 // an inherited GIT_DIR or GIT_COMMON_DIR cannot route it to an undenied git directory.
 export function childEnvironment(
@@ -166,13 +194,13 @@ export function childEnvironment(
   mode: AccessMode,
   source: NodeJS.ProcessEnv = process.env
 ): NodeJS.ProcessEnv {
+  if (provider === "grok") {
+    return Object.fromEntries(Object.entries(source).filter(([key]) =>
+      GROK_ENVIRONMENT.has(key) || GROK_ENVIRONMENT_PREFIXES.some((prefix) => key.startsWith(prefix))
+    ));
+  }
   const result = { ...source };
-  const remove = provider === "claude"
-    ? CODEX_IDENTITY
-    : provider === "codex"
-      ? CLAUDE_IDENTITY
-      : [...CODEX_IDENTITY, ...CLAUDE_IDENTITY];
-  for (const key of remove) delete result[key];
+  for (const key of provider === "claude" ? CODEX_IDENTITY : CLAUDE_IDENTITY) delete result[key];
   if (provider === "claude" && mode === "isolated-write") {
     for (const key of Object.keys(result)) if (key.startsWith("GIT_")) delete result[key];
   }
