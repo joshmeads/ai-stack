@@ -36,6 +36,8 @@ export function classify(files: ChangedFile[], registry: Registry): Selection {
     for (const [key, feature] of [['setup', 'setup'], ['runner', 'runner'], ['tools', 'shipped-tools'], ['project', 'project-skill']] as const) {
       if (registry[key].some(p => matches(path, p))) { features.add(feature); covered = true; }
     }
+    // Reflect's Codex transcript lookup runs this script; no other skill consumes it.
+    if (path === 'plugins/pstack/skills/poteto-mode/scripts/resolve-codex-transcript.ts') { skills.add('reflect'); covered = true; }
     const skill = /^plugins\/pstack\/skills\/([^/]+)\/(.+)$/.exec(path);
     if (skill && registry.skills.includes(skill[1]!)) {
       const leaf = skill[2]!;
