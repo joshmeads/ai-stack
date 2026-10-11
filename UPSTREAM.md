@@ -61,6 +61,6 @@ No output means the tracked pstack tree has not changed. This comparison does no
 3. Keep one shared `plugins/pstack/skills/` tree. Put harness translation in the existing `codex-tools.md` and provider routing in `provider-dispatch.md`; do not fork a skill per harness.
 4. Update the commit and version in this file, the affected provenance rows in `NOTICE.md`, and `README-UPSTREAM.md` when upstream changes it.
 5. Run CI-equivalent checks locally, then run the installed Claude Code and Codex behavioral lanes required by the changed surface. Unit tests alone are not a release gate.
-6. Merge the reviewed PR before tagging the next open-pstack release.
+6. Merge the reviewed PR before tagging the next open-pstack release. Publish the release with `python3 scripts/release.py publish` from a clean checkout of `main`.
 
 Cursor's version and open-pstack's version are independent. Cursor's version identifies the imported content; open-pstack's version identifies the cross-harness distribution.

@@ -49,6 +49,6 @@
     "NOTICE.md", "README-UPSTREAM.md", "LICENSE-cursor-team-kit", "LICENSE-superpowers",
     ".gitignore", ".mergify.yml", "docs/**", "assets/**",
     "plugins/pstack/skills/poteto-mode/scripts/bootstrap.test.ts",
-    "plugins/pstack/skills/poteto-mode/scripts/check-plan.test.ts"
+    "plugins/pstack/skills/poteto-mode/scripts/check-plan.test.ts", "scripts/release.py", "scripts/release_test.py"
   ]
 }
