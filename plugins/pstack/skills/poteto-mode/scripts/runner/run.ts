@@ -546,14 +546,19 @@ function successfulPreflightEvidence(provider: Provider, model: string): string 
     : "authenticated";
 }
 
+// Only preflight output is read for authentication; a failed model call's output can quote
+// the child's own work.
 function unavailableStatus(value: string): ReceiptStatus {
   if (/not logged in|not authenticated|unauthenticated|authentication|sign in|login required/i.test(value)) {
     return "unauthenticated";
   }
-  if (/model.{0,40}(not found|unknown|unavailable|unsupported|not supported|invalid)|invalid.{0,20}model/i.test(value)) {
-    return "unavailable-model";
-  }
-  return "child-failed";
+  return modelFailureStatus(value);
+}
+
+function modelFailureStatus(value: string): "unavailable-model" | "child-failed" {
+  return /model.{0,40}(not found|unknown|unavailable|unsupported|not supported|invalid)|invalid.{0,20}model/i.test(value)
+    ? "unavailable-model"
+    : "child-failed";
 }
 
 function preflightFailureStatus(
@@ -988,7 +993,7 @@ async function executeLane(
       ? "cancelled"
       : result.timedOut
         ? "timed-out"
-        : providerFailure?.status ?? unavailableStatus(rawFailureEvidence);
+        : providerFailure?.status ?? modelFailureStatus(rawFailureEvidence);
     const sandboxHint = status === "child-failed" && providerFailure === null && parentNetworkDisabled
       ? "likely cause: Codex parent sandbox has network disabled; see provider-dispatch.md#host-and-parent-prerequisites"
       : null;

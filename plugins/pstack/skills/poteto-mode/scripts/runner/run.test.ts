@@ -475,22 +475,13 @@ process.exit(1);
       const input = { ...options("grok"), parent: "codex" as const,
         timeoutMs: status === "timed-out" ? 150 : null };
       if (status === "unavailable-model") process.env.FAKE_INVALID_MODEL = "1";
-      if (status === "unauthenticated") {
-        writeFileSync(join(bin, "grok"), `#!/usr/bin/env bun
-if (process.argv[2] === "models") {
-  console.log("You are logged in with grok.com.\\nAvailable models:\\n  * grok-4.6 (default)");
-  process.exit(0);
-}
-console.error("Not logged in. Run grok auth login.");
-process.exit(1);
-`);
-      }
+      if (status === "unauthenticated") process.env.FAKE_GROK_UNAUTH = "1";
       if (status === "timed-out") process.env.FAKE_TIMEOUT = "1";
       const result = await runLane(input);
       expect(result.receipt.status).toBe(status);
       expect(result.receipt.error?.message).not.toContain("Codex parent sandbox");
       expect(result.receipt.error?.evidence).not.toContain("Codex parent sandbox");
-    });
+    }, 10_000);
   }
 });
 
@@ -667,6 +658,18 @@ process.exit(${scenario.endsWith("nonzero") ? 1 : 0});
       expect(existsSync(input.outputPath)).toBe(false);
     });
   }
+
+  it("does not read authentication from malformed terminal data after a nonzero exit", async () => {
+    const input = options("grok");
+    writeFileSync(join(bin, "grok"), fake.replace("const modelIndex =",
+      'process.stdout.write(\'{"type":"result","is_error":true}\\n\'); console.error("Not logged in. Run grok auth login."); process.exit(1);\nconst modelIndex ='));
+    const result = await runLane(input);
+    expect(result.exitCode).toBe(70);
+    expect(result.receipt).toMatchObject({
+      status: "child-failed", exitCode: 1, error: { message: "child exited with status 1" },
+    });
+    expect(result.receipt.error?.evidence).toContain("Not logged in.");
+  });
 
   for (const stdout of ['{"type":"system","subtype":"init"}\n', "startup failed\n"]) {
     for (const exitCode of [0, 1]) {
@@ -866,6 +869,37 @@ printf '%s\\n' '{"type":"thread.started","thread_id":"isolated"}' '{"type":"item
       modelEvidence: null,
     });
   });
+
+  for (const text of [
+    "reviewing the authentication middleware",
+    "not logged in",
+    "unauthenticated",
+    "sign in",
+    "login required",
+  ]) {
+    for (const stream of ["stdout", "stderr"] as const) {
+      it(`classifies a failed model call mentioning "${text}" on ${stream} as child-failed`, async () => {
+        writeFileSync(join(bin, "codex"), `#!/usr/bin/env bun
+if (process.argv[2] === "login") {
+  console.log("Logged in using ChatGPT");
+  process.exit(0);
+}
+console.${stream === "stdout" ? "log" : "error"}(${JSON.stringify(text)});
+process.exit(1);
+`);
+        const input = options("codex");
+        const result = await runLane(input);
+        expect(result.exitCode).toBe(70);
+        expect(result.receipt).toMatchObject({
+          status: "child-failed",
+          exitCode: 1,
+          preflight: { status: "passed" },
+          error: { message: "child exited with status 1" },
+        });
+        expect(result.receipt.error?.evidence).toContain(text);
+      });
+    }
+  }
 
   it("executes Grok after one API-key-authenticated exact-model preflight", async () => {
     process.env.FAKE_GROK_PREFLIGHT_OUTPUT = "You are using XAI_API_KEY.\nAvailable models: [grok-4.6] (default)";
