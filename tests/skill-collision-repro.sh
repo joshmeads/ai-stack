@@ -475,6 +475,14 @@ else
   note "ok: shared project verification skill has executable helper and maintained feature map"
 fi
 
+if release_out="$(python3 "$repo/scripts/release_test.py" 2>&1 && python3 "$repo/scripts/release.py" notes 2>&1 >/dev/null)"; then
+  note "ok: release notes build from the CHANGES.md section for the manifest version ($vc)"
+else
+  note "FAIL: release notes do not build"
+  note "$release_out"
+  fail=1
+fi
+
 note "Checking non-shipped verification helper"
 (
   cd "$verification"

@@ -10,9 +10,9 @@ open-pstack tracks [Cursor's pstack](https://github.com/cursor/plugins/tree/main
 | Path | `pstack/` |
 | Commit | `978ca6e9c0e012047cd5058b8e829240336e704e` |
 | Upstream version | `0.15.17` |
-| open-pstack version | `1.6.0` |
+| open-pstack version | `1.6.1` |
 
-The table above is the current Cursor sync point. Open Pstack 1.6.0 imports this 0.15.17 sync. `README-UPSTREAM.md` preserves the upstream pstack README verbatim. `CHANGES.md` and `NOTICE.md` describe the adaptations and provenance.
+The table above is the current Cursor sync point. Open Pstack 1.6.0 imported this 0.15.17 sync, and 1.6.1 keeps it. `README-UPSTREAM.md` preserves the upstream pstack README verbatim. `CHANGES.md` and `NOTICE.md` describe the adaptations and provenance.
 
 ## Upstream-only exclusions
 
@@ -61,6 +61,6 @@ No output means the tracked pstack tree has not changed. This comparison does no
 3. Keep one shared `plugins/pstack/skills/` tree. Put harness translation in the existing `codex-tools.md` and provider routing in `provider-dispatch.md`; do not fork a skill per harness.
 4. Update the commit and version in this file, the affected provenance rows in `NOTICE.md`, and `README-UPSTREAM.md` when upstream changes it.
 5. Run CI-equivalent checks locally, then run the installed Claude Code and Codex behavioral lanes required by the changed surface. Unit tests alone are not a release gate.
-6. Merge the reviewed PR before tagging the next open-pstack release.
+6. Merge the reviewed PR before tagging the next open-pstack release. Publish the release with `python3 scripts/release.py publish` from a clean checkout of `main`.
 
 Cursor's version and open-pstack's version are independent. Cursor's version identifies the imported content; open-pstack's version identifies the cross-harness distribution.
