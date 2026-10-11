@@ -8,11 +8,11 @@ open-pstack tracks [Cursor's pstack](https://github.com/cursor/plugins/tree/main
 | --- | --- |
 | Repository | `https://github.com/cursor/plugins.git` |
 | Path | `pstack/` |
-| Commit | `12d587dfb20741cafc376c42c696c5f6e2a64487` |
-| Upstream version | `0.15.5` |
-| open-pstack version | `1.5.0` |
+| Commit | `978ca6e9c0e012047cd5058b8e829240336e704e` |
+| Upstream version | `0.15.17` |
+| open-pstack version | `1.6.0` |
 
-The table above is the current Cursor sync point. Open Pstack 1.5.0 imports this 0.15.5 sync. `README-UPSTREAM.md` preserves the upstream pstack README verbatim. `CHANGES.md` and `NOTICE.md` describe the adaptations and provenance.
+The table above is the current Cursor sync point. Open Pstack 1.6.0 imports this 0.15.17 sync. `README-UPSTREAM.md` preserves the upstream pstack README verbatim. `CHANGES.md` and `NOTICE.md` describe the adaptations and provenance.
 
 ## Upstream-only exclusions
 
@@ -24,6 +24,13 @@ The table above is the current Cursor sync point. Open Pstack 1.5.0 imports this
 - The expected-runtime column in `70b2dc8`'s `children.tsv` and its expected-runtime stuck test are not applied. A lane is stuck only on affirmative failure evidence.
 - The explicit Grok, Opus, and Sol defaults for the Why and Reflect roles are not applied. Those roles stay on `inherit-parent` because the external runner omits the parent's MCP servers.
 - The Claude manifest does not take the logo field from `efa2a53` because Claude Code has no schema for it. The shared asset is exposed through the Codex manifest instead.
+- Commit `df58112` (pstack 0.15.15) is not applied. It drops Sol from every default, cuts the panels to Opus and Grok, and moves Opus from `max` to `xhigh`. Open Pstack keeps its own model defaults and three-model panels.
+- The `disable-model-invocation: true` lines that `23e4138` puts on `benchmark-checklist` and `principle-explain-the-number` are not applied. The same flag, which upstream carried on principle leaves and `figure-it-out` before 0.15.5, stays off as in earlier syncs. Principle leaves keep `user-invocable: false`, and `figure-it-out` and `benchmark-checklist` stay model-invocable because poteto-mode routes to them by name. The typed-only `correct`, `ketchup`, and `poteto-help` keep the flag.
+- The Built-in PR tool paragraph from `23e4138` and `00b14f1` is not applied. It describes a Cursor run tool that Claude Code and Codex do not have.
+- `00b14f1`'s shorter `principle-test-behavior-not-implementation` text is not applied. It fails every restated constant, table row, or prompt string and every absence-only assertion (`not.toHaveBeenCalled`, `toBeUndefined`, `toEqual([])`), and the 0.15.0 local correction keeps both kinds when they test a real contract. The poteto-mode index line for this principle takes `00b14f1`'s format change and keeps the 0.15.0 wording.
+- The 40-line squash-body cutoff returns in `00b14f1` and stays omitted, as in the 0.15.0 sync.
+- Autopilot-full step 5's rule from `23e4138` is not applied. That rule lets a green head with an unchanged patch ID merge without another rebase after trunk moves, when `git merge-tree` is clean and trunk touched none of the PR's paths or CI paths. Both checks pass when trunk removes an export that the PR's new code imports, so the combined tree merges without a build or test. Step 5 keeps sending a trunk move before the merge through the patch ID rule in `playbooks/shipping.md`.
+- `correct` step 3 from `9511e60` says to fix or delete any test that would still pass if every function it calls returned nothing. The port sends that step to `principle-test-behavior-not-implementation`, which keeps negative-path tests whose correct result is an absence.
 
 ## Local port-patch ledger
 
@@ -41,8 +48,8 @@ Fetch and inspect only commits that touched pstack after the recorded sync point
 
 ```shell
 git fetch cursor main
-git log --oneline 12d587dfb20741cafc376c42c696c5f6e2a64487..cursor/main -- pstack
-git diff --stat 12d587dfb20741cafc376c42c696c5f6e2a64487..cursor/main -- pstack
+git log --oneline 978ca6e9c0e012047cd5058b8e829240336e704e..cursor/main -- pstack
+git diff --stat 978ca6e9c0e012047cd5058b8e829240336e704e..cursor/main -- pstack
 ```
 
 No output means the tracked pstack tree has not changed. This comparison does not need a polling service or generated mirror branch.
