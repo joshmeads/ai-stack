@@ -13,13 +13,7 @@ Invoke when the user says "reflect" or "/reflect". Skip when the conversation is
 
 ## 1. Locate the active transcript
 
-Before fanning out, find this conversation's transcript in Claude Code's per-project transcripts directory, `~/.claude/projects/<encoded-cwd>/`, which the system prompt names. Do not glob across `~/.claude/projects/`. That crosses workspace boundaries and reads private chats from unrelated projects.
-
-```bash
-ls -t ~/.claude/projects/<encoded-cwd>/*.jsonl 2>/dev/null | head -10
-```
-
-Three transcript layouts: legacy flat (`<id>.jsonl`), current nested (`<id>/<id>.jsonl`), and subagent (`<parent>/subagents/<child>.jsonl`). For each candidate, read the first JSONL line. Take the file whose `message.content[0].text` contains the conversation's opening user prompt. If none matches, pass a tight digest of the session instead.
+Before fanning out, resolve and verify this conversation's transcript through the [active-transcript mapping](../poteto-mode/references/codex-tools.md#active-transcripts); otherwise pass a tight session digest.
 
 ## 2. Spawn three reviewers in parallel
 
