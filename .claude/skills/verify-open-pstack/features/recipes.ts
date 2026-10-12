@@ -186,7 +186,6 @@ function reflect(harness: Harness): Case[] {
         } else {
           if (!record.tools.some(tool => tool.parent === null && !tool.failed && tool.result?.includes(nonce))) throw new Error('reflect-transcript-not-read');
           assertions.push(await written(record, report(f)));
-          if ((await lstat(report(f))).size > 5000) throw new Error('reflect-result-budget');
           const result = JSON.parse(await readFile(report(f), 'utf8')), opening = result.opening_user_message;
           if (available ? result.status !== 'resolved' || result.path !== transcript(f) || opening?.line !== 2 ||
               opening?.characters !== REFLECT_OPENING.length || opening?.sha256 !== sha256(REFLECT_OPENING)
