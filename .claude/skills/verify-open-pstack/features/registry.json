@@ -45,7 +45,7 @@
     "AGENTS.md", "CLAUDE.md", "tests/skill-collision-repro.sh"
   ],
   "nonRuntime": [
-    "README.md", "CHANGES.md", "LICENSE", "LICENSE.md", "UPSTREAM.md",
+    "README.md", "REVIEW.md", "CHANGES.md", "LICENSE", "LICENSE.md", "UPSTREAM.md",
     "NOTICE.md", "README-UPSTREAM.md", "LICENSE-cursor-team-kit", "LICENSE-superpowers",
     ".gitignore", ".mergify.yml", "docs/**", "assets/**",
     "plugins/pstack/skills/poteto-mode/scripts/bootstrap.test.ts",
