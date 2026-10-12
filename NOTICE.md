@@ -60,5 +60,6 @@ Files authored for this port (not derived from upstream):
 - `plugins/pstack/hooks/hooks.json`, `plugins/pstack/hooks/session-start`, and `plugins/pstack/hooks/session-start-context.md` (the auto-fire hook and its mandate)
 - `NOTICE.md` (this file)
 - `README.md`
+- `REVIEW.md` (the review panel's usage and waiver-scope mandate, #153; adapted from mastra-pilot's `REVIEW.md`, not from upstream)
 - `CHANGES.md`
 - `LICENSE-cursor-team-kit` (copied verbatim from upstream cursor-team-kit MIT)
