@@ -43,7 +43,7 @@ describe('registry and ownership', () => {
     expect(matches('skills/xyz/file', 'skills/x/**')).toBe(false);
   });
   test('repository-root attribution files are not runtime', () => {
-    for (const filename of ['NOTICE.md', 'README-UPSTREAM.md', 'LICENSE-cursor-team-kit', 'LICENSE-superpowers']) {
+    for (const filename of ['NOTICE.md', 'README-UPSTREAM.md', 'REVIEW.md', 'LICENSE-cursor-team-kit', 'LICENSE-superpowers']) {
       expect(classify([{ filename }], registry).noRuntime).toBe(true);
     }
   });
