@@ -167,14 +167,42 @@ function toLines(raw) {
     start = close === -1 ? 0 : close + 1;
   }
   const lines = [];
-  let fence = false;
+  /** @type {{ char: string, length: number } | null} */
+  let fence = null;
   for (let i = start; i < split.length; i++) {
     const text = split[i] ?? "";
     const n = i + 1;
-    if (/^```/.test(text)) fence = !fence;
-    lines.push({ n, text, code: fence });
+    let code = fence !== null;
+    if (fence && closesFence(text, fence)) {
+      fence = null;
+      code = false;
+    } else if (!fence) {
+      fence = opensFence(text);
+      code = fence !== null;
+    }
+    lines.push({ n, text, code });
   }
   return lines;
+}
+
+/**
+ * @param {string} text
+ * @returns {{ char: string, length: number } | null}
+ */
+function opensFence(text) {
+  const match = text.match(/^ {0,3}(`{3,}|~{3,})(.*)$/);
+  const marker = match?.[1];
+  if (!marker || (marker[0] === "`" && match[2]?.includes("`"))) return null;
+  return { char: marker[0] ?? "", length: marker.length };
+}
+
+/**
+ * @param {string} text
+ * @param {{ char: string, length: number }} opening
+ */
+function closesFence(text, opening) {
+  const marker = text.match(/^ {0,3}(`+|~+)[ \t]*$/)?.[1];
+  return marker !== undefined && marker[0] === opening.char && marker.length >= opening.length;
 }
 
 /**
