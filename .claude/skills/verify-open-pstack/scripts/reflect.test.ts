@@ -1,5 +1,5 @@
 import { afterEach, expect, test } from 'bun:test';
-import { mkdtemp, readdir, readFile, realpath, rm, writeFile } from 'node:fs/promises';
+import { mkdtemp, readdir, readFile, realpath, rm, symlink, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join, resolve } from 'node:path';
 import { recipe, type Case, type Fixture } from '../features/recipes.ts';
@@ -13,12 +13,27 @@ const chat = '00000000-1111-2222-3333-444444444444';
 
 async function fixture(harness: Harness): Promise<Fixture> {
   const dir = await realpath(await mkdtemp(join(tmpdir(), 'pstack-reflect-recipe-'))); roots.push(dir);
-  const workspace = resolve(import.meta.dir, '../../../..');
-  return { harness, dir, workspace, location: join(workspace, 'plugins/pstack'), configHome: dir, run: command };
+  const workspace = resolve(import.meta.dir, '../../../..'), location = join(dir, 'installed-pstack');
+  // A symlinked install gives the launcher an installed path that differs from its realpath.
+  await symlink(join(workspace, 'plugins/pstack'), location);
+  return { harness, dir, workspace, location, configHome: dir, run: command };
 }
 
 const home = (f: Fixture) => join(f.dir, 'transcript-home');
 const claudeTranscript = (f: Fixture) => join(home(f), 'projects/fixture/known.jsonl');
+/** The Claude fixture's opening user record, whose uuid is the per-run nonce. */
+const opener = async (f: Fixture): Promise<{ uuid: string; text: string }> => {
+  const record = JSON.parse((await readFile(claudeTranscript(f), 'utf8')).split('\n')[1]!);
+  return { uuid: record.uuid, text: record.message.content[0].text };
+};
+/** The report a Claude session writes after reading the opening user record. */
+async function claudeReport(f: Fixture, available: boolean): Promise<Record<string, unknown>> {
+  const { uuid, text } = await opener(f);
+  return available
+    ? { status: 'resolved', path: claudeTranscript(f), opening_user_message: { line: 2, characters: text.length, sha256: hash(text), uuid } }
+    : { status: 'unresolved', reason: 'opening_message_mismatch', fallback: 'session_digest', uuid };
+}
+const hash = (text: string) => new Bun.CryptoHasher('sha256').update(text).digest('hex');
 const launcher = (f: Fixture) => join(f.location, 'skills/poteto-mode/scripts/resolve-codex-transcript');
 const lookup = (f: Fixture) => `CODEX_HOME=${home(f)} ${launcher(f)} ${chat}`;
 const tool = (name: string, input: Record<string, any>, result: string | undefined, failed = false): SessionRecord['tools'][number] =>
@@ -38,10 +53,7 @@ async function simulatedRecord(f: Fixture, available: boolean): Promise<SessionR
   if (f.harness === 'codex') {
     tools = [tool('command', { command: `/bin/zsh -lc '${lookup(f)}'` }, await launch(f))];
   } else {
-    const opening = 'Reflect on the corrections in this disposable session.';
-    await writeFile(join(f.dir, 'result.json'), JSON.stringify(available ? {
-      status: 'resolved', path: claudeTranscript(f), opening_user_message: { line: 2, characters: opening.length, sha256: new Bun.CryptoHasher('sha256').update(opening).digest('hex') },
-    } : { status: 'unresolved', reason: 'opening_message_mismatch', fallback: 'session_digest' }));
+    await writeFile(join(f.dir, 'result.json'), JSON.stringify(await claudeReport(f, available)));
     tools = [tool('Bash', { command: `cat -n ${claudeTranscript(f)}` }, await readFile(claudeTranscript(f), 'utf8'))];
   }
   if (!available) await writeFile(join(f.dir, 'digest.md'), 'The requested opening is missing from this synthetic fixture.');
@@ -62,7 +74,7 @@ test.each(['claude', 'codex'] as const)('%s Reflect recipes verify the opening a
     expect((await c.assert(record, f)).assertions).toContain(available ? 'opening-verified' : 'digest-fallback');
     expect(c.prompt(f)).toContain(harness === 'claude' ? '/pstack:reflect' : '$pstack:reflect');
     await expect(c.assert({ ...record, skills: [] }, f)).rejects.toThrow('skill-not-loaded');
-    await expect(c.assert({ ...record, tools: [] }, f)).rejects.toThrow(harness === 'codex' ? 'reflect-resolver-not-run' : 'reflect-transcript-not-read');
+    if (harness === 'codex') await expect(c.assert({ ...record, tools: [] }, f)).rejects.toThrow('reflect-resolver-not-run');
     if (available) {
       await writeFile(join(f.dir, 'digest.md'), 'An unneeded digest.');
       await expect(c.assert(record, f)).rejects.toThrow('reflect-unneeded-fallback');
@@ -87,7 +99,7 @@ test.each(['claude', 'codex'] as const)('%s prompts name neither the resolver no
     const { f, c } = await prepared(harness, index), prompt = c.prompt(f);
     const nonce = harness === 'codex'
       ? (await readdir(join(home(f), 'sessions/2026/10/11')))[0]!.replace(/^rollout-|\.jsonl$/g, '')
-      : JSON.parse((await readFile(claudeTranscript(f), 'utf8')).split('\n')[1]!).uuid;
+      : (await opener(f)).uuid;
     expect(nonce).toMatch(/^[0-9a-f-]{36}$/);
     for (const leak of [nonce, 'resolve-codex-transcript', 'poteto-mode/scripts', 'known.jsonl', 'state_5.sqlite']) expect(prompt).not.toContain(leak);
   }
@@ -100,6 +112,20 @@ test('Codex accepts the launcher or the script, installed or by realpath, howeve
     `/bin/bash -lc 'bun --no-env-file ${await realpath(script)} ${chat} 2>&1'`]) {
     await c.assert({ ...record, tools: [tool('command', { command: commandText }, output)] }, f);
   }
+});
+
+test.each(['claude', 'codex'] as const)('%s fixtures write requested and unrelated openers of equal length but different content and hashes', async harness => {
+  const written = async (index: number) => {
+    const { f } = await prepared(harness, index);
+    if (harness === 'claude') return (await opener(f)).text;
+    const dir = join(home(f), 'sessions/2026/10/11'), [name] = await readdir(dir);
+    return JSON.parse((await readFile(join(dir, name!), 'utf8')).split('\n')[2]!).payload.content[0].text as string;
+  };
+  const [requested, unrelated] = [await written(0), await written(1)];
+  expect(requested).toBe('Reflect on the corrections in this disposable session.');
+  expect(unrelated.length).toBe(requested.length);
+  expect(unrelated).not.toBe(requested);
+  expect(hash(unrelated)).not.toBe(hash(requested));
 });
 
 test('Codex rejects output from another fixture, another run, or a command that does not name the resolver', async () => {
@@ -120,34 +146,56 @@ test('Codex rejects output from another fixture, another run, or a command that 
   await c.assert({ ...record, tools: [tool('command', good!.input, JSON.stringify(Object.fromEntries(Object.entries(JSON.parse(fresh)).reverse())))] }, f);
 });
 
-test('Claude requires a completed parent tool result holding the opening user record in both cases', async () => {
+test('Claude accepts the exact report naming the opener record\'s uuid in both cases, whichever tool read the transcript', async () => {
   for (const index of [0, 1]) {
-    const { f, c, record } = await prepared('claude', index), [read] = record.tools;
-    const [metadata, user] = (await readFile(claudeTranscript(f), 'utf8')).trimEnd().split('\n');
-    await c.assert({ ...record, tools: [tool('Read', { file_path: claudeTranscript(f) }, `1\t${metadata}\n2\t${user}`)] }, f);
-    for (const changed of [
-      tool('Read', { file_path: claudeTranscript(f), limit: 1 }, `1\t${metadata}`), tool('Bash', { command: 'echo opener' }, 'Reflect on the corrections in this disposable session.'),
-      { ...read!, failed: true }, { ...read!, result: undefined }, { ...read!, parent: 'child-agent' },
-    ]) {
-      await expect(c.assert({ ...record, tools: [changed] }, f)).rejects.toThrow('reflect-transcript-not-read');
-    }
-    await c.prepare!(f);
-    await expect(c.assert(record, f)).rejects.toThrow('reflect-transcript-not-read');
+    const { f, c, record } = await prepared('claude', index), path = claudeTranscript(f), { text } = await opener(f);
+    const [metadata, user] = (await readFile(path, 'utf8')).trimEnd().split('\n');
+    for (const tools of [
+      [tool('Read', { file_path: path }, `1\t${metadata}\n2\t${user}`)],
+      [tool('Glob', { pattern: `${join(home(f), 'projects/fixture')}/*.jsonl` }, path), tool('Grep', { pattern: '"type":"user"', path }, `2:${user}`)],
+      [tool('Bash', { command: `python3 -I - ${path} <<'EOF'\nprint(uuid, sha)\nEOF` }, `line 2 uuid ${JSON.parse(user!).uuid} sha ${hash(text)}`)],
+    ]) await c.assert({ ...record, tools }, f);
   }
 });
 
-test('Claude accepts a completed Bash read in the native stream and rejects a failed or pending one', async () => {
-  const { f, c, record } = await prepared('claude'), content = await readFile(claudeTranscript(f), 'utf8');
-  const events = (completed: boolean, failed: boolean) => [
-    { type: 'user', isReplay: true, message: { content: '<command-name>/pstack:reflect</command-name>' } },
-    { type: 'assistant', message: { content: [{ type: 'tool_use', id: 'bash', name: 'Bash', input: { command: `cat -n ${claudeTranscript(f)}` } }] } },
-    ...completed ? [{ type: 'user', message: { content: [{ type: 'tool_result', tool_use_id: 'bash', is_error: failed, content }] } }] : [],
-    { type: 'result', subtype: 'success', result: 'I read it and it passed.' },
-  ].map(event => JSON.stringify(event)).join('\n');
-  for (const [completed, failed] of [[false, false], [true, true]]) {
-    await expect(c.assert(parseSession('claude', events(completed!, failed!), 0, record.started), f)).rejects.toThrow('reflect-transcript-not-read');
+/** Sets the uuid where a Claude report carries it: under opening_user_message when resolved, beside the status otherwise. */
+const withUuid = (report: any, uuid: string | undefined) =>
+  report.opening_user_message ? { ...report, opening_user_message: { ...report.opening_user_message, uuid } } : { ...report, uuid };
+
+test('Claude rejects a report without the opener record\'s uuid, with another run\'s, or with the right uuid and a wrong value', async () => {
+  for (const index of [0, 1]) {
+    const available = index === 0, { f, c, record } = await prepared('claude', index), good = await claudeReport(f, available);
+    const mismatch = available ? 'reflect-opening-mismatch' : 'reflect-fallback-mismatch', { uuid: otherRun } = await opener((await prepared('claude', index)).f);
+    const wrongValue = available ? { ...good, opening_user_message: { ...good.opening_user_message as object, sha256: hash('another opener') } } : { ...good, path: claudeTranscript(f) };
+    for (const report of [withUuid(good, undefined), withUuid(good, otherRun), wrongValue, { ...good, extra: true }]) {
+      await writeFile(join(f.dir, 'result.json'), JSON.stringify(report));
+      await expect(c.assert(record, f)).rejects.toThrow(mismatch);
+    }
+    await writeFile(join(f.dir, 'result.json'), JSON.stringify(good));
+    await c.assert(record, f);
+    // A rerun writes a new uuid, so the earlier run's report no longer passes.
+    await c.prepare!(f);
+    await expect(c.assert(record, f)).rejects.toThrow(mismatch);
   }
-  await c.assert(parseSession('claude', events(true, false), 0, record.started), f);
+});
+
+test('Claude judges a report written in the native stream by its uuid, not by which tools ran', async () => {
+  for (const index of [0, 1]) {
+    const { f, c, record } = await prepared('claude', index), good = await claudeReport(f, index === 0);
+    const events = (report: object) => [
+      { type: 'user', isReplay: true, message: { content: '<command-name>/pstack:reflect</command-name>' } },
+      { type: 'assistant', message: { content: [{ type: 'tool_use', id: 'write', name: 'Write', input: { file_path: join(f.dir, 'result.json'), content: JSON.stringify(report) } }] } },
+      { type: 'user', message: { content: [{ type: 'tool_result', tool_use_id: 'write', is_error: false, content: 'File created successfully.' }] } },
+      { type: 'result', subtype: 'success', result: 'Resolved.' },
+    ].map(event => JSON.stringify(event)).join('\n');
+    const write = async (report: object) => {
+      await writeFile(join(f.dir, 'result.json'), JSON.stringify(report));
+      return c.assert(parseSession('claude', events(report), 0, record.started), f);
+    };
+    await write(good);
+    // A report echoed from the prompt has every disclosed value but not the uuid.
+    await expect(write(withUuid(good, undefined))).rejects.toThrow(index === 0 ? 'reflect-opening-mismatch' : 'reflect-fallback-mismatch');
+  }
 });
 
 test('Codex requires a completed resolver command in the native stream and rejects failed, pending or claimed execution', async () => {
