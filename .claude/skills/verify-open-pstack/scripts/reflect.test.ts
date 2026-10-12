@@ -102,9 +102,10 @@ test('Codex accepts the launcher installed or by realpath, however the command i
   const accept = (commandText: string) => c.assert({ ...record, tools: [tool('command', { command: commandText }, output)] }, f);
   for (const path of [installed, resolved]) {
     for (const commandText of [`CODEX_HOME=${home(f)} ${path} ${chat}`, `cd /tmp && CODEX_HOME="${home(f)}" "${path}" ${chat} # lookup`,
-      `/bin/zsh -lc '${path} ${chat} 2>&1'`, `(${path} ${chat})|cat`]) await accept(commandText);
+      `/bin/zsh -lc '${path} ${chat} 2>&1'`, `(${path} ${chat})|cat`, `CODEX_HOME=${home(f)} '${path}'`]) await accept(commandText);
     for (const commandText of [`bun ${path}.ts ${chat}`, `/bin/bash -lc 'bun --no-env-file --config=/dev/null "${path}.ts" ${chat}'`,
-      `${path}-old ${chat}`, `/opt${path} ${chat}`]) await expect(accept(commandText)).rejects.toThrow('reflect-resolver-not-run');
+      `${path}-old ${chat}`, `/opt${path} ${chat}`, `bun ${path}''.ts ${chat}`, `bun ${path}"".ts ${chat}`,
+      `bun "${path}"'.ts' ${chat}`]) await expect(accept(commandText)).rejects.toThrow('reflect-resolver-not-run');
   }
 });
 
