@@ -237,9 +237,36 @@ const projectSkill: Case = {
   },
 };
 
+// A Claude writer in a linked worktree must get the shared git directory as a sandbox deny. Only a
+// Codex parent runs it, because a Claude parent dispatches Claude lanes natively.
+const writer: Case = {
+  id: 'linked-worktree-writer',
+  codexSandbox: 'danger-full-access',
+  async prepare(f) {
+    const repo = join(f.dir, 'writer-repo');
+    await git(f, 'init', '-q', '-b', 'main', repo);
+    await git(f, '-C', repo, 'commit', '-q', '--allow-empty', '-m', 'init');
+    await git(f, '-C', repo, 'worktree', 'add', '-q', '-b', 'writer', join(f.dir, 'writer-lane'));
+    await writeFile(join(f.dir, 'writer.prompt.md'), 'Create the file WRITTEN.md in the current directory containing the single word PONG, then reply DONE.\n');
+  },
+  prompt: f => `${invoke(f.harness, 'poteto-mode', `Dispatch exactly one external lane and nothing else. Run the installed launcher ${join(f.location, 'skills/poteto-mode/scripts/runner/pstack-runner')} with these arguments and wait for it to exit: --parent codex --provider claude --model opus --effort max --mode isolated-write --prompt ${join(f.dir, 'writer.prompt.md')} --cwd ${join(f.dir, 'writer-lane')} --output ${join(f.dir, 'writer.output.md')} --receipt ${join(f.dir, 'writer.receipt.json')}`)}. ${rules(f.dir)}`,
+  async assert(record, f) {
+    if (!record.commands.some(c => c.includes('pstack-runner'))) throw new Error('runner-not-run');
+    const receipt = JSON.parse(await readFile(join(f.dir, 'writer.receipt.json'), 'utf8')), lane = join(f.dir, 'writer-lane');
+    if (receipt.status !== 'complete') throw new Error(`receipt-status:${receipt.status}`);
+    if (receipt.parent !== 'codex' || receipt.provider !== 'claude' || receipt.model !== 'opus' || receipt.effort !== 'max' || receipt.mode !== 'isolated-write' || receipt.cwd !== lane) throw new Error('receipt-route-mismatch');
+    if (receipt.outputPath !== join(f.dir, 'writer.output.md') || !(Date.parse(receipt.startedAt) >= record.started)) throw new Error('receipt-not-this-session');
+    const settings = parseJson(receipt.argv[receipt.argv.indexOf('--settings') + 1]) as { sandbox?: { filesystem?: { denyWrite?: unknown } } } | undefined;
+    if (!Bun.deepEquals(settings?.sandbox?.filesystem?.denyWrite, [await realpath(join(f.dir, 'writer-repo/.git'))])) throw new Error('shared-git-not-denied');
+    const effect = await written(record, join(lane, 'WRITTEN.md'));
+    if ((await readFile(join(lane, 'WRITTEN.md'), 'utf8')).trim() !== 'PONG') throw new Error('writer-effect-mismatch:WRITTEN.md');
+    return { assertions: ['runner-ran', 'receipt-complete', 'shared-git-denied', effect], files: [join(f.dir, 'writer.receipt.json'), join(lane, 'WRITTEN.md')] };
+  },
+};
+
 function runner(harness: Harness, routes: string[]): Case[] {
   const chosen = routes.filter(route => !route.startsWith(`${harness}:`));
-  return (chosen.length ? chosen : [DEFAULT_ROUTES[harness]]).map((route, index) => {
+  const cases = (chosen.length ? chosen : [DEFAULT_ROUTES[harness]]).map((route, index): Case => {
     const [, provider, model, effort] = ROUTE.exec(route)!, lane = (f: Fixture, name: string) => join(f.dir, `lane-${index + 1}.${name}`);
     return {
       id: `route-${index + 1}`,
@@ -257,6 +284,7 @@ function runner(harness: Harness, routes: string[]): Case[] {
       },
     };
   });
+  return harness === 'codex' ? [...cases, writer] : cases;
 }
 
 const setup: Case[] = [{

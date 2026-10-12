@@ -1,19 +1,10 @@
+import { resolve } from "node:path";
 import { parseArgs as parseNodeArgs } from "node:util";
-import { resolvedOptions, runLane } from "./run.ts";
-import {
-  ACCESS_MODES,
-  EFFORTS,
-  PARENTS,
-  PROVIDERS,
-  type AccessMode,
-  type Effort,
-  type Parent,
-  type Provider,
-  type RunnerOptions,
-  UsageError,
-} from "./types.ts";
+import { type Lane, REGISTRY, resolveLane } from "./registry/index.ts";
+import { runLane } from "./run.ts";
+import { PARENTS, UsageError } from "./types.ts";
 
-const HELP = `Usage: pstack-runner --parent <claude|codex> --provider <claude|codex|grok> \\
+const HELP = `Usage: pstack-runner --parent <${Object.keys(PARENTS).join("|")}> --provider <${REGISTRY.adapters.map((adapter) => adapter.id).join("|")}> \\
   --model <slug> --effort <level> --mode <read-only|isolated-write> \\
   --prompt <file> --cwd <dir> --output <file> --receipt <file> [--timeout <seconds>]
 
@@ -34,17 +25,6 @@ const defaultIo: Io = {
   stderr: (value) => process.stderr.write(value),
 };
 
-function oneOf<T extends string>(
-  name: string,
-  value: string | undefined,
-  choices: readonly T[]
-): T {
-  if (value === undefined || !choices.includes(value as T)) {
-    throw new UsageError(`${name} must be one of: ${choices.join(", ")}`);
-  }
-  return value as T;
-}
-
 function required(name: string, value: string | undefined): string {
   if (value === undefined || value.trim().length === 0) {
     throw new UsageError(`${name} is required`);
@@ -56,7 +36,7 @@ function stringValue(value: unknown): string | undefined {
   return typeof value === "string" ? value : undefined;
 }
 
-export function parseArgs(argv: readonly string[]): RunnerOptions | null {
+export function parseArgs(argv: readonly string[]): Lane | null {
   let parsed: ReturnType<typeof parseNodeArgs>;
   try {
     parsed = parseNodeArgs({
@@ -81,11 +61,6 @@ export function parseArgs(argv: readonly string[]): RunnerOptions | null {
     throw new UsageError(error instanceof Error ? error.message : String(error));
   }
   if (parsed.values.help) return null;
-  const mode = oneOf(
-    "mode",
-    stringValue(parsed.values.mode),
-    ACCESS_MODES
-  ) as AccessMode;
   const timeoutValue = stringValue(parsed.values.timeout);
   const timeoutSeconds = timeoutValue === undefined ? null : Number(timeoutValue);
   if (
@@ -94,16 +69,16 @@ export function parseArgs(argv: readonly string[]): RunnerOptions | null {
   ) {
     throw new UsageError("timeout must be a number greater than zero");
   }
-  return resolvedOptions({
-    parent: oneOf("parent", stringValue(parsed.values.parent), PARENTS) as Parent,
-    provider: oneOf("provider", stringValue(parsed.values.provider), PROVIDERS) as Provider,
-    model: required("model", stringValue(parsed.values.model)),
-    effort: oneOf("effort", stringValue(parsed.values.effort), EFFORTS) as Effort,
-    mode,
-    promptPath: required("prompt", stringValue(parsed.values.prompt)),
-    cwd: required("cwd", stringValue(parsed.values.cwd)),
-    outputPath: required("output", stringValue(parsed.values.output)),
-    receiptPath: required("receipt", stringValue(parsed.values.receipt)),
+  return resolveLane({
+    parent: stringValue(parsed.values.parent) ?? "",
+    provider: stringValue(parsed.values.provider) ?? "",
+    model: stringValue(parsed.values.model) ?? "",
+    effort: stringValue(parsed.values.effort) ?? "",
+    mode: stringValue(parsed.values.mode) ?? "",
+    promptPath: resolve(required("prompt", stringValue(parsed.values.prompt))),
+    cwd: resolve(required("cwd", stringValue(parsed.values.cwd))),
+    outputPath: resolve(required("output", stringValue(parsed.values.output))),
+    receiptPath: resolve(required("receipt", stringValue(parsed.values.receipt))),
     timeoutMs: timeoutSeconds === null ? null : timeoutSeconds * 1_000,
   });
 }
@@ -114,12 +89,12 @@ export async function main(
   io: Io = defaultIo
 ): Promise<number> {
   try {
-    const options = parseArgs(argv);
-    if (options === null) {
+    const lane = parseArgs(argv);
+    if (lane === null) {
       io.stdout(HELP);
       return 0;
     }
-    const result = await runLane(options, startedAt);
+    const result = await runLane(lane, startedAt);
     const rendered = `${JSON.stringify(result.receipt)}\n`;
     if (result.exitCode === 0) io.stdout(rendered);
     else io.stderr(rendered);

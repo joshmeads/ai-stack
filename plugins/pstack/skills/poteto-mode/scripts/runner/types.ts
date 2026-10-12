@@ -1,25 +1,32 @@
-export const PARENTS = ["claude", "codex"] as const;
-export const PROVIDERS = ["claude", "codex", "grok"] as const;
-export const EFFORTS = ["low", "medium", "high", "xhigh", "max", "ultra"] as const;
+/** The two harnesses with a native subagent primitive, and the markers that identify each one. */
+export const PARENTS = {
+  claude: {
+    identity: [
+      "CLAUDECODE",
+      "CLAUDE_CODE_CHILD_SESSION",
+      "CLAUDE_CODE_SESSION_ID",
+      "CLAUDE_CODE_EXPERIMENTAL_AGENT_TEAMS",
+    ],
+  },
+  codex: {
+    identity: [
+      "CODEX_THREAD_ID",
+      "CODEX_SESSION_ID",
+      "CODEX_CI",
+      "CODEX_SHELL",
+      "CODEX_SANDBOX",
+      "CODEX_SANDBOX_NETWORK_DISABLED",
+      "CODEX_INTERNAL_ORIGINATOR_OVERRIDE",
+    ],
+  },
+} as const;
+/** `default` passes no effort, so the CLI or model uses its own setting. */
+export const EFFORTS = ["low", "medium", "high", "xhigh", "max", "ultra", "default"] as const;
 export const ACCESS_MODES = ["read-only", "isolated-write"] as const;
 
-export type Parent = (typeof PARENTS)[number];
-export type Provider = (typeof PROVIDERS)[number];
+export type Parent = keyof typeof PARENTS;
 export type Effort = (typeof EFFORTS)[number];
 export type AccessMode = (typeof ACCESS_MODES)[number];
-
-export interface RunnerOptions {
-  readonly parent: Parent;
-  readonly provider: Provider;
-  readonly model: string;
-  readonly effort: Effort;
-  readonly mode: AccessMode;
-  readonly promptPath: string;
-  readonly cwd: string;
-  readonly outputPath: string;
-  readonly receiptPath: string;
-  readonly timeoutMs: number | null;
-}
 
 export type ReceiptStatus =
   | "complete"
@@ -40,19 +47,11 @@ export interface NormalizedUsage {
   readonly totalTokens?: number;
 }
 
-export interface ParsedOutput {
-  readonly text: string;
-  readonly reportedModel: string | null;
-  readonly sessionId: string | null;
-  readonly usage: NormalizedUsage | null;
-  readonly costUsd: number | null;
-}
-
 export interface RunnerReceipt {
   readonly schemaVersion: 1;
   readonly status: ReceiptStatus;
   readonly parent: Parent;
-  readonly provider: Provider;
+  readonly provider: string;
   readonly model: string;
   readonly effort: Effort;
   readonly mode: AccessMode;
@@ -86,3 +85,15 @@ export interface RunnerReceipt {
 }
 
 export class UsageError extends Error {}
+
+export const ERROR_EVIDENCE_LIMIT = 4_000;
+
+export function evidence(value: string): string {
+  return value.trim().slice(0, ERROR_EVIDENCE_LIMIT);
+}
+
+export function modelFailureStatus(value: string): "unavailable-model" | "child-failed" {
+  return /model.{0,40}(not found|unknown|unavailable|unsupported|not supported|invalid)|invalid.{0,20}model/i.test(value)
+    ? "unavailable-model"
+    : "child-failed";
+}
