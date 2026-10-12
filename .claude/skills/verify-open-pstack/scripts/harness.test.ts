@@ -3,6 +3,7 @@ import { cp, lstat, mkdtemp, mkdir, readFile, readlink, realpath, rm, stat, syml
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { doctor } from './doctor.ts';
+import { linkCodexAuth } from './isolation.ts';
 import { codexInstallation, launch, MacDriver, parseSession, verifyCodexEnabled } from './harness.ts';
 import { verifyProjectDoctor } from '../features/recipes.ts';
 import { newReceipt } from './core.ts';
@@ -400,6 +401,41 @@ describe('headless recipes', () => {
     await expect(run(stream('The first is **Laziness Protocol**.', { childTool: 'Bash' }))).rejects.toThrow('child-used-tools');
     await expect(run(stream('poteto-mode was not preloaded.'))).rejects.toThrow('principle-missing:Laziness Protocol');
     await expect(run(stream('Laziness Protocol', { error: true }))).rejects.toThrow('agent-not-dispatched');
+  });
+
+  test('startup hook recipe needs the installed context in the harness record, not in a reply', async () => {
+    const context = '<EXTREMELY_IMPORTANT>\nYou have pstack.\n</EXTREMELY_IMPORTANT>\n';
+    const hooked = async (harness: Harness) => {
+      const { root, installation } = await candidate(harness), workspace = join(installation.home, 'workspace');
+      await mkdir(join(installation.location, 'hooks'));
+      await writeFile(join(installation.location, 'hooks/session-start-context.md'), context);
+      return { root, installation: { ...installation, treeHash: await treeHash(installation.location), sourceHash: await sourceDigest(workspace) } };
+    };
+    const reply = { type: 'assistant', message: { content: [{ type: 'text', text: context }] } };
+    const claude = await hooked('claude');
+    const runClaude = (hook: Record<string, unknown>) => new MacDriver(command, stub(lines([
+      { type: 'system', subtype: 'hook_response', hook_event: 'SessionStart', exit_code: 0, outcome: 'success', stdout: context, ...hook }, reply,
+    ])).record).exercise(selected(claude.root, claude.installation, ['hook:startup']));
+    const [observation] = await runClaude({});
+    expect(observation!.assertions).toEqual(['startup:exit-0', 'startup:hook-context-injected']);
+    expect(observation!.artifacts.map(a => a.path)).toEqual(['sessions/claude/hook-startup/startup.session-context.md']);
+    for (const hook of [{ exit_code: 1, outcome: 'error' }, { stdout: '' }, { hook_event: 'UserPromptSubmit' }]) {
+      await expect(runClaude(hook)).rejects.toThrow('hook-context-missing');
+    }
+    const codex = await hooked('codex'), thread = '01a130b0-6128-7253-abc0-6e8fa3b2cd25';
+    await loginFixture(codex.root); await linkCodexAuth(codex.installation.home);
+    const runCodex = async (role: string) => {
+      const sessions = join(codex.installation.home, '.codex/sessions/2026/10/12');
+      await mkdir(sessions, { recursive: true });
+      await writeFile(join(sessions, `rollout-2026-10-12T11-17-08-${thread}.jsonl`), lines([
+        { type: 'response_item', payload: { type: 'message', role, content: [{ type: 'input_text', text: context.trimEnd() }] } },
+      ]));
+      return new MacDriver(command, stub(lines([{ type: 'thread.started', thread_id: thread },
+        { type: 'item.completed', item: { id: 'item_0', type: 'agent_message', text: context } }])).record)
+        .exercise(selected(codex.root, codex.installation, ['hook:startup']));
+    };
+    expect((await runCodex('developer'))[0]!.assertions).toEqual(['startup:exit-0', 'startup:hook-context-injected']);
+    await expect(runCodex('user')).rejects.toThrow('hook-context-missing');
   });
 
   test('a success claim with no fixture file fails', async () => {

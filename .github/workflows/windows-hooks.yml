@@ -1,0 +1,135 @@
+name: Windows hooks
+
+# Evidence for the SessionStart hook on Windows, beside the Mac live gate. The wrapper job runs on
+# every pull request with no login. The Codex job needs a real login: it runs when a same-repository
+# pull request carries the windows-codex-login label, or on manual dispatch, and pauses in an upterm
+# session restricted to the actor until that person logs in and creates the continue file.
+
+on:
+  pull_request:
+    types: [opened, synchronize, reopened, labeled]
+  workflow_dispatch:
+    inputs:
+      ref:
+        description: Commit, branch or tag to test
+        required: true
+
+permissions:
+  contents: read
+
+jobs:
+  wrapper:
+    if: github.event_name == 'pull_request' && github.event.action != 'labeled'
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - name: Run the hook as Codex runs commandWindows
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = 'Stop'
+          $root = Join-Path $env:RUNNER_TEMP 'plugin root with spaces\pstack'
+          New-Item -ItemType Directory -Force (Split-Path $root) | Out-Null
+          Copy-Item -Recurse plugins/pstack $root
+          $expected = (Get-Content -Raw "$root\hooks\session-start-context.md").Replace("`r`n", "`n").TrimEnd()
+          $hook = (Get-Content -Raw plugins/pstack/hooks/hooks.json | ConvertFrom-Json).hooks.SessionStart[0].hooks[0].commandWindows
+          # Codex starts %COMSPEC% /C and passes the command line wrapped in one pair of quotes.
+          function Invoke-Hook([string]$File, [string]$CommandLine, [string]$Path) {
+            $info = [Diagnostics.ProcessStartInfo]::new($File, $CommandLine)
+            $info.UseShellExecute = $false; $info.RedirectStandardOutput = $true; $info.RedirectStandardError = $true
+            $info.Environment['PLUGIN_ROOT'] = $root; $info.Environment['PATH'] = $Path
+            $process = [Diagnostics.Process]::Start($info)
+            $stderr = $process.StandardError.ReadToEndAsync(); $stdout = $process.StandardOutput.ReadToEnd(); $process.WaitForExit()
+            Write-Host "exit $($process.ExitCode); stderr: $($stderr.Result)"
+            @{ Code = $process.ExitCode; Out = $stdout.Replace("`r`n", "`n").TrimEnd() }
+          }
+          $cmd = Join-Path $env:SystemRoot 'System32\cmd.exe'
+          $cases = @(
+            @{ Name = 'ordinary PATH'; File = $cmd; Line = "/C `"$hook`""; Path = $env:PATH; Pass = $true },
+            @{ Name = 'System32-only PATH'; File = $cmd; Line = "/C `"$hook`""; Path = (Join-Path $env:SystemRoot 'System32'); Pass = $true },
+            @{ Name = 'session-start with an empty PATH'; File = 'C:\Program Files\Git\usr\bin\bash.exe'; Line = "`"$root\hooks\session-start`""; Path = ''; Pass = $true },
+            @{ Name = 'missing script'; File = $cmd; Line = "/C `"$($hook.Replace(' session-start', ' missing-script'))`""; Path = $env:PATH; Pass = $false }
+          )
+          $failed = 0
+          foreach ($case in $cases) {
+            $result = Invoke-Hook $case.File $case.Line $case.Path
+            $ok = if ($case.Pass) { $result.Code -eq 0 -and $result.Out -eq $expected } else { $result.Code -ne 0 }
+            Write-Host "$(if ($ok) { 'PASS' } else { 'FAIL' }): $($case.Name)"
+            if (-not $ok) { $failed++ }
+          }
+          Remove-Item "$root\hooks\session-start-context.md"
+          $result = Invoke-Hook $cmd "/C `"$hook`"" $env:PATH
+          Write-Host "$(if ($result.Code -ne 0) { 'PASS' } else { $failed++; 'FAIL' }): missing context file"
+          if ($failed) { exit 1 }
+
+  codex:
+    if: >-
+      github.event_name == 'workflow_dispatch' ||
+      (github.event.pull_request.head.repo.full_name == github.repository &&
+       contains(github.event.pull_request.labels.*.name, 'windows-codex-login') &&
+       (github.event.action != 'labeled' || github.event.label.name == 'windows-codex-login'))
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          ref: ${{ inputs.ref || github.event.pull_request.head.sha }}
+          persist-credentials: false
+      - name: Install Codex and the checked-out plugin
+        shell: bash
+        run: |
+          set -euo pipefail
+          npm install -g @openai/codex@0.160.0
+          export CODEX_HOME="$RUNNER_TEMP/codex-home"
+          mkdir -p "$CODEX_HOME" "$RUNNER_TEMP/session" "$RUNNER_TEMP/evidence"
+          echo "CODEX_HOME=$CODEX_HOME" >> "$GITHUB_ENV"
+          codex plugin marketplace add "$GITHUB_WORKSPACE" --json
+          codex plugin add pstack@open-pstack --json
+          codex plugin list --marketplace open-pstack --json
+      - name: Write the login command for the upterm session
+        shell: pwsh
+        run: |
+          $login = Join-Path $env:RUNNER_TEMP 'codex-login.cmd'
+          Set-Content -Encoding ascii $login @(
+            '@echo off',
+            "set `"PATH=$env:PATH`"",
+            "set `"CODEX_HOME=$env:CODEX_HOME`"",
+            'call codex login --device-auth || exit /b 1',
+            "type nul > `"$env:GITHUB_WORKSPACE\continue`""
+          )
+          Write-Host "In the upterm session, run: cmd //c '$login'"
+      - uses: owenthereal/action-upterm@41ec120391a17f0dbc38ba074d19245e925855bf # v2.3.0
+        with:
+          limit-access-to-actor: true
+          upterm-version: v0.33.0
+      - name: Run one Codex session and check the SessionStart context
+        shell: bash
+        run: |
+          set -euo pipefail
+          evidence="$RUNNER_TEMP/evidence"
+          git rev-parse HEAD > "$evidence/head.txt"
+          codex --version > "$evidence/codex-version.txt"
+          echo 'Reply with the single word OK.' | codex exec --json --skip-git-repo-check --dangerously-bypass-hook-trust \
+            --sandbox read-only --cd "$RUNNER_TEMP/session" - > "$evidence/exec.jsonl"
+          # The rollout also names the account, so only the matched developer message is kept.
+          node -e '
+            const fs = require("fs"), path = require("path");
+            const [stream, home, context, out] = process.argv.slice(1);
+            const thread = JSON.parse(fs.readFileSync(stream, "utf8").split("\n")[0]).thread_id;
+            const sessions = path.join(home, "sessions");
+            const name = fs.readdirSync(sessions, { recursive: true }).find(file => file.endsWith(`-${thread}.jsonl`));
+            if (!name) throw new Error(`rollout-missing:${thread}`);
+            const normal = text => String(text ?? "").replace(/\r\n/g, "\n").trimEnd();
+            const expected = normal(fs.readFileSync(context, "utf8"));
+            const record = fs.readFileSync(path.join(sessions, name), "utf8").split("\n").filter(Boolean).map(line => JSON.parse(line))
+              .find(e => e.type === "response_item" && e.payload?.role === "developer" && (e.payload.content ?? []).some(c => normal(c.text) === expected));
+            if (!record) throw new Error("hook-context-missing");
+            fs.writeFileSync(path.join(out, "session-context.json"), JSON.stringify({ thread, rollout: path.basename(name), record }, null, 2));
+            console.log(`SessionStart context reached Codex session ${thread}`);
+          ' "$evidence/exec.jsonl" "$CODEX_HOME" plugins/pstack/hooks/session-start-context.md "$evidence"
+      - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        if: always()
+        with:
+          name: windows-codex-session-start
+          path: ${{ runner.temp }}/evidence
+          if-no-files-found: ignore

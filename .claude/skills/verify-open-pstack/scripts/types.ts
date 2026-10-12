@@ -48,6 +48,8 @@ export interface SessionRecord {
   commands: string[];
   /** Claude: every tool call, with `parent` set to the Agent call's id for a subagent's own calls. Codex: every completed shell command, with its captured output. */
   tools: { name: string; id: string; input: Record<string, any>; parent: string | null; result?: string; failed: boolean }[];
+  /** Claude: stdout of each successful SessionStart hook, which Claude adds to context. Codex: each developer message in the rollout. */
+  context: string[];
 }
 export interface Driver {
   preflight(receipt: Receipt): Promise<void>;
