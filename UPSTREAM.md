@@ -8,11 +8,11 @@ open-pstack tracks [Cursor's pstack](https://github.com/cursor/plugins/tree/main
 | --- | --- |
 | Repository | `https://github.com/cursor/plugins.git` |
 | Path | `pstack/` |
-| Commit | `978ca6e9c0e012047cd5058b8e829240336e704e` |
-| Upstream version | `0.15.17` |
-| open-pstack version | `1.6.1` |
+| Commit | `1b6d44ff26d4e242f4e8f68c391e6d2f7ca16def` |
+| Upstream version | `0.15.20` |
+| open-pstack version | `1.7.0` |
 
-The table above is the current Cursor sync point. Open Pstack 1.6.0 imported this 0.15.17 sync, and 1.6.1 keeps it. `README-UPSTREAM.md` preserves the upstream pstack README verbatim. `CHANGES.md` and `NOTICE.md` describe the adaptations and provenance.
+The table above is the current Cursor sync point. Open Pstack 1.7.0 imported this 0.15.20 sync. `README-UPSTREAM.md` preserves the upstream pstack README verbatim. `CHANGES.md` and `NOTICE.md` describe the adaptations and provenance.
 
 ## Upstream-only exclusions
 
@@ -31,6 +31,9 @@ The table above is the current Cursor sync point. Open Pstack 1.6.0 imported thi
 - The 40-line squash-body cutoff returns in `00b14f1` and stays omitted, as in the 0.15.0 sync.
 - Autopilot-full step 5's rule from `23e4138` is not applied. That rule lets a green head with an unchanged patch ID merge without another rebase after trunk moves, when `git merge-tree` is clean and trunk touched none of the PR's paths or CI paths. Both checks pass when trunk removes an export that the PR's new code imports, so the combined tree merges without a build or test. Step 5 keeps sending a trunk move before the merge through the patch ID rule in `playbooks/shipping.md`.
 - `correct` step 3 from `9511e60` says to fix or delete any test that would still pass if every function it calls returned nothing. The port sends that step to `principle-test-behavior-not-implementation`, which keeps negative-path tests whose correct result is an absence.
+- `poteto-agent.md` does not take `is_background: true` from `2bd5dd4`. Claude Code documents `background`, not `is_background`, in agent frontmatter, and Codex defines agents in TOML and maps concurrency at dispatch. The port keeps `general-purpose` in the description and the `skills: [pstack:poteto-mode]` preload.
+- The root Agent Plugins v1 `pstack/plugin.json` from `e5a02f8` and its `1b6d44f` version bump are not applied. The port keeps its current Claude manifest at `plugins/pstack/.claude-plugin/plugin.json` and Codex manifest at `plugins/pstack/.codex-plugin/plugin.json`. Agent Plugins v1 is revisited with #13.
+- `unslop` takes `bc697d0`'s description without its `disable-model-invocation: true` line, as for `73f8be4` above.
 
 ## Local port-patch ledger
 
@@ -49,8 +52,8 @@ Fetch and inspect only commits that touched pstack after the recorded sync point
 
 ```shell
 git fetch cursor main
-git log --oneline 978ca6e9c0e012047cd5058b8e829240336e704e..cursor/main -- pstack
-git diff --stat 978ca6e9c0e012047cd5058b8e829240336e704e..cursor/main -- pstack
+git log --oneline 1b6d44ff26d4e242f4e8f68c391e6d2f7ca16def..cursor/main -- pstack
+git diff --stat 1b6d44ff26d4e242f4e8f68c391e6d2f7ca16def..cursor/main -- pstack
 ```
 
 No output means the tracked pstack tree has not changed. This comparison does not need a polling service or generated mirror branch.

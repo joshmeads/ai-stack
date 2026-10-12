@@ -3,6 +3,18 @@
 Mergify auto-queue is live: ready PRs to main require passing verify, Unfret and exact-head live-gate; workflow changes require operator queueing.
 This port applies the Cursor → Claude Code substitutions in skill bodies. Earlier drafts left them flagged; this revision resolves them. A later pass added a Codex build that shares the same skills; see [Codex port](#codex-port) below.
 
+## 1.7.0 syncs to Cursor pstack 0.15.20
+
+Open Pstack 1.7.0 tracks Cursor pstack 0.15.20 at `1b6d44ff26d4e242f4e8f68c391e6d2f7ca16def`. Eleven upstream commits since 0.15.17 touch pstack. Nine are applied, four of them with port adaptations. Two are excluded: the root Agent Plugins v1 manifest and the version bump that touches only manifests.
+
+**Changed behavior.** `ketchup` shows each action item as a before and after, side by side, and makes a visual from what it already has or says plainly that none exists. The chat that receives `/poteto-mode` runs the playbook and never spawns a `poteto-agent` to run it, and `poteto-agent` is described as a delegate for code-writing and helper tasks during a run. `create-verification-skill` defines ready as usable from an empty data dir, makes a journey that the seed data cannot satisfy report a failure, and keeps setup that a stand-in did unverified until a run on the real target covers it. The plan checker treats fences by CommonMark rules: indented openers up to three spaces, backtick and tilde fences, closers of the same character and at least the opening length, and no backtick in a backtick info string. `watch-pr` reads every page of review threads, so an unresolved thread past the first 100 blocks readiness, and it counts Bugbot passes across all pages. `worktree-audit.sh` takes `-b <ref>` for the `MERGED` column, falls back to `origin/HEAD`, then `origin/main`, then `origin/master`, and prints the base it used. The `unslop` description drops "Must always apply."
+
+**Shorter prompts.** Upstream's cuts remove restated rules, generic search steps and return-format blocks from the `how` explorer prompt, the `why` source references, the Babysit playbook's Reply block, the Worktree cleanup introduction, and the `principle-encode-lessons-in-structure`, `principle-laziness-protocol`, `principle-exhaust-the-design-space` and `principle-guard-the-context-window` leaves.
+
+**Port adaptations.** `poteto-agent` keeps `general-purpose`, the `Agent` tool name and the `pstack:poteto-mode` preload. Poteto-mode's Subagents line keeps the provider-dispatch routing and adds upstream's runner rule. Babysit keeps the port's merge-safety paragraph with explicit repository arguments. Worktree cleanup runs the audit from the installed plugin with the new `-b` argument and keeps the session-list wording, and `worktree-audit.sh` keeps the Claude transcript directory. `create-verification-skill` keeps `.claude/skills/` paths. The plan checker's fence handling lives in the port's typed `toLines`, and the port's suite adds upstream's fence cases against the extracted plan skeleton. `no-comments` already spawned `comment-sicko` through `Agent`, so the agent rename needs no port change. `package.json` keeps the port's test and typecheck lists, which already run the checker tests and its strict typecheck.
+
+**Not applied.** See the 0.15.20 rows in `UPSTREAM.md`: the `is_background` field on `poteto-agent`, the root Agent Plugins v1 `plugin.json` (revisited with #13), and the `disable-model-invocation` line that `unslop` and the principle leaves still carry upstream. The Cursor manifest stays out. `README-UPSTREAM.md` is the verbatim upstream README.
+
 ## 1.6.1 adds a release script
 
 Open Pstack 1.6.1 keeps the Cursor pstack 0.15.17 sync and changes no skill.
