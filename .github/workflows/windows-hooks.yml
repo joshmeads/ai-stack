@@ -1,25 +1,17 @@
 name: Windows hooks
 
-# Evidence for the SessionStart hook on Windows, beside the Mac live gate. The wrapper job runs on
-# every pull request with no login. The Codex job needs a real login: it runs when a same-repository
-# pull request carries the windows-codex-login label, or on manual dispatch, and pauses in an upterm
-# session restricted to the actor until that person logs in and creates the continue file.
+# Evidence for the SessionStart hook on Windows, beside the Mac live gate. It runs the hook the way
+# Codex runs commandWindows, with no login, so no credential is ever on a runner with pull request code.
 
 on:
   pull_request:
-    types: [opened, synchronize, reopened, labeled]
-  workflow_dispatch:
-    inputs:
-      ref:
-        description: Commit, branch or tag to test
-        required: true
+    types: [opened, synchronize, reopened]
 
 permissions:
   contents: read
 
 jobs:
   wrapper:
-    if: github.event_name == 'pull_request' && github.event.action != 'labeled'
     runs-on: windows-latest
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
@@ -62,74 +54,3 @@ jobs:
           $result = Invoke-Hook $cmd "/C `"$hook`"" $env:PATH
           Write-Host "$(if ($result.Code -ne 0) { 'PASS' } else { $failed++; 'FAIL' }): missing context file"
           if ($failed) { exit 1 }
-
-  codex:
-    if: >-
-      github.event_name == 'workflow_dispatch' ||
-      (github.event.pull_request.head.repo.full_name == github.repository &&
-       contains(github.event.pull_request.labels.*.name, 'windows-codex-login') &&
-       (github.event.action != 'labeled' || github.event.label.name == 'windows-codex-login'))
-    runs-on: windows-latest
-    steps:
-      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
-        with:
-          ref: ${{ inputs.ref || github.event.pull_request.head.sha }}
-          persist-credentials: false
-      - name: Install Codex and the checked-out plugin
-        shell: bash
-        run: |
-          set -euo pipefail
-          npm install -g @openai/codex@0.160.0
-          export CODEX_HOME="$RUNNER_TEMP/codex-home"
-          mkdir -p "$CODEX_HOME" "$RUNNER_TEMP/session" "$RUNNER_TEMP/evidence"
-          echo "CODEX_HOME=$CODEX_HOME" >> "$GITHUB_ENV"
-          codex plugin marketplace add "$GITHUB_WORKSPACE" --json
-          codex plugin add pstack@open-pstack --json
-          codex plugin list --marketplace open-pstack --json
-      - name: Write the login command for the upterm session
-        shell: pwsh
-        run: |
-          $login = Join-Path $env:RUNNER_TEMP 'codex-login.cmd'
-          Set-Content -Encoding ascii $login @(
-            '@echo off',
-            "set `"PATH=$env:PATH`"",
-            "set `"CODEX_HOME=$env:CODEX_HOME`"",
-            'call codex login --device-auth || exit /b 1',
-            "type nul > `"$env:GITHUB_WORKSPACE\continue`""
-          )
-          Write-Host "In the upterm session, run: cmd //c '$login'"
-      - uses: owenthereal/action-upterm@41ec120391a17f0dbc38ba074d19245e925855bf # v2.3.0
-        with:
-          limit-access-to-actor: true
-          upterm-version: v0.33.0
-      - name: Run one Codex session and check the SessionStart context
-        shell: bash
-        run: |
-          set -euo pipefail
-          evidence="$RUNNER_TEMP/evidence"
-          git rev-parse HEAD > "$evidence/head.txt"
-          codex --version > "$evidence/codex-version.txt"
-          echo 'Reply with the single word OK.' | codex exec --json --skip-git-repo-check --dangerously-bypass-hook-trust \
-            --sandbox read-only --cd "$RUNNER_TEMP/session" - > "$evidence/exec.jsonl"
-          # The rollout also names the account, so only the matched developer message is kept.
-          node -e '
-            const fs = require("fs"), path = require("path");
-            const [stream, home, context, out] = process.argv.slice(1);
-            const thread = JSON.parse(fs.readFileSync(stream, "utf8").split("\n")[0]).thread_id;
-            const sessions = path.join(home, "sessions");
-            const name = fs.readdirSync(sessions, { recursive: true }).find(file => file.endsWith(`-${thread}.jsonl`));
-            if (!name) throw new Error(`rollout-missing:${thread}`);
-            const normal = text => String(text ?? "").replace(/\r\n/g, "\n").trimEnd();
-            const expected = normal(fs.readFileSync(context, "utf8"));
-            const record = fs.readFileSync(path.join(sessions, name), "utf8").split("\n").filter(Boolean).map(line => JSON.parse(line))
-              .find(e => e.type === "response_item" && e.payload?.role === "developer" && (e.payload.content ?? []).some(c => normal(c.text) === expected));
-            if (!record) throw new Error("hook-context-missing");
-            fs.writeFileSync(path.join(out, "session-context.json"), JSON.stringify({ thread, rollout: path.basename(name), record }, null, 2));
-            console.log(`SessionStart context reached Codex session ${thread}`);
-          ' "$evidence/exec.jsonl" "$CODEX_HOME" plugins/pstack/hooks/session-start-context.md "$evidence"
-      - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
-        if: always()
-        with:
-          name: windows-codex-session-start
-          path: ${{ runner.temp }}/evidence
-          if-no-files-found: ignore
