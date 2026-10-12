@@ -11,7 +11,7 @@ Open Pstack 1.6.2 keeps the Cursor pstack 0.15.17 sync. It ships the runner and 
 
 **Grok environment allowlist.** A Grok lane inherits only an allowlisted environment, in both modes and for both the preflight and the model call. The allowlist holds `PATH`, `HOME`, `USER`, `LOGNAME`, `SHELL`, `TMPDIR`, `LANG`, `TERM`, `COLORTERM`, `TZ`, the proxy variables in both cases, `SSL_CERT_FILE`, `SSL_CERT_DIR`, `NODE_EXTRA_CA_CERTS`, `LC_*`, `XDG_*`, `GROK_*` and `XAI_*`. Before this change, a Grok lane with a shell inherited the parent's full environment, secrets included. A Grok setup that needs another variable now fails with a receipt-bearing dropout (#141).
 
-**Authentication from the preflight only.** The runner classifies a lane as `unauthenticated` only from the preflight probe. A nonzero exit after the model call is `child-failed`/70, or `unavailable-model`/69 when the model-error text matches, even when the child's output mentions authentication (#142).
+**Authentication from the preflight only.** The runner classifies a lane as `unauthenticated` only from the preflight probe. A nonzero exit after the model call, without a provider-reported reason, is `child-failed`/70, or `unavailable-model`/69 when the model-error text matches, even when the child's output mentions authentication. A provider-reported cancellation stays `cancelled` (#142).
 
 **Grok login and model listing.** Grok preflight accepts a deployment-key login. It accepts a model only when the model appears on a line under `Available models:` in `grok models` output (#131).
 
