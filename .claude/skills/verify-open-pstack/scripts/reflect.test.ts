@@ -1,5 +1,5 @@
 import { afterEach, expect, test } from 'bun:test';
-import { mkdtemp, readdir, readFile, realpath, rm, writeFile } from 'node:fs/promises';
+import { mkdtemp, readdir, readFile, realpath, rm, symlink, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join, resolve } from 'node:path';
 import { recipe, type Case, type Fixture } from '../features/recipes.ts';
@@ -13,8 +13,10 @@ const chat = '00000000-1111-2222-3333-444444444444';
 
 async function fixture(harness: Harness): Promise<Fixture> {
   const dir = await realpath(await mkdtemp(join(tmpdir(), 'pstack-reflect-recipe-'))); roots.push(dir);
-  const workspace = resolve(import.meta.dir, '../../../..');
-  return { harness, dir, workspace, location: join(workspace, 'plugins/pstack'), configHome: dir, run: command };
+  const workspace = resolve(import.meta.dir, '../../../..'), location = join(dir, 'installed-pstack');
+  // A symlinked install gives the launcher an installed path that differs from its realpath.
+  await symlink(join(workspace, 'plugins/pstack'), location);
+  return { harness, dir, workspace, location, configHome: dir, run: command };
 }
 
 const home = (f: Fixture) => join(f.dir, 'transcript-home');
@@ -93,13 +95,29 @@ test.each(['claude', 'codex'] as const)('%s prompts name neither the resolver no
   }
 });
 
-test('Codex accepts the launcher or the script, installed or by realpath, however the command is spelled', async () => {
+test('Codex accepts the launcher installed or by realpath, however the command is spelled, and rejects the script', async () => {
   const { f, c, record } = await prepared('codex'), output = record.tools[0]!.result!;
-  const script = `${launcher(f)}.ts`;
-  for (const commandText of [lookup(f), `bun ${script} ${chat}`, `cd /tmp && CODEX_HOME="${home(f)}" "${await realpath(launcher(f))}" ${chat} # lookup`,
-    `/bin/bash -lc 'bun --no-env-file ${await realpath(script)} ${chat} 2>&1'`]) {
-    await c.assert({ ...record, tools: [tool('command', { command: commandText }, output)] }, f);
+  const installed = launcher(f), resolved = await realpath(installed);
+  expect(resolved).not.toBe(installed);
+  const accept = (commandText: string) => c.assert({ ...record, tools: [tool('command', { command: commandText }, output)] }, f);
+  for (const path of [installed, resolved]) {
+    for (const commandText of [`CODEX_HOME=${home(f)} ${path} ${chat}`, `cd /tmp && CODEX_HOME="${home(f)}" "${path}" ${chat} # lookup`,
+      `/bin/zsh -lc '${path} ${chat} 2>&1'`, `(${path} ${chat})|cat`]) await accept(commandText);
+    for (const commandText of [`bun ${path}.ts ${chat}`, `/bin/bash -lc 'bun --no-env-file --config=/dev/null "${path}.ts" ${chat}'`,
+      `${path}-old ${chat}`, `/opt${path} ${chat}`]) await expect(accept(commandText)).rejects.toThrow('reflect-resolver-not-run');
   }
+});
+
+test('the requested and unrelated openers have equal lengths but different content and hashes', async () => {
+  const opener = async (index: number) => {
+    const { f } = await prepared('claude', index);
+    return JSON.parse((await readFile(claudeTranscript(f), 'utf8')).split('\n')[1]!).message.content[0].text as string;
+  };
+  const [requested, unrelated] = [await opener(0), await opener(1)];
+  expect(unrelated.length).toBe(requested.length);
+  expect(unrelated).not.toBe(requested);
+  const hash = (text: string) => new Bun.CryptoHasher('sha256').update(text).digest('hex');
+  expect(hash(unrelated)).not.toBe(hash(requested));
 });
 
 test('Codex rejects output from another fixture, another run, or a command that does not name the resolver', async () => {

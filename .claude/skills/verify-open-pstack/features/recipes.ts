@@ -125,7 +125,7 @@ const overrides: Record<string, Case> = {
 
 const REFLECT_CHAT = '00000000-1111-2222-3333-444444444444';
 const REFLECT_OPENING = 'Reflect on the corrections in this disposable session.';
-const REFLECT_UNRELATED = 'An unrelated synthetic opening.';
+const REFLECT_UNRELATED = 'An unrelated synthetic opener written for the fixture.';
 const RESOLVER = 'skills/poteto-mode/scripts/resolve-codex-transcript';
 
 function parseJson(text: string | undefined): unknown {
@@ -175,9 +175,11 @@ function reflect(harness: Harness): Case[] {
           // Both cases resolve the chat; only the opener it reports differs. The output is the harness's capture.
           const expected = { status: 'resolved', chat_id: REFLECT_CHAT, path: transcript(f),
             opening_user_message: { line: 3, record_type: 'response_item', characters: text.length, sha256: sha256(text) } };
-          const installed = [RESOLVER, `${RESOLVER}.ts`].map(path => join(f.location, path));
-          const names = [...installed, ...await Promise.all(installed.map(path => realpath(path)))];
-          const output = record.tools.find(tool => tool.name === 'command' && !tool.failed && names.some(name => tool.input.command.includes(name)) &&
+          // The launcher must appear as a whole pathname, so `resolve-codex-transcript.ts` does not match.
+          const installed = join(f.location, RESOLVER), bound = `[\\s'"\`;&|()<>]`;
+          const names = [installed, await realpath(installed)].map(name =>
+            new RegExp(`(?:^|${bound})${name.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')}(?=$|${bound})`));
+          const output = record.tools.find(tool => tool.name === 'command' && !tool.failed && names.some(name => name.test(tool.input.command)) &&
             Bun.deepEquals(parseJson(tool.result), expected))?.result;
           if (output === undefined) throw new Error('reflect-resolver-not-run');
           const retained = join(f.dir, 'resolver-output.json');
