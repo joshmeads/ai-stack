@@ -3,6 +3,22 @@
 Mergify auto-queue is live: ready PRs to main require passing verify, Unfret and exact-head live-gate; workflow changes require operator queueing.
 This port applies the Cursor → Claude Code substitutions in skill bodies. Earlier drafts left them flagged; this revision resolves them. A later pass added a Codex build that shares the same skills; see [Codex port](#codex-port) below.
 
+## 1.6.2 ships the runner and Reflect fixes merged after 1.6.1
+
+Open Pstack 1.6.2 keeps the Cursor pstack 0.15.17 sync. It ships the runner and Reflect fixes that merged after 1.6.1 was tagged.
+
+**Claude write lanes run in the Bash sandbox.** A Claude `isolated-write` lane now runs with `acceptEdits` and the Claude Code Bash sandbox enabled, with unsandboxed commands disallowed. Its shell commands run without prompts, and its writes stay inside the cwd and the per-user temp directory. The lane refuses to start when the sandbox is unavailable. In a linked worktree, the runner asks `git rev-parse --git-common-dir` for the shared `.git` and adds its literal path to the sandbox's write denials. If git fails, the cwd lies inside the shared directory, or the path contains a glob or control character, the runner refuses the lane with a `child-failed` receipt before any provider process starts. Claude writer children no longer inherit `GIT_*` variables. The denial also blocks `git add` and `git commit` in a linked worktree. Read-only Claude lanes, Grok and Codex lanes, and Claude Code parents are unchanged (#118).
+
+**Grok environment allowlist.** A Grok lane inherits only an allowlisted environment, in both modes and for both the preflight and the model call. The allowlist holds `PATH`, `HOME`, `USER`, `LOGNAME`, `SHELL`, `TMPDIR`, `LANG`, `TERM`, `COLORTERM`, `TZ`, the proxy variables in both cases, `SSL_CERT_FILE`, `SSL_CERT_DIR`, `NODE_EXTRA_CA_CERTS`, `LC_*`, `XDG_*`, `GROK_*` and `XAI_*`. Before this change, a Grok lane with a shell inherited the parent's full environment, secrets included. A Grok setup that needs another variable now fails with a receipt-bearing dropout (#141).
+
+**Authentication from the preflight only.** The runner classifies a lane as `unauthenticated` only from the preflight probe. A nonzero exit after the model call is `child-failed`/70, or `unavailable-model`/69 when the model-error text matches, even when the child's output mentions authentication (#142).
+
+**Grok login and model listing.** Grok preflight accepts a deployment-key login. It accepts a model only when the model appears on a line under `Available models:` in `grok models` output (#131).
+
+**Invalid Grok terminal data.** `provider-dispatch.md` now states that invalid or incomplete Grok terminal data is `malformed-output`/65 only after a zero exit. After a nonzero exit, it takes the ordinary failure classification (#132).
+
+**Reflect finds Codex transcripts.** Reflect step 1 resolves and verifies the current conversation's transcript through the active-transcript mapping in `codex-tools.md`, or passes a session digest of at most 2,000 words. On Codex, `resolve-codex-transcript.ts` looks up a known chat in the Codex state index, read-only and within fixed limits, and prints bounded metadata, never message text. On Claude, the lookup stays in the per-project transcript directory. Neither harness searches wider (#140).
+
 ## 1.6.1 adds a release script
 
 Open Pstack 1.6.1 keeps the Cursor pstack 0.15.17 sync and changes no skill.
