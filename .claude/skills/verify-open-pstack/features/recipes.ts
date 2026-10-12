@@ -175,10 +175,10 @@ function reflect(harness: Harness): Case[] {
           const expected = { status: 'resolved', chat_id: REFLECT_CHAT, path: transcript(f),
             opening_user_message: { line: 3, record_type: 'response_item', characters: text.length, sha256: sha256(text) } };
           // The launcher must appear as a whole pathname, so `resolve-codex-transcript.ts` does not match.
-          // A closing quote ends it only before a real boundary, so `launcher''.ts` does not match either.
-          const installed = join(f.location, RESOLVER), end = `(?:$|[\\s;&|()<>])`, bound = `[\\s'"\`;&|()<>]`;
+          // Only whitespace, or one closing quote and whitespace, may follow it before the chat ID, so `launcher''.ts` does not match.
+          const installed = join(f.location, RESOLVER), bound = `[\\s'"\`;&|()<>]`;
           const names = [installed, await realpath(installed)].map(name =>
-            new RegExp(`(?:^|${bound})${name.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')}(?=${end}|['"\`]${end})`));
+            new RegExp(`(?:^|${bound})${name.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')}(?=\\s|['"]\\s)`));
           const output = record.tools.find(tool => tool.name === 'command' && !tool.failed && names.some(name => name.test(tool.input.command)) &&
             Bun.deepEquals(parseJson(tool.result), expected))?.result;
           if (output === undefined) throw new Error('reflect-resolver-not-run');

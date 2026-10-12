@@ -102,17 +102,18 @@ test.each(['claude', 'codex'] as const)('%s prompts name neither the resolver no
   }
 });
 
-test('Codex accepts the launcher installed or by realpath, however the command is spelled, and rejects the script', async () => {
+test('Codex accepts the launcher installed or by realpath only when the chat ID follows it, and rejects the script', async () => {
   const { f, c, record } = await prepared('codex'), output = record.tools[0]!.result!;
   const installed = launcher(f), resolved = await realpath(installed);
   expect(resolved).not.toBe(installed);
   const accept = (commandText: string) => c.assert({ ...record, tools: [tool('command', { command: commandText }, output)] }, f);
   for (const path of [installed, resolved]) {
     for (const commandText of [`CODEX_HOME=${home(f)} ${path} ${chat}`, `cd /tmp && CODEX_HOME="${home(f)}" "${path}" ${chat} # lookup`,
-      `/bin/zsh -lc '${path} ${chat} 2>&1'`, `(${path} ${chat})|cat`, `CODEX_HOME=${home(f)} '${path}'`]) await accept(commandText);
+      `/bin/zsh -lc '${path} ${chat} 2>&1'`, `(${path} ${chat})|cat`, `/bin/zsh -lc "CODEX_HOME='${home(f)}' '${path}' ${chat}"`]) await accept(commandText);
     for (const commandText of [`bun ${path}.ts ${chat}`, `/bin/bash -lc 'bun --no-env-file --config=/dev/null "${path}.ts" ${chat}'`,
       `${path}-old ${chat}`, `/opt${path} ${chat}`, `bun ${path}''.ts ${chat}`, `bun ${path}"".ts ${chat}`,
-      `bun "${path}"'.ts' ${chat}`]) await expect(accept(commandText)).rejects.toThrow('reflect-resolver-not-run');
+      `bun "${path}"'.ts' ${chat}`, `${path}(.ts|.x) ${chat}`, `bun ${path}\` \`.ts ${chat}`,
+      `CODEX_HOME=${home(f)} '${path}'`]) await expect(accept(commandText)).rejects.toThrow('reflect-resolver-not-run');
   }
 });
 
