@@ -17,7 +17,9 @@ import { dirname, join } from "node:path";
 import { tmpdir } from "node:os";
 import { childEnvironment, discoverSharedGitDir, runLane } from "./run.ts";
 import { main } from "./cli.ts";
-import type { Provider, RunnerOptions, RunnerReceipt } from "./types.ts";
+import { type LaneRequest, resolveLane } from "./registry/index.ts";
+import type { ProviderId } from "./registry/family.ts";
+import type { RunnerReceipt } from "./types.ts";
 
 let scratch = "";
 let bin = "";
@@ -151,7 +153,7 @@ function makeExecutable(name: string): void {
   chmodSync(path, 0o755);
 }
 
-function options(provider: Provider, suffix: string = provider): RunnerOptions {
+function options(provider: ProviderId, suffix: string = provider): LaneRequest {
   const parent = provider === "codex" ? "claude" : "codex";
   const model =
     provider === "claude"
@@ -173,6 +175,8 @@ function options(provider: Provider, suffix: string = provider): RunnerOptions {
   };
 }
 
+const laneOf = resolveLane;
+
 function receipt(path: string): RunnerReceipt {
   return JSON.parse(readFileSync(path, "utf8")) as RunnerReceipt;
 }
@@ -180,7 +184,7 @@ function receipt(path: string): RunnerReceipt {
 // Fixture git never sees the caller's GIT_* routing or hooks. A ceiling, when given, keeps
 // repositories above the fixture root out of discovery.
 function gitEnv(ceiling: string | null = null): NodeJS.ProcessEnv {
-  const env = childEnvironment("claude", "isolated-write");
+  const env = childEnvironment(laneOf({ ...options("claude"), mode: "isolated-write" }));
   return ceiling === null ? env : { ...env, GIT_CEILING_DIRECTORIES: ceiling };
 }
 
@@ -201,7 +205,7 @@ function gitRepository(env: NodeJS.ProcessEnv, path: string): void {
   );
 }
 
-function runnerArgs(input: RunnerOptions): string[] {
+function runnerArgs(input: LaneRequest): string[] {
   const args = [
     join(import.meta.dir, "pstack-runner"),
     "--parent", input.parent,
@@ -350,7 +354,7 @@ console.error("ENOTFOUND api.anthropic.com");
 process.exit(1);
 `);
     const input = options("claude");
-    const result = await runLane(input);
+    const result = await runLane(laneOf(input));
     const saved = receipt(input.receiptPath);
     expect(JSON.parse(readFileSync(invoked, "utf8"))).toMatchObject({
       argv: expect.arrayContaining(["--model", "fable"]),
@@ -367,7 +371,7 @@ process.exit(1);
     expect(saved.error?.message).toContain("provider-dispatch.md#host-and-parent-prerequisites");
     expect(saved.schemaVersion).toBe(1);
     expect(saved.model).toBe(input.model);
-    expect(saved.effort).toBe(input.effort);
+    expect(saved.effort as string).toBe(input.effort);
     expect(readFileSync(streamPath(saved.stderrPath), "utf8")).toBe("ENOTFOUND api.anthropic.com\n");
     expect(existsSync(input.outputPath)).toBe(false);
   });
@@ -383,7 +387,7 @@ if (process.argv[2] === "auth") {
 console.error("ENOTFOUND api.anthropic.com; EACCES local-state");
 process.exit(1);
 `);
-      const result = await runLane(options("claude"));
+      const result = await runLane(laneOf(options("claude")));
       expect(result.exitCode).toBe(70);
       expect(result.receipt.error).toEqual({
         message: "child exited with status 1",
@@ -402,7 +406,7 @@ if (process.argv[2] === "models") {
 console.error("ENOTFOUND grok.com");
 process.exit(1);
 `);
-    const result = await runLane({ ...options("grok"), parent: "claude" });
+    const result = await runLane(laneOf({ ...options("grok"), parent: "claude" }));
     expect(result.exitCode).toBe(70);
     expect(result.receipt.error).toEqual({
       message: "child exited with status 1",
@@ -422,7 +426,7 @@ process.stderr.write(${JSON.stringify(stderr)});
 process.exit(1);
 `);
     const input = { ...options("grok"), parent: "codex" as const };
-    const result = await runLane(input);
+    const result = await runLane(laneOf(input));
     expect(result.exitCode).toBe(70);
     expect(result.receipt.status).toBe("child-failed");
     expect(result.receipt.error?.evidence).toStartWith("likely cause: Codex parent sandbox has network disabled");
@@ -450,7 +454,7 @@ console.log(${JSON.stringify(terminal)});
 console.error("startup warning".repeat(500));
 process.exit(1);
 `);
-      const result = await runLane({ ...options("grok"), parent: "codex" });
+      const result = await runLane(laneOf({ ...options("grok"), parent: "codex" }));
       expect(result.exitCode).toBe(scenario === "api-error" ? 70 : 130);
       expect(result.receipt.status).toBe(scenario === "api-error" ? "child-failed" : "cancelled");
       expect(result.receipt.error?.message).toBe(reason);
@@ -462,7 +466,7 @@ process.exit(1);
   for (const provider of ["claude", "grok"] as const) {
     it(`leaves successful ${provider} lanes unchanged with the marker`, async () => {
       process.env.CODEX_SANDBOX_NETWORK_DISABLED = "1";
-      const result = await runLane({ ...options(provider), parent: "codex" });
+      const result = await runLane(laneOf({ ...options(provider), parent: "codex" }));
       expect(result.exitCode).toBe(0);
       expect(result.receipt.status).toBe("complete");
       expect(result.receipt.error).toBeNull();
@@ -477,7 +481,7 @@ process.exit(1);
       if (status === "unavailable-model") process.env.GROK_FAKE_INVALID_MODEL = "1";
       if (status === "unauthenticated") process.env.GROK_FAKE_GROK_UNAUTH = "1";
       if (status === "timed-out") process.env.GROK_FAKE_TIMEOUT = "1";
-      const result = await runLane(input);
+      const result = await runLane(laneOf(input));
       expect(result.receipt.status).toBe(status);
       expect(result.receipt.error?.message).not.toContain("Codex parent sandbox");
       expect(result.receipt.error?.evidence).not.toContain("Codex parent sandbox");
@@ -521,7 +525,7 @@ process.stdout.write(${JSON.stringify(stdout)});
 process.stderr.write(${JSON.stringify(stderr)});
 process.exit(${scenario.endsWith("nonzero") ? 1 : 0});
 `);
-      const result = await runLane(input);
+      const result = await runLane(laneOf(input));
       const saved = JSON.parse(readFileSync(input.receiptPath, "utf8"));
       expect(saved.status).toBe(scenario === "success-streams" ? "complete"
         : scenario.startsWith("api-error") ? "child-failed" : "cancelled");
@@ -557,7 +561,7 @@ process.exit(${scenario.endsWith("nonzero") ? 1 : 0});
       const input = options("grok");
       const conflict = `${input.receiptPath}.${stream}`;
       writeFileSync(conflict, "operator evidence");
-      await expect(runLane(input)).rejects.toThrow();
+      await expect(runLane(laneOf(input))).rejects.toThrow();
       expect(readFileSync(conflict, "utf8")).toBe("operator evidence");
       for (const path of [input.outputPath, input.receiptPath,
         `${input.receiptPath}.${stream === "stdout" ? "stderr" : "stdout"}`]) {
@@ -569,10 +573,10 @@ process.exit(${scenario.endsWith("nonzero") ? 1 : 0});
       const input = options("grok");
       const conflict = `${input.receiptPath}.${stream}`;
       writeFileSync(conflict, "operator prompt");
-      await expect(runLane({ ...input, promptPath: conflict })).rejects.toThrow("must be distinct");
+      await expect(runLane(laneOf({ ...input, promptPath: conflict }))).rejects.toThrow("must be distinct");
       expect(readFileSync(conflict, "utf8")).toBe("operator prompt");
       rmSync(conflict);
-      await expect(runLane({ ...input, outputPath: conflict })).rejects.toThrow("must be distinct");
+      await expect(runLane(laneOf({ ...input, outputPath: conflict }))).rejects.toThrow("must be distinct");
       for (const path of [input.outputPath, input.receiptPath,
         `${input.receiptPath}.stdout`, `${input.receiptPath}.stderr`]) {
         expect(existsSync(path)).toBe(false);
@@ -596,7 +600,7 @@ process.exit(${scenario.endsWith("nonzero") ? 1 : 0});
         Math.min(typeof length === "number" ? length : data.byteLength, 7));
     });
     try {
-      const result = await runLane(input);
+      const result = await runLane(laneOf(input));
       expect(result.exitCode).toBe(0);
       expect(partialWrites).toBeGreaterThan(1);
       expect(readFileSync(streamPath(result.receipt.stdoutPath))).toEqual(Buffer.from(stdout));
@@ -616,7 +620,7 @@ process.exit(${scenario.endsWith("nonzero") ? 1 : 0});
       throw new Error("sidecar storage unavailable");
     });
     try {
-      const result = await runLane(input);
+      const result = await runLane(laneOf(input));
       expect(result.exitCode).toBe(70);
       expect(result.receipt.status).toBe("child-failed");
       expect(result.receipt.error?.evidence).toContain("sidecar storage unavailable");
@@ -633,7 +637,7 @@ process.exit(${scenario.endsWith("nonzero") ? 1 : 0});
     const bytes = Buffer.from([0, 255, 195, 169, 13, 10]);
     writeFileSync(join(bin, "grok"), fake.replace("const modelIndex =",
       `process.stderr.write(Buffer.from(${JSON.stringify([...bytes])}));\nconst modelIndex =`));
-    const result = await runLane(input);
+    const result = await runLane(laneOf(input));
     expect(result.exitCode).toBe(0);
     expect(readFileSync(streamPath(result.receipt.stderrPath))).toEqual(bytes);
   });
@@ -646,7 +650,7 @@ process.exit(${scenario.endsWith("nonzero") ? 1 : 0});
         'console.log(JSON.stringify({type:"result",subtype:"error_during_execution",is_error:true,stop_reason:"cancelled",errors:["cancelled"]}));',
         `process.stdout.write(${JSON.stringify(stdout)}); process.exit(${exitCode});`));
       process.env.GROK_FAKE_GROK_ERROR_RESULT = "1";
-      const result = await runLane(input);
+      const result = await runLane(laneOf(input));
       expect(result.exitCode).toBe(exitCode === 0 ? 65 : 70);
       expect(result.receipt).toMatchObject({
         status: exitCode === 0 ? "malformed-output" : "child-failed",
@@ -663,7 +667,7 @@ process.exit(${scenario.endsWith("nonzero") ? 1 : 0});
     const input = options("grok");
     writeFileSync(join(bin, "grok"), fake.replace("const modelIndex =",
       'process.stdout.write(\'{"type":"result","is_error":true}\\n\'); console.error("Not logged in. Run grok auth login."); process.exit(1);\nconst modelIndex ='));
-    const result = await runLane(input);
+    const result = await runLane(laneOf(input));
     expect(result.exitCode).toBe(70);
     expect(result.receipt).toMatchObject({
       status: "child-failed", exitCode: 1, error: { message: "child exited with status 1" },
@@ -678,7 +682,7 @@ process.exit(${scenario.endsWith("nonzero") ? 1 : 0});
         const stderr = "sandbox startup refused\n";
         writeFileSync(join(bin, "grok"), fake.replace("const modelIndex =",
           `process.stdout.write(${JSON.stringify(stdout)}); process.stderr.write(${JSON.stringify(stderr)}); process.exit(${exitCode});\nconst modelIndex =`));
-        const result = await runLane(input);
+        const result = await runLane(laneOf(input));
         expect(result.exitCode).toBe(exitCode === 0 ? 65 : 70);
         expect(result.receipt).toMatchObject({
           status: exitCode === 0 ? "malformed-output" : "child-failed",
@@ -697,7 +701,7 @@ process.exit(${scenario.endsWith("nonzero") ? 1 : 0});
       'console.log(JSON.stringify({type:"result",subtype:"error_during_execution",is_error:true,stop_reason:"cancelled",errors:["cancelled"]}));',
       'console.log(JSON.stringify({type:"result",subtype:"api_error",is_error:true,errors:["API unavailable"]})); process.exit(1);'));
     process.env.GROK_FAKE_GROK_ERROR_RESULT = "1";
-    const result = await runLane(input);
+    const result = await runLane(laneOf(input));
     expect(result.exitCode).toBe(70);
     expect(result.receipt).toMatchObject({
       status: "child-failed", exitCode: 1, reportedModel: null, modelVerified: false,
@@ -711,7 +715,7 @@ process.exit(${scenario.endsWith("nonzero") ? 1 : 0});
   it("retains strict model verification for successful Grok results", async () => {
     const input = options("grok");
     writeFileSync(join(bin, "grok"), fake.replace('[model + "-build"]', '["grok-unexpected"]'));
-    const result = await runLane(input);
+    const result = await runLane(laneOf(input));
     expect(result.exitCode).toBe(65);
     expect(result.receipt).toMatchObject({ status: "malformed-output", modelVerified: false });
     expect(result.receipt.error?.message).toBe("requested model grok-4.6 was not reported by grok");
@@ -801,7 +805,7 @@ printf '%s\\n' '{"type":"thread.started","thread_id":"isolated"}' '{"type":"item
   for (const provider of ["claude", "codex", "grok"] as const) {
     it(`executes and receipts the ${provider} external lane`, async () => {
       const input = options(provider);
-      const result = await runLane(input);
+      const result = await runLane(laneOf(input));
       expect(result.exitCode).toBe(0);
       expect(readFileSync(input.outputPath, "utf8")).toContain(
         provider.toUpperCase()
@@ -828,7 +832,7 @@ printf '%s\\n' '{"type":"thread.started","thread_id":"isolated"}' '{"type":"item
 
   it("records Codex's exact argv without fabricating a reported model", async () => {
     const input = options("codex");
-    const result = await runLane(input);
+    const result = await runLane(laneOf(input));
     expect(result.exitCode).toBe(0);
     expect(receipt(input.receiptPath)).toMatchObject({
       status: "complete",
@@ -842,7 +846,7 @@ printf '%s\\n' '{"type":"thread.started","thread_id":"isolated"}' '{"type":"item
   it("keeps Grok's terminal cancellation reason in bounded evidence", async () => {
     process.env.GROK_FAKE_GROK_ERROR_RESULT = "1";
     const input = options("grok", "grok-error-result");
-    const result = await runLane(input);
+    const result = await runLane(laneOf(input));
     expect(result.exitCode).toBe(130);
     expect(existsSync(input.outputPath)).toBe(false);
     const recorded = receipt(input.receiptPath);
@@ -858,7 +862,7 @@ printf '%s\\n' '{"type":"thread.started","thread_id":"isolated"}' '{"type":"item
   it("classifies an unavailable model without falling back", async () => {
     process.env.GROK_FAKE_INVALID_MODEL = "1";
     const input = options("codex");
-    const result = await runLane(input);
+    const result = await runLane(laneOf(input));
     expect(result.exitCode).toBe(69);
     expect(existsSync(input.outputPath)).toBe(false);
     expect(receipt(input.receiptPath)).toMatchObject({
@@ -888,7 +892,7 @@ console.${stream === "stdout" ? "log" : "error"}(${JSON.stringify(text)});
 process.exit(1);
 `);
         const input = options("codex");
-        const result = await runLane(input);
+        const result = await runLane(laneOf(input));
         expect(result.exitCode).toBe(70);
         expect(result.receipt).toMatchObject({
           status: "child-failed",
@@ -908,7 +912,7 @@ process.exit(1);
     process.env.GROK_FAKE_GROK_PREFLIGHT_LOG_PATH = preflightLog;
     process.env.GROK_FAKE_MODEL_STARTED_PATH = modelStarted;
     const input = options("grok", "grok-api-key");
-    const result = await runLane(input);
+    const result = await runLane(laneOf(input));
 
     expect(result.exitCode).toBe(0);
     expect(readFileSync(preflightLog, "utf8")).toBe("attempt\n");
@@ -930,7 +934,7 @@ process.exit(1);
       process.env.GROK_FAKE_GROK_PREFLIGHT_LOG_PATH = preflightLog;
       process.env.GROK_FAKE_MODEL_STARTED_PATH = modelStarted;
       const input = options("grok", "grok-unsupported");
-      const result = await runLane(input);
+      const result = await runLane(laneOf(input));
 
       expect(result.exitCode).toBe(69);
       expect(readFileSync(preflightLog, "utf8")).toBe("attempt\n");
@@ -952,7 +956,7 @@ process.exit(1);
       process.env.GROK_FAKE_GROK_PREFLIGHT_LOG_PATH = preflightLog;
       process.env.GROK_FAKE_MODEL_STARTED_PATH = modelStarted;
       const input = options("grok", "grok-api-key-unauth");
-      const result = await runLane(input);
+      const result = await runLane(laneOf(input));
 
       expect(result.exitCode).toBe(77);
       expect(readFileSync(preflightLog, "utf8")).toBe("attempt\nattempt\n");
@@ -973,7 +977,7 @@ process.exit(1);
       process.env.GROK_FAKE_GROK_PREFLIGHT_LOG_PATH = preflightLog;
       process.env.GROK_FAKE_MODEL_STARTED_PATH = modelStarted;
       const input = options("grok", "grok-neighbor");
-      const result = await runLane(input);
+      const result = await runLane(laneOf(input));
 
       expect(result.exitCode).toBe(69);
       expect(readFileSync(preflightLog, "utf8")).toBe("attempt\n");
@@ -1016,7 +1020,7 @@ process.exit(1);
       process.env.GROK_FAKE_GROK_PREFLIGHT_LOG_PATH = preflightLog;
       process.env.GROK_FAKE_MODEL_STARTED_PATH = modelStarted;
       const input = { ...options("grok", "grok-listing"), model: "grok-4.7" };
-      const result = await runLane(input);
+      const result = await runLane(laneOf(input));
 
       expect(result.exitCode).toBe(passes ? 0 : 69);
       expect(readFileSync(preflightLog, "utf8")).toBe("attempt\n");
@@ -1038,7 +1042,7 @@ const startedPath =`));
       process.env.GROK_PSTACK_CANARY = "kept";
       try {
         const input = { ...options("grok", `grok-env-${mode}`), mode };
-        const result = await runLane(input);
+        const result = await runLane(laneOf(input));
         expect(result.exitCode).toBe(0);
         expect(readFileSync(captured, "utf8")).toBe(
           "preflight GROK_PSTACK_CANARY\nmodel GROK_PSTACK_CANARY\n"
@@ -1058,7 +1062,7 @@ const startedPath =`));
     const modelStarted = join(scratch, "grok-transient-model.started");
     process.env.GROK_FAKE_MODEL_STARTED_PATH = modelStarted;
     const input = options("grok", "grok-transient-unauth");
-    const result = await runLane(input);
+    const result = await runLane(laneOf(input));
 
     expect(result.exitCode).toBe(0);
     expect(readFileSync(preflightLog, "utf8")).toBe("attempt\nattempt\n");
@@ -1082,7 +1086,7 @@ const startedPath =`));
     const modelStarted = join(scratch, "grok-model.started");
     process.env.GROK_FAKE_MODEL_STARTED_PATH = modelStarted;
     const input = options("grok", "grok-unauthenticated");
-    const result = await runLane(input);
+    const result = await runLane(laneOf(input));
 
     expect(result.exitCode).toBe(77);
     expect(readFileSync(preflightLog, "utf8")).toBe("attempt\nattempt\n");
@@ -1107,7 +1111,7 @@ const startedPath =`));
       ...options("grok", "grok-preflight-retry-deadline"),
       timeoutMs: 700,
     };
-    const result = await runLane(input);
+    const result = await runLane(laneOf(input));
     const recorded = receipt(input.receiptPath);
 
     expect(result.exitCode).toBe(124);
@@ -1161,7 +1165,7 @@ const startedPath =`));
     const modelStarted = join(scratch, "grok-missing-model.started");
     process.env.GROK_FAKE_MODEL_STARTED_PATH = modelStarted;
     const input = options("grok", "grok-missing-model");
-    const result = await runLane(input);
+    const result = await runLane(laneOf(input));
 
     expect(result.exitCode).toBe(69);
     expect(readFileSync(preflightLog, "utf8")).toBe("attempt\n");
@@ -1175,7 +1179,7 @@ const startedPath =`));
   it("kills a timed-out child and preserves a failure receipt", async () => {
     process.env.GROK_FAKE_TIMEOUT = "1";
     const input = { ...options("claude"), timeoutMs: 30 };
-    const result = await runLane(input);
+    const result = await runLane(laneOf(input));
     expect(result.exitCode).toBe(124);
     expect(existsSync(input.outputPath)).toBe(false);
     expect(receipt(input.receiptPath).status).toBe("timed-out");
@@ -1283,7 +1287,7 @@ const startedPath =`));
     process.env.GROK_FAKE_PREFLIGHT_DELAY_MS = "1200";
     process.env.GROK_FAKE_MODEL_DELAY_MS = "1200";
     const input = { ...options("claude"), timeoutMs: 1_500 };
-    const result = await runLane(input);
+    const result = await runLane(laneOf(input));
     const recorded = receipt(input.receiptPath);
 
     expect(result.exitCode).toBe(124);
@@ -1520,7 +1524,7 @@ const startedPath =`));
     expect(receipt(input.receiptPath).status).toBe("cancelled");
 
     const retry = options("codex", "cancelled-retry");
-    const result = await runLane(retry);
+    const result = await runLane(laneOf(retry));
     expect(result.exitCode).toBe(0);
     expect(receipt(retry.receiptPath).status).toBe("complete");
   });
@@ -1529,7 +1533,7 @@ const startedPath =`));
     process.env.PATH = join(scratch, "empty-bin");
     mkdirSync(process.env.PATH);
     const input = options("grok");
-    const result = await runLane(input);
+    const result = await runLane(laneOf(input));
     expect(result.exitCode).toBe(69);
     expect(existsSync(input.outputPath)).toBe(false);
     expect(receipt(input.receiptPath).status).toBe("unavailable-cli");
@@ -1538,7 +1542,7 @@ const startedPath =`));
   it("runs simultaneous same-provider lanes only into their unique paths", async () => {
     const first = options("grok", "first");
     const second = options("grok", "second");
-    const results = await Promise.all([runLane(first), runLane(second)]);
+    const results = await Promise.all([runLane(laneOf(first)), runLane(laneOf(second))]);
     expect(results.map((result) => result.exitCode)).toEqual([0, 0]);
     expect(first.outputPath).not.toBe(second.outputPath);
     expect(receipt(first.receiptPath).sessionId).toBe("g1");
@@ -1548,7 +1552,7 @@ const startedPath =`));
   it("refuses a second writer for an already-reserved path", async () => {
     const input = options("claude");
     writeFileSync(input.outputPath, "owned");
-    await expect(runLane(input)).rejects.toThrow();
+    await expect(runLane(laneOf(input))).rejects.toThrow();
     expect(readFileSync(input.outputPath, "utf8")).toBe("owned");
     expect(existsSync(input.receiptPath)).toBe(false);
   });
@@ -1614,7 +1618,7 @@ const startedPath =`));
 
     makeExecutable("claude");
     const retry = options("claude", "post-reservation-retry");
-    expect((await runLane(retry)).exitCode).toBe(0);
+    expect((await runLane(laneOf(retry))).exitCode).toBe(0);
     expect(receipt(retry.receiptPath).status).toBe("complete");
   });
 
@@ -1642,14 +1646,14 @@ const startedPath =`));
     expect(existsSync(input.outputPath)).toBe(false);
   });
 
-  it("rejects same-provider recursion", async () => {
+  it("rejects same-provider recursion", () => {
     const input = { ...options("claude"), parent: "claude" as const };
-    await expect(runLane(input)).rejects.toThrow("native to parent");
+    expect(() => laneOf(input)).toThrow("native to parent");
   });
 
-  it("rejects a versioned Claude family before it can stay pinned", async () => {
+  it("rejects a versioned Claude family before it can stay pinned", () => {
     const input = { ...options("claude"), model: "claude-fable-9-9" };
-    await expect(runLane(input)).rejects.toThrow(
+    expect(() => laneOf(input)).toThrow(
       "normalize it to fable before invoking the runner"
     );
     expect(existsSync(input.outputPath)).toBe(false);
@@ -1667,13 +1671,13 @@ describe("childEnvironment", () => {
       CLAUDE_CODE_CHILD_SESSION: "1",
       KEEP_ME: "yes",
     };
-    expect(childEnvironment("claude", "read-only", source)).toEqual({
+    expect(childEnvironment(laneOf({ ...options("claude"), mode: "read-only" }), source)).toEqual({
       PATH: "/bin",
       CLAUDECODE: "1",
       CLAUDE_CODE_CHILD_SESSION: "1",
       KEEP_ME: "yes",
     });
-    expect(childEnvironment("codex", "read-only", source)).toEqual({
+    expect(childEnvironment(laneOf({ ...options("codex"), mode: "read-only" }), source)).toEqual({
       PATH: "/bin",
       CODEX_THREAD_ID: "codex",
       CODEX_CI: "1",
@@ -1704,21 +1708,21 @@ describe("childEnvironment", () => {
       cases.filter(([, keep]) => keep).map(([name]) => [name, `${name}-value`])
     );
     for (const mode of ["read-only", "isolated-write"] as const) {
-      expect(childEnvironment("grok", mode, source)).toEqual(kept);
+      expect(childEnvironment(laneOf({ ...options("grok"), mode }), source)).toEqual(kept);
     }
     const { CODEX_THREAD_ID: _codex, ...withoutCodex } = source;
     const { CLAUDECODE: _claude, ...withoutClaude } = source;
     for (const mode of ["read-only", "isolated-write"] as const) {
-      expect(childEnvironment("claude", mode, source)).toEqual(withoutCodex);
-      expect(childEnvironment("codex", mode, source)).toEqual(withoutClaude);
+      expect(childEnvironment(laneOf({ ...options("claude"), mode }), source)).toEqual(withoutCodex);
+      expect(childEnvironment(laneOf({ ...options("codex"), mode }), source)).toEqual(withoutClaude);
     }
   });
 
   it("drops GIT_* only for a Claude writer", () => {
     const source = { PATH: "/bin", GIT_DIR: "/elsewhere/.git", GIT_WORK_TREE: "/elsewhere" };
-    expect(childEnvironment("claude", "isolated-write", source)).toEqual({ PATH: "/bin" });
-    expect(childEnvironment("claude", "read-only", source)).toEqual(source);
-    expect(childEnvironment("codex", "isolated-write", source)).toEqual(source);
+    expect(childEnvironment(laneOf({ ...options("claude"), mode: "isolated-write" }), source)).toEqual({ PATH: "/bin" });
+    expect(childEnvironment(laneOf({ ...options("claude"), mode: "read-only" }), source)).toEqual(source);
+    expect(childEnvironment(laneOf({ ...options("codex"), mode: "isolated-write" }), source)).toEqual(source);
   });
 });
 

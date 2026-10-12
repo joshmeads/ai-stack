@@ -21,3 +21,5 @@ Do not add implicit timeouts or weaker-model fallbacks. A model assertion that a
 ## Headless
 
 The runner recipe in `recipes.ts` has the installed `poteto-mode` parent launch the candidate `pstack-runner` for one external lane: `codex:gpt-6.1-sol@max` from Claude and `claude:opus@max` from Codex. It asserts the launcher command ran from the installed plugin, the receipt reports `complete` with the requested parent, provider, model, effort, and mode, and this session wrote the output. `verify.sh run --runner-route PROVIDER:MODEL@EFFORT` replaces the route for each parent whose provider differs.
+
+From Codex the recipe adds the `linked-worktree-writer` case: one `claude:opus@max` `isolated-write` lane whose cwd is a linked worktree of a run-owned repository. It asserts the receipt is `complete` with that route and cwd, the receipt argv's `--settings` sandbox denies writes to the repository's real shared `.git` directory, and the child wrote `WRITTEN.md` in the worktree during this session. Route overrides do not change this case.

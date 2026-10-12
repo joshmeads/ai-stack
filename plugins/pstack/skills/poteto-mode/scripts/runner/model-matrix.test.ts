@@ -211,7 +211,7 @@ describe("model matrix", () => {
   const panel = defaultDescriptors(rows, FIRST_RUN_PANEL);
 
   it("owns the effort universe and first-run defaults", () => {
-    expect([...EFFORTS]).toEqual(["low", "medium", "high", "xhigh", "max", "ultra"]);
+    expect([...EFFORTS]).toEqual(["low", "medium", "high", "xhigh", "max", "ultra", "default"]);
     expect(rows.map((row) => row.family)).toEqual([...FAMILY_ORDER]);
     for (const row of rows) {
       expect(row.upstreamChoice.length).toBeGreaterThan(0);

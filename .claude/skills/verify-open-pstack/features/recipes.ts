@@ -125,7 +125,7 @@ const overrides: Record<string, Case> = {
 
 const REFLECT_CHAT = '00000000-1111-2222-3333-444444444444';
 const REFLECT_OPENING = 'Reflect on the corrections in this disposable session.';
-const REFLECT_UNRELATED = 'An unrelated synthetic opening.';
+const REFLECT_UNRELATED = 'An unrelated synthetic opener written for the fixture.';
 const RESOLVER = 'skills/poteto-mode/scripts/resolve-codex-transcript';
 
 function parseJson(text: string | undefined): unknown {
@@ -135,8 +135,7 @@ function parseJson(text: string | undefined): unknown {
 function reflect(harness: Harness): Case[] {
   return [true, false].map(available => {
     const home = (f: Fixture) => join(f.dir, 'transcript-home');
-    // A per-run nonce keeps a transcript path or record the prompt never names: Codex in the
-    // rollout's file name, Claude on the opening user record.
+    // A per-run nonce the prompt never names: Codex in the rollout's file name, Claude as the opening user record's uuid.
     let nonce = '';
     const transcript = (f: Fixture) => join(home(f), harness === 'codex' ? `sessions/2026/10/11/rollout-${nonce}.jsonl` : 'projects/fixture/known.jsonl');
     const index = (f: Fixture) => join(home(f), 'state_5.sqlite');
@@ -165,7 +164,7 @@ function reflect(harness: Harness): Case[] {
         const request = `Exercise only step 1 with this disposable synthetic fixture. Do not fan out reviewers, apply edits, or inspect real chats. The conversation's opening prompt to verify is ${JSON.stringify(REFLECT_OPENING)}. `;
         const where = harness === 'codex'
           ? `The fixture's known parent chat ID is ${REFLECT_CHAT}. Run the transcript lookup with CODEX_HOME set to ${home(f)} for that command only. `
-          : `For this fixture, the system-named per-project transcript directory is ${join(home(f), 'projects/fixture')}. Write only JSON to ${report(f)}: when a transcript verifies, its status "resolved", path, and opening_user_message with line, characters, and sha256; otherwise status "unresolved", reason "opening_message_mismatch", and fallback "session_digest". Do not include message text in ${report(f)}. `;
+          : `For this fixture, the system-named per-project transcript directory is ${join(home(f), 'projects/fixture')}. Write only JSON to ${report(f)}: when a transcript verifies, its status "resolved", path, and opening_user_message with line, characters, sha256, and the uuid of that user record; otherwise status "unresolved", reason "opening_message_mismatch", fallback "session_digest", and uuid, the uuid of the opening user record you inspected. Do not include message text in ${report(f)}. `;
         return `${invoke(harness, 'reflect', `${request}${where}If the transcript cannot be verified, write the session digest, at most 2,000 words and covering only this fixture request, to ${digest(f)}.`)} ${rules(f.dir)}`;
       },
       async assert(record, f) {
@@ -184,13 +183,14 @@ function reflect(harness: Harness): Case[] {
           await writeFile(retained, output);
           paths.push(retained); assertions.push('resolver-ran');
         } else {
-          if (!record.tools.some(tool => tool.parent === null && !tool.failed && tool.result?.includes(nonce))) throw new Error('reflect-transcript-not-read');
+          // The opener record's uuid is the nonce, held only by the transcript, so a report naming it shows the read.
           assertions.push(await written(record, report(f)));
-          const result = JSON.parse(await readFile(report(f), 'utf8')), opening = result.opening_user_message;
-          if (available ? result.status !== 'resolved' || result.path !== transcript(f) || opening?.line !== 2 ||
-              opening?.characters !== REFLECT_OPENING.length || opening?.sha256 !== sha256(REFLECT_OPENING)
-            : result.status !== 'unresolved' || result.reason !== 'opening_message_mismatch' || result.fallback !== 'session_digest' ||
-              result.path !== undefined) throw new Error(available ? 'reflect-opening-mismatch' : 'reflect-fallback-mismatch');
+          const expected = available
+            ? { status: 'resolved', path: transcript(f), opening_user_message: { line: 2, characters: text.length, sha256: sha256(text), uuid: nonce } }
+            : { status: 'unresolved', reason: 'opening_message_mismatch', fallback: 'session_digest', uuid: nonce };
+          if (!Bun.deepEquals(parseJson(await readFile(report(f), 'utf8')), expected)) {
+            throw new Error(available ? 'reflect-opening-mismatch' : 'reflect-fallback-mismatch');
+          }
           paths.push(report(f));
         }
         if (available) {
@@ -236,9 +236,36 @@ const projectSkill: Case = {
   },
 };
 
+// A Claude writer in a linked worktree must get the shared git directory as a sandbox deny. Only a
+// Codex parent runs it, because a Claude parent dispatches Claude lanes natively.
+const writer: Case = {
+  id: 'linked-worktree-writer',
+  codexSandbox: 'danger-full-access',
+  async prepare(f) {
+    const repo = join(f.dir, 'writer-repo');
+    await git(f, 'init', '-q', '-b', 'main', repo);
+    await git(f, '-C', repo, 'commit', '-q', '--allow-empty', '-m', 'init');
+    await git(f, '-C', repo, 'worktree', 'add', '-q', '-b', 'writer', join(f.dir, 'writer-lane'));
+    await writeFile(join(f.dir, 'writer.prompt.md'), 'Create the file WRITTEN.md in the current directory containing the single word PONG, then reply DONE.\n');
+  },
+  prompt: f => `${invoke(f.harness, 'poteto-mode', `Dispatch exactly one external lane and nothing else. Run the installed launcher ${join(f.location, 'skills/poteto-mode/scripts/runner/pstack-runner')} with these arguments and wait for it to exit: --parent codex --provider claude --model opus --effort max --mode isolated-write --prompt ${join(f.dir, 'writer.prompt.md')} --cwd ${join(f.dir, 'writer-lane')} --output ${join(f.dir, 'writer.output.md')} --receipt ${join(f.dir, 'writer.receipt.json')}`)}. ${rules(f.dir)}`,
+  async assert(record, f) {
+    if (!record.commands.some(c => c.includes('pstack-runner'))) throw new Error('runner-not-run');
+    const receipt = JSON.parse(await readFile(join(f.dir, 'writer.receipt.json'), 'utf8')), lane = join(f.dir, 'writer-lane');
+    if (receipt.status !== 'complete') throw new Error(`receipt-status:${receipt.status}`);
+    if (receipt.parent !== 'codex' || receipt.provider !== 'claude' || receipt.model !== 'opus' || receipt.effort !== 'max' || receipt.mode !== 'isolated-write' || receipt.cwd !== lane) throw new Error('receipt-route-mismatch');
+    if (receipt.outputPath !== join(f.dir, 'writer.output.md') || !(Date.parse(receipt.startedAt) >= record.started)) throw new Error('receipt-not-this-session');
+    const settings = parseJson(receipt.argv[receipt.argv.indexOf('--settings') + 1]) as { sandbox?: { filesystem?: { denyWrite?: unknown } } } | undefined;
+    if (!Bun.deepEquals(settings?.sandbox?.filesystem?.denyWrite, [await realpath(join(f.dir, 'writer-repo/.git'))])) throw new Error('shared-git-not-denied');
+    const effect = await written(record, join(lane, 'WRITTEN.md'));
+    if ((await readFile(join(lane, 'WRITTEN.md'), 'utf8')).trim() !== 'PONG') throw new Error('writer-effect-mismatch:WRITTEN.md');
+    return { assertions: ['runner-ran', 'receipt-complete', 'shared-git-denied', effect], files: [join(f.dir, 'writer.receipt.json'), join(lane, 'WRITTEN.md')] };
+  },
+};
+
 function runner(harness: Harness, routes: string[]): Case[] {
   const chosen = routes.filter(route => !route.startsWith(`${harness}:`));
-  return (chosen.length ? chosen : [DEFAULT_ROUTES[harness]]).map((route, index) => {
+  const cases = (chosen.length ? chosen : [DEFAULT_ROUTES[harness]]).map((route, index): Case => {
     const [, provider, model, effort] = ROUTE.exec(route)!, lane = (f: Fixture, name: string) => join(f.dir, `lane-${index + 1}.${name}`);
     return {
       id: `route-${index + 1}`,
@@ -256,6 +283,7 @@ function runner(harness: Harness, routes: string[]): Case[] {
       },
     };
   });
+  return harness === 'codex' ? [...cases, writer] : cases;
 }
 
 const setup: Case[] = [{
