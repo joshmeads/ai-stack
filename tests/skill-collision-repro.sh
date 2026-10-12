@@ -48,12 +48,13 @@ fi
 # Active configuration must use Claude's rolling family aliases. Concrete
 # provider reports may still appear in runner fixtures, but no shipped
 # descriptor, native-agent model field, or live test invocation may pin one.
+# The registry's released pairs record old pins so they keep resolving to their family.
 legacy_model_pins="$(
   grep -REn \
     --include='*.md' --include='*.ts' --include='*.sh' \
     'claude:claude-(fable|opus)-[0-9]|^model: claude-(fable|opus)-[0-9]|--model claude-(fable|opus)-[0-9]' \
     "$repo/plugins/pstack" "$repo/tests" "$repo/README.md" "$repo/docs/reference.md" \
-    2>/dev/null || true
+    2>/dev/null | grep -Ev '^[^:]*/skills/poteto-mode/scripts/runner/registry/models\.ts:[0-9]+:  \{ pair: "claude:claude-(fable|opus)-[0-9]+", family: "(fable|opus)" \},$' || true
 )"
 standalone_code_pins="$(
   grep -REn \
