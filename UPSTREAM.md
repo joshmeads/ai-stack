@@ -10,9 +10,9 @@ open-pstack tracks [Cursor's pstack](https://github.com/cursor/plugins/tree/main
 | Path | `pstack/` |
 | Commit | `978ca6e9c0e012047cd5058b8e829240336e704e` |
 | Upstream version | `0.15.17` |
-| open-pstack version | `1.6.1` |
+| open-pstack version | `1.6.2` |
 
-The table above is the current Cursor sync point. Open Pstack 1.6.0 imported this 0.15.17 sync, and 1.6.1 keeps it. `README-UPSTREAM.md` preserves the upstream pstack README verbatim. `CHANGES.md` and `NOTICE.md` describe the adaptations and provenance.
+The table above is the current Cursor sync point. Open Pstack 1.6.0 imported this 0.15.17 sync, and 1.6.1 and 1.6.2 keep it. `README-UPSTREAM.md` preserves the upstream pstack README verbatim. `CHANGES.md` and `NOTICE.md` describe the adaptations and provenance.
 
 ## Upstream-only exclusions
 
