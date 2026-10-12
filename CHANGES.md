@@ -17,6 +17,8 @@ Open Pstack 1.6.2 keeps the Cursor pstack 0.15.17 sync. It ships the runner and 
 
 **Invalid Grok terminal data.** `provider-dispatch.md` now states that invalid or incomplete Grok terminal data is `malformed-output`/65 only after a zero exit. After a nonzero exit, it takes the ordinary failure classification (#132).
 
+**Git 2.25 or later.** `docs/reference.md` now names git 2.25 or later as a requirement. The runner reads `git rev-parse --git-common-dir`, and `worktree-audit.sh` reads `git worktree list --porcelain` (#153).
+
 **Reflect finds Codex transcripts.** Reflect step 1 resolves and verifies the current conversation's transcript through the active-transcript mapping in `codex-tools.md`, or passes a session digest of at most 2,000 words. On Codex, `resolve-codex-transcript.ts` looks up a known chat in the Codex state index, read-only and within fixed limits, and prints bounded metadata, never message text. On Claude, the lookup stays in the per-project transcript directory. Neither harness searches wider (#140).
 
 ## 1.6.1 adds a release script
