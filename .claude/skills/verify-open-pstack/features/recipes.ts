@@ -135,9 +135,9 @@ function parseJson(text: string | undefined): unknown {
 function reflect(harness: Harness): Case[] {
   return [true, false].map(available => {
     const home = (f: Fixture) => join(f.dir, 'transcript-home');
-    // A per-run nonce in the transcript's file name gives each run a path the prompt never names.
+    // A per-run nonce the prompt never names: Codex in the rollout's file name, Claude as the opening user record's uuid.
     let nonce = '';
-    const transcript = (f: Fixture) => join(home(f), harness === 'codex' ? `sessions/2026/10/11/rollout-${nonce}.jsonl` : `projects/fixture/${nonce}.jsonl`);
+    const transcript = (f: Fixture) => join(home(f), harness === 'codex' ? `sessions/2026/10/11/rollout-${nonce}.jsonl` : 'projects/fixture/known.jsonl');
     const index = (f: Fixture) => join(home(f), 'state_5.sqlite');
     const report = (f: Fixture) => join(f.dir, 'result.json');
     const digest = (f: Fixture) => join(f.dir, 'digest.md');
@@ -146,7 +146,6 @@ function reflect(harness: Harness): Case[] {
       id: available ? 'locate-transcript' : 'digest-fallback',
       async prepare(f) {
         nonce = crypto.randomUUID();
-        await rm(home(f), { recursive: true, force: true });
         const records = harness === 'codex' ? [
           { type: 'session_meta', payload: { id: REFLECT_CHAT } },
           { type: 'response_item', payload: { type: 'message', role: 'user', content: [{ type: 'input_text', text: `# AGENTS.md instructions for ${f.dir}\n\n<INSTRUCTIONS>\nFixture only.\n</INSTRUCTIONS>` }] } },
@@ -154,6 +153,7 @@ function reflect(harness: Harness): Case[] {
         ] : [{ type: 'system', subtype: 'fixture_metadata' }, { type: 'user', uuid: nonce, message: { role: 'user', content: [{ type: 'text', text }] } }];
         await files(f.dir, { [transcript(f).slice(f.dir.length + 1)]: records.map(record => JSON.stringify(record)).join('\n') + '\n' });
         if (harness === 'codex') {
+          await rm(index(f), { force: true });
           const database = new Database(index(f));
           database.run('CREATE TABLE threads (id TEXT PRIMARY KEY, rollout_path TEXT NOT NULL)');
           database.run('INSERT INTO threads VALUES (?, ?)', [REFLECT_CHAT, transcript(f)]);
@@ -164,7 +164,7 @@ function reflect(harness: Harness): Case[] {
         const request = `Exercise only step 1 with this disposable synthetic fixture. Do not fan out reviewers, apply edits, or inspect real chats. The conversation's opening prompt to verify is ${JSON.stringify(REFLECT_OPENING)}. `;
         const where = harness === 'codex'
           ? `The fixture's known parent chat ID is ${REFLECT_CHAT}. Run the transcript lookup with CODEX_HOME set to ${home(f)} for that command only. `
-          : `For this fixture, the system-named per-project transcript directory is ${join(home(f), 'projects/fixture')}. Write only JSON to ${report(f)}: when a transcript verifies, its status "resolved", path, and opening_user_message with line, characters, and sha256; otherwise status "unresolved", reason "opening_message_mismatch", and fallback "session_digest". Do not include message text in ${report(f)}. `;
+          : `For this fixture, the system-named per-project transcript directory is ${join(home(f), 'projects/fixture')}. Write only JSON to ${report(f)}: when a transcript verifies, its status "resolved", path, and opening_user_message with line, characters, sha256, and the uuid of that user record; otherwise status "unresolved", reason "opening_message_mismatch", fallback "session_digest", and uuid, the uuid of the opening user record you inspected. Do not include message text in ${report(f)}. `;
         return `${invoke(harness, 'reflect', `${request}${where}If the transcript cannot be verified, write the session digest, at most 2,000 words and covering only this fixture request, to ${digest(f)}.`)} ${rules(f.dir)}`;
       },
       async assert(record, f) {
@@ -174,31 +174,24 @@ function reflect(harness: Harness): Case[] {
           // Both cases resolve the chat; only the opener it reports differs. The output is the harness's capture.
           const expected = { status: 'resolved', chat_id: REFLECT_CHAT, path: transcript(f),
             opening_user_message: { line: 3, record_type: 'response_item', characters: text.length, sha256: sha256(text) } };
-          // The launcher must appear as a whole pathname, so `resolve-codex-transcript.ts` does not match.
-          // Only whitespace, or one closing quote and whitespace, may follow it before the chat ID, so `launcher''.ts` does not match.
-          const installed = join(f.location, RESOLVER), bound = `[\\s'"\`;&|()<>]`;
-          const names = [installed, await realpath(installed)].map(name =>
-            new RegExp(`(?:^|${bound})${name.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')}(?=\\s|['"]\\s)`));
-          const output = record.tools.find(tool => tool.name === 'command' && !tool.failed && names.some(name => name.test(tool.input.command)) &&
+          const installed = [RESOLVER, `${RESOLVER}.ts`].map(path => join(f.location, path));
+          const names = [...installed, ...await Promise.all(installed.map(path => realpath(path)))];
+          const output = record.tools.find(tool => tool.name === 'command' && !tool.failed && names.some(name => tool.input.command.includes(name)) &&
             Bun.deepEquals(parseJson(tool.result), expected))?.result;
           if (output === undefined) throw new Error('reflect-resolver-not-run');
           const retained = join(f.dir, 'resolver-output.json');
           await writeFile(retained, output);
           paths.push(retained); assertions.push('resolver-ran');
         } else {
-          // A parent Read or Bash call names this run's transcript and its output shows the file's opener or its SHA-256.
-          const name = basename(transcript(f)), shown = [text, sha256(text)];
-          if (!record.tools.some(tool => tool.parent === null && !tool.failed && (tool.name === 'Read' || tool.name === 'Bash') &&
-              String(tool.input.file_path ?? tool.input.command ?? '').includes(name) && shown.some(value => tool.result?.includes(value)))) {
-            throw new Error('reflect-transcript-not-read');
-          }
+          // The opener record's uuid is the nonce, held only by the transcript, so a report naming it shows the read.
           assertions.push(await written(record, report(f)));
           if ((await lstat(report(f))).size > 5000) throw new Error('reflect-result-budget');
-          const result = JSON.parse(await readFile(report(f), 'utf8')), opening = result.opening_user_message;
-          if (available ? result.status !== 'resolved' || result.path !== transcript(f) || opening?.line !== 2 ||
-              opening?.characters !== REFLECT_OPENING.length || opening?.sha256 !== sha256(REFLECT_OPENING)
-            : result.status !== 'unresolved' || result.reason !== 'opening_message_mismatch' || result.fallback !== 'session_digest' ||
-              result.path !== undefined) throw new Error(available ? 'reflect-opening-mismatch' : 'reflect-fallback-mismatch');
+          const expected = available
+            ? { status: 'resolved', path: transcript(f), opening_user_message: { line: 2, characters: text.length, sha256: sha256(text), uuid: nonce } }
+            : { status: 'unresolved', reason: 'opening_message_mismatch', fallback: 'session_digest', uuid: nonce };
+          if (!Bun.deepEquals(parseJson(await readFile(report(f), 'utf8')), expected)) {
+            throw new Error(available ? 'reflect-opening-mismatch' : 'reflect-fallback-mismatch');
+          }
           paths.push(report(f));
         }
         if (available) {
