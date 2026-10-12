@@ -135,10 +135,9 @@ function parseJson(text: string | undefined): unknown {
 function reflect(harness: Harness): Case[] {
   return [true, false].map(available => {
     const home = (f: Fixture) => join(f.dir, 'transcript-home');
-    // A per-run nonce keeps a transcript path or record the prompt never names: Codex in the
-    // rollout's file name, Claude on the opening user record.
+    // A per-run nonce in the transcript's file name gives each run a path the prompt never names.
     let nonce = '';
-    const transcript = (f: Fixture) => join(home(f), harness === 'codex' ? `sessions/2026/10/11/rollout-${nonce}.jsonl` : 'projects/fixture/known.jsonl');
+    const transcript = (f: Fixture) => join(home(f), harness === 'codex' ? `sessions/2026/10/11/rollout-${nonce}.jsonl` : `projects/fixture/${nonce}.jsonl`);
     const index = (f: Fixture) => join(home(f), 'state_5.sqlite');
     const report = (f: Fixture) => join(f.dir, 'result.json');
     const digest = (f: Fixture) => join(f.dir, 'digest.md');
@@ -147,6 +146,7 @@ function reflect(harness: Harness): Case[] {
       id: available ? 'locate-transcript' : 'digest-fallback',
       async prepare(f) {
         nonce = crypto.randomUUID();
+        await rm(home(f), { recursive: true, force: true });
         const records = harness === 'codex' ? [
           { type: 'session_meta', payload: { id: REFLECT_CHAT } },
           { type: 'response_item', payload: { type: 'message', role: 'user', content: [{ type: 'input_text', text: `# AGENTS.md instructions for ${f.dir}\n\n<INSTRUCTIONS>\nFixture only.\n</INSTRUCTIONS>` }] } },
@@ -154,7 +154,6 @@ function reflect(harness: Harness): Case[] {
         ] : [{ type: 'system', subtype: 'fixture_metadata' }, { type: 'user', uuid: nonce, message: { role: 'user', content: [{ type: 'text', text }] } }];
         await files(f.dir, { [transcript(f).slice(f.dir.length + 1)]: records.map(record => JSON.stringify(record)).join('\n') + '\n' });
         if (harness === 'codex') {
-          await rm(index(f), { force: true });
           const database = new Database(index(f));
           database.run('CREATE TABLE threads (id TEXT PRIMARY KEY, rollout_path TEXT NOT NULL)');
           database.run('INSERT INTO threads VALUES (?, ?)', [REFLECT_CHAT, transcript(f)]);
@@ -187,7 +186,12 @@ function reflect(harness: Harness): Case[] {
           await writeFile(retained, output);
           paths.push(retained); assertions.push('resolver-ran');
         } else {
-          if (!record.tools.some(tool => tool.parent === null && !tool.failed && tool.result?.includes(nonce))) throw new Error('reflect-transcript-not-read');
+          // A parent Read or Bash call names this run's transcript and its output shows the file's opener or its SHA-256.
+          const name = basename(transcript(f)), shown = [text, sha256(text)];
+          if (!record.tools.some(tool => tool.parent === null && !tool.failed && (tool.name === 'Read' || tool.name === 'Bash') &&
+              String(tool.input.file_path ?? tool.input.command ?? '').includes(name) && shown.some(value => tool.result?.includes(value)))) {
+            throw new Error('reflect-transcript-not-read');
+          }
           assertions.push(await written(record, report(f)));
           if ((await lstat(report(f))).size > 5000) throw new Error('reflect-result-budget');
           const result = JSON.parse(await readFile(report(f), 'utf8')), opening = result.opening_user_message;
