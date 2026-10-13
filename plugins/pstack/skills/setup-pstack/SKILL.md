@@ -35,7 +35,7 @@ Use the harness and tool surface running this skill: Claude Code or Codex. Envir
 
 Inspect `<config-home>/pstack-models.md` and the existing integration: resolve Claude's single model-sheet import, or read Codex's single bounded model block, reporting missing targets and stopping on unreadable, malformed, or ambiguous state. Use the sole surviving configuration, or the editable sheet when both configurations agree; on Codex, the sheet remains authoritative and the block is its mirror, recoverable when the sheet is absent. If surviving configurations differ, show both sources and their differing assignments and require an explicit source choice before normalization or probing, without merging them automatically. Use first-run defaults only when neither source contains recoverable configuration, then apply the existing normalization, role-completion, and validation rules to the selected state. Before matrix validation, normalize only the rolling-alias predecessors that earlier pstack releases generated. A provider-qualified Claude model is migratable when its model component starts with `claude-fable-` or `claude-opus-` and the remaining revision contains only digits and hyphens. Replace that component in memory with `fable` or `opus`, preserving the provider, effort, role, and lane order. Record each original and normalized descriptor for the confirmation in step 7. This migration is valid loaded state and does not require a separate operator choice.
 
-Treat the normalized values as current role-to-family assignments. Overlay those rows on the complete first-run role map in step 7. Materialize any missing documented role row from that map on the next successful write. A duplicate role row is inconsistent state; report it and resolve it before probing. A row whose role is not in the step 7 role map, such as `how critics`, is from a retired role. Drop it and list it at confirmation. A bare host-native slug from an older sheet is also invalid because it does not say which provider owns it. A versioned Claude model outside the two migration families remains inconsistent state. A value whose `(provider, model)` is a [kept predecessor](../poteto-mode/references/model-catalog.md#kept-predecessors-and-normalization) is not inconsistent state. On a rerun, propose replacing every occurrence with its family's current model at the same effort, and ask. If the operator declines, that family's model stays the kept predecessor for steps 3 to 7: probe it, render it, and write it unchanged. If the sheet is missing, use the complete first-run role map and the model matrix's Default effort cells.
+Treat the normalized values as current role-to-family assignments. Overlay those rows on the complete first-run role map, the catalog's [role defaults](../poteto-mode/references/model-catalog.md#role-defaults). Materialize any missing documented role row from that map on the next successful write. A duplicate role row is inconsistent state; report it and resolve it before probing. A row whose role is not in the role defaults, such as `how critics`, is from a retired role. Drop it and list it at confirmation. A bare host-native slug from an older sheet is also invalid because it does not say which provider owns it. A versioned Claude model outside the two migration families remains inconsistent state. A value whose `(provider, model)` is a [kept predecessor](../poteto-mode/references/model-catalog.md#kept-predecessors-and-normalization) is not inconsistent state. On a rerun, propose replacing every occurrence with its family's current model at the same effort, and ask. If the operator declines, that family's model stays the kept predecessor for steps 3 to 7: probe it, render it, and write it unchanged. If the sheet is missing, seed from the role defaults, whose descriptors carry the model matrix's Default effort cells.
 
 Then ask whether to keep these role-to-family assignments or change named roles. Keeping them is the default. Apply only role changes the operator names; never offer a reset of a customized sheet to the first-run assignments. A changed role may use any model-matrix family, `inherit-parent`, or `auto`.
 
@@ -49,16 +49,16 @@ One distinct effort per family is the current value. A family with no non-alias 
 
 ### 4. Collect one requested effort per family
 
-Ask one effort question for each assigned family. Name each model, its current or proposed value, and the Selectable efforts from its matrix row. Empty input keeps that value. On a first run, state the assigned families' matrix defaults before asking. On a rerun, state the parsed values without offering to reset customized role lanes.
+Ask one effort question for each assigned family. Name each model, its current or proposed value, and the Selectable efforts from its matrix row. A family whose only selectable effort is `default` gets no effort question. Empty input keeps that value. On a first run, state the assigned families' matrix defaults before asking. On a rerun, state the parsed values without offering to reset customized role lanes.
 
 ### 5. Probe the requested pairs
 
-Before any external CLI availability/authentication check or model probe, resolve the selected families through this parent's route table. On a Codex parent, name the assigned external families (Claude Fable, Claude Opus, and/or Grok) and inspect the parent's effective permission instructions for network access and the actual credential/state paths those CLIs need, including any required outside-workspace writes. Do not inspect credential contents or attempt a denied write to establish permission. `CODEX_SANDBOX_NETWORK_DISABLED=1` in the parent's own environment is evidence that external CLI network access is disabled; inspect it before child-environment scrubbing. `CODEX_SANDBOX` identifies a sandbox backend, not a complete permission policy. Missing markers, a config-file preference, or the name `workspace-write` alone do not prove sufficient access. Use the effective session permissions and required paths, not a blanket ban on every path outside the workspace.
+Before any external CLI availability/authentication check or model probe, resolve the selected families through this parent's route table. On a Codex parent, name the assigned external families and inspect the parent's effective permission instructions for network access and the state paths and host prerequisites in each provider's [notes](../poteto-mode/references/model-catalog.md#provider-notes), including any required outside-workspace writes. Do not inspect credential contents or attempt a denied write to establish permission. `CODEX_SANDBOX_NETWORK_DISABLED=1` in the parent's own environment is evidence that external CLI network access is disabled; inspect it before child-environment scrubbing. `CODEX_SANDBOX` identifies a sandbox backend, not a complete permission policy. Missing markers, a config-file preference, or the name `workspace-write` alone do not prove sufficient access. Use the effective session permissions and required paths, not a blanket ban on every path outside the workspace.
 
 If required access is blocked, explain the affected assigned families and the restriction before invoking their CLIs. If permission information is unavailable or incomplete, call it **unknown**, say which required access cannot be established, and resolve it before external checks or probes. Offer exactly two paths when access is blocked or remains unknown:
 
 1. Restart the parent with suitable permissions, chosen deliberately by the operator; stop this setup without writing. See provider-dispatch's **Host and parent prerequisites**, including Grok's nested-sandbox limitation.
-2. Explicitly choose native-only role assignments for this parent. Show each affected role and proposed replacement and obtain the operator's named changes, then return to steps 2–4 to validate the revised map and efforts before native probes. On Codex, Sol is native; `inherit-parent` and `auto` also stay native. Do not change any lane automatically, reduce its effort, or launch an external CLI for a now-unassigned family. State any reduction in provider diversity.
+2. Explicitly choose native-only role assignments for this parent. Show each affected role and proposed replacement and obtain the operator's named changes, then return to steps 2–4 to validate the revised map and efforts before native probes. On Codex, families of the `codex` provider are native; `inherit-parent` and `auto` also stay native. Do not change any lane automatically, reduce its effort, or launch an external CLI for a now-unassigned family. State any reduction in provider diversity.
 
 If all chosen families are native, no external CLI permission check or probe is needed; the separate final-write check still applies. When the effective permissions allow the selected external lanes, proceed with the existing routes and requested efforts unchanged. Never change sandbox settings or escalate permissions as part of setup.
 
@@ -66,14 +66,9 @@ Probe only the selected `provider:model@effort` pair of each assigned family. Ru
 
 If a Grok probe fails because the host cannot enforce its bounded sandbox, see [Host and parent prerequisites](../poteto-mode/references/provider-dispatch.md#host-and-parent-prerequisites); keep the active configuration unchanged.
 
-| Family | Pair source | Claude parent route | Codex parent route | Availability proof |
-|---|---|---|---|---|
-| Fable | Fable matrix row + selected effort | native Agent `pstack-fable-<effort>` | Claude CLI | native one-turn probe or `claude auth status --json` plus one-turn probe |
-| Sol | Sol matrix row + selected effort | `codex exec` | native `spawn_agent` | `codex login status` plus one-turn probe or native one-turn probe |
-| Grok | Grok matrix row + selected effort | Grok CLI | Grok CLI | `grok models` must list the requested model; one-turn probe |
-| Opus | Opus matrix row + selected effort | native Agent `pstack-opus-<effort>` | Claude CLI | native one-turn probe or `claude auth status --json` plus one-turn probe |
+Find the family's provider in the [route table](../poteto-mode/references/model-catalog.md#routes). A native route gets a native one-turn probe: on Claude Code, the family's `pstack-<family>-<effort>` agent; on Codex, `spawn_agent` with the descriptor's model and `reasoning_effort`. An external route gets one `pstack-runner` call with a tiny read-only probe prompt. The runner's preflight checks the CLI, the login and the model, and its receipt is the result.
 
-Use a tiny read-only probe that returns a unique marker. A login-status command alone proves credentials, not that the requested model and effort flags run. Record native and external results separately. Never call the external launcher for the parent's own provider. On a Claude parent, the Fable and Opus probes are one-turn runs of the mapped `pstack-<stem>-<effort>` agent. On a Codex parent, the Sol probe is native `spawn_agent` with the selected `reasoning_effort`. Every other pair uses the external runner with the selected effort flag.
+Use a tiny read-only probe that returns a unique marker. A login-status command alone proves credentials, not that the requested model and effort flags run. Record native and external results separately. Never call the external launcher for the parent's own provider.
 
 Receipts and native transcripts prove the requested effort and the route. They do not prove a provider's hidden applied reasoning depth. There is no implicit timeout, weaker-model fallback, same-provider external fallback, or second mutable configuration source.
 
@@ -81,7 +76,7 @@ Receipts and native transcripts prove the requested effort and the route. They d
 
 Build the new sheet in memory. Do not write it yet.
 
-- First run: start from the complete role assignments in step 7, with the step 2 role changes applied.
+- First run: start from the catalog's role defaults, with the step 2 role changes applied.
 - Rerun: start from the normalized complete role map from step 2, with the step 2 role changes applied, preserving each loaded row's lane order and family (or alias) per lane.
 
 Rewrite every matrix-family descriptor to `provider:model@<requested effort for that family>`, using each family's model chosen in step 2. Leave `inherit-parent` and `auto` unchanged. An effort-only rerun cannot change a role's family. Changing Grok's effort updates every Grok occurrence and does not move a Sol role onto Grok. Refuse an unqualified slug, an unavailable route, a model outside the model matrix and its kept predecessors, or a provider/model mismatch.
@@ -96,29 +91,7 @@ Every non-alias value must match `<provider>:<model>@<effort>` and must have pas
 
 After the operator confirms, separately check the parent's effective write permission for **both actual destinations** (the sheet and parent integration, resolved through `CODEX_HOME` when set) and any directory creation needed. Render both artifacts in memory and perform this check before the first write or directory creation. Native probes succeeding does not grant configuration-write permission. A restricted parent may still be allowed to write under `CODEX_HOME`; assess each resolved destination rather than rejecting it just because it is outside the workspace. If either destination is denied or its permission remains unknown, stop with the destination-specific explanation: leave every existing artifact byte-identical and create neither artifact on a first run. Do not test permission by overwriting a target, write only the allowed artifact, or automatically request escalation.
 
-Only after both destinations are permitted, write the in-memory render from step 6 using step 8's snapshot and readback procedure. Never paste the example below as the result. It is only the complete first-run role map used to seed step 2; selected efforts and explicit role changes always replace its example values before writing.
-
-```markdown
-# pstack model configuration
-
-Provider-qualified per-role choices. Read the installed pstack provider-dispatch reference before dispatching a configured role. Every documented role remains present. `inherit-parent` and `auto` use the parent model natively and still count as one panel lane.
-
-feature, refactoring: grok:grok-4.7@xhigh
-bug-fix: codex:gpt-6.1-sol@max
-perf-issue: codex:gpt-6.1-sol@max
-hillclimb: codex:gpt-6.1-sol@max
-judgment and prose: claude:opus@max
-hardest tasks: claude:opus@max
-how explorer: grok:grok-4.7@xhigh
-how explainer: claude:opus@max
-why investigators, synthesizer: inherit-parent
-reflect tooling, judgment, divergent, synthesizer: inherit-parent
-arena runners: claude:opus@max, codex:gpt-6.1-sol@max, grok:grok-4.7@xhigh
-arena cross-judge pool: claude:opus@max, codex:gpt-6.1-sol@max, grok:grok-4.7@xhigh
-swarm workers: grok:grok-4.7@xhigh
-architect runners: claude:opus@max, codex:gpt-6.1-sol@max, grok:grok-4.7@xhigh
-interrogate reviewers: claude:opus@max, codex:gpt-6.1-sol@max, grok:grok-4.7@xhigh
-```
+Only after both destinations are permitted, write the in-memory render from step 6 using step 8's snapshot and readback procedure. Never paste the role defaults as the result. They only seed step 2; selected efforts and explicit role changes always replace their values before writing.
 
 ### 8. Wire it in
 

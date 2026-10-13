@@ -45,37 +45,6 @@ else
   fail=1
 fi
 
-# Active configuration must use Claude's rolling family aliases. Concrete
-# provider reports may still appear in runner fixtures, but no shipped
-# descriptor, native-agent model field, or live test invocation may pin one.
-# The registry's released pairs record old pins so they keep resolving to their family.
-legacy_model_pins="$(
-  grep -REn \
-    --include='*.md' --include='*.ts' --include='*.sh' \
-    'claude:claude-(fable|opus)-[0-9]|^model: claude-(fable|opus)-[0-9]|--model claude-(fable|opus)-[0-9]' \
-    "$repo/plugins/pstack" "$repo/tests" "$repo/README.md" "$repo/docs/reference.md" \
-    2>/dev/null | grep -Ev '^[^:]*/skills/poteto-mode/scripts/runner/registry/models\.ts:[0-9]+:  \{ pair: "claude:claude-(fable|opus)-[0-9]+", family: "(fable|opus)" \},$' || true
-)"
-standalone_code_pins="$(
-  grep -REn \
-    --include='*.ts' --include='*.js' \
-    --exclude='*.test.ts' --exclude='*.test.js' \
-    "['\"]claude-(fable|opus)-[0-9]" \
-    "$repo/plugins/pstack" \
-    2>/dev/null || true
-)"
-if [ -n "$legacy_model_pins" ] || [ -n "$standalone_code_pins" ]; then
-  note "FAIL: active Fable or Opus configuration still pins a model revision:"
-  [ -z "$legacy_model_pins" ] || note "$legacy_model_pins"
-  [ -z "$standalone_code_pins" ] || note "$standalone_code_pins"
-  fail=1
-else
-  note "ok: active Fable and Opus configuration uses rolling aliases"
-fi
-
-# Static invariant (CHANGES maintenance note): setup-pstack's first-run `arena runners`
-# row is the default panel. The other panel rows and the arena, architect, and
-# interrogate defaults copy it verbatim.
 setup="$repo/plugins/pstack/skills/setup-pstack/SKILL.md"
 
 # Config-home port invariant (#120): guard upstream merges against daily-home writes.
@@ -129,40 +98,6 @@ if [ -n "$config_home_bad" ]; then
   fail=1
 else
   note "ok: setup config-home port invariant; unset/empty defaults and spaced overrides resolve without writes"
-fi
-
-quad_of() { { grep -oE '(claude|codex|grok):[a-z0-9.-]+@(low|medium|high|xhigh|max|ultra)' || true; } | tr '\n' ' ' | sed 's/ $//'; }
-canon_panel="$( { grep -m1 '^arena runners:' "$setup" || true; } | quad_of)"
-panel_bad=""
-[ -n "$canon_panel" ] || panel_bad="could not read the canonical panel from $setup"$'\n'
-# Anchor on the panel's last slug rather than a hard-coded one, so a model swap in
-# setup-pstack cannot leave this check hunting for a slug nobody ships any more.
-anchor="${canon_panel##* }"
-# arena and architect each state the panel on one line; interrogate lists it
-# as one slug per row of its Reviewer A/B/C table (upstream #167).
-for name in arena architect; do
-  skill="$repo/plugins/pstack/skills/$name/SKILL.md"
-  n="$(grep -Fc "$anchor" "$skill" || true)"
-  if [ "$n" != "1" ]; then
-    panel_bad="$panel_bad$skill: expected exactly 1 default-panel line, found $n"$'\n'
-    continue
-  fi
-  got="$(grep -F "$anchor" "$skill" | quad_of)"
-  [ "$got" = "$canon_panel" ] || panel_bad="$panel_bad$skill: [$got] != [$canon_panel]"$'\n'
-done
-interrogate="$repo/plugins/pstack/skills/interrogate/SKILL.md"
-got="$(grep -E '^\| Reviewer [A-Z] \|' "$interrogate" | quad_of)"
-[ "$got" = "$canon_panel" ] || panel_bad="$panel_bad$interrogate reviewer table: [$got] != [$canon_panel]"$'\n'
-while IFS= read -r line; do
-  got="$(printf '%s\n' "$line" | quad_of)"
-  [ "$got" = "$canon_panel" ] || panel_bad="$panel_bad$setup role row: [$got] != [$canon_panel]"$'\n'
-done < <(grep -E '^(arena runners|arena cross-judge pool|architect runners|interrogate reviewers):' "$setup")
-if [ -n "$panel_bad" ]; then
-  note "FAIL: the default model panel is not identical across provider dispatch, the panel skills, and setup-pstack:"
-  note "$panel_bad"
-  fail=1
-else
-  note "ok: default model panel identical across provider dispatch + 3 panel skills + setup-pstack ($canon_panel)"
 fi
 
 plugin="$repo/plugins/pstack"

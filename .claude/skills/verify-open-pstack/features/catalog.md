@@ -18,4 +18,4 @@ The outcome is the evidence: the reported descriptors and routes must equal the 
 
 ## Headless
 
-The catalog recipe in `recipes.ts` writes a fixture sheet whose `judgment and prose` line takes another role's default descriptor, so only a read of the sheet reports it. The parent writes `routes.json` with that role's descriptors and their routes. The case asserts the `poteto-mode` load and that the report equals the descriptor from the sheet and the route from the installed catalog's route table for this parent.
+The catalog recipe in `recipes.ts` writes a fixture sheet whose `judgment and prose` line takes another role's default descriptor, so only a read of the sheet reports it. The sheet has no `arena runners` or `bug-fix` line. The parent writes `routes.json` with the descriptors and routes of those three roles. The case asserts the `poteto-mode` load and that the report equals, role by role, the sheet's descriptor or the installed catalog's role default, each with the route the catalog's route table gives this parent.

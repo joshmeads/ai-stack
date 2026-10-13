@@ -45,6 +45,8 @@ for (const harness of ['claude', 'codex'] as const) {
       return { role, descriptors, routes: descriptors.map(d => installed.route(harness, d)) };
     }) };
     expect(report.roles[0]!.descriptors).not.toEqual(installed.defaults.get(report.roles[0]!.role));
+    expect(roles.slice(1)).toEqual(['arena runners', 'bug-fix']);
+    for (const role of roles.slice(1)) expect(lines.has(role)).toBe(false);
     await writeFile(join(f.dir, 'routes.json'), JSON.stringify(report));
     expect((await c!.assert(record(harness, 'pstack:poteto-mode'), f)).assertions.slice(0, 2)).toEqual(['skill-loaded', 'file:routes.json']);
 
@@ -67,4 +69,29 @@ test('the kept-predecessor case requires the kept model, the materialized role a
 
   await writeFile(path, rerun.replaceAll('grok:grok-4.6@', `${installed.kept.get('grok:grok-4.6')}@`));
   await expect(c.assert(record('claude', 'pstack:setup-pstack'), f)).rejects.toThrow('kept-predecessor-replaced');
+});
+
+for (const harness of ['claude', 'codex'] as const) {
+  test(`${harness}: the runner recipe's default route is the candidate's role default for this parent`, async () => {
+    const f = await fixture(harness), [c] = recipe('runner', harness), installed = await readCatalog(location);
+    await c!.prepare!(f);
+    const [route] = installed.defaults.get(harness === 'claude' ? 'bug-fix' : 'judgment and prose')!;
+    const [provider, rest] = route!.split(':'), [model, effort] = rest!.split('@');
+    expect(provider).not.toBe(harness);
+    expect(c!.prompt(f)).toContain(`--parent ${harness} --provider ${provider} --model ${model} --effort ${effort} --mode read-only`);
+  });
+}
+
+test('the first-run case requires a sheet equal to the catalog role defaults', async () => {
+  const f = await fixture('codex'), c = setupCase('first-run'), installed = await readCatalog(location);
+  const path = join(f.dir, 'pstack-models.md');
+  await writeFile(path, 'stale\n'); await writeFile(join(f.dir, 'AGENTS.md'), 'mirror\n');
+  await c.prepare!(f);
+  await expect(readFile(path)).rejects.toThrow();
+  await expect(readFile(join(f.dir, 'AGENTS.md'))).rejects.toThrow();
+  const lines = [...installed.defaults].map(([role, lanes]) => `${role}: ${lanes.join(', ')}`);
+  await writeFile(path, `# pstack model configuration\n\n${lines.join('\n')}\n`);
+  expect((await c.assert(record('codex', 'pstack:setup-pstack'), f)).assertions).toContain('sheet:role-defaults');
+  await writeFile(path, `# pstack model configuration\n\n${lines.slice(1).join('\n')}\n`);
+  await expect(c.assert(record('codex', 'pstack:setup-pstack'), f)).rejects.toThrow('first-run-not-role-defaults');
 });

@@ -89,6 +89,7 @@ describe("registry data", () => {
       });
       expect(catalog).toContain(`\n${role}: ${descriptors.join(", ")}\n`);
     }
+    expect(catalog).toContain("Every documented role remains present.");
   });
 
   it("routes each provider natively only from its own parent", () => {
@@ -211,7 +212,6 @@ describe("hand-written dispatch and setup rules", () => {
       "starts with `claude-fable-` or `claude-opus-`",
       "preserving the provider, effort, role, and lane order",
       "Show any rolling-alias migrations",
-      "Every documented role remains present.",
       "An effort-only rerun cannot change a role's family.",
       "<!-- pstack:models:begin -->",
       "<!-- pstack:models:end -->",
@@ -229,10 +229,71 @@ describe("hand-written dispatch and setup rules", () => {
       .toEqual(expect.arrayContaining(["codex:gpt-5.6-sol", "grok:grok-4.6"]));
   });
 
-  // Setup's in-file first-run sheet goes when its steps point at the catalog's role defaults.
-  it("keeps setup's first-run sheet equal to the catalog's role defaults", () => {
-    const catalog = renderCatalog(REGISTRY).content;
-    expect(setup).toContain(catalog.slice(catalog.indexOf("```markdown\n"), catalog.lastIndexOf("```")));
+});
+
+const REPO_ROOT = join(PLUGIN_ROOT, "../..");
+const ROLE_DEFAULTS = "model-catalog.md#role-defaults";
+/** Cursor-derived and port files that point at role defaults, and the roles each names. */
+const ROLE_POINTERS: Record<string, readonly string[]> = {
+  "skills/arena/SKILL.md": ["arena runners", "arena cross-judge pool"],
+  "skills/architect/SKILL.md": ["architect runners"],
+  "skills/how/SKILL.md": ["how explorer", "how explainer"],
+  "skills/interrogate/SKILL.md": ["interrogate reviewers"],
+  "skills/swarm/SKILL.md": ["swarm workers"],
+  "skills/poteto-mode/SKILL.md": ["feature, refactoring", "bug-fix", "perf-issue", "hillclimb", "hardest tasks", "judgment and prose"],
+  "skills/poteto-mode/playbooks/bug-fix.md": ["bug-fix"],
+  "skills/poteto-mode/playbooks/feature.md": ["feature, refactoring"],
+  "skills/poteto-mode/playbooks/hillclimb.md": ["hillclimb"],
+  "skills/poteto-mode/playbooks/perf-issue.md": ["perf-issue"],
+  "skills/poteto-mode/playbooks/refactoring.md": ["feature, refactoring"],
+  "skills/poteto-mode/references/codex-tools.md": [],
+  "skills/setup-pstack/SKILL.md": [],
+};
+
+function walk(dir: string, keep: (name: string) => boolean): string[] {
+  return readdirSync(dir, { withFileTypes: true }).flatMap((entry) => {
+    const path = join(dir, entry.name);
+    if (entry.isDirectory()) return entry.name === "node_modules" ? [] : walk(path, keep);
+    return keep(entry.name) ? [path] : [];
+  });
+}
+
+const escape = (value: string): string => value.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+
+describe("role pointers and text scans", () => {
+  it("point each Cursor-derived site at role defaults that exist", () => {
+    const roles = new Set(REGISTRY.roleDefaults.map((entry) => entry.role));
+    for (const [file, named] of Object.entries(ROLE_POINTERS)) {
+      const text = readFileSync(join(PLUGIN_ROOT, file), "utf8");
+      expect([file, text.includes(ROLE_DEFAULTS)]).toEqual([file, true]);
+      for (const role of named) {
+        expect([file, role, roles.has(role), text.includes(`\`${role}\``)]).toEqual([file, role, true, true]);
+      }
+    }
+  });
+
+  it("find no descriptor or versioned model name outside the generated catalog and agents", () => {
+    const generated = new Set([CATALOG_PATH, ...renderNativeAgents(REGISTRY).map((file) => file.path)]
+      .map((path) => join(PLUGIN_ROOT, path)));
+    const files = [...walk(PLUGIN_ROOT, (name) => name.endsWith(".md")), join(REPO_ROOT, "README.md"), join(REPO_ROOT, "docs/reference.md")]
+      .filter((path) => !generated.has(path));
+    const descriptor = new RegExp(`\\b(?:${REGISTRY.adapters.map((adapter) => adapter.id).join("|")}):[A-Za-z0-9._-]+@[a-z]+`);
+    const versioned = REGISTRY.families
+      .flatMap((entry) => [entry.model, ...(entry.predecessors ?? []).map((kept) => kept.model)])
+      .filter((model) => /[0-9]/.test(model))
+      .map((model) => new RegExp(model.split("-").map(escape).join("[-\\s]"), "i"));
+    const hits = files.flatMap((path) => readFileSync(path, "utf8").split("\n").flatMap((line, at) =>
+      [descriptor, ...versioned].some((pattern) => pattern.test(line)) ? [`${relative(REPO_ROOT, path)}:${at + 1}: ${line}`] : []));
+    expect(hits).toEqual([]);
+  });
+
+  it("keep versioned Claude literals in non-test code to registry/models.ts", () => {
+    const prefixes = REGISTRY.families.flatMap((entry) => entry.rolling === undefined ? [] : [escape(entry.rolling.revisionPrefix)]);
+    const literal = new RegExp(`["'\`:](?:${prefixes.join("|")})[0-9]`);
+    const hits = walk(PLUGIN_ROOT, (name) => /\.(?:ts|js|mjs)$/.test(name) && !/\.test\.(?:ts|js)$/.test(name))
+      .filter((path) => path !== join(RUNNER, "registry/models.ts") && literal.test(readFileSync(path, "utf8")))
+      .map((path) => relative(PLUGIN_ROOT, path));
+    expect(hits).toEqual([]);
   });
 });
 

@@ -33,7 +33,8 @@ export interface Case {
 
 /** Claude tools pre-authorized for every case; anything else is denied without a prompt and fails the case. */
 export const CLAUDE_TOOLS = 'Skill,Read,Glob,Grep,Write,Edit,Bash,Agent,Task,TodoWrite';
-export const DEFAULT_ROUTES: Record<Harness, string> = { claude: 'codex:gpt-6.1-sol@max', codex: 'claude:opus@max' };
+/** Without --runner-route, the runner recipe dispatches the first lane of this role's default in the installed catalog. */
+export const DEFAULT_ROLES: Record<Harness, string> = { claude: 'bug-fix', codex: 'judgment and prose' };
 export const ROUTE = /^(claude|codex|grok):([A-Za-z0-9._-]+)@([a-z]+)$/;
 const SETUP_DESCRIPTOR = 'claude:opus@high';
 const DESCRIPTOR = /\b(?:claude|codex|grok):[A-Za-z0-9._-]+@[a-z]+/g;
@@ -298,12 +299,19 @@ const writer: Case = {
 
 function runner(harness: Harness, routes: string[]): Case[] {
   const chosen = routes.filter(route => !route.startsWith(`${harness}:`));
-  const cases = (chosen.length ? chosen : [DEFAULT_ROUTES[harness]]).map((route, index): Case => {
-    const [, provider, model, effort] = ROUTE.exec(route)!, lane = (f: Fixture, name: string) => join(f.dir, `lane-${index + 1}.${name}`);
+  const cases = (chosen.length ? chosen : ['']).map((fixed, index): Case => {
+    let route = fixed, provider = '', model = '', effort = '';
+    const lane = (f: Fixture, name: string) => join(f.dir, `lane-${index + 1}.${name}`);
     return {
       id: `route-${index + 1}`,
       codexSandbox: 'danger-full-access',
-      prepare: async f => { await writeFile(lane(f, 'prompt.md'), 'Reply with the single word PONG.\n'); },
+      async prepare(f) {
+        route ||= (await readCatalog(f.location)).defaults.get(DEFAULT_ROLES[harness])?.[0] ?? '';
+        const parts = ROUTE.exec(route);
+        if (!parts || parts[1] === harness) throw new Error(`runner-route-not-external:${route || DEFAULT_ROLES[harness]}`);
+        [, provider = '', model = '', effort = ''] = parts;
+        await writeFile(lane(f, 'prompt.md'), 'Reply with the single word PONG.\n');
+      },
       prompt: f => `${invoke(f.harness, 'poteto-mode', `Dispatch exactly one external lane and nothing else. Run the installed launcher ${join(f.location, 'skills/poteto-mode/scripts/runner/pstack-runner')} with these arguments and wait for it to exit: --parent ${harness} --provider ${provider} --model ${model} --effort ${effort} --mode read-only --prompt ${lane(f, 'prompt.md')} --cwd ${f.dir} --output ${lane(f, 'output.md')} --receipt ${lane(f, 'receipt.json')}`)}. ${rules(f.dir)}`,
       async assert(record, f) {
         // Sessions often call the launcher through a shell variable; the receipt below is written only by the runner.
@@ -338,7 +346,23 @@ const setup: Case[] = [{
     if (!(await readFile(path, 'utf8')).includes(SETUP_DESCRIPTOR)) throw new Error('consumer-route-mismatch');
     return { assertions: [...assertions, 'consumer-route'], files: [path] };
   },
-}, keptPredecessor()];
+}, keptPredecessor(), {
+  id: 'first-run',
+  codexSandbox: 'danger-full-access',
+  claudePermission: 'bypassPermissions',
+  async prepare(f) {
+    // No sheet and, on Codex, no run-owned AGENTS.md mirror: setup has no configuration to recover.
+    await rm(join(f.configHome, 'pstack-models.md'), { force: true });
+    if (f.harness === 'codex') await rm(join(f.configHome, 'AGENTS.md'), { force: true });
+  },
+  prompt: f => `${invoke(f.harness, 'setup-pstack', `Use these answers and ask nothing else. Keep the first-run role assignments and every proposed effort. I confirm every write. Write the setup report to ${join(f.dir, 'result.md')}.`)} Do not push, post, or contact GitHub.`,
+  async assert(record, f) {
+    const sheet = join(f.configHome, 'pstack-models.md'), assertions = [loaded(record, 'pstack:setup-pstack'), await written(record, sheet)];
+    const lines = (await readFile(sheet, 'utf8')).split('\n').filter(line => /^[a-z][^:]*: \S/.test(line));
+    if (!Bun.deepEquals(lines, [...(await readCatalog(f.location)).defaults].map(([role, lanes]) => `${role}: ${lanes.join(', ')}`))) throw new Error('first-run-not-role-defaults');
+    return { assertions: [...assertions, 'sheet:role-defaults'], files: [sheet] };
+  },
+}];
 
 // Releases before v1.5.0 wrote this pair; setup must offer its family's current model and keep it on a decline.
 const KEPT = 'grok:grok-4.6', KEPT_EFFORT = 'high';
@@ -375,7 +399,7 @@ function keptPredecessor(): Case {
 
 // The parent reads a fixture sheet and reports each role's descriptors and routes, which must equal what the
 // installed candidate's catalog gives for that sheet and parent.
-const CONFIGURED_ROLE = 'judgment and prose';
+const CONFIGURED_ROLE = 'judgment and prose', MISSING_ROLES = ['arena runners', 'bug-fix'];
 function catalog(harness: Harness): Case[] {
   const sheet = (f: Fixture) => join(f.dir, 'pstack-models.md'), report = (f: Fixture) => join(f.dir, 'routes.json');
   let expected: { roles: { role: string; descriptors: string[]; routes: string[] }[] } = { roles: [] };
@@ -384,10 +408,15 @@ function catalog(harness: Harness): Case[] {
     async prepare(f) {
       const installed = await readCatalog(f.location), defaults = installed.defaults.get(CONFIGURED_ROLE);
       // The configured role takes another role's default, so only a read of the fixture sheet reports it.
+      // The missing roles must come from the catalog's role defaults.
       const configured = [...installed.defaults.values()].flat().find(lane => lane.includes(':') && !defaults?.includes(lane));
       if (!defaults || !configured) throw new Error(`catalog-role-missing:${CONFIGURED_ROLE}`);
-      await writeFile(sheet(f), sheetText([...installed.defaults].map(([role, lanes]) => [role, role === CONFIGURED_ROLE ? [configured] : lanes])));
-      expected = { roles: [{ role: CONFIGURED_ROLE, descriptors: [configured], routes: [installed.route(harness, configured)] }] };
+      const missing = MISSING_ROLES.map(role => ({ role, descriptors: installed.defaults.get(role) ?? [] }));
+      if (missing.some(m => !m.descriptors.length)) throw new Error(`catalog-role-missing:${MISSING_ROLES.join(',')}`);
+      await writeFile(sheet(f), sheetText([...installed.defaults].filter(([role]) => !MISSING_ROLES.includes(role))
+        .map(([role, lanes]) => [role, role === CONFIGURED_ROLE ? [configured] : lanes])));
+      expected = { roles: [{ role: CONFIGURED_ROLE, descriptors: [configured] }, ...missing]
+        .map(r => ({ ...r, routes: r.descriptors.map(d => installed.route(harness, d)) })) };
     },
     prompt: f => `${invoke(f.harness, 'poteto-mode', `Do no engineering work and launch no lane. For this task the pstack model sheet is ${sheet(f)}; use it in place of any configured sheet. For each of these roles, in this order, find the descriptors this parent would dispatch and the route of each: ${expected.roles.map(r => JSON.stringify(r.role)).join(', ')}. Write to ${report(f)} only JSON of the form {"roles":[{"role":"<role>","descriptors":["<provider:model@effort>"],"routes":["native" or "external"]}]}, one route per descriptor, where "native" is this parent's own subagent primitive and "external" is the external runner.`)} ${rules(f.dir)}`,
     async assert(record, f) {
