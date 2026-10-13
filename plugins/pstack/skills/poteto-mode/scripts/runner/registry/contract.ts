@@ -106,6 +106,13 @@ export interface ProviderAdapter {
     matches(lane: Lane, reported: string): boolean;
   };
   environment(access: Access): EnvPolicy;
+  /** Markdown that render.ts puts into the model catalog's routes and provider notes. */
+  readonly docs: {
+    readonly name: string;
+    readonly hostPrerequisites: readonly string[];
+    readonly statePaths: readonly string[];
+    readonly notes: readonly string[];
+  };
 }
 
 /** Keeps the literal id, from which the provider list derives ProviderId. */

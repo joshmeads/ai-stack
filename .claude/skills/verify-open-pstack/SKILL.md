@@ -27,7 +27,7 @@ EVIDENCE="$SESSION/live" # must not exist yet
 
 Pick the features that exercise the PR's changed behavior and pass each as `--feature <harness>:<feature>`, repeatable. List the same features in the PR body, where review sees them. A runtime change needs at least one `--feature`; the run fails before any install without one. The run exercises only the named features, plus `project-skill` in both harnesses under `--self-test`. It never falls back to the classified set, and a full sweep is never the default.
 
-Reuse the Claude Code and Codex logins you already have; no extra login or credential source flags. Omit `--self-test` for ordinary plugin verification; it is mandatory for this skill's delivery. An agent runs and judges the whole gate from a non-TTY shell; nothing prompts a person. `--runner-route PROVIDER:MODEL@EFFORT`, repeatable, replaces the runner recipe's fixed external route for each parent whose provider differs from the route's.
+Reuse the Claude Code and Codex logins you already have; no extra login or credential source flags. Omit `--self-test` for ordinary plugin verification; it is mandatory for this skill's delivery. An agent runs and judges the whole gate from a non-TTY shell; nothing prompts a person. `--runner-route PROVIDER:MODEL@EFFORT`, repeatable, replaces the runner recipe's default route, a role default from the installed candidate's model catalog, for each parent whose provider differs from the route's.
 
 The publisher revision is recorded separately from the candidate SHA and must equal it when classification selects `project-skill`. Run those PRs from their reviewed candidate head; run all other PRs from trusted `main`. Use a fresh private output directory for every run. The verifier requires an open same-repository PR, pins exact head and base SHAs, classifies immutable Git objects, and rechecks them at phase and publication boundaries. Unknown paths abort; evidence never transfers to another head.
 
@@ -79,6 +79,7 @@ Each headless session exits on its own. Verify any setup restoration before publ
 Read receipts as data, never shell input. Do not put credentials in prompts or public artifacts.
 
 ## Scripts
+- scripts/catalog.test.ts
 - scripts/cli.test.ts
 - scripts/cli.ts
 - scripts/core.test.ts

@@ -3,7 +3,7 @@ import { HARNESSES, REPO, type ChangedFile, type Harness, type Receipt, type Reg
 export function validateRegistry(value: unknown): Registry {
   if (!value || typeof value !== 'object') throw new Error('Invalid feature registry');
   const r = value as Registry;
-  for (const key of ['skills', 'shared', 'assets', 'setup', 'runner', 'tools', 'project', 'nonRuntime'] as const) {
+  for (const key of ['skills', 'shared', 'catalog', 'assets', 'setup', 'runner', 'tools', 'project', 'nonRuntime'] as const) {
     if (!Array.isArray(r[key]) || r[key].some(v => typeof v !== 'string' || !v || v.includes('..'))) {
       throw new Error(`Invalid registry.${key}`);
     }
@@ -28,7 +28,10 @@ export function classify(files: ChangedFile[], registry: Registry): Selection {
       if (path !== 'plugins/pstack/assets/logo.png') throw new Error(`Unmapped asset consumer: ${path}`);
       features.add('assets:codex'); covered = true;
     }
-    if (registry.shared.some(p => matches(path, p))) {
+    // Catalog paths change only model and provider facts, so they skip shared expansion and the skill match.
+    const catalog = registry.catalog.some(p => matches(path, p));
+    if (catalog) { ['catalog', 'setup', 'runner'].forEach(f => features.add(f)); covered = true; }
+    if (!catalog && registry.shared.some(p => matches(path, p))) {
       registry.skills.forEach(s => skills.add(s));
       ['setup', 'runner', 'shipped-tools'].forEach(f => features.add(f));
       covered = true;
@@ -39,7 +42,7 @@ export function classify(files: ChangedFile[], registry: Registry): Selection {
     // Reflect's Codex transcript lookup runs this launcher and script; no other skill consumes them.
     if (/^plugins\/pstack\/skills\/poteto-mode\/scripts\/resolve-codex-transcript(?:\.ts)?$/.test(path)) { skills.add('reflect'); covered = true; }
     const skill = /^plugins\/pstack\/skills\/([^/]+)\/(.+)$/.exec(path);
-    if (skill && registry.skills.includes(skill[1]!)) {
+    if (!catalog && skill && registry.skills.includes(skill[1]!)) {
       const leaf = skill[2]!;
       if (leaf === 'SKILL.md' || leaf.startsWith('references/') || leaf.startsWith('playbooks/')) {
         skills.add(skill[1]!); covered = true;

@@ -21,8 +21,23 @@
   "shared": [
     "plugins/pstack/.claude-plugin/plugin.json", "plugins/pstack/.codex-plugin/plugin.json",
     ".claude-plugin/marketplace.json", ".agents/plugins/marketplace.json",
-    "plugins/pstack/agents/**", "plugins/pstack/hooks/**",
+    "plugins/pstack/agents/poteto-agent.md", "plugins/pstack/agents/comment-sicko.md", "plugins/pstack/hooks/**",
     "plugins/pstack/skills/poteto-mode/references/**"
+  ],
+  "catalog": [
+    "plugins/pstack/skills/poteto-mode/references/model-catalog.md",
+    "plugins/pstack/skills/poteto-mode/scripts/runner/registry/**",
+    "plugins/pstack/skills/poteto-mode/scripts/runner/providers/**",
+    "plugins/pstack/agents/pstack-fable-low.md",
+    "plugins/pstack/agents/pstack-fable-medium.md",
+    "plugins/pstack/agents/pstack-fable-high.md",
+    "plugins/pstack/agents/pstack-fable-xhigh.md",
+    "plugins/pstack/agents/pstack-fable-max.md",
+    "plugins/pstack/agents/pstack-opus-low.md",
+    "plugins/pstack/agents/pstack-opus-medium.md",
+    "plugins/pstack/agents/pstack-opus-high.md",
+    "plugins/pstack/agents/pstack-opus-xhigh.md",
+    "plugins/pstack/agents/pstack-opus-max.md"
   ],
   "assets": ["plugins/pstack/assets/**"],
   "setup": ["plugins/pstack/skills/setup-pstack/SKILL.md"],

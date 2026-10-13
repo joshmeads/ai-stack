@@ -92,4 +92,10 @@ export const codex = adapter({
   // Codex never reports the served model, so the pinned argv is the evidence.
   proof: { report: "absent", matches: exactOrSuffixed },
   environment: () => ({ kind: "inherit", dropPrefixes: [] }),
+  docs: {
+    name: "Codex CLI",
+    hostPrerequisites: [],
+    statePaths: ["the Codex home (`CODEX_HOME`, else `~/.codex`)"],
+    notes: [],
+  },
 });
