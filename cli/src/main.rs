@@ -1,0 +1,397 @@
+mod blocks;
+mod config;
+mod install;
+mod models;
+mod paths;
+mod plan;
+mod plugins;
+mod render;
+mod tui;
+
+use std::fs;
+use std::io::{self, IsTerminal, Write};
+use std::path::{Path, PathBuf};
+use std::process::Command as Process;
+
+use anyhow::{Context as _, Result, anyhow, bail};
+use clap::{Parser, Subcommand};
+
+use crate::config::{Config, Provider, Stack};
+use crate::install::Options;
+use crate::models::{ModelReport, Status};
+use crate::plan::Plan;
+use crate::plugins::SystemRunner;
+
+#[derive(Parser)]
+#[command(name = "ai-stack", version, about = "Install and update the jm:stack agent configuration")]
+struct Cli {
+    /// Config file (default: <home>/.config/ai-stack/config.toml).
+    #[arg(long, global = true, value_name = "PATH")]
+    config: Option<PathBuf>,
+    /// Home directory (default: $HOME).
+    #[arg(long, global = true, value_name = "DIR")]
+    home: Option<PathBuf>,
+    /// Stack checkout to use instead of `stack.path` from the config.
+    #[arg(long, global = true, value_name = "DIR")]
+    stack: Option<PathBuf>,
+    #[command(subcommand)]
+    command: Commands,
+}
+
+#[derive(Subcommand)]
+enum Commands {
+    /// Write the default config file.
+    Init {
+        /// Overwrite an existing config file.
+        #[arg(long)]
+        force: bool,
+    },
+    /// Print the install plan with diffs. Runs only the harness CLIs' read-only `plugin list`
+    /// queries. Exit 0 when nothing would change, 1 otherwise.
+    Diff {
+        /// Also plan moving non-kept skills into the backup and removing non-kept plugins.
+        #[arg(long)]
+        clean: bool,
+    },
+    /// Review the install plan and apply it.
+    Install {
+        /// Apply without review.
+        #[arg(long)]
+        yes: bool,
+        /// Replace an unmanaged model sheet (backed up first).
+        #[arg(long)]
+        force: bool,
+        /// Print the plan instead of opening the review screen.
+        #[arg(long)]
+        plain: bool,
+        /// Move skills not in [clean] keep_skills into the backup and remove plugins not in
+        /// [clean] keep_plugins.
+        #[arg(long)]
+        clean: bool,
+    },
+    /// Pull the stack checkout, check models, then install.
+    Update {
+        /// Apply without review.
+        #[arg(long)]
+        yes: bool,
+        /// Print the plan instead of opening the review screen.
+        #[arg(long)]
+        plain: bool,
+        /// Bump configured models to newer versions in the same family.
+        #[arg(long)]
+        bump_models: bool,
+    },
+    /// Report configured models against the provider catalogs.
+    Models {
+        /// Rewrite config model IDs to the newest version in the same family.
+        #[arg(long)]
+        bump: bool,
+    },
+}
+
+/// Paths and overrides shared by every command.
+struct Context {
+    home: PathBuf,
+    config_path: PathBuf,
+    stack_override: Option<PathBuf>,
+}
+
+/// Model catalogs fetched once per run. Errors are kept as text for the reports.
+struct Catalogs {
+    openai: Result<Vec<String>, String>,
+    anthropic: Result<Vec<String>, String>,
+}
+
+fn main() -> Result<()> {
+    let cli = Cli::parse();
+    let ctx = resolve_context(&cli)?;
+    let code = match cli.command {
+        Commands::Init { force } => cmd_init(&ctx, force)?,
+        Commands::Diff { clean } => cmd_diff(&ctx, clean)?,
+        Commands::Install { yes, force, plain, clean } => cmd_install(&ctx, yes, Options { force, clean }, plain)?,
+        Commands::Update { yes, plain, bump_models } => cmd_update(&ctx, yes, plain, bump_models)?,
+        Commands::Models { bump } => cmd_models(&ctx, bump)?,
+    };
+    io::stdout().flush()?;
+    std::process::exit(code);
+}
+
+fn resolve_context(cli: &Cli) -> Result<Context> {
+    let home = match &cli.home {
+        Some(home) => home.clone(),
+        None => std::env::var_os("HOME")
+            .map(PathBuf::from)
+            .ok_or_else(|| anyhow!("HOME is not set; pass --home"))?,
+    };
+    let config_path = cli
+        .config
+        .clone()
+        .unwrap_or_else(|| home.join(".config/ai-stack/config.toml"));
+    Ok(Context { home: paths::normalize(&std::path::absolute(home)?), config_path, stack_override: cli.stack.clone() })
+}
+
+fn load_config(ctx: &Context) -> Result<Config> {
+    let mut cfg = config::load(&ctx.config_path, &ctx.home)?;
+    if let Some(stack) = &ctx.stack_override {
+        let configured = std::mem::replace(&mut cfg.stack.path, paths::absolute(&stack.to_string_lossy(), &ctx.home)?);
+        // Links and hooks into the configured checkout are still ours to remove.
+        cfg.stack.legacy_paths.push(configured);
+    }
+    Ok(cfg)
+}
+
+fn cmd_init(ctx: &Context, force: bool) -> Result<i32> {
+    init_at(&ctx.config_path, force)?;
+    println!("Wrote {}", ctx.config_path.display());
+    Ok(0)
+}
+
+/// Writes the default config to `config_path`, refusing to overwrite unless `force`.
+fn init_at(config_path: &Path, force: bool) -> Result<()> {
+    if config_path.exists() && !force {
+        bail!("{} already exists; pass --force to overwrite it", config_path.display());
+    }
+    if let Some(parent) = config_path.parent() {
+        fs::create_dir_all(parent).with_context(|| format!("cannot create {}", parent.display()))?;
+    }
+    fs::write(config_path, config::default_config_text())
+        .with_context(|| format!("cannot write {}", config_path.display()))
+}
+
+fn cmd_diff(ctx: &Context, clean: bool) -> Result<i32> {
+    let cfg = load_config(ctx)?;
+    let plan = install::plan(&cfg, Options { clean, ..Options::default() }, &SystemRunner)?;
+    print!("{}", plan.render_text(&ctx.home));
+    Ok(if plan.is_empty() { 0 } else { 1 })
+}
+
+fn cmd_install(ctx: &Context, yes: bool, opts: Options, plain: bool) -> Result<i32> {
+    let cfg = load_config(ctx)?;
+    install_flow(ctx, &cfg, opts, yes, plain, &[])
+}
+
+/// Builds the plan, then reviews, confirms and applies it. Returns the exit code.
+fn install_flow(
+    ctx: &Context,
+    cfg: &Config,
+    opts: Options,
+    yes: bool,
+    plain: bool,
+    models: &[ModelReport],
+) -> Result<i32> {
+    let plan = install::plan(cfg, opts, &SystemRunner)?;
+    if plan.is_empty() {
+        for warning in &plan.warnings { println!("{warning}"); }
+        println!("Nothing to install.");
+        return Ok(0);
+    }
+    if !plan.conflicts.is_empty() {
+        print!("{}", plan.render_text(&ctx.home));
+        return Ok(1);
+    }
+
+    let approved = if yes {
+        for warning in &plan.warnings { println!("{warning}"); }
+        Some(plan)
+    } else if plain || !io::stdout().is_terminal() {
+        print!("{}", plan.render_text(&ctx.home));
+        if !io::stdin().is_terminal() {
+            println!("Re-run with --yes to apply.");
+            return Ok(1);
+        }
+        confirm("Apply these changes? [y/N] ")?.then_some(plan)
+    } else {
+        // The review screen can toggle --clean, which re-plans.
+        let mut replan = |clean| install::plan(cfg, Options { clean, ..opts }, &SystemRunner);
+        tui::review(plan, opts.clean, models, &ctx.home, &mut replan)?
+    };
+    let Some(plan) = approved else {
+        println!("Not applied.");
+        return Ok(1);
+    };
+    apply_plan(ctx, &plan)
+}
+
+fn confirm(prompt: &str) -> Result<bool> {
+    print!("{prompt}");
+    io::stdout().flush()?;
+    let mut line = String::new();
+    io::stdin().read_line(&mut line).context("cannot read the answer")?;
+    Ok(matches!(line.trim().to_ascii_lowercase().as_str(), "y" | "yes"))
+}
+
+fn apply_plan(ctx: &Context, plan: &Plan) -> Result<i32> {
+    let report = plan::apply(plan, &ctx.home.join(".local/state/ai-stack/backups"), &SystemRunner)?;
+    println!("Applied {} change(s).", report.applied);
+    if let Some(dir) = report.backup_dir {
+        println!("Backups: {}", dir.display());
+    }
+    if let Some(manifest) = report.manifest {
+        println!("Removed plugins and their reinstall commands: {}", manifest.display());
+    }
+    Ok(0)
+}
+
+fn cmd_update(ctx: &Context, yes: bool, plain: bool, bump: bool) -> Result<i32> {
+    let mut cfg = load_config(ctx)?;
+    if git_pull(&cfg.stack)? {
+        println!(
+            "note: this pull changed files under cli/. The installed ai-stack binary is not rebuilt automatically; rebuild it with `cargo install --path {}`.",
+            cfg.stack.path.join("cli").display()
+        );
+    }
+
+    let catalogs = fetch_catalogs();
+    let mut reports = check_models(&cfg, &catalogs);
+    print_reports(&reports);
+    if bump && bump_models(&ctx.config_path, &reports)? > 0 {
+        cfg = load_config(ctx)?;
+        reports = check_models(&cfg, &catalogs);
+    }
+
+    install_flow(ctx, &cfg, Options::default(), yes, plain, &reports)
+}
+
+/// Fast-forwards the stack checkout from its configured remote and branch.
+/// Returns whether the pull changed any file under `cli/`.
+fn git_pull(stack: &Stack) -> Result<bool> {
+    let before = git_head(stack)?;
+    let output = Process::new("git")
+        .arg("-C")
+        .arg(&stack.path)
+        .args(["pull", "--ff-only"])
+        .arg(&stack.remote)
+        .arg(&stack.branch)
+        .output()
+        .with_context(|| format!("cannot run git in {}", stack.path.display()))?;
+    if !output.status.success() {
+        bail!(
+            "git pull --ff-only {} {} failed in {}: {}",
+            stack.remote,
+            stack.branch,
+            stack.path.display(),
+            String::from_utf8_lossy(&output.stderr).trim()
+        );
+    }
+    print!("{}", String::from_utf8_lossy(&output.stdout));
+    let after = git_head(stack)?;
+    if before == after {
+        return Ok(false);
+    }
+    let diff = git(stack, &["diff", "--name-only", &before, &after, "--", "cli"])?;
+    Ok(!diff.trim().is_empty())
+}
+
+fn git_head(stack: &Stack) -> Result<String> {
+    Ok(git(stack, &["rev-parse", "HEAD"])?.trim().to_string())
+}
+
+fn git(stack: &Stack, args: &[&str]) -> Result<String> {
+    let output = Process::new("git")
+        .arg("-C")
+        .arg(&stack.path)
+        .args(args)
+        .output()
+        .with_context(|| format!("cannot run git in {}", stack.path.display()))?;
+    if !output.status.success() {
+        bail!("git {} failed in {}: {}", args.join(" "), stack.path.display(), String::from_utf8_lossy(&output.stderr).trim());
+    }
+    Ok(String::from_utf8_lossy(&output.stdout).into_owned())
+}
+
+fn cmd_models(ctx: &Context, bump: bool) -> Result<i32> {
+    let cfg = load_config(ctx)?;
+    let catalogs = fetch_catalogs();
+    let reports = check_models(&cfg, &catalogs);
+    print_reports(&reports);
+    if bump {
+        bump_models(&ctx.config_path, &reports)?;
+    }
+    Ok(0)
+}
+
+fn fetch_catalogs() -> Catalogs {
+    Catalogs {
+        openai: models::openai_catalog().map_err(|e| format!("{e:#}")),
+        anthropic: models::anthropic_catalog().map_err(|e| format!("{e:#}")),
+    }
+}
+
+fn check_models(cfg: &Config, catalogs: &Catalogs) -> Vec<ModelReport> {
+    models::check(
+        cfg,
+        catalogs.openai.as_deref().map_err(String::as_str),
+        catalogs.anthropic.as_deref().map_err(String::as_str),
+    )
+}
+
+fn print_reports(reports: &[ModelReport]) {
+    for report in reports {
+        println!(
+            "{}  {}  {}  {}",
+            report.alias,
+            report.id,
+            provider_name(report.provider),
+            status_text(&report.status)
+        );
+    }
+}
+
+fn provider_name(provider: Provider) -> &'static str {
+    match provider {
+        Provider::Anthropic => "anthropic",
+        Provider::Openai => "openai",
+    }
+}
+
+fn status_text(status: &Status) -> String {
+    match status {
+        Status::Current => "current".to_string(),
+        Status::Newer { latest } => format!("newer: {latest}"),
+        Status::Missing => "missing".to_string(),
+        Status::Unknown(reason) => format!("unknown: {reason}"),
+    }
+}
+
+/// Rewrites every model with a newer version in the config file, in one write.
+/// Returns how many models were bumped.
+fn bump_models(config_path: &Path, reports: &[ModelReport]) -> Result<usize> {
+    let newer: Vec<(&ModelReport, &str)> = reports
+        .iter()
+        .filter_map(|report| match &report.status {
+            Status::Newer { latest } => Some((report, latest.as_str())),
+            _ => None,
+        })
+        .collect();
+    if newer.is_empty() {
+        return Ok(0);
+    }
+    let mut text = fs::read_to_string(config_path)
+        .with_context(|| format!("cannot read {}", config_path.display()))?;
+    for (report, latest) in &newer {
+        text = models::bump(&text, &report.alias, latest)?;
+    }
+    fs::write(config_path, text).with_context(|| format!("cannot write {}", config_path.display()))?;
+    for (report, latest) in &newer {
+        println!("bumped {}: {} -> {}", report.alias, report.id, latest);
+    }
+    Ok(newer.len())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn init_writes_default_config_and_refuses_overwrite() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join(".config/ai-stack/config.toml");
+
+        init_at(&path, false).unwrap();
+        assert_eq!(fs::read_to_string(&path).unwrap(), config::default_config_text());
+
+        let err = init_at(&path, false).unwrap_err();
+        assert!(err.to_string().contains("--force"), "{err}");
+        init_at(&path, true).unwrap();
+    }
+}

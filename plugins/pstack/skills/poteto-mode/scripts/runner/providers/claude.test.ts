@@ -2,7 +2,6 @@ import { describe, expect, it } from "bun:test";
 import type { LaneRequest } from "../registry/index.ts";
 import { adapterSuite, testLane } from "./adapter-suite.ts";
 import { claude } from "./claude.ts";
-import { grok } from "./grok.ts";
 
 adapterSuite(claude);
 
@@ -184,7 +183,8 @@ describe("claude model proof", () => {
     expect(claude.proof.matches(fable, "claude-fable-beta")).toBe(false);
     expect(claude.proof.matches(fable, "fable")).toBe(false);
     expect(claude.proof.matches(fable, "fable-preview")).toBe(false);
-    expect(grok.proof.matches(testLane({ provider: "grok", model: "fable" }), "claude-fable-9-9")).toBe(false);
+    expect(claude.proof.matches(lane({ model: "haiku" }), "claude-haiku-5-5")).toBe(true);
+    expect(claude.proof.matches(lane({ model: "haiku" }), "claude-opus-9")).toBe(false);
   });
 
   it("matches an unregistered Claude model exactly or with a suffix", () => {

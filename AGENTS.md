@@ -1,13 +1,16 @@
-# open-pstack
+# jm
 
-Track all durable work in this repository's GitHub Issues. Do not create a parallel Linear queue. Read `UPSTREAM.md` before changing upstream-derived content.
+This repository is the `jm` marketplace (`jm-stack`, `jm-games`, `jm-tools`) plus the `ai-stack` CLI in `cli/`. Track durable work in GitHub Issues on `joshmeads/ai-stack`.
 
-Cursor's `cursor/plugins/pstack` tree is the content upstream. Keep one shared skill tree for Claude Code and Codex; adapt harness primitives at the existing mapping boundaries instead of forking skills or adding compatibility layers. The parent harness resolves provider routing once. Children do not detect or reroute themselves.
+`plugins/pstack/` is Open Pstack renamed jm:stack. Read `UPSTREAM.md` before changing it, keep upstream behaviour unless a change is listed there as a divergence, and merge upstream updates explicitly. Keep one shared skill tree for Claude Code and Codex; adapt harness differences at the existing mapping boundaries instead of forking skills. The parent harness resolves model routing once. Children do not detect or reroute themselves.
 
-Before opening a pull request, run the Bun tests, strict typecheck, static invariants, and plugin validation.
+Before opening a pull request, run:
 
-Nothing merges, tags, releases, or rolls out until the exact candidate is installed and the changed behavior passes a live test from the real user surface in every affected harness. Unit tests, validators, source inspection, and self-reports do not satisfy this gate. The record is the `live-gate` commit status on that exact head, which links an evidence comment naming the installed version, surface, action, and observed result. Mergify does not queue a pull request without it. A pull request may be ready for review before its live test, but every new head, including a queue-created head, needs its own.
+- `bun run test` and `bun run typecheck` in `plugins/pstack/skills/poteto-mode/scripts`
+- `PSTACK_STATIC_ONLY=1 bash tests/skill-collision-repro.sh`
+- `claude plugin validate` on the repository root and on each plugin directory
+- `cargo test` in `cli/`
 
-For Open Pstack PRs, use the shared repository-local `.claude/skills/verify-open-pstack/` skill (Codex: `.agents/skills/verify-open-pstack`). Verifier-changing PRs run from a checkout of their reviewed candidate head, with the publisher revision equal to the candidate SHA; all other PRs run from trusted `main`. Record the publisher revision separately from the candidate SHA. Reuse the operator's existing logins without credential source flags, extra logins, or credential reading/copying. Claude uses normal operator config with session-only `--plugin-dir <exact-head checkout>/plugins/pstack --settings '{"enabledPlugins":{"pstack@open-pstack":false}}'`. Codex installs the exact-head candidate in a run-owned `CODEX_HOME`, with `auth.json` symlinked to the operator's `${CODEX_HOME:-$HOME/.codex}/auth.json`; absent file-based auth fails closed. Removing the run home removes only the symlink, never its target. Setup alone snapshots real `${CLAUDE_CONFIG_DIR:-$HOME/.claude}/pstack-models.md` and `CLAUDE.md`, restores their exact bytes or original absence afterwards, and verifies restoration before any publication; restoration failure publishes nothing. Preserve private mode-0700 raw evidence through merge. Publication is one structured evidence comment plus exact-SHA `live-gate`; no credential parsing, token registration, or exact-secret comment checks. No PR-body, ready/draft, reversal, or compensation writes, publisher-code attestation, or OS filesystem-denial claims are permitted. Builders do not publish the gate, queue, or merge.
+Before merging, install the exact candidate with `ai-stack install` and check the changed behaviour from the real Claude Code and Codex surfaces it affects. Record what you installed, where you tested, what you did, and what you saw in the pull request.
 
 Do not add an implicit runtime timeout or a weaker-model fallback.

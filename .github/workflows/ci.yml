@@ -30,5 +30,8 @@ jobs:
         run: bun run typecheck
       - name: Validate manifests and static invariants
         run: |
-          bun -e 'for (const path of [".claude-plugin/marketplace.json", ".agents/plugins/marketplace.json", "plugins/pstack/.claude-plugin/plugin.json", "plugins/pstack/.codex-plugin/plugin.json"]) JSON.parse(await Bun.file(path).text())'
+          bun -e 'for (const path of [".claude-plugin/marketplace.json", ".agents/plugins/marketplace.json", "plugins/pstack/.claude-plugin/plugin.json", "plugins/pstack/.codex-plugin/plugin.json", "plugins/jm-games/.claude-plugin/plugin.json", "plugins/jm-games/.codex-plugin/plugin.json", "plugins/jm-tools/.claude-plugin/plugin.json", "plugins/jm-tools/.codex-plugin/plugin.json"]) JSON.parse(await Bun.file(path).text())'
           PSTACK_STATIC_ONLY=1 bash tests/skill-collision-repro.sh
+      - name: CLI tests
+        working-directory: cli
+        run: cargo test

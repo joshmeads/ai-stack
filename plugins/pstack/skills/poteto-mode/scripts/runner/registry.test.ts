@@ -85,7 +85,7 @@ describe("registry data", () => {
       entry.efforts.join(" "),
       entry.provider === "claude" ? entry.name : "-",
     ]));
-    const setup = readFileSync(join(PLUGIN_ROOT, "skills/setup-pstack/SKILL.md"), "utf8");
+    const setup = readFileSync(join(PLUGIN_ROOT, "skills/setup-stack/SKILL.md"), "utf8");
     for (const { role, lanes } of REGISTRY.roleDefaults) {
       const descriptors = lanes.map((name) => {
         const family = REGISTRY.families.find((entry) => entry.name === name);
@@ -98,12 +98,12 @@ describe("registry data", () => {
 
 describe("resolveLane", () => {
   it("passes an unregistered pair to the CLI unchanged with any listed effort", () => {
-    const lane = resolveLane(request({ parent: "claude", provider: "grok", model: "grok-4.5", effort: "high" }));
+    const lane = resolveLane(request({ parent: "claude", provider: "codex", model: "gpt-6-nova", effort: "ultra" }));
     expect(lane.family).toBeNull();
-    expect(lane.model).toBe("grok-4.5");
+    expect(lane.model).toBe("gpt-6-nova");
     expect(lane.adapter.launch.argv(lane, { sharedGitDir: null }))
-      .toEqual(expect.arrayContaining(["--model", "grok-4.5", "--reasoning-effort", "high"]));
-    expect(resolveLane(request({ parent: "claude", provider: "grok", model: "grok-4.5", effort: "default" })).effort)
+      .toEqual(expect.arrayContaining(["--model", "gpt-6-nova", "--config", 'model_reasoning_effort="ultra"']));
+    expect(resolveLane(request({ parent: "claude", provider: "codex", model: "gpt-6-nova", effort: "default" })).effort)
       .toBe("default");
   });
 
@@ -111,19 +111,21 @@ describe("resolveLane", () => {
     expect(() => resolveLane(request({ effort: "ultra" })))
       .toThrow("effort ultra is not offered for claude:opus; choose one of: low, medium, high, xhigh, max");
     expect(() => resolveLane(request({ effort: "default" }))).toThrow("effort default is not offered");
-    expect(() => resolveLane(request({ parent: "claude", provider: "grok", model: "grok-4.6", effort: "ultra" })))
-      .toThrow("effort ultra is not offered for grok:grok-4.6");
+    expect(() => resolveLane(request({ parent: "claude", provider: "codex", model: "gpt-6-luna", effort: "ultra" })))
+      .toThrow("effort ultra is not offered for codex:gpt-6-luna; choose one of: low, medium, high, xhigh, max");
+    expect(() => resolveLane(request({ model: "haiku", effort: "ultra" })))
+      .toThrow("effort ultra is not offered for claude:haiku");
     expect(resolveLane(request({ parent: "claude", provider: "codex", model: "gpt-5.6-sol", effort: "ultra" })).family?.name)
       .toBe("sol");
   });
 
   it("rejects an effort outside the global list", () => {
-    expect(() => resolveLane(request({ provider: "grok", model: "grok-4.5", effort: "none" })))
+    expect(() => resolveLane(request({ provider: "codex", model: "gpt-6-nova", effort: "none" })))
       .toThrow(`effort must be one of: ${EFFORTS.join(", ")}`);
   });
 
   it("refuses an unnormalized Claude revision with today's message", () => {
-    for (const [model, alias] of [["claude-opus-5", "opus"], ["claude-fable-9-9", "fable"]]) {
+    for (const [model, alias] of [["claude-opus-5", "opus"], ["claude-fable-9-9", "fable"], ["claude-haiku-5-5", "haiku"]]) {
       expect(() => resolveLane(request({ model })))
         .toThrow(`Claude model ${model} is a version pin; normalize it to ${alias} before invoking the runner`);
     }
@@ -133,8 +135,8 @@ describe("resolveLane", () => {
   it("rejects same-provider recursion and unknown names", () => {
     expect(() => resolveLane(request({ parent: "claude" })))
       .toThrow("provider claude is native to parent claude; use the parent subagent primitive");
-    expect(() => resolveLane(request({ provider: "devin" }))).toThrow("provider must be one of: claude, codex, grok");
-    expect(() => resolveLane(request({ parent: "grok" }))).toThrow("parent must be one of: claude, codex");
+    expect(() => resolveLane(request({ provider: "devin" }))).toThrow("provider must be one of: claude, codex");
+    expect(() => resolveLane(request({ parent: "devin" }))).toThrow("parent must be one of: claude, codex");
     expect(() => resolveLane(request({ mode: "full" }))).toThrow("mode must be one of: read-only, isolated-write");
     expect(() => resolveLane(request({ model: " " }))).toThrow("model is required");
   });

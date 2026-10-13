@@ -23,7 +23,7 @@ sources. Without a file-backed source, log in in the redirected directory.
 No daily configuration or credentials are modified by this fixture.
 
 Run the printed commands in an operator terminal. Install the exact candidate,
-invoke /setup-pstack through the real parent, complete probes and confirmation,
+invoke /setup-stack through the real parent, complete probes and confirmation,
 and refuse permission to write outside the redirected directories. Retain the
 native transcripts and provider receipts. Then run --verify, rerun setup without
 changes, and run --verify again to assert byte-identical output. Start a fresh
@@ -106,7 +106,7 @@ if (!fs.existsSync(sheet) || !fs.statSync(sheet).size) fail('redirected model sh
 const bytes = fs.readFileSync(sheet);
 const imported = path.join(run, 'imported-sheet');
 if (fs.existsSync(imported)) {
-  const assignments = text => text.split('\n').filter(line => /^[^:#]+:\s*(?:claude:|codex:|grok:|inherit-parent\s*$|auto\s*$)/.test(line)).map(line => line.trim()).sort();
+  const assignments = text => text.split('\n').filter(line => /^[^:#]+:\s*(?:claude:|codex:|inherit-parent\s*$|auto\s*$)/.test(line)).map(line => line.trim()).sort();
   const before = assignments(fs.readFileSync(imported, 'utf8'));
   if (!before.length || JSON.stringify(before) !== JSON.stringify(assignments(bytes.toString('utf8')))) fail('imported sheet assignments were not preserved');
 }
@@ -190,9 +190,9 @@ printf 'export CLAUDE_CONFIG_DIR=%q CODEX_HOME=%q\n' "$run/claude # config" "$ru
 if [ "$harness" = claude ]; then
   printf 'claude --plugin-dir %q\n' "$repo/plugins/pstack"
 else
-  printf 'codex plugin marketplace add ericlitman/open-pstack --ref %q\n' "$(git -C "$repo" rev-parse HEAD)"
-  printf 'codex plugin add pstack@open-pstack\ncodex\n'
+  printf 'codex plugin marketplace add joshmeads/ai-stack --ref %q\n' "$(git -C "$repo" rev-parse HEAD)"
+  printf 'codex plugin add jm-stack@jm\ncodex\n'
 fi
-printf 'Invoke /setup-pstack; permit writes only under the redirected config dirs.\n'
+printf 'Invoke /setup-stack; permit writes only under the redirected config dirs.\n'
 printf 'Retain native transcripts/receipts; then verify, rerun setup unchanged, verify again, and prove fresh-session loading.\n'
 printf 'bash %q --verify %q\n' "$repo/tests/setup-config-home-repro.sh" "$run"

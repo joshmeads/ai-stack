@@ -1,0 +1,117 @@
+# jm:stack config. Edit, then run `ai-stack install`.
+
+[stack]
+# Checkout of joshmeads/ai-stack. ai-stack adds it to each harness as the
+# local `jm` plugin marketplace and installs jm-stack, jm-games and jm-tools.
+path = "~/.local/share/open-pstack"
+remote = "origin"
+branch = "main"
+# Older checkout roots. Skill and agent links and settings hooks that point
+# into the stack or these roots are leftovers of older installs and are removed.
+legacy_paths = []
+
+[harness.claude]
+home = "~/.claude"
+enabled = true
+
+[harness.codex]
+home = "~/.codex"
+enabled = true
+
+# Models used by [leads] and [review], checked by `ai-stack models`.
+# Optional `efforts` limits a model to those efforts; every route that uses it
+# must then name one. Optional `context` is the model's usable context in
+# tokens; the routing block states it. ai-stack does not configure compaction.
+
+[models.sol]
+provider = "openai"
+id = "gpt-6.1-sol"
+
+[models.luna]
+provider = "openai"
+id = "gpt-6-luna"
+
+[models.opus]
+provider = "anthropic"
+id = "claude-opus-5-5"
+
+[models.haiku]
+provider = "anthropic"
+id = "claude-haiku-5-5"
+# The owner sets Haiku's compaction in Claude Code at 100k tokens because
+# Anthropic bills the whole request at 5x once the prompt exceeds 100k tokens.
+context = 100000
+
+# The lead in each harness, as "alias@effort". This only describes the lead in
+# the routing block; install does not change either CLI's default model.
+[leads]
+claude = "opus@high"
+codex = "sol@high"
+
+# The review model in each harness, as "alias@effort". The routing block names
+# it, and jm-games' art-iteration critic uses it.
+[review]
+claude = "opus@xhigh"
+codex = "sol@xhigh"
+
+# jm:stack model sheets, one per harness, written to <home>/pstack-models.md.
+# Each lane is a provider-qualified descriptor `<provider>:<model>@<effort>`
+# (see the jm-stack provider-dispatch reference), or inherit-parent / auto.
+# Panel rows accept arrays. Why and Reflect need the parent's MCP servers, so
+# they must inherit the parent. All 15 rows are required in each table.
+
+[sheet.claude]
+"feature, refactoring" = "claude:opus@medium"
+"bug-fix" = "claude:opus@medium"
+"perf-issue" = "claude:opus@medium"
+"hillclimb" = "claude:opus@medium"
+"judgment and prose" = "claude:opus@xhigh"
+"hardest tasks" = "claude:opus@high"
+"how explorer" = "claude:haiku@xhigh"
+"how explainer" = "claude:opus@medium"
+"why investigators, synthesizer" = "inherit-parent"
+"reflect tooling, judgment, divergent, synthesizer" = "inherit-parent"
+"arena runners" = ["claude:opus@medium", "claude:opus@high"]
+"arena cross-judge pool" = "claude:opus@xhigh"
+"swarm workers" = "claude:opus@medium"
+"architect runners" = ["claude:opus@high", "claude:opus@medium"]
+"interrogate reviewers" = ["claude:opus@xhigh", "codex:gpt-6.1-sol@xhigh"]
+
+[sheet.codex]
+"feature, refactoring" = "codex:gpt-6.1-sol@medium"
+"bug-fix" = "codex:gpt-6.1-sol@medium"
+"perf-issue" = "codex:gpt-6.1-sol@medium"
+"hillclimb" = "codex:gpt-6.1-sol@medium"
+"judgment and prose" = "codex:gpt-6.1-sol@xhigh"
+"hardest tasks" = "codex:gpt-6.1-sol@xhigh"
+"how explorer" = "codex:gpt-6-luna@xhigh"
+"how explainer" = "codex:gpt-6.1-sol@medium"
+"why investigators, synthesizer" = "inherit-parent"
+"reflect tooling, judgment, divergent, synthesizer" = "inherit-parent"
+"arena runners" = ["codex:gpt-6.1-sol@medium", "codex:gpt-6.1-sol@xhigh"]
+"arena cross-judge pool" = "codex:gpt-6.1-sol@xhigh"
+"swarm workers" = "codex:gpt-6.1-sol@medium"
+"architect runners" = ["codex:gpt-6.1-sol@xhigh", "codex:gpt-6.1-sol@medium"]
+"interrogate reviewers" = ["codex:gpt-6.1-sol@xhigh", "claude:opus@xhigh"]
+
+# What `ai-stack install --clean` and `ai-stack diff --clean` keep. Clean is off
+# unless one of those flags is passed or it is toggled in the review screen.
+# Every entry in a skill root that no keep_skills glob matches is moved into the
+# run's backup directory; nothing is deleted. Entries starting with `.` and the
+# app-managed `synced` directory are always kept. Every installed plugin whose
+# `name@marketplace` no keep_plugins glob matches is uninstalled. Globs use `*`
+# and `?`.
+[clean]
+skill_roots = ["~/.claude/skills", "~/.codex/skills", "~/.agents/skills"]
+keep_skills = [
+  "better-*", "brandkit", "break", "variant", "explain-interface",
+  "interface-review", "design-taste-frontend", "gpt-taste",
+  "high-end-visual-design", "image-to-code", "redesign-existing-projects",
+  "full-output-enforcement", "make-interfaces-feel-better", "oklch-skill",
+  "color-expert", "cua-*", "gui-automation", "hatch-pet", "turborepo",
+]
+# Codex's built-in plugins come from `openai-*` marketplaces.
+keep_plugins = [
+  "jm-*@jm", "github@claude-plugins-official",
+  "chrome-devtools-mcp@claude-plugins-official", "*@openai-*",
+]

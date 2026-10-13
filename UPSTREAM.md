@@ -14,17 +14,28 @@ open-pstack tracks [Cursor's pstack](https://github.com/cursor/plugins/tree/main
 
 The table above is the current Cursor sync point. Open Pstack 1.7.0 imported this 0.15.20 sync. `README-UPSTREAM.md` preserves the upstream pstack README verbatim. `CHANGES.md` and `NOTICE.md` describe the adaptations and provenance.
 
+## jm:stack divergence
+
+This checkout publishes Open Pstack as jm:stack in the `jm` marketplace. It also tracks Open Pstack itself (`upstream` remote, `ericlitman/open-pstack`). Two changes diverge from both upstreams; keep them when merging either one.
+
+- **Rename.** The plugin is `jm-stack` with display name "jm:stack" in both plugin manifests, so skills are namespaced `jm-stack:<skill>`. `setup-pstack` is `setup-stack`, and the native Claude agents are `stack-<stem>-<effort>`. The SessionStart text, `poteto-agent`'s preload, `poteto-help`, `codex-tools.md`, `docs/reference.md`, and the tests use these names. Other skill names stay upstream's. Internal names stay: the `plugins/pstack/` directory, `pstack-models.md`, the `pstack:models` markers, the sheet heading, and `pstack-runner`.
+- **Models.** The Grok family and the runner's Grok adapter are removed, with their matrix row, defaults, docs, and tests. The matrix adds `luna` (`codex:gpt-6-luna`, default `xhigh`) and `haiku` (`claude:haiku`, a rolling alias normalized and verified like Fable and Opus, default `xhigh`, native agents `stack-haiku-<effort>`). Opus and Sol default to `xhigh`. Every first-run role and every skill's built-in default uses Opus or Sol, and the panels are Opus then Sol. Fable, Luna, and Haiku stay selectable but unused by default; the ai-stack CLI's per-harness sheets assign Luna or Haiku to `how explorer`.
+- **Marketplace.** Both marketplace manifests are named `jm` and list `jm-stack` (`./plugins/pstack`), `jm-games`, and `jm-tools`.
+- **Maintainer process.** Open Pstack's own process files are removed: the `verify-open-pstack` project skill and its static check, `REVIEW.md`, `.github/unfret.json`, the `live-gate` pull request template, and `open-pstack.code-workspace`. When an Open Pstack merge changes them, keep them deleted.
+
+When a Cursor or Open Pstack change touches Grok (runner adapter, preflight, environment allowlist, default descriptors), apply only the parts that are not Grok-specific and restate any changed default as Opus or Sol. The runner contract keeps the generic adapter features Grok used (`prompt: "file"`, the preflight retry, the environment allowlist) so Open Pstack merges stay small.
+
 ## Upstream-only exclusions
 
 - Commits `799151d` and `6fecddb` add and relocate `make-bot-ui`. It depends on Cursor routines, webhook events, and UI primitives that Claude Code and Codex do not share.
 - Four `disable-model-invocation: true` lines from `73f8be4` are not applied to `how`, `why`, `unslop`, or `typescript-best-practices`. Poteto-mode invokes those skills by name, and the flag blocks that route on Claude Code.
-- The default-model hunks for `bug-fix`, `perf-issue`, and `hillclimb` from `23a56e2`, `889ec4b`, and `70b2dc8` are not applied. Those frequent code-writing roles stay on `codex:gpt-6.1-sol@max`.
+- The default-model hunks for `bug-fix`, `perf-issue`, and `hillclimb` from `23a56e2`, `889ec4b`, and `70b2dc8` are not applied. Those frequent code-writing roles stay on Sol, `codex:gpt-6.1-sol@xhigh` in jm:stack.
 - `5bf2b15`'s setup budget question, its `# budget` line, and its step down to a lower detected effort are not applied. Setup already asks one requested effort per assigned family, and the step-down would silently lower a requested effort.
 - `12d587d`'s rule that reruns a rejected configured entry on its family default or the closest valid slug is not applied. An unavailable model stays a named dropout per `provider-dispatch.md`.
 - The expected-runtime column in `70b2dc8`'s `children.tsv` and its expected-runtime stuck test are not applied. A lane is stuck only on affirmative failure evidence.
 - The explicit Grok, Opus, and Sol defaults for the Why and Reflect roles are not applied. Those roles stay on `inherit-parent` because the external runner omits the parent's MCP servers.
 - The Claude manifest does not take the logo field from `efa2a53` because Claude Code has no schema for it. The shared asset is exposed through the Codex manifest instead.
-- Commit `df58112` (pstack 0.15.15) is not applied. It drops Sol from every default, cuts the panels to Opus and Grok, and moves Opus from `max` to `xhigh`. Open Pstack keeps its own model defaults and three-model panels.
+- Commit `df58112` (pstack 0.15.15) is not applied. It drops Sol from every default, cuts the panels to Opus and Grok, and moves Opus from `max` to `xhigh`. Open Pstack keeps its own model defaults and three-model panels; jm:stack keeps Sol and uses an Opus and Sol panel (see jm:stack divergence).
 - The `disable-model-invocation: true` lines that `23e4138` puts on `benchmark-checklist` and `principle-explain-the-number` are not applied. The same flag, which upstream carried on principle leaves and `figure-it-out` before 0.15.5, stays off as in earlier syncs. Principle leaves keep `user-invocable: false`, and `figure-it-out` and `benchmark-checklist` stay model-invocable because poteto-mode routes to them by name. The typed-only `correct`, `ketchup`, and `poteto-help` keep the flag.
 - The Built-in PR tool paragraph from `23e4138` and `00b14f1` is not applied. It describes a Cursor run tool that Claude Code and Codex do not have.
 - `00b14f1`'s shorter `principle-test-behavior-not-implementation` text is not applied. It fails every restated constant, table row, or prompt string and every absence-only assertion (`not.toHaveBeenCalled`, `toBeUndefined`, `toEqual([])`), and the 0.15.0 local correction keeps both kinds when they test a real contract. The poteto-mode index line for this principle takes `00b14f1`'s format change and keeps the 0.15.0 wording.
