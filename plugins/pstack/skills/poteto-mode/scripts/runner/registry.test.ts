@@ -64,6 +64,15 @@ describe("registry data", () => {
     }
   });
 
+  // UPSTREAM.md records these as port choices that upstream syncs do not apply.
+  it("keeps the solo code roles on Sol and every panel on Opus, Sol and Grok", () => {
+    const lanes = (role: string) => REGISTRY.roleDefaults.find((entry) => entry.role === role)?.lanes;
+    for (const role of ["bug-fix", "perf-issue", "hillclimb"]) expect([role, lanes(role)]).toEqual([role, ["sol"]]);
+    for (const role of ["arena runners", "arena cross-judge pool", "architect runners", "interrogate reviewers"]) {
+      expect([role, lanes(role)]).toEqual([role, ["opus", "sol", "grok"]]);
+    }
+  });
+
   it("keeps family names and (provider, model) pairs unique, and efforts ordered", () => {
     const names = REGISTRY.families.map((entry) => entry.name);
     expect(new Set(names).size).toBe(names.length);

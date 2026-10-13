@@ -56,7 +56,7 @@ for (const harness of ['claude', 'codex'] as const) {
   });
 }
 
-test('the kept-predecessor case requires the kept model, the materialized role and the proposed replacement', async () => {
+test('the kept-predecessor case requires every loaded role, the materialized role and the proposed replacement', async () => {
   const f = await fixture('claude'), c = setupCase('keep-predecessor'), installed = await readCatalog(location);
   await c.prepare!(f);
   const path = join(f.dir, 'pstack-models.md'), prepared = await readFile(path, 'utf8');
@@ -68,7 +68,11 @@ test('the kept-predecessor case requires the kept model, the materialized role a
   expect((await c.assert(record('claude', 'pstack:setup-pstack'), f)).assertions).toContain('kept:grok:grok-4.6@high');
 
   await writeFile(path, rerun.replaceAll('grok:grok-4.6@', `${installed.kept.get('grok:grok-4.6')}@`));
-  await expect(c.assert(record('claude', 'pstack:setup-pstack'), f)).rejects.toThrow('kept-predecessor-replaced');
+  await expect(c.assert(record('claude', 'pstack:setup-pstack'), f)).rejects.toThrow('kept-sheet-mismatch');
+
+  // A rerun that keeps the model but drops a loaded role fails too.
+  await writeFile(path, rerun.replace(/\nbug-fix: [^\n]*/, ''));
+  await expect(c.assert(record('claude', 'pstack:setup-pstack'), f)).rejects.toThrow('kept-sheet-mismatch');
 });
 
 for (const harness of ['claude', 'codex'] as const) {

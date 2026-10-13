@@ -45,6 +45,26 @@ else
   fail=1
 fi
 
+# Active configuration must use Claude's rolling family aliases. Concrete
+# provider reports may still appear in runner fixtures, but no shipped
+# descriptor, native-agent model field, or live test invocation may pin one.
+# The registry's released pairs record old pins so they keep resolving to their family.
+# registry.test.ts scans TypeScript and JavaScript string literals for the same pins.
+legacy_model_pins="$(
+  grep -REn \
+    --include='*.md' --include='*.ts' --include='*.sh' \
+    'claude:claude-(fable|opus)-[0-9]|^model: claude-(fable|opus)-[0-9]|--model claude-(fable|opus)-[0-9]' \
+    "$repo/plugins/pstack" "$repo/tests" "$repo/README.md" "$repo/docs/reference.md" \
+    2>/dev/null | grep -Ev '^[^:]*/skills/poteto-mode/scripts/runner/registry/models\.ts:[0-9]+:  \{ pair: "claude:claude-(fable|opus)-[0-9]+", family: "(fable|opus)" \},$' || true
+)"
+if [ -n "$legacy_model_pins" ]; then
+  note "FAIL: active Fable or Opus configuration still pins a model revision:"
+  note "$legacy_model_pins"
+  fail=1
+else
+  note "ok: active Fable and Opus configuration uses rolling aliases"
+fi
+
 setup="$repo/plugins/pstack/skills/setup-pstack/SKILL.md"
 
 # Config-home port invariant (#120): guard upstream merges against daily-home writes.

@@ -368,7 +368,7 @@ const setup: Case[] = [{
 const KEPT = 'grok:grok-4.6', KEPT_EFFORT = 'high';
 function keptPredecessor(): Case {
   const proposal = (f: Fixture) => join(f.dir, 'proposal.json');
-  let omitted = '', proposed = '';
+  let expected: string[] = [], proposed = '';
   return {
     id: 'keep-predecessor',
     codexSandbox: 'danger-full-access',
@@ -378,19 +378,19 @@ function keptPredecessor(): Case {
       if (!current) throw new Error(`catalog-kept-missing:${KEPT}`);
       proposed = `${current}@${KEPT_EFFORT}`;
       // Every family lane takes the kept model, so setup probes only it. One alias role is left out, so the rerun must write.
-      const roles = [...installed.defaults];
-      omitted = roles.find(([, lanes]) => lanes.every(lane => !lane.includes(':')))?.[0] ?? '';
-      await writeFile(join(f.configHome, 'pstack-models.md'), sheetText(roles.filter(([role]) => role !== omitted)
-        .map(([role, lanes]) => [role, lanes.map(lane => lane.includes(':') ? `${KEPT}@${KEPT_EFFORT}` : lane)])));
+      const roles = [...installed.defaults].map(([role, lanes]): [string, string[]] => [role, lanes.map(lane => lane.includes(':') ? `${KEPT}@${KEPT_EFFORT}` : lane)]);
+      const omitted = roles.find(([, lanes]) => lanes.every(lane => !lane.includes(':')))?.[0];
+      // The rewritten sheet must keep every loaded row and restore the omitted one.
+      expected = roles.map(([role, lanes]) => `${role}: ${lanes.join(', ')}`).sort();
+      await writeFile(join(f.configHome, 'pstack-models.md'), sheetText(roles.filter(([role]) => role !== omitted)));
       // Codex mirrors the sheet in a run-owned AGENTS.md block; without it the sheet is the only source.
       if (f.harness === 'codex') await rm(join(f.configHome, 'AGENTS.md'), { force: true });
     },
     prompt: f => `${invoke(f.harness, 'setup-pstack', `Use these answers and ask nothing else. Keep every role assignment and the requested effort ${KEPT_EFFORT}. When setup proposes replacing ${KEPT}, decline and keep it. I confirm every write. Write to ${proposal(f)} only JSON of the form {"kept":"<descriptor>","proposed":"<descriptor>"} naming the kept descriptor and the replacement setup proposed. Write the setup report to ${join(f.dir, 'result.md')}.`)} Do not push, post, or contact GitHub.`,
     async assert(record, f) {
       const sheet = join(f.configHome, 'pstack-models.md'), assertions = [loaded(record, 'pstack:setup-pstack'), await written(record, sheet), await written(record, proposal(f))];
-      const text = await readFile(sheet, 'utf8'), descriptors = text.match(DESCRIPTOR) ?? [];
-      if (!descriptors.length || descriptors.some(d => d !== `${KEPT}@${KEPT_EFFORT}`)) throw new Error('kept-predecessor-replaced');
-      if (omitted && !text.includes(`\n${omitted}: `)) throw new Error(`role-not-materialized:${omitted}`);
+      const lines = (await readFile(sheet, 'utf8')).split('\n').filter(line => /^[a-z][^:]*: \S/.test(line)).sort();
+      if (!Bun.deepEquals(lines, expected)) throw new Error('kept-sheet-mismatch');
       if (!Bun.deepEquals(parseJson(await readFile(proposal(f), 'utf8')), { kept: `${KEPT}@${KEPT_EFFORT}`, proposed })) throw new Error('proposal-mismatch');
       return { assertions: [...assertions, `kept:${KEPT}@${KEPT_EFFORT}`, `proposed:${proposed}`], files: [sheet, proposal(f)] };
     },
