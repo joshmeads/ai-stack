@@ -17,6 +17,8 @@ Open Pstack 1.8.0 keeps the Cursor pstack 0.15.20 sync. It ships the first three
 
 **Windows SessionStart hook in Codex.** Codex on Windows runs a plugin hook through the session's shell, usually PowerShell. The hook's `commandWindows` now starts `C:\Windows\System32\cmd.exe` by full path with delayed expansion, so the same command works in PowerShell and cmd, and a plugin path with a space, `&`, `%` or `!` stays intact. Before this release, Windows Codex sessions got no pstack context. `hooks/run-hook.cmd` is superpowers 7.0.0's wrapper, which finds Git for Windows' Bash in its system-wide and per-user locations and on `PATH`. `docs/reference.md` lists Bash and a Windows installed in `C:\Windows` as requirements. Coldsun1 reported the failure and confirmed the fix in the Codex desktop app and CLI (#127).
 
+**README.** The README now opens with what Open Pstack adds beyond Lauren's pstack, each item linked to its source (#167).
+
 ## 1.7.0 syncs to Cursor pstack 0.15.20
 
 Open Pstack 1.7.0 tracks Cursor pstack 0.15.20 at `1b6d44ff26d4e242f4e8f68c391e6d2f7ca16def`. Eleven upstream commits since 0.15.17 touch pstack. Nine are applied, four of them with port adaptations. Two are excluded: the root Agent Plugins v1 manifest and the version bump that touches only manifests.
