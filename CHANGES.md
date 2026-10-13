@@ -3,6 +3,22 @@
 Mergify auto-queue is live: ready PRs to main require passing verify, Unfret and exact-head live-gate, and no unresolved review thread; workflow changes require operator queueing.
 This port applies the Cursor → Claude Code substitutions in skill bodies. Earlier drafts left them flagged; this revision resolves them. A later pass added a Codex build that shares the same skills; see [Codex port](#codex-port) below.
 
+## 1.8.0 adds a generated model catalog and fixes the Windows SessionStart hook
+
+Open Pstack 1.8.0 keeps the Cursor pstack 0.15.20 sync. It ships registry units U2 and U3 and the Windows hook fix, merged after 1.7.0, and adds the note for registry unit U1, which shipped in 1.7.0.
+
+**Model catalog.** Model facts live in the runner registry, `skills/poteto-mode/scripts/runner/registry/`. Its `render.ts` generates `references/model-catalog.md` and the Claude-native `pstack-<family>-<effort>` agents. The catalog holds the model matrix, kept predecessors and rolling aliases, each provider's route from each parent, provider notes and the role defaults. `provider-dispatch.md` keeps the hand-written dispatch rules and links to the catalog. A hand edit of a generated file fails the tests and prints the write command (#156).
+
+**Role pointers.** Arena, Architect, How, Interrogate, Swarm, poteto-mode and the bug-fix, feature, hillclimb, perf-issue and refactoring playbooks point at the catalog's role defaults instead of naming models, so a default-model change edits no Cursor-derived file. Interrogate's reviewer table is gone. A sheet that lacks a role uses that role's default from the catalog (#157).
+
+**Setup reads the catalog.** `setup-pstack` seeds a first run from the catalog's role defaults. On a rerun it treats every kept predecessor the way it treated the earlier Sol default: it proposes the family's current model at the same effort, and keeps the old one if you decline. `grok:grok-4.6` is now a kept predecessor of Grok 4.7. Setup probes a native route with a one-turn native probe and an external route with one `pstack-runner` call (#156, #157).
+
+**Provider adapter contract.** Claude, Codex and Grok each run behind one adapter module in the registry, and the runner's per-provider switches are gone. Argv, receipts and behavior for a valid model sheet are unchanged. This shipped in 1.7.0 without a note (#155).
+
+**Windows SessionStart hook in Codex.** Codex on Windows runs a plugin hook through the session's shell, usually PowerShell. The hook's `commandWindows` now starts `C:\Windows\System32\cmd.exe` by full path with delayed expansion, so the same command works in PowerShell and cmd, and a plugin path with a space, `&`, `%` or `!` stays intact. Before this release, Windows Codex sessions got no pstack context. `hooks/run-hook.cmd` is superpowers 7.0.0's wrapper, which finds Git for Windows' Bash in its system-wide and per-user locations and on `PATH`. `docs/reference.md` lists Bash and a Windows installed in `C:\Windows` as requirements. Coldsun1 reported the failure and confirmed the fix in the Codex desktop app and CLI (#127).
+
+**README.** The README now opens with what Open Pstack adds beyond Lauren's pstack, each item linked to its source (#167).
+
 ## 1.7.0 syncs to Cursor pstack 0.15.20
 
 Open Pstack 1.7.0 tracks Cursor pstack 0.15.20 at `1b6d44ff26d4e242f4e8f68c391e6d2f7ca16def`. Eleven upstream commits since 0.15.17 touch pstack. Nine are applied, four of them with port adaptations. Two are excluded: the root Agent Plugins v1 manifest and the version bump that touches only manifests.
