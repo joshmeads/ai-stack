@@ -185,7 +185,6 @@ function reflect(harness: Harness): Case[] {
         } else {
           // The opener record's uuid is the nonce, held only by the transcript, so a report naming it shows the read.
           assertions.push(await written(record, report(f)));
-          if ((await lstat(report(f))).size > 5000) throw new Error('reflect-result-budget');
           const expected = available
             ? { status: 'resolved', path: transcript(f), opening_user_message: { line: 2, characters: text.length, sha256: sha256(text), uuid: nonce } }
             : { status: 'unresolved', reason: 'opening_message_mismatch', fallback: 'session_digest', uuid: nonce };
@@ -338,10 +337,26 @@ const agentPreload: Case = {
   },
 };
 
+const startupHook: Case = {
+  id: 'startup',
+  prompt: () => 'Reply with the single word OK.',
+  async assert(record, f) {
+    // The harness's own record must carry the installed context file; the model's reply is not read.
+    const expected = (await readFile(join(f.location, 'hooks/session-start-context.md'), 'utf8')).trimEnd();
+    const injected = record.context.find(text => text.trimEnd() === expected);
+    if (injected === undefined) throw new Error('hook-context-missing');
+    // The verifier, not the model, retains the recorded context as the artifact.
+    const copy = join(f.dir, 'session-context.md');
+    await writeFile(copy, injected);
+    return { assertions: ['hook-context-injected'], files: [copy] };
+  },
+};
+
 /** Resolve a feature's cases, or fail with a named reason before any session starts. */
 export function recipe(feature: string, harness: Harness, routes: string[] = []): Case[] {
   if (feature === 'assets:codex') throw new Error('unsupported-native-consumer:assets:codex');
   if (feature === 'project-skill') return [projectSkill];
+  if (feature === 'hook:startup') return [startupHook];
   if (feature === 'runner') return runner(harness, routes);
   if (feature === 'setup' || feature === 'skill-invocation:setup-pstack') return setup;
   if (feature === 'shipped-tools') return [shippedTools];

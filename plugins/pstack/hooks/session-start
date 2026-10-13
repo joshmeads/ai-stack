@@ -1,8 +1,19 @@
 #!/usr/bin/env bash
 # SessionStart hook for the pstack plugin: prints the poteto-mode dispatch
-# mandate to stdout, which Claude Code injects as session context directly.
+# mandate to stdout, which Claude Code and Codex inject as session context.
 # A missing context file fails the hook cleanly instead of injecting noise.
+#
+# Uses only Bash built-ins, because Git Bash on Windows can start the hook
+# without /usr/bin on PATH. Splits $0 on its last / or \ (run-hook.cmd's cmd
+# half passes a Windows path) instead of calling dirname, and reads with
+# $(<file) instead of cat; the assignment fails under set -e when the file is
+# missing.
 
 set -euo pipefail
 
-exec cat "$(cd "$(dirname "$0")" && pwd)/session-start-context.md"
+case "$0" in
+  */*|*\\*) dir="${0%[/\\]*}" ;;
+  *) dir=. ;;
+esac
+context="$(<"$dir/session-start-context.md")"
+printf '%s\n' "$context"

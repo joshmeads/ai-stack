@@ -7,7 +7,7 @@ The agent running the verifier picks the features that exercise the PR's changed
 | Ownership | Surfaces a change can affect |
 | --- | --- |
 | `skills` | One `skill-invocation:<name>` exercise per selected skill, in both harnesses |
-| `shared` | All listed skills, setup, runner, and shipped tools in both harnesses |
+| `shared` | All listed skills, setup, runner, and shipped tools in both harnesses; `hook:startup` for `plugins/pstack/hooks/**` |
 | `assets` | Installed UI/resource surface for each actual consumer found in the pinned plugin manifests |
 | `setup` | Installed setup/model configuration with byte-exact daily Claude file restoration before publication |
 | `runner` | Installed parent invoking real configured provider lanes |
@@ -29,6 +29,7 @@ The feature documents below define sub-features, user entry points, driving inst
 - `runner.md`: parent-to-child provider dispatch and receipts.
 - `shipped-tools.md`: orchestration, watch, plan checks, audit, and evidence logging.
 - `assets.md`: manifest-declared installed assets on actual consuming harnesses.
+- `hooks.md`: the SessionStart hook's context reaching a new session (`hook:startup`), and the Windows runner beside it.
 - `recipes.ts`: the headless cases and machine-checked assertions for every selectable feature. A named feature without one fails the run as `missing-recipe` before any session starts.
 - `agent-preload:poteto-agent` (Claude only): the parent dispatches `pstack:poteto-agent` through the Agent tool and asks it for the first Core principle of the preloaded poteto-mode skill without invoking `Skill` or reading files. The check needs that Agent call, `Laziness Protocol` in the reply the parent writes to `result.md`, and no `Skill` call or `Read` of poteto-mode's `SKILL.md` among the child's own tool calls.
 

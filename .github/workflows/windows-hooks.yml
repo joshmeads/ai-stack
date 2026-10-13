@@ -1,0 +1,77 @@
+name: Windows hooks
+
+# Evidence for the SessionStart hook on Windows, beside the Mac live gate. It runs the hook the way
+# Codex runs commandWindows in each Windows shell, with no login, so no credential is ever on a runner
+# with pull request code.
+
+on:
+  pull_request:
+    types: [opened, synchronize, reopened]
+
+permissions:
+  contents: read
+
+jobs:
+  wrapper:
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - name: Run the hook as Codex runs commandWindows
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = 'Stop'
+          # The plugin root holds a space, &, % and !, and the session directory holds a planted cmd.exe.
+          $root = Join-Path $env:RUNNER_TEMP 'plugin root & 50%OS%!\pstack'
+          New-Item -ItemType Directory -Force (Split-Path $root) | Out-Null
+          Copy-Item -Recurse plugins/pstack $root
+          $cwd = Join-Path $env:RUNNER_TEMP 'repo'
+          New-Item -ItemType Directory -Force $cwd | Out-Null
+          Copy-Item (Join-Path $env:SystemRoot 'System32\hostname.exe') (Join-Path $cwd 'cmd.exe')
+          $expected = (Get-Content -Raw "$root\hooks\session-start-context.md").Replace("`r`n", "`n").TrimEnd()
+          $hook = (Get-Content -Raw plugins/pstack/hooks/hooks.json | ConvertFrom-Json).hooks.SessionStart[0].hooks[0].commandWindows
+          # Codex runs a hook through the session's shell (codex-rs/hooks/src/engine/command_runner.rs,
+          # build_command): PowerShell gets `-NoProfile -Command <command>` as an argument, and cmd, or
+          # %COMSPEC% with no session shell, gets `/c "<command>"` unescaped.
+          $shells = [ordered]@{
+            'cmd' = (Join-Path $env:SystemRoot 'System32\cmd.exe')
+            'Windows PowerShell' = (Join-Path $env:SystemRoot 'System32\WindowsPowerShell\v1.0\powershell.exe')
+            'pwsh' = (Get-Command pwsh).Source
+          }
+          function Invoke-Hook([string]$Shell, [string]$Command, [string]$Path) {
+            $info = [Diagnostics.ProcessStartInfo]::new($shells[$Shell])
+            if ($Shell -eq 'cmd') { $info.Arguments = "/c `"$Command`"" }
+            else { foreach ($arg in '-NoProfile', '-Command', $Command) { $info.ArgumentList.Add($arg) } }
+            $info.UseShellExecute = $false; $info.RedirectStandardOutput = $true; $info.RedirectStandardError = $true
+            $info.WorkingDirectory = $cwd
+            $info.Environment['PLUGIN_ROOT'] = $root; $info.Environment['PATH'] = $Path
+            $process = [Diagnostics.Process]::Start($info)
+            $stderr = $process.StandardError.ReadToEndAsync(); $stdout = $process.StandardOutput.ReadToEnd(); $process.WaitForExit()
+            Write-Host "exit $($process.ExitCode); stderr: $($stderr.Result)"
+            @{ Code = $process.ExitCode; Out = $stdout.Replace("`r`n", "`n").TrimEnd() }
+          }
+          $system32 = Join-Path $env:SystemRoot 'System32'
+          $failed = 0
+          function Check([string]$Name, [bool]$Ok) {
+            Write-Host "$(if ($Ok) { 'PASS' } else { 'FAIL' }): $Name"
+            if (-not $Ok) { $script:failed++ }
+          }
+          foreach ($shell in $shells.Keys) {
+            foreach ($case in @(@{ Name = 'ordinary PATH'; Path = $env:PATH }, @{ Name = 'System32-only PATH'; Path = $system32 })) {
+              $result = Invoke-Hook $shell $hook $case.Path
+              Check "$shell, $($case.Name)" ($result.Code -eq 0 -and $result.Out -eq $expected)
+            }
+            $result = Invoke-Hook $shell $hook.Replace(' session-start', ' missing-script') $env:PATH
+            Check "$shell, missing script" ($result.Code -ne 0)
+          }
+          $info = [Diagnostics.ProcessStartInfo]::new('C:\Program Files\Git\bin\bash.exe', "`"$root\hooks\session-start`"")
+          $info.UseShellExecute = $false; $info.RedirectStandardOutput = $true; $info.Environment['PATH'] = ''
+          $process = [Diagnostics.Process]::Start($info); $out = $process.StandardOutput.ReadToEnd(); $process.WaitForExit()
+          Check 'session-start with an empty PATH' ($process.ExitCode -eq 0 -and $out.Replace("`r`n", "`n").TrimEnd() -eq $expected)
+          Remove-Item "$root\hooks\session-start-context.md"
+          foreach ($shell in $shells.Keys) {
+            $result = Invoke-Hook $shell $hook $env:PATH
+            Check "$shell, missing context file" ($result.Code -ne 0)
+          }
+          if ($failed) { exit 1 }

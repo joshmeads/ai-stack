@@ -38,7 +38,9 @@ export function parseSession(harness: Harness, text: string, exitCode: number, s
     const uses = blocks.filter(b => b.type === 'tool_use' && !failed.has(b.id));
     const commands = stream.filter(e => e.type === 'user' && e.isReplay && typeof e.message?.content === 'string')
       .flatMap(e => [...(e.message.content as string).matchAll(/<command-name>\/([^<\s]+)<\/command-name>/g)].map(m => m[1]!));
-    return { harness, exitCode, started,
+    const context = stream.filter(e => e.type === 'system' && e.subtype === 'hook_response' && e.hook_event === 'SessionStart' &&
+      e.exit_code === 0 && e.outcome === 'success' && typeof e.stdout === 'string').map(e => e.stdout as string);
+    return { harness, exitCode, started, context,
       skills: [...commands, ...uses.filter(u => u.name === 'Skill' && typeof u.input?.skill === 'string').map(u => u.input.skill as string)],
       commands: uses.filter(u => u.name === 'Bash' && typeof u.input?.command === 'string').map(u => u.input.command as string),
       tools: stream.filter(e => e.type === 'assistant' && Array.isArray(e.message?.content)).flatMap(e => (e.message.content as Event[]).filter(b => b.type === 'tool_use')
@@ -47,13 +49,17 @@ export function parseSession(harness: Harness, text: string, exitCode: number, s
   const items = stream.filter(e => e.type === 'item.completed' && e.item && typeof e.item === 'object').map(e => e.item as Event);
   const commands = items.filter(i => i.type === 'command_execution' && i.exit_code === 0 && typeof i.command === 'string').map(i => i.command as string);
   // Codex's JSON stream omits skill resolution; its rollout records each injected skill's name and SKILL.md path.
-  const texts = rollout.split('\n').filter(line => line.trim()).map(line => JSON.parse(line) as Event)
-    .flatMap(e => e.type === 'response_item' && Array.isArray(e.payload?.content) ? (e.payload.content as Event[]).map(c => String(c.text ?? '')) : []);
+  const messages = rollout.split('\n').filter(line => line.trim()).map(line => JSON.parse(line) as Event)
+    .filter(e => e.type === 'response_item' && Array.isArray(e.payload?.content));
+  const contents = (e: Event) => (e.payload.content as Event[]).map(c => String(c.text ?? ''));
+  const texts = messages.flatMap(contents);
+  // Codex adds SessionStart hook output to the model input as a developer message.
+  const context = messages.filter(e => e.payload.role === 'developer').flatMap(contents);
   const skills = texts.flatMap(text => [...text.matchAll(/<skill>\n<name>([^<]+)<\/name>\n<path>([^<]+)<\/path>/g)])
     .map(([, name, path]) => path!.includes('/plugins/cache/open-pstack/pstack/') ? name! : path!);
   const tools = items.filter(i => i.type === 'command_execution' && typeof i.command === 'string').map(i => ({ name: 'command', id: String(i.id),
     input: { command: i.command as string }, result: typeof i.aggregated_output === 'string' ? i.aggregated_output : undefined, parent: null, failed: i.exit_code !== 0 }));
-  return { harness, exitCode, started, skills, commands, tools };
+  return { harness, exitCode, started, skills, commands, tools, context };
 }
 export async function codexInstallation(output: string, home: string, expected: string): Promise<string> {
   const result = JSON.parse(output);
