@@ -1,6 +1,6 @@
 # open-pstack
 
-Track all durable work in this repository's GitHub Issues. Do not create a parallel Linear queue. Read `UPSTREAM.md` before changing upstream-derived content.
+Track all durable work in this repository's GitHub Issues. Do not create a parallel Linear queue. Build a ticket that comes from a waived review finding only after that failure has been seen in real use; until then the ticket records the finding and stays unscheduled. Read `UPSTREAM.md` before changing upstream-derived content.
 
 Cursor's `cursor/plugins/pstack` tree is the content upstream. Keep one shared skill tree for Claude Code and Codex; adapt harness primitives at the existing mapping boundaries instead of forking skills or adding compatibility layers. The parent harness resolves provider routing once. Children do not detect or reroute themselves.
 
