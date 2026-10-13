@@ -29,9 +29,8 @@ Start all reviewers in one fan-out phase, one per entry on the `interrogate revi
 
 | Subagent | Default model |
 |----------|---------------|
-| Reviewer A | `claude:opus@max` |
-| Reviewer B | `codex:gpt-6.1-sol@max` |
-| Reviewer C | `grok:grok-4.7@xhigh` |
+| Reviewer A | `claude:opus@xhigh` |
+| Reviewer B | `codex:gpt-6.1-sol@xhigh` |
 
 Route each reviewer's descriptor with `read-only` access and a unique output and receipt path. Use the parent subagent primitive without a model override for an `auto` or `inherit-parent` entry, so that reviewer runs on the parent model.
 

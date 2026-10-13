@@ -52,7 +52,7 @@ fi
 legacy_model_pins="$(
   grep -REn \
     --include='*.md' --include='*.ts' --include='*.sh' \
-    'claude:claude-(fable|opus)-[0-9]|^model: claude-(fable|opus)-[0-9]|--model claude-(fable|opus)-[0-9]' \
+    'claude:claude-(fable|opus|haiku)-[0-9]|^model: claude-(fable|opus|haiku)-[0-9]|--model claude-(fable|opus|haiku)-[0-9]' \
     "$repo/plugins/pstack" "$repo/tests" "$repo/README.md" "$repo/docs/reference.md" \
     2>/dev/null | grep -Ev '^[^:]*/skills/poteto-mode/scripts/runner/registry/models\.ts:[0-9]+:  \{ pair: "claude:claude-(fable|opus)-[0-9]+", family: "(fable|opus)" \},$' || true
 )"
@@ -60,23 +60,23 @@ standalone_code_pins="$(
   grep -REn \
     --include='*.ts' --include='*.js' \
     --exclude='*.test.ts' --exclude='*.test.js' \
-    "['\"]claude-(fable|opus)-[0-9]" \
+    "['\"]claude-(fable|opus|haiku)-[0-9]" \
     "$repo/plugins/pstack" \
     2>/dev/null || true
 )"
 if [ -n "$legacy_model_pins" ] || [ -n "$standalone_code_pins" ]; then
-  note "FAIL: active Fable or Opus configuration still pins a model revision:"
+  note "FAIL: active Fable, Opus, or Haiku configuration still pins a model revision:"
   [ -z "$legacy_model_pins" ] || note "$legacy_model_pins"
   [ -z "$standalone_code_pins" ] || note "$standalone_code_pins"
   fail=1
 else
-  note "ok: active Fable and Opus configuration uses rolling aliases"
+  note "ok: active Fable, Opus, and Haiku configuration uses rolling aliases"
 fi
 
-# Static invariant (CHANGES maintenance note): setup-pstack's first-run `arena runners`
+# Static invariant (CHANGES maintenance note): setup-stack's first-run `arena runners`
 # row is the default panel. The other panel rows and the arena, architect, and
 # interrogate defaults copy it verbatim.
-setup="$repo/plugins/pstack/skills/setup-pstack/SKILL.md"
+setup="$repo/plugins/pstack/skills/setup-stack/SKILL.md"
 dispatch="$repo/plugins/pstack/skills/poteto-mode/references/provider-dispatch.md"
 
 # Config-home port invariant (#120): guard upstream merges against daily-home writes.
@@ -132,12 +132,12 @@ else
   note "ok: setup config-home port invariant; unset/empty defaults and spaced overrides resolve without writes"
 fi
 
-quad_of() { { grep -oE '(claude|codex|grok):[a-z0-9.-]+@(low|medium|high|xhigh|max|ultra)' || true; } | tr '\n' ' ' | sed 's/ $//'; }
+quad_of() { { grep -oE '(claude|codex):[a-z0-9.-]+@(low|medium|high|xhigh|max|ultra)' || true; } | tr '\n' ' ' | sed 's/ $//'; }
 canon_panel="$( { grep -m1 '^arena runners:' "$setup" || true; } | quad_of)"
 panel_bad=""
 [ -n "$canon_panel" ] || panel_bad="could not read the canonical panel from $setup"$'\n'
 # Anchor on the panel's last slug rather than a hard-coded one, so a model swap in
-# setup-pstack cannot leave this check hunting for a slug nobody ships any more.
+# setup-stack cannot leave this check hunting for a slug nobody ships any more.
 anchor="${canon_panel##* }"
 # arena and architect each state the panel on one line; interrogate lists it
 # as one slug per row of its Reviewer A/B/C table (upstream #167).
@@ -159,11 +159,11 @@ while IFS= read -r line; do
   [ "$got" = "$canon_panel" ] || panel_bad="$panel_bad$setup role row: [$got] != [$canon_panel]"$'\n'
 done < <(grep -E '^(arena runners|arena cross-judge pool|architect runners|interrogate reviewers):' "$setup")
 if [ -n "$panel_bad" ]; then
-  note "FAIL: the default model panel is not identical across provider dispatch, the panel skills, and setup-pstack:"
+  note "FAIL: the default model panel is not identical across provider dispatch, the panel skills, and setup-stack:"
   note "$panel_bad"
   fail=1
 else
-  note "ok: default model panel identical across provider dispatch + 3 panel skills + setup-pstack ($canon_panel)"
+  note "ok: default model panel identical across provider dispatch + 3 panel skills + setup-stack ($canon_panel)"
 fi
 
 plugin="$repo/plugins/pstack"
@@ -174,8 +174,8 @@ poteto_preload_bad=""
 if [ "$(printf '%s\n' "$poteto_agent_front" | grep -cx 'skills:' || true)" != "1" ]; then
   poteto_preload_bad="${poteto_agent} must declare one skills list"$'\n'
 fi
-if [ "$(printf '%s\n' "$poteto_agent_front" | grep -cx '  - pstack:poteto-mode' || true)" != "1" ]; then
-  poteto_preload_bad="${poteto_preload_bad}${poteto_agent} must preload pstack:poteto-mode"$'\n'
+if [ "$(printf '%s\n' "$poteto_agent_front" | grep -cx '  - jm-stack:poteto-mode' || true)" != "1" ]; then
+  poteto_preload_bad="${poteto_preload_bad}${poteto_agent} must preload jm-stack:poteto-mode"$'\n'
 fi
 if [ -n "$poteto_preload_bad" ]; then
   note "FAIL: Claude poteto-agent does not preload poteto-mode:"
@@ -453,29 +453,6 @@ else
   note "ok: codex logo path resolves"
 fi
 
-verification="$repo/.claude/skills/verify-open-pstack"
-verification_bad=""
-if [ ! -L "$repo/.agents/skills/verify-open-pstack" ] ||
-   [ "$(readlink "$repo/.agents/skills/verify-open-pstack" 2>/dev/null || true)" != "../../.claude/skills/verify-open-pstack" ]; then
-  verification_bad="Codex must link to the canonical Claude project skill"
-fi
-for section in Launch Doctor Drive Evidence Cleanup Helpers; do
-  grep -q "^## $section$" "$verification/SKILL.md" || verification_bad="$verification_bad missing $section;"
-done
-for file in features/registry.json features/README.md package.json bun.lock tsconfig.json; do
-  [ -f "$verification/$file" ] || verification_bad="$verification_bad missing $file;"
-done
-[ -x "$verification/scripts/verify.sh" ] || verification_bad="$verification_bad helper is not executable;"
-if [ -e "$plugin/skills/verify-open-pstack" ] || [ -e "$plugin/commands/verify-open-pstack.md" ]; then
-  verification_bad="$verification_bad project verifier must not ship in the plugin;"
-fi
-if [ -n "$verification_bad" ]; then
-  note "FAIL: repository-local verification skill: $verification_bad"
-  fail=1
-else
-  note "ok: shared project verification skill has executable helper and maintained feature map"
-fi
-
 if release_out="$(python3 "$repo/scripts/release_test.py" 2>&1 && python3 "$repo/scripts/release.py" notes 2>&1 >/dev/null)"; then
   note "ok: release notes build from the CHANGES.md section for the manifest version ($vc)"
 else
@@ -483,14 +460,6 @@ else
   note "$release_out"
   fail=1
 fi
-
-note "Checking non-shipped verification helper"
-(
-  cd "$verification"
-  bun install --frozen-lockfile
-  bun run test
-  bun run typecheck
-)
 
 if [ "${PSTACK_STATIC_ONLY:-0}" = "1" ]; then
   exit "$fail"
@@ -512,7 +481,7 @@ Then stop. Do not invoke any skill or tool.
 EOF
 
 run() {
-  claude -p --plugin-dir "$scratch" --model fable --effort max --max-turns 3 "$1" < /dev/null 2>&1
+  claude -p --plugin-dir "$scratch" --model opus --effort high --max-turns 3 "$1" < /dev/null 2>&1
 }
 
 check() { # $1 label, $2 expected marker, $3 output
@@ -531,10 +500,10 @@ check "user /testplug:foo invocation" "SKILL-RAN" "$(run '/testplug:foo')"
 
 preloaded_agent_output="$(
   claude -p \
-    'Use the Agent tool once with subagent_type pstack:poteto-agent. Give it this task verbatim: "Without invoking Skill or reading files, reply with the first Core principle named in the preloaded poteto-mode skill." Return only the child response.' \
+    'Use the Agent tool once with subagent_type jm-stack:poteto-agent. Give it this task verbatim: "Without invoking Skill or reading files, reply with the first Core principle named in the preloaded poteto-mode skill." Return only the child response.' \
     --plugin-dir "$plugin" \
-    --model fable \
-    --effort max \
+    --model opus \
+    --effort high \
     --max-turns 5 \
     --tools Agent \
     < /dev/null 2>&1 || true

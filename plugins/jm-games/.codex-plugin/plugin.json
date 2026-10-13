@@ -1,0 +1,34 @@
+{
+  "name": "jm-games",
+  "version": "0.1.0",
+  "description": "Game and graphics skills: version-specific three.js and react-three-fiber facts, and a reference-driven art iteration loop with an image-only critic.",
+  "author": {
+    "name": "Josh Meads"
+  },
+  "license": "MIT",
+  "keywords": [
+    "threejs",
+    "webgpu",
+    "tsl",
+    "react-three-fiber",
+    "art",
+    "vfx"
+  ],
+  "skills": "./skills/",
+  "interface": {
+    "displayName": "jm:games",
+    "shortDescription": "three.js r180+ facts and a reference-driven art iteration loop",
+    "longDescription": "threejs holds version-specific three.js and react-three-fiber facts that models get wrong from training data. art-iteration iterates a visual deliverable against reference images until an image-only critic passes it.",
+    "developerName": "Josh Meads",
+    "category": "Developer Tools",
+    "capabilities": [
+      "Interactive",
+      "Read",
+      "Write"
+    ],
+    "defaultPrompt": [
+      "Use the threejs skill to check this WebGPU code.",
+      "Iterate this effect against the reference until the critic passes it."
+    ]
+  }
+}

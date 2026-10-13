@@ -15,7 +15,7 @@ Every candidate gets the same prompt, so the prompt is the contract.
 
 1. State the artifact each candidate is producing.
 2. Derive the rubric, 3-6 concrete gradeable criteria for what success looks like on *this* task. It is the picker's tool in Phase D. Candidates only see the task.
-3. Pick the runners. Use `arena runners` from the current harness's pstack model sheet when present. Otherwise default to one each on `claude:opus@max`, `codex:gpt-6.1-sol@max`, `grok:grok-4.7@xhigh`. Spawn more runners when the arena covers multiple design directions. Use the same descriptor N times when the work is generation-bound rather than judgment-sensitive.
+3. Pick the runners. Use `arena runners` from the current harness's pstack model sheet when present. Otherwise default to one each on `claude:opus@xhigh`, `codex:gpt-6.1-sol@xhigh`. Spawn more runners when the arena covers multiple design directions. Use the same descriptor N times when the work is generation-bound rather than judgment-sensitive.
 4. Give each candidate its own output location (a git worktree where possible, otherwise `/tmp/arena-<slug>/candidate-<n>/`), per the **separate-before-serializing-shared-state** principle skill.
 
 ## Phase B: Fan out

@@ -11,7 +11,7 @@ export interface KeptPredecessor {
 }
 
 export interface FamilyEntry {
-  /** The key role defaults name. A Claude family's native agents are pstack-<name>-<effort>. */
+  /** The key role defaults name. A Claude family's native agents are stack-<name>-<effort>. */
   readonly name: string;
   /** The matrix label. */
   readonly label: string;

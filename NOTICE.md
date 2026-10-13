@@ -2,6 +2,8 @@
 
 This plugin is a port of upstream MIT-licensed work. All upstream copyright notices and license terms are preserved. The open-pstack history begins from `michael-denyer/pstack-claude` through proven import commit `053ed78732e3b71826933170eafe7f7782dda844`.
 
+The `jm-stack` plugin ("jm:stack", in `plugins/pstack/`) is Josh Meads's distribution of [Open Pstack](https://github.com/ericlitman/open-pstack) with renamed user-facing names and different model defaults; see `UPSTREAM.md`. Lauren Tan remains its author of record.
+
 ## Upstream sources
 
 | Component | Upstream | Copyright | License | License file |
@@ -55,12 +57,10 @@ Files authored for this port (not derived from upstream):
 - `plugins/pstack/skills/poteto-mode/scripts/bootstrap.test.ts`
 - `plugins/pstack/skills/poteto-mode/scripts/check-plan.test.ts`
 - `plugins/pstack/skills/poteto-mode/scripts/resolve-codex-transcript`, `resolve-codex-transcript.ts`, and `resolve-codex-transcript.test.ts` (Reflect's known-chat Codex transcript lookup, #140; behavior and test cases from Donncha O'Toole's contribution)
-- `.claude/skills/verify-open-pstack/scripts/reflect.test.ts` (#140)
 - `plugins/pstack/skills/babysit/SKILL.md` (independently authored; workflow informed by Cursor's public `/babysit` behavior)
-- `plugins/pstack/agents/pstack-fable-*.md` and `plugins/pstack/agents/pstack-opus-*.md` (Claude-native frontier lanes at each selectable effort)
+- `plugins/pstack/agents/stack-fable-*.md`, `stack-opus-*.md` and `stack-haiku-*.md` (Claude-native lanes at each selectable effort)
 - `plugins/pstack/hooks/hooks.json`, `plugins/pstack/hooks/session-start`, and `plugins/pstack/hooks/session-start-context.md` (the auto-fire hook and its mandate)
 - `NOTICE.md` (this file)
 - `README.md`
-- `REVIEW.md` (the review panel's usage and waiver-scope mandate, #153; adapted from mastra-pilot's `REVIEW.md`, not from upstream)
 - `CHANGES.md`
 - `LICENSE-cursor-team-kit` (copied verbatim from upstream cursor-team-kit MIT)

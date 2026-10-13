@@ -1,16 +1,16 @@
 ---
 name: poteto-help
-description: Guides users through pstack setup, /poteto-mode, and picking the skill, playbook, or principle for a task. Type /poteto-help with a question.
+description: Guides users through jm:stack setup, /poteto-mode, and picking the skill, playbook, or principle for a task. Type /poteto-help with a question.
 disable-model-invocation: true
 ---
 
 # Poteto help
 
-Answer the user's question about pstack, hand them a prompt they can send, and link the file the answer came from. For a help question, don't start the work. The user asked how, and a pstack run spends real tokens, so let them send the prompt.
+Answer the user's question about jm:stack, hand them a prompt they can send, and link the file the answer came from. For a help question, don't start the work. The user asked how, and a jm:stack run spends real tokens, so let them send the prompt.
 
-A message that asks for work, such as "use pstack to fix this bug", is not a help question. Read [`poteto-mode`](../poteto-mode/SKILL.md), do the work under it, and mention once that starting each task with `/poteto-mode` keeps it on.
+A message that asks for work, such as "use jm:stack to fix this bug", is not a help question. Read [`poteto-mode`](../poteto-mode/SKILL.md), do the work under it, and mention once that starting each task with `/poteto-mode` keeps it on.
 
-This file maps questions to the skills and guide pages that hold the answers. Those files own the details. Read the file you route to before you quote it, and trust it when it disagrees with this map. The skill links here point into the installed plugin, which the user may not be able to open, so give the user the file's public copy: `https://github.com/ericlitman/open-pstack/blob/main/plugins/pstack/` followed by its path. The guide pages are Lauren's upstream guide. They show Cursor's interface, so translate any Cursor step with this file before you pass it on.
+This file maps questions to the skills and guide pages that hold the answers. Those files own the details. Read the file you route to before you quote it, and trust it when it disagrees with this map. The skill links here point into the installed plugin, which the user may not be able to open, so give the user the file's public copy: `https://github.com/joshmeads/ai-stack/blob/main/plugins/pstack/` followed by its path. The guide pages are Lauren's upstream guide. They show Cursor's interface, so translate any Cursor step with this file before you pass it on.
 
 ## Find out what they need
 
@@ -20,29 +20,29 @@ Infer the need from the message and the conversation. A named situation, such as
 - Start a task with `/poteto-mode`
 - Pick a skill for a situation
 - Fix a run that went wrong
-- Make pstack my own
+- Make jm:stack my own
 
 Check the state that changes the answer, and mention it only when it does:
 
-- No `pstack-models.md` in the active harness's config home means `/setup-pstack` hasn't run for this user, so every role uses its default model. Resolve the config home per [`codex-tools.md`](../poteto-mode/references/codex-tools.md#harness-config-homes).
+- No `pstack-models.md` in the active harness's config home means `/setup-stack` hasn't run for this user, so every role uses its default model. Resolve the config home per [`codex-tools.md`](../poteto-mode/references/codex-tools.md#harness-config-homes).
 - No `verify-*` skill or other app harness in the project means agents have no scripted way to drive the app. Mention `/create-verification-skill` when the question is about proving a change works.
 
 When the model rule is missing and it matters, ask whether the user wants to pick a model for each role and a requested effort now. It matters when the user is new, the question is about setup or cost, or the answer depends on which models run. Ask at most once per chat. If the need is also unclear, ask both questions together. Offer two choices:
 
-- Now: give them `/setup-pstack` to type, and answer their question too.
-- Later: answer their question, and add one line saying every role keeps its default model until they run `/setup-pstack`.
+- Now: give them `/setup-stack` to type, and answer their question too.
+- Later: answer their question, and add one line saying every role keeps its default model until they run `/setup-stack`.
 
 ## Get set up
 
-1. Install. In Claude Code, run `/plugin marketplace add ericlitman/open-pstack`, then `/plugin install pstack@open-pstack`, then `/reload-plugins`. In Codex, run `codex plugin marketplace add ericlitman/open-pstack --ref main`, then `codex plugin add pstack@open-pstack`, and turn on `multi_agent` per [`codex-tools.md`](../poteto-mode/references/codex-tools.md).
-2. Run [`/setup-pstack`](../setup-pstack/SKILL.md). It maps a model to each role, asks one requested effort for each model family it assigns, probes those models, and writes a model sheet. The sheet applies to new sessions.
+1. Install. In Claude Code, run `/plugin marketplace add joshmeads/ai-stack`, then `/plugin install jm-stack@jm`, then `/reload-plugins`. In Codex, run `codex plugin marketplace add joshmeads/ai-stack --ref main`, then `codex plugin add jm-stack@jm`, and turn on `multi_agent` per [`codex-tools.md`](../poteto-mode/references/codex-tools.md).
+2. Run [`/setup-stack`](../setup-stack/SKILL.md). It maps a model to each role, asks one requested effort for each model family it assigns, probes those models, and writes a model sheet. The sheet applies to new sessions.
 3. Start a real task with `/poteto-mode`, a goal, and a check that can pass or fail.
 
-In Claude Code, a typed skill carries the plugin prefix, as in `/pstack:poteto-mode`. In Codex, ask for a skill by name, as in "use pstack:poteto-mode". The [README](https://github.com/ericlitman/open-pstack#readme) and [guide page 1](https://github.com/cursor/plugins/blob/main/pstack/docs/guide/01-setup.md) have the details. Offer to word their first prompt with them, per [`references/prompting.md`](references/prompting.md).
+In Claude Code, a typed skill carries the plugin prefix, as in `/jm-stack:poteto-mode`. In Codex, ask for a skill by name, as in "use jm-stack:poteto-mode". The [README](https://github.com/joshmeads/ai-stack#readme) and [guide page 1](https://github.com/cursor/plugins/blob/main/pstack/docs/guide/01-setup.md) have the details. Offer to word their first prompt with them, per [`references/prompting.md`](references/prompting.md).
 
-If cost is the worry, say where the tokens go and how to spend fewer. pstack spends extra tokens on subagents and review panels. Rerun `/setup-pstack` and pick lower efforts or cheaper models. A role set to `auto` or `inherit-parent` runs on the session's model, which saves tokens when the session runs on a cheaper model. A shorter panel list runs fewer subagents, one for each entry. Save `/poteto-mode` for work that needs rigor.
+If cost is the worry, say where the tokens go and how to spend fewer. jm:stack spends extra tokens on subagents and review panels. Rerun `/setup-stack` and pick lower efforts or cheaper models. A role set to `auto` or `inherit-parent` runs on the session's model, which saves tokens when the session runs on a cheaper model. A shorter panel list runs fewer subagents, one for each entry. Save `/poteto-mode` for work that needs rigor.
 
-Open Pstack runs one shared skill tree in Claude Code and Codex. Workflow skills such as `/poteto-mode`, `/how`, `/why`, and `/teach` start subagents with per-role models. A model from the app you are using runs inside it, and other models run through their signed-in command-line tools. Codex has no `loop` skill and no `poteto-agent` type. [`codex-tools.md`](../poteto-mode/references/codex-tools.md) maps each Claude Code tool to its Codex form.
+jm:stack runs one shared skill tree in Claude Code and Codex. Workflow skills such as `/poteto-mode`, `/how`, `/why`, and `/teach` start subagents with per-role models. A model from the app you are using runs inside it, and other models run through their signed-in command-line tools. Codex has no `loop` skill and no `poteto-agent` type. [`codex-tools.md`](../poteto-mode/references/codex-tools.md) maps each Claude Code tool to its Codex form.
 
 ## Start a task with `/poteto-mode`
 
@@ -50,8 +50,8 @@ Open Pstack runs one shared skill tree in Claude Code and Codex. Workflow skills
 
 Whether `/poteto-mode` stays on depends on the harness:
 
-- In Claude Code, a small startup instruction routes non-trivial work into `/poteto-mode`. A typed `/pstack:poteto-mode` attaches the skill to that task, and it can fade as the session moves on.
-- In Codex, ask for `pstack:poteto-mode` by name at the start of each task.
+- In Claude Code, a small startup instruction routes non-trivial work into `/poteto-mode`. A typed `/jm-stack:poteto-mode` attaches the skill to that task, and it can fade as the session moves on.
+- In Codex, ask for `jm-stack:poteto-mode` by name at the start of each task.
 - In both, start each new task with `/poteto-mode` when it matters.
 
 Mid-session, "new task" makes the mode match a fresh playbook. In Claude Code, `/poteto-mode` already uses `poteto-agent` for the subagents its playbook steps spawn. To get the same style from a subagent of your own, spawn it with `subagent_type: "poteto-agent"`. Codex has no `poteto-agent` type, so dispatch a `spawn_agent` whose instructions say to read the `poteto-mode` skill in full first.
@@ -84,11 +84,11 @@ The default answer is `/poteto-mode`, which runs most of the others when its ste
 | Vet a performance number before reporting or acting on it | [`/benchmark-checklist`](../benchmark-checklist/SKILL.md) |
 | Run a large or cross-cutting change, or one to review after stepping away | [`/figure-it-out`](../figure-it-out/SKILL.md) |
 | Keep a decision log during a run, and review it afterward | [`/show-me-your-work`](../show-me-your-work/SKILL.md) |
-| Pick a model for each role and a requested effort for each model family | [`/setup-pstack`](../setup-pstack/SKILL.md) |
+| Pick a model for each role and a requested effort for each model family | [`/setup-stack`](../setup-stack/SKILL.md) |
 | Turn their own working habits into a personal mode skill | [`/automate-me`](../automate-me/SKILL.md) |
 | Turn what a finished task taught into skill edits | [`/reflect`](../reflect/SKILL.md) |
 | Stop agents from repeating the same mistakes in this repo | [`/correct`](../correct/SKILL.md) |
-| Find their way around pstack | `/poteto-help` |
+| Find their way around jm:stack | `/poteto-help` |
 
 If a skill directory next to this one is missing from the table, read its frontmatter and route by its description. The `principle-*` directories are covered under principles below.
 
@@ -101,11 +101,11 @@ Close calls:
 - `/recall` rebuilds context across recent chats. `/ketchup` covers only this chat since the user's last message. Resuming one specific chat or branch is the Session pickup playbook.
 - `/figure-it-out` designs one rigorous run. The Orchestrate playbook runs a program that spans days and many PRs. The Autonomous run playbook drives one task to a finish condition.
 
-Not in pstack:
+Not in jm:stack:
 
 - `run` (CLIs and TUIs), `verify` (UIs), and `loop` are Claude Code built-ins. `plugin-dev:skill-development` ships in the separate `plugin-dev` plugin, which skill-authoring routes need. In Claude Code, install it with `/plugin marketplace add anthropics/claude-plugins-official`, then `/plugin install plugin-dev@claude-plugins-official`. [`codex-tools.md`](../poteto-mode/references/codex-tools.md) names the Codex equivalent of each.
 - `/make-bot-ui` is not ported, because it depends on Cursor routines and webhooks.
-- pstack has no `/orchestrate` skill. Orchestrate is a `/poteto-mode` playbook. If the slash menu shows `/orchestrate`, another plugin provides it.
+- jm:stack has no `/orchestrate` skill. Orchestrate is a `/poteto-mode` playbook. If the slash menu shows `/orchestrate`, another plugin provides it.
 
 ## Playbooks and principles
 
@@ -120,9 +120,9 @@ Playbooks are step lists inside `/poteto-mode`, not skills, so they have no slas
 
 Without `/poteto-mode`, a phrase such as "babysit this pr" can start the bundled `/babysit` skill for the same job instead. The Playbooks section of [`poteto-mode`](../poteto-mode/SKILL.md) lists every playbook and when it applies. [Guide page 6](https://github.com/cursor/plugins/blob/main/pstack/docs/guide/06-verify-and-ship.md) covers opening, babysitting, and landing a PR.
 
-pstack has no planning skill. Claude Code's plan mode works alongside it. For work that spans phases or stacked PRs, asking `/poteto-mode` for a plan runs the [Multi-phase plan playbook](../poteto-mode/playbooks/multi-phase-plan.md), which writes the plan and doesn't implement it. For a design question, the Prototype playbook or `/architect` settles it in code first.
+jm:stack has no planning skill. Claude Code's plan mode works alongside it. For work that spans phases or stacked PRs, asking `/poteto-mode` for a plan runs the [Multi-phase plan playbook](../poteto-mode/playbooks/multi-phase-plan.md), which writes the plan and doesn't implement it. For a design question, the Prototype playbook or `/architect` settles it in code first.
 
-Principles are one-rule skills that `/poteto-mode` reads and cites in its replies. The user rarely invokes one. They steer with the names instead, as in "apply prove it works. show me the real output." Principles are hidden from the slash menu, but asking for one by name, such as `pstack:principle-prove-it-works`, still loads it on demand. [Guide page 8](https://github.com/cursor/plugins/blob/main/pstack/docs/guide/08-principles.md) lists them.
+Principles are one-rule skills that `/poteto-mode` reads and cites in its replies. The user rarely invokes one. They steer with the names instead, as in "apply prove it works. show me the real output." Principles are hidden from the slash menu, but asking for one by name, such as `jm-stack:principle-prove-it-works`, still loads it on demand. [Guide page 8](https://github.com/cursor/plugins/blob/main/pstack/docs/guide/08-principles.md) lists them.
 
 ## Fix a run that went wrong
 
@@ -130,7 +130,7 @@ Principles are one-rule skills that `/poteto-mode` reads and cites in its replie
 |---|---|
 | The mode stopped applying after a few turns | A typed skill fades as the session moves on. Start each task with `/poteto-mode`. |
 | A question got treated as the next step of the last task | Say "new task", or say the turn doesn't need the mode. |
-| A new model choice had no effect | The model sheet from `/setup-pstack` applies to new sessions. Start one. |
+| A new model choice had no effect | The model sheet from `/setup-stack` applies to new sessions. Start one. |
 | Runs cost more than expected | See the cost paragraph under Get set up. |
 | A skill didn't load on its own | `/poteto-help`, `/correct`, and `/ketchup` run only when typed. Others can load from the user's words, but only when the request matches their description, and `/poteto-mode` doesn't run every skill. |
 | Parallel agents overwrote each other | Give each agent its own worktree. |
@@ -139,7 +139,7 @@ Principles are one-rule skills that `/poteto-mode` reads and cites in its replie
 
 For a run that drifts, [`references/prompting.md`](references/prompting.md) has one-line steers. [Guide page 10](https://github.com/cursor/plugins/blob/main/pstack/docs/guide/10-recipes-and-pitfalls.md) has more pitfalls and the recipes worth copying.
 
-## Make pstack my own
+## Make jm:stack my own
 
 - [`/automate-me`](../automate-me/SKILL.md) drafts a personal mode skill from the user's own history, to use alongside `/poteto-mode`.
 - [`/reflect`](../reflect/SKILL.md) after a session turns its lessons into skill edits the user approves.

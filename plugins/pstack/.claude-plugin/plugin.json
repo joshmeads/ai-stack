@@ -1,15 +1,16 @@
 {
-  "name": "pstack",
-  "displayName": "pstack",
+  "name": "jm-stack",
+  "displayName": "jm:stack",
   "version": "1.7.0",
-  "description": "if you want to go fast, go deep first. pstack helps you write less, but higher quality code. rigorous agent workflows you can parallelize with confidence. Ported from cursor/plugins/pstack for Claude Code and Codex.",
+  "description": "jm:stack: Lauren Tan's pstack for Claude Code and Codex with Josh Meads's model routing. Based on Open Pstack (ericlitman/open-pstack), which began from michael-denyer/pstack-claude and ports cursor/plugins/pstack.",
   "author": {
     "name": "Lauren Tan"
   },
-  "homepage": "https://github.com/ericlitman/open-pstack",
-  "repository": "https://github.com/ericlitman/open-pstack",
+  "homepage": "https://github.com/joshmeads/ai-stack",
+  "repository": "https://github.com/joshmeads/ai-stack",
   "license": "MIT",
   "keywords": [
+    "jm-stack",
     "pstack",
     "poteto-mode",
     "workflow",

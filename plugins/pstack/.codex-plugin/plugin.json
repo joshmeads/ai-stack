@@ -1,14 +1,15 @@
 {
-  "name": "pstack",
+  "name": "jm-stack",
   "version": "1.7.0",
-  "description": "if you want to go fast, go deep first. pstack helps you write less, but higher quality code. rigorous agent workflows you can parallelize with confidence. Codex port of the Claude Code plugin; skills are shared, tool names resolve via skills/poteto-mode/references/codex-tools.md.",
+  "description": "jm:stack: Lauren Tan's pstack for Claude Code and Codex with Josh Meads's model routing. Based on Open Pstack (ericlitman/open-pstack), which began from michael-denyer/pstack-claude and ports cursor/plugins/pstack. Skills are shared; tool names resolve via skills/poteto-mode/references/codex-tools.md.",
   "author": {
     "name": "Lauren Tan"
   },
-  "homepage": "https://github.com/ericlitman/open-pstack",
-  "repository": "https://github.com/ericlitman/open-pstack",
+  "homepage": "https://github.com/joshmeads/ai-stack",
+  "repository": "https://github.com/joshmeads/ai-stack",
   "license": "MIT",
   "keywords": [
+    "jm-stack",
     "pstack",
     "poteto-mode",
     "workflow",
@@ -20,10 +21,10 @@
   "skills": "./skills/",
   "interface": {
     "logo": "./assets/logo.png",
-    "displayName": "pstack",
+    "displayName": "jm:stack",
     "shortDescription": "Rigorous, parallelizable agent workflows: go deep first, write less, verify everything",
-    "longDescription": "pstack guides agent work through poteto-mode's principles, parallel design exploration (architect/arena), adversarial multi-model review (interrogate), root-cause debugging, prose deslopping, and verified delivery. Skills are shared with the Claude Code build; on Codex, tool names resolve via the codex-tools mapping.",
-    "developerName": "Lauren Tan (original), open-pstack maintainers",
+    "longDescription": "jm:stack guides agent work through poteto-mode's principles, parallel design exploration (architect/arena), adversarial multi-model review (interrogate), root-cause debugging, prose deslopping, and verified delivery. Skills are shared with the Claude Code build; on Codex, tool names resolve via the codex-tools mapping.",
+    "developerName": "Lauren Tan (original), Open Pstack maintainers, Josh Meads",
     "category": "Developer Tools",
     "capabilities": [
       "Interactive",
@@ -34,7 +35,7 @@
       "Work on this in poteto-mode.",
       "Interrogate this diff with multiple models."
     ],
-    "websiteURL": "https://github.com/ericlitman/open-pstack",
+    "websiteURL": "https://github.com/joshmeads/ai-stack",
     "brandColor": "#7C3AED"
   }
 }

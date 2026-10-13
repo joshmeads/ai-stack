@@ -1,6 +1,6 @@
-# Codex tool mapping for pstack
+# Codex tool mapping for jm:stack
 
-pstack skills retain Claude Code tool language (`Skill`, `Agent`, `AskUserQuestion`) in shared prose. On Codex the files are the same; only those tool names resolve differently. Model execution is not translated here. Read [`provider-dispatch.md`](provider-dispatch.md) for the parent-owned Claude/Codex/Grok route table and provider-qualified descriptors.
+jm:stack skills retain Claude Code tool language (`Skill`, `Agent`, `AskUserQuestion`) in shared prose. On Codex the files are the same; only those tool names resolve differently. Model execution is not translated here. Read [`provider-dispatch.md`](provider-dispatch.md) for the parent-owned Claude/Codex route table and provider-qualified descriptors.
 
 ## Harness config homes
 
@@ -13,7 +13,7 @@ Resolve the current parent's config home once: Claude Code uses nonempty `CLAUDE
 
 Empty and unset variables both select the default. Preserve spaces in the resolved path by quoting shell file operands. In shared instructions, `<config-home>` means this resolved parent-specific directory, not literal text to write. Use that same home for setup's sheet and integration writes, snapshots, restoration, and readback.
 
-The Claude integration is the one `@` import line in `<config-home>/CLAUDE.md` whose target's basename is `pstack-models.md`, regardless of its existing directory or path spelling. Select current state using [setup-pstack step 2](../../setup-pstack/SKILL.md#2-load-current-state). When `<config-home>` is the default home, render exactly the legacy line:
+The Claude integration is the one `@` import line in `<config-home>/CLAUDE.md` whose target's basename is `pstack-models.md`, regardless of its existing directory or path spelling. Select current state using [setup-stack step 2](../../setup-stack/SKILL.md#2-load-current-state). When `<config-home>` is the default home, render exactly the legacy line:
 
 ```text
 @~/.claude/pstack-models.md
@@ -39,7 +39,7 @@ The resolver reads the [Codex config home](#harness-config-homes) and looks up t
 
 ## Tool actions
 
-| pstack / Claude action | Codex equivalent |
+| jm:stack / Claude action | Codex equivalent |
 |------------------------|------------------|
 | Read a file | `shell` (`cat`, `head`, `tail`) |
 | Create / edit / delete a file | `apply_patch` |
@@ -48,7 +48,7 @@ The resolver reads the [Codex config home](#harness-config-homes) and looks up t
 | Fetch a URL | `shell` with `curl` / `wget` |
 | Search the web | `web_search` |
 | Invoke a skill (the `Skill` tool, `/command`) | Skills load natively. Follow the instructions presented. |
-| `paths` frontmatter scopes automatic loading | Claude Code only. On Codex, invoke `pstack:typescript-best-practices` by name. |
+| `paths` frontmatter scopes automatic loading | Claude Code only. On Codex, invoke `jm-stack:typescript-best-practices` by name. |
 | Dispatch a subagent (the `Agent`/`Task` tool) | `spawn_agent` |
 | Dispatch N parallel subagents in one turn | N `spawn_agent` calls in one response |
 | Wait for a subagent result | `wait_agent` |
@@ -77,13 +77,13 @@ poteto-mode's Subagents section sets Claude-specific defaults (`subagent_type: "
 
 ## Models and providers
 
-Do not replace every configured entry with a Codex model. `/setup-pstack` writes portable descriptors such as `claude:opus@max`, `codex:gpt-6.1-sol@max`, and `grok:grok-4.7@xhigh`. In a Codex parent, only `codex:*` is native. Route Claude and Grok descriptors through the external launcher exactly as `provider-dispatch.md` specifies. The default panel runs one model from each of three providers and contains no older GPT or Claude substitute.
+Do not replace every configured entry with a Codex model. `/setup-stack` writes portable descriptors such as `claude:opus@xhigh`, `codex:gpt-6.1-sol@xhigh`, and `codex:gpt-6-luna@xhigh`. In a Codex parent, only `codex:*` is native. Route Claude descriptors through the external launcher exactly as `provider-dispatch.md` specifies. The default panel runs one model from each of two providers and contains no older GPT or Claude substitute.
 
-## Claude built-in skills pstack references
+## Claude built-in skills jm:stack references
 
-Some triggers name skills that ship with Claude Code, not pstack. They do not exist on Codex. Substitute the behavior:
+Some triggers name skills that ship with Claude Code, not jm:stack. They do not exist on Codex. Substitute the behavior:
 
-| Claude built-in named in pstack | On Codex |
+| Claude built-in named in jm:stack | On Codex |
 |---------------------------------|----------|
 | `run` (drive a CLI/TUI to see a change work) | Run the app yourself via `shell` and observe the real output. |
 | `verify` (drive a UI to confirm a fix) | Drive the UI with whatever automation you have, or hand the user a concrete manual check. Do not claim done without observing the artifact. |
@@ -92,8 +92,8 @@ Some triggers name skills that ship with Claude Code, not pstack. They do not ex
 
 ## Vendored scripts
 
-`skills/poteto-mode/scripts/` ships the `watch-pr` PR watcher, the `orch` store CLI, `worktree-audit.sh`, and `runner/pstack-runner`. They are plain bun and bash, so they run the same on Codex; invoke them through `shell`. The external runner additionally needs the assigned `claude`, `codex`, or `grok` executable already authenticated. It rejects a Codex provider when Codex is the parent because that lane belongs on native `spawn_agent`. The other scripts need `bun`, `gh`, (for stack work) `gt`, and (for `worktree-audit.sh`) `jq` and `rg`. `worktree-audit.sh` reads Claude Code transcripts under `~/.claude/projects/`; point it at your runtime's transcript directory instead when you run it elsewhere.
+`skills/poteto-mode/scripts/` ships the `watch-pr` PR watcher, the `orch` store CLI, `worktree-audit.sh`, and `runner/pstack-runner`. They are plain bun and bash, so they run the same on Codex; invoke them through `shell`. The external runner additionally needs the assigned `claude` or `codex` executable already authenticated. It rejects a Codex provider when Codex is the parent because that lane belongs on native `spawn_agent`. The other scripts need `bun`, `gh`, (for stack work) `gt`, and (for `worktree-audit.sh`) `jq` and `rg`. `worktree-audit.sh` reads Claude Code transcripts under `~/.claude/projects/`; point it at your runtime's transcript directory instead when you run it elsewhere.
 
 ## Instructions file
 
-Where a pstack skill says "your instructions file", on Codex that is `AGENTS.md` (project root, plus `<config-home>/AGENTS.md` global). On Claude Code it is `CLAUDE.md` (project root, plus `<config-home>/CLAUDE.md` global). Resolve the global directory with the [config-home rule](#harness-config-homes).
+Where a jm:stack skill says "your instructions file", on Codex that is `AGENTS.md` (project root, plus `<config-home>/AGENTS.md` global). On Claude Code it is `CLAUDE.md` (project root, plus `<config-home>/CLAUDE.md` global). Resolve the global directory with the [config-home rule](#harness-config-homes).

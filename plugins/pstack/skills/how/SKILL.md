@@ -7,7 +7,7 @@ description: "Use for \"how does X work\", code walkthroughs before changing som
 
 Explore the codebase to answer "how does X work?" questions. Produce architectural explanations at the level of a senior engineer onboarding onto a subsystem, enough to build a working mental model, not so much that it reads like annotated source code.
 
-**Dispatch contract.** Resolve every configured role through [`provider-dispatch.md`](../poteto-mode/references/provider-dispatch.md). Values are provider-qualified descriptors; the parent chooses native versus external execution. Every lane runs in `read-only` mode. Explorers use the `how explorer` descriptor (default `grok:grok-4.7@xhigh`), and every explainer uses the `how explainer` descriptor (default `claude:opus@max`). A native lane uses the parent subagent primitive; an external lane uses the launcher directly. On Codex, resolve remaining Claude tool names via [`codex-tools.md`](../poteto-mode/references/codex-tools.md).
+**Dispatch contract.** Resolve every configured role through [`provider-dispatch.md`](../poteto-mode/references/provider-dispatch.md). Values are provider-qualified descriptors; the parent chooses native versus external execution. Every lane runs in `read-only` mode. Explorers use the `how explorer` descriptor (default `codex:gpt-6.1-sol@xhigh`), and every explainer uses the `how explainer` descriptor (default `claude:opus@xhigh`). A native lane uses the parent subagent primitive; an external lane uses the launcher directly. On Codex, resolve remaining Claude tool names via [`codex-tools.md`](../poteto-mode/references/codex-tools.md).
 
 ## 1. Assess complexity
 

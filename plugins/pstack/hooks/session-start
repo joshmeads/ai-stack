@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# SessionStart hook for the pstack plugin: prints the poteto-mode dispatch
+# SessionStart hook for the jm:stack plugin: prints the poteto-mode dispatch
 # mandate to stdout, which Claude Code injects as session context directly.
 # A missing context file fails the hook cleanly instead of injecting noise.
 

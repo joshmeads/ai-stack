@@ -1,21 +1,22 @@
 {
-  "name": "open-pstack",
+  "name": "jm",
   "owner": {
-    "name": "Eric Litman"
+    "name": "Josh Meads"
   },
-  "description": "Pstack for Claude Code and Codex, tracking Cursor's upstream pstack.",
+  "description": "Josh Meads's agent plugins for Claude Code and Codex: jm:stack (Open Pstack with Josh's model routing), jm:games, and jm:tools.",
   "plugins": [
     {
-      "name": "pstack",
+      "name": "jm-stack",
       "source": "./plugins/pstack",
-      "description": "if you want to go fast, go deep first. pstack helps you write less, but higher quality code. rigorous agent workflows you can parallelize with confidence.",
+      "description": "jm:stack: Lauren Tan's pstack for Claude Code and Codex with Josh Meads's model routing. Based on Open Pstack (ericlitman/open-pstack), which began from michael-denyer/pstack-claude and ports cursor/plugins/pstack.",
       "version": "1.7.0",
       "author": {
         "name": "Lauren Tan (original)"
       },
-      "homepage": "https://github.com/ericlitman/open-pstack",
+      "homepage": "https://github.com/joshmeads/ai-stack",
       "license": "MIT",
       "keywords": [
+        "jm-stack",
         "pstack",
         "poteto-mode",
         "workflow",
@@ -24,6 +25,26 @@
         "subagents",
         "unslop"
       ]
+    },
+    {
+      "name": "jm-games",
+      "source": "./plugins/jm-games",
+      "description": "Game and graphics skills: version-specific three.js and react-three-fiber facts, and a reference-driven art iteration loop with an image-only critic.",
+      "author": {
+        "name": "Josh Meads"
+      },
+      "homepage": "https://github.com/joshmeads/ai-stack",
+      "license": "MIT"
+    },
+    {
+      "name": "jm-tools",
+      "source": "./plugins/jm-tools",
+      "description": "Working tools: continuation handoffs for a fresh session, adversarial try-to-break-it checks, and before/after visual evidence for UI changes.",
+      "author": {
+        "name": "Josh Meads"
+      },
+      "homepage": "https://github.com/joshmeads/ai-stack",
+      "license": "MIT AND CC-BY-SA-4.0"
     }
   ]
 }

@@ -1,174 +1,63 @@
-# open-pstack
+# jm
 
-[![CI](https://github.com/ericlitman/open-pstack/actions/workflows/ci.yml/badge.svg)](https://github.com/ericlitman/open-pstack/actions/workflows/ci.yml)
-[![Latest release](https://img.shields.io/github/v/release/ericlitman/open-pstack)](https://github.com/ericlitman/open-pstack/releases/latest)
-[![MIT license](https://img.shields.io/github/license/ericlitman/open-pstack)](LICENSE)
+Personal plugins for Claude Code and Codex, maintained at [joshmeads/ai-stack](https://github.com/joshmeads/ai-stack). The repository is a marketplace named `jm` with three plugins, plus the `ai-stack` CLI that installs them.
 
-**Open Pstack brings [Lauren Tan (@poteto)](https://x.com/poteto)'s [pstack](https://github.com/cursor/plugins/tree/main/pstack) to Claude Code and Codex.** Its job is to stay as close to her original work as possible while translating the parts that depend on Cursor.
-
-Lauren built pstack from the skills she uses to ship code at Cursor. In a [55-minute interview with Denis Labelle](https://x.com/DenisLabelle/status/2091337807939706928), she says that she shipped 1,000 pull requests in one month after steadily improving how her agents work and verify their results.
-
-> If you want to go fast, go deep first.
-
-Open Pstack is an unofficial community project that makes pstack work in Claude Code and Codex. If Cursor is your main coding environment, use [Lauren's original pstack](https://github.com/cursor/plugins/tree/main/pstack). If Claude Code or Codex is your main coding environment, use this repository.
-
-## What pstack does
-
-pstack is a plugin for coding agents. It is not a new model or a hosted service. It gives your agent engineering rules, step-by-step workflows for different kinds of work, focused skills, and small local tools.
-
-The normal entry point is `poteto-mode`. You give it a task in plain language. It then:
-
-- reads the task and chooses a workflow that fits;
-- learns how the current system works before changing it;
-- compares designs when the choice matters;
-- favors small, simple changes over extra machinery;
-- asks several models to challenge important decisions when useful;
-- runs the code and checks real behavior instead of stopping at “the tests pass”; and
-- carries the work through review, continuous integration (CI), and a ready-to-merge pull request when asked.
-
-![How pstack routes a task through focused skills, real-app proof, and a review-ready pull request](assets/pstack-workflow.png)
-
-pstack does not ask you to trust an agent on day one. It helps the agent leave evidence you can inspect. Start with supervised work. Let it run more work in parallel only after its checks have earned that trust in your own repositories.
+| Plugin | Shown as | What it is |
+| --- | --- | --- |
+| `jm-stack` | `jm-stack:how`, `jm-stack:poteto-mode`, … | [Open Pstack](https://github.com/ericlitman/open-pstack), the Claude Code and Codex port of Lauren Tan's [pstack](https://github.com/cursor/plugins/tree/main/pstack), renamed jm:stack and set up for the models below. Everything else is upstream's. |
+| `jm-games` | `jm-games:threejs`, `jm-games:art-iteration` | three.js and react-three-fiber facts, and a loop for visual work judged against reference images. |
+| `jm-tools` | `jm-tools:handoff`, `jm-tools:try-to-break-it`, `jm-tools:visual-evidence` | Hand off work to a fresh session, try to break a change before calling it done, and capture before/after UI evidence. |
 
 ## Install
 
-You need a current Claude Code or Codex installation. For the full three-model review, install and sign in to the Claude Code, Codex, and Grok command-line tools. [Bun](https://bun.sh) runs the small local tool that starts models outside the app you are using. You can still use the core workflows with fewer models.
+Build the CLI, create the config, preview, then install:
 
-### Claude Code
-
-Run these commands inside Claude Code:
-
-```text
-/plugin marketplace add ericlitman/open-pstack
-/plugin install pstack@open-pstack
-/reload-plugins
+```sh
+cargo install --path cli
+ai-stack init
+ai-stack diff
+ai-stack install
 ```
 
-### Codex
+`ai-stack install` does two things for each harness:
 
-Run these commands in your shell:
+1. It writes the files that differ between Claude Code and Codex: the jm:stack model sheet and a short routing block in `~/.claude/CLAUDE.md` or `~/.codex/AGENTS.md`.
+2. It adds this checkout as the `jm` marketplace and installs `jm-stack`, `jm-games`, and `jm-tools` with each harness's own plugin commands.
 
-```shell
-codex plugin marketplace add ericlitman/open-pstack --ref main
-codex plugin add pstack@open-pstack
-```
+It also removes what older ai-stack installs left behind. Every file it changes is backed up under `~/.local/state/ai-stack/backups/`. `ai-stack update` pulls this checkout and installs again. `ai-stack install --clean` (or `c` in the review screen) also moves every skill outside the `[clean] keep_skills` list into the backup and uninstalls every plugin outside `keep_plugins`, so only this install and the keep lists remain; preview it with `ai-stack diff --clean`. See [cli/README.md](cli/README.md) for the details.
 
-Turn on Codex subagents in `~/.codex/config.toml` so pstack can compare work in parallel:
+## Models
 
-```toml
-[features]
-multi_agent = true
-```
+Each harness stays on its own provider's models, except for major reviews.
 
-Start a new Codex task after installation so it can discover the new skills and setting.
-
-## Get started
-
-Lauren's original setup has two steps. Open Pstack keeps the same flow.
-
-### 1. Set up the models
-
-In Claude Code, run:
-
-```text
-/pstack:setup-pstack
-```
-
-In Codex, ask:
-
-```text
-Use pstack:setup-pstack to configure pstack.
-```
-
-Setup checks the models you can actually run, shows how each one will start, and asks before saving the choices. The default review panel uses Opus, GPT-5.6 Sol, and Grok 4.7, and setup probes only the models your roles use. Fable remains available.
-
-An older model sheet starts using the rolling aliases in memory as soon as this release is installed. Run setup once after updating to persist that migration. It replaces versioned Fable and Opus entries while preserving every role assignment and effort selection.
-
-A model sheet from an earlier release keeps its panel. To take the new defaults, delete those role lines and run setup again; setup fills missing roles from the defaults. A `grok:grok-4.6` entry keeps running until the next setup run asks you to replace it.
-
-### 2. Use poteto-mode
-
-Start any task that needs careful engineering with `poteto-mode`.
-
-In Claude Code:
-
-```text
-/pstack:poteto-mode Add saved filters to search. Keep the design simple, verify it in the real app, and open a pull request.
-```
-
-In Codex:
-
-```text
-Use pstack:poteto-mode. Add saved filters to search. Keep the design simple, verify it in the real app, and open a pull request.
-```
-
-For that feature, poteto-mode should first understand how search works today. It should decide how the data should be represented before writing code, implement the smallest complete version, run the feature the way a user would, review the result, and prepare the pull request.
-
-That is the main workflow. The other skills are there when poteto-mode needs them or when you want to call one directly.
-
-## Useful skills
-
-| Skill | Use it when |
-| --- | --- |
-| `how` | You want a clear explanation of how part of the system works. |
-| `why` | You want evidence for why the system was built that way. |
-| `architect` | A change crosses a function or module boundary and the design needs to be settled first. |
-| `arena` | You want several complete attempts, followed by a comparison of their best parts. |
-| `interrogate` | You want different models to try to break a design or diff. |
-| `create-verification-skill` | Your project has no repeatable way for an agent to prove real behavior. |
-| `maintain-verification-skill` | The project's verification instructions no longer match the product. |
-| `babysit` | A pull request needs CI failures and review comments handled until it is ready. |
-| `reflect` | A hard task is finished and its lessons should improve the next run. |
-| `correct` | Agents keep making the same mistake in a repository and you want a check that stops it. |
-| `poteto-help` | You want to know which skill, playbook, or principle fits a question. |
-
-Plugin skills include `pstack:` in their name. In Claude Code, invoke a native skill such as `/pstack:architect`. In Codex, ask for the skill, such as `Use pstack:architect for this design.` See the [technical reference](docs/reference.md) for the full list.
-
-## Models and token use
-
-Some pstack workflows use one model. Skills such as `architect`, `arena`, and `interrogate` can run several models in parallel. Each model run uses the subscription and token allowance of its own command-line tool.
-
-`setup-pstack` lets you choose the models, one requested effort per model family you assign, and how many run in parallel. A model from the app you are using runs inside that app. Other models run through their own command-line tools. Open Pstack does not quietly replace a failed model with a weaker one.
-
-## Claude Code and Codex
-
-Both apps read the same pstack skills. Only the way they start those skills and models is different.
-
-| | Claude Code | Codex |
+| Work | Codex | Claude Code |
 | --- | --- | --- |
-| Start poteto-mode | Claude loads a small startup instruction that can route non-trivial work into it. You can also run `/pstack:poteto-mode` yourself. | Ask for `pstack:poteto-mode` by name. Codex does not load the Claude startup instruction. |
-| Runs inside the app | Claude models stay inside Claude Code. | The Sol model stays inside Codex. |
-| Other models | Codex and Grok run through their signed-in command-line tools. | Claude and Grok run through their signed-in command-line tools. |
-| Skills and workflows | Shared with Codex. | Shared with Claude Code. |
+| Lead (the model you talk to) | Sol 6.1, high | Opus 5.5, high |
+| Implementation, explanation, swarm workers | Sol 6.1, medium | Opus 5.5, medium |
+| Hardest tasks | Sol 6.1, xhigh | Opus 5.5, high |
+| Exploration (`how`) | Luna, xhigh | Haiku 5.5, xhigh |
+| Judgment, judging, review | Sol 6.1, xhigh | Opus 5.5, xhigh |
+| Major review (`interrogate`) | Sol 6.1 and Opus 5.5, xhigh | Opus 5.5 and Sol 6.1, xhigh |
 
-Grok can take part in a multi-model review. You cannot use Grok as the main app running pstack.
+A major review happens after a design is settled and before a pull request. It pairs both providers, so in each harness one reviewer runs through the other provider's CLI, which may ask for your approval. Haiku is kept under 100k tokens of context, where its price is lowest; you set its compaction in Claude Code.
 
-## Learn from the original
+The choices come from Artificial Analysis's intelligence, cost, and time-per-task data, picking points on each provider's Pareto line. Change them in `~/.config/ai-stack/config.toml` and run `ai-stack install`.
 
-Lauren's [pstack guide](https://github.com/cursor/plugins/tree/main/pstack/docs/guide) walks through a real task, verification, and longer unattended runs. It uses Cursor's interface, but the ideas are the same. Use the translated skill invocations above in Claude Code or Codex.
+## Upstream
 
-This repository also keeps:
+jm:stack follows Open Pstack. Merge its updates explicitly:
 
-- [the original README](README-UPSTREAM.md), unchanged;
-- [the technical reference](docs/reference.md) for every skill, dependency, and Claude Code or Codex detail;
-- [the upstream sync record](UPSTREAM.md) and update process;
-- [the change record](CHANGES.md) for every adaptation; and
-- [the attribution record](NOTICE.md) for pstack and the imported Cursor Team Kit skills.
+```sh
+git fetch upstream main
+git merge upstream/main
+```
 
-## Staying close to Lauren's pstack
+Read [UPSTREAM.md](UPSTREAM.md) before changing content that came from pstack. [README-OPEN-PSTACK.md](README-OPEN-PSTACK.md) is Open Pstack's own README, and [README-UPSTREAM.md](README-UPSTREAM.md) is Lauren Tan's original.
 
-Open Pstack 1.7.0 tracks pstack 0.15.20 at Cursor commit [`1b6d44ff26d4e242f4e8f68c391e6d2f7ca16def`](https://github.com/cursor/plugins/commit/1b6d44ff26d4e242f4e8f68c391e6d2f7ca16def).
+## Credits
 
-The two projects have separate version numbers. The pstack version identifies Lauren's upstream content. The Open Pstack version identifies the Claude Code and Codex package built from it.
-
-In this repository, “upstream” means Lauren's original pstack. Open Pstack does not promise instant updates. It records the exact version it follows, reviews new changes in order, and changes only what Claude Code and Codex require. New pstack behavior belongs in Lauren's project first whenever possible.
-
-## Contributing
-
-Fixes for Claude Code or Codex and help bringing over new pstack releases are welcome. Search [GitHub Issues](https://github.com/ericlitman/open-pstack/issues) before opening a new issue. For larger behavior changes, explain why the change belongs in Open Pstack instead of Lauren's original project.
-
-Read [UPSTREAM.md](UPSTREAM.md) before changing content brought over from Lauren's pstack. Pull requests must keep one shared skill tree for Claude Code and Codex and pass the repository's tests, type checks, plugin validation, and static checks.
+jm:stack is pstack under a new name. Lauren Tan ([@poteto](https://x.com/poteto)) created [pstack](https://github.com/cursor/plugins/tree/main/pstack) from the skills she uses at Cursor. [Open Pstack](https://github.com/ericlitman/open-pstack), maintained by Eric Litman, ported it to Claude Code and Codex, building on Michael Denyer's [pstack-claude](https://github.com/michael-denyer/pstack-claude).
 
 ## License
 
-MIT. pstack was created by Lauren Tan. Open Pstack builds on Michael Denyer's [pstack-claude](https://github.com/michael-denyer/pstack-claude) port and includes attributed MIT-licensed work from Cursor Team Kit and Superpowers. See [NOTICE.md](NOTICE.md) and the preserved license files for details.
+MIT, except where a plugin or skill says otherwise. See [NOTICE.md](NOTICE.md) and the preserved license files.

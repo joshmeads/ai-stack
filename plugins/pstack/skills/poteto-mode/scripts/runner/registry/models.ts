@@ -20,19 +20,18 @@ export const FAMILIES = [
     provider: "codex",
     model: "gpt-6.1-sol",
     efforts: UP_TO_ULTRA, // `codex debug models`, Codex CLI 0.159.0
-    defaultEffort: "max",
+    defaultEffort: "xhigh",
     upstream: "gpt-5.6-sol-max",
     predecessors: [{ model: "gpt-5.6-sol", efforts: UP_TO_ULTRA }],
   }),
   family({
-    name: "grok",
-    label: "Grok 4.7",
-    provider: "grok",
-    model: "grok-4.7",
-    efforts: UP_TO_MAX,
+    name: "luna",
+    label: "GPT-6 Luna",
+    provider: "codex",
+    model: "gpt-6-luna",
+    efforts: UP_TO_MAX, // `codex debug models`, Codex CLI 0.159.0: no `ultra`
     defaultEffort: "xhigh",
-    upstream: "grok-4.7-xhigh-fast",
-    predecessors: [{ model: "grok-4.6", efforts: UP_TO_MAX }], // written before v1.5.0
+    upstream: null,
   }),
   family({
     name: "opus",
@@ -40,40 +39,50 @@ export const FAMILIES = [
     provider: "claude",
     model: "opus",
     efforts: UP_TO_MAX,
-    defaultEffort: "max",
+    defaultEffort: "xhigh",
     upstream: "opus",
     rolling: { revisionPrefix: "claude-opus-" },
+  }),
+  family({
+    name: "haiku",
+    label: "Haiku",
+    provider: "claude",
+    model: "haiku",
+    efforts: UP_TO_MAX,
+    defaultEffort: "xhigh",
+    upstream: null,
+    rolling: { revisionPrefix: "claude-haiku-" },
   }),
 ] as const;
 export type FamilyName = (typeof FAMILIES)[number]["name"];
 
-const PANEL = ["opus", "sol", "grok"] as const;
+const PANEL = ["opus", "sol"] as const;
 export const ROLE_DEFAULTS = [
-  { role: "feature, refactoring", lanes: ["grok"] },
+  { role: "feature, refactoring", lanes: ["sol"] },
   { role: "bug-fix", lanes: ["sol"] },
   { role: "perf-issue", lanes: ["sol"] },
   { role: "hillclimb", lanes: ["sol"] },
   { role: "judgment and prose", lanes: ["opus"] },
   { role: "hardest tasks", lanes: ["opus"] },
-  { role: "how explorer", lanes: ["grok"] },
+  { role: "how explorer", lanes: ["sol"] },
   { role: "how explainer", lanes: ["opus"] },
   { role: "why investigators, synthesizer", lanes: ["inherit-parent"] },
   { role: "reflect tooling, judgment, divergent, synthesizer", lanes: ["inherit-parent"] },
   { role: "arena runners", lanes: PANEL },
   { role: "arena cross-judge pool", lanes: PANEL },
-  { role: "swarm workers", lanes: ["grok"] },
+  { role: "swarm workers", lanes: ["sol"] },
   { role: "architect runners", lanes: PANEL },
   { role: "interrogate reviewers", lanes: PANEL },
 ] as const satisfies readonly RoleDefault<FamilyName>[];
 
-/** Append-only. Every pair any model-matrix revision on main contained. */
+/** Append-only for the families jm:stack ships. Every such pair any model-matrix revision on main contained. */
 export const RELEASED_PAIRS = [
   { pair: "claude:claude-fable-5", family: "fable" },
   { pair: "claude:claude-opus-5", family: "opus" },
   { pair: "claude:fable", family: "fable" },
+  { pair: "claude:haiku", family: "haiku" },
   { pair: "claude:opus", family: "opus" },
   { pair: "codex:gpt-5.6-sol", family: "sol" },
+  { pair: "codex:gpt-6-luna", family: "luna" },
   { pair: "codex:gpt-6.1-sol", family: "sol" },
-  { pair: "grok:grok-4.6", family: "grok" },
-  { pair: "grok:grok-4.7", family: "grok" },
 ] as const satisfies readonly ReleasedPair<FamilyName>[];

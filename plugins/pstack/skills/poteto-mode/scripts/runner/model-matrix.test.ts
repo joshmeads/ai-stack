@@ -8,7 +8,7 @@ const DISPATCH_PATH = join(
   PLUGIN_ROOT,
   "skills/poteto-mode/references/provider-dispatch.md"
 );
-const SETUP_PATH = join(PLUGIN_ROOT, "skills/setup-pstack/SKILL.md");
+const SETUP_PATH = join(PLUGIN_ROOT, "skills/setup-stack/SKILL.md");
 const AGENTS_DIR = join(PLUGIN_ROOT, "agents");
 
 const MATRIX_HEADER = [
@@ -21,11 +21,11 @@ const MATRIX_HEADER = [
   "Claude-native agent stem",
 ] as const;
 
-const FAMILY_ORDER = ["fable", "sol", "grok", "opus"] as const;
-const FIRST_RUN_PANEL = ["opus", "sol", "grok"] as const;
-const PROVIDERS = ["claude", "codex", "grok"] as const;
+const FAMILY_ORDER = ["fable", "sol", "luna", "opus", "haiku"] as const;
+const FIRST_RUN_PANEL = ["opus", "sol"] as const;
+const PROVIDERS = ["claude", "codex"] as const;
 const DESCRIPTOR_RE =
-  /(claude|codex|grok):[a-z0-9.-]+@(low|medium|high|xhigh|max|ultra)/g;
+  /(claude|codex):[a-z0-9.-]+@(low|medium|high|xhigh|max|ultra)/g;
 const PANEL_ROLES = [
   "arena runners",
   "arena cross-judge pool",
@@ -107,9 +107,9 @@ function parseModelMatrix(markdown: string): MatrixRow[] {
     .slice(start + 1, end)
     .map((line) => line.trim())
     .filter((line) => line.startsWith("|"));
-  if (table.length !== 6) {
+  if (table.length !== 7) {
     throw new Error(
-      `model matrix must be header, separator, and 4 data rows, got ${table.length}`
+      `model matrix must be header, separator, and 5 data rows, got ${table.length}`
     );
   }
   const header = splitRow(table[0]);
@@ -200,7 +200,7 @@ function firstRunSheet(setup: string): string {
     /```markdown\n(# pstack model configuration\n[\s\S]*?)```/
   );
   if (!match) {
-    throw new Error("setup-pstack is missing the first-run sheet fence");
+    throw new Error("setup-stack is missing the first-run sheet fence");
   }
   return match[1];
 }
@@ -225,17 +225,19 @@ describe("model matrix", () => {
       rows.map((row) => [row.family, row.defaultEffort])
     ).toEqual([
       ["fable", "max"],
-      ["sol", "max"],
-      ["grok", "xhigh"],
-      ["opus", "max"],
+      ["sol", "xhigh"],
+      ["luna", "xhigh"],
+      ["opus", "xhigh"],
+      ["haiku", "xhigh"],
     ]);
     expect(
       rows
-        .filter((row) => row.family === "fable" || row.family === "opus")
+        .filter((row) => row.provider === "claude")
         .map((row) => [row.family, row.model])
     ).toEqual([
       ["fable", "fable"],
       ["opus", "opus"],
+      ["haiku", "haiku"],
     ]);
   });
 
@@ -272,13 +274,13 @@ describe("model matrix", () => {
         continue;
       }
       for (const effort of row.selectableEfforts) {
-        const name = `pstack-${stem}-${effort}`;
+        const name = `stack-${stem}-${effort}`;
         expected.add(`${name}.md`);
         const text = readFileSync(join(AGENTS_DIR, `${name}.md`), "utf8");
         const { fields, body } = parseFrontmatter(text);
         expect(fields).toEqual({
           name,
-          description: `Native Claude lane for pstack roles configured as ${row.provider}:${row.model}@${effort}.`,
+          description: `Native Claude lane for jm:stack roles configured as ${row.provider}:${row.model}@${effort}.`,
           model: row.model,
           effort,
           background: "true",
@@ -302,7 +304,7 @@ describe("model matrix", () => {
     );
     expect(expected.size).toBe(declaredCount);
     const shipped = readdirSync(AGENTS_DIR)
-      .filter((name) => name.startsWith("pstack-") && name.endsWith(".md"))
+      .filter((name) => name.startsWith("stack-") && name.endsWith(".md"))
       .sort();
     expect(shipped).toEqual([...expected].sort());
   });
@@ -351,7 +353,7 @@ describe("model matrix", () => {
     expect(setup).toContain("A failed probe writes nothing:");
     expect(setup).toContain("Run one probe per family");
     expect(setup).toContain("normalized complete role map from step 2");
-    expect(setup).toContain("starts with `claude-fable-` or `claude-opus-`");
+    expect(setup).toContain("starts with `claude-fable-`, `claude-opus-`, or `claude-haiku-`");
     expect(setup).toContain("preserving the provider, effort, role, and lane order");
     expect(setup).toContain("Show any rolling-alias migrations");
     expect(setup).toContain("Every documented role remains present.");
@@ -370,7 +372,7 @@ describe("model matrix", () => {
     expect(nativeLanes).toContain(
       "match the descriptor's `(provider, model)` to one model-matrix row"
     );
-    expect(nativeLanes).toContain("`pstack-<stem>-<effort>`");
+    expect(nativeLanes).toContain("`stack-<stem>-<effort>`");
   });
 
   it("normalizes old rolling-family pins before any runtime route", () => {
@@ -383,7 +385,7 @@ describe("model matrix", () => {
     expect(normalization).toContain("replace that model component in memory");
     expect(normalization).toContain("Never pass the versioned predecessor to Claude.");
     expect(normalization).toContain("without writing user files");
-    expect(normalization).toContain("`/setup-pstack` will rewrite it");
-    expect(normalization).toContain("runner rejects a missed Fable or Opus version pin");
+    expect(normalization).toContain("`/setup-stack` will rewrite it");
+    expect(normalization).toContain("runner rejects a missed Fable, Opus, or Haiku version pin");
   });
 });

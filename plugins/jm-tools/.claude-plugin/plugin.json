@@ -1,0 +1,17 @@
+{
+  "name": "jm-tools",
+  "displayName": "jm:tools",
+  "version": "0.1.0",
+  "description": "Working tools: continuation handoffs for a fresh session, adversarial try-to-break-it checks, and before/after visual evidence for UI changes.",
+  "author": {
+    "name": "Josh Meads"
+  },
+  "license": "MIT",
+  "keywords": [
+    "handoff",
+    "context",
+    "adversarial-testing",
+    "visual-evidence",
+    "screenshots"
+  ]
+}
