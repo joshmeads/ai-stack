@@ -10,6 +10,8 @@ export interface ChangedFile { filename: string; previous_filename?: string }
 export interface Registry {
   skills: string[];
   shared: string[];
+  /** The generated model catalog and native agents, and the registry sources they come from. */
+  catalog: string[];
   assets: string[];
   setup: string[];
   runner: string[];

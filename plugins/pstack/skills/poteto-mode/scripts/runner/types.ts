@@ -1,6 +1,8 @@
 /** The two harnesses with a native subagent primitive, and the markers that identify each one. */
 export const PARENTS = {
   claude: {
+    harness: "Claude Code",
+    native: "Agent",
     identity: [
       "CLAUDECODE",
       "CLAUDE_CODE_CHILD_SESSION",
@@ -9,6 +11,8 @@ export const PARENTS = {
     ],
   },
   codex: {
+    harness: "Codex",
+    native: "spawn_agent",
     identity: [
       "CODEX_THREAD_ID",
       "CODEX_SESSION_ID",

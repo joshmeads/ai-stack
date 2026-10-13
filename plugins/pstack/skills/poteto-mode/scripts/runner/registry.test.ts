@@ -1,5 +1,6 @@
-import { describe, expect, it } from "bun:test";
-import { readdirSync, readFileSync } from "node:fs";
+import { afterEach, describe, expect, it } from "bun:test";
+import { mkdtempSync, readdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { tmpdir } from "node:os";
 import { dirname, join, relative, resolve } from "node:path";
 import {
   defaultDescriptor,
@@ -8,6 +9,16 @@ import {
   resolveLane,
   resolveModel,
 } from "./registry/index.ts";
+import {
+  CATALOG_PATH,
+  driftMessage,
+  driftReport,
+  main,
+  renderCatalog,
+  renderNativeAgents,
+  WRITE_COMMAND,
+  writeGenerated,
+} from "./registry/render.ts";
 import { EFFORTS } from "./types.ts";
 
 const RUNNER = import.meta.dir;
@@ -69,30 +80,159 @@ describe("registry data", () => {
     }
   });
 
-  // Until the model catalog is generated from the registry, the hand-written matrix and
-  // first-run sheet must say the same thing.
-  it("matches the model matrix and setup's first-run sheet", () => {
-    const dispatch = readFileSync(join(PLUGIN_ROOT, "skills/poteto-mode/references/provider-dispatch.md"), "utf8");
-    const matrix = dispatch.slice(dispatch.indexOf("## Model matrix"));
-    const rows = matrix.split("\n").filter((line) => /^\| [a-z]/.test(line)).slice(0, REGISTRY.families.length)
-      .map((line) => line.split("|").slice(1, -1).map((cell) => cell.trim()));
-    expect(rows).toEqual(REGISTRY.families.map((entry) => [
-      entry.name,
-      entry.upstream ?? "-",
-      entry.provider,
-      entry.model,
-      entry.defaultEffort,
-      entry.efforts.join(" "),
-      entry.provider === "claude" ? entry.name : "-",
-    ]));
-    const setup = readFileSync(join(PLUGIN_ROOT, "skills/setup-pstack/SKILL.md"), "utf8");
+  it("renders each role default as its families' default descriptors, keeping aliases", () => {
+    const catalog = renderCatalog(REGISTRY).content;
     for (const { role, lanes } of REGISTRY.roleDefaults) {
       const descriptors = lanes.map((name) => {
         const family = REGISTRY.families.find((entry) => entry.name === name);
         return family === undefined ? name : defaultDescriptor(family);
       });
-      expect(setup).toContain(`\n${role}: ${descriptors.join(", ")}\n`);
+      expect(catalog).toContain(`\n${role}: ${descriptors.join(", ")}\n`);
     }
+  });
+
+  it("routes each provider natively only from its own parent", () => {
+    const routes = renderCatalog(REGISTRY).content.split("\n## Routes\n")[1]!.split("\n## ")[0]!;
+    for (const adapter of REGISTRY.adapters) {
+      const cells = routes.split("\n").find((line) => line.startsWith(`| ${adapter.id} |`))!.split(" | ");
+      expect(cells.slice(1, 3)).toEqual([
+        adapter.id === "claude" ? "native `Agent`" : "external runner",
+        adapter.id === "codex" ? "native `spawn_agent`" : "external runner",
+      ]);
+    }
+  });
+});
+
+describe("generated files", () => {
+  const roots: string[] = [];
+  afterEach(() => {
+    for (const root of roots.splice(0)) rmSync(root, { recursive: true, force: true });
+  });
+  function root(): string {
+    const path = mkdtempSync(join(tmpdir(), "pstack-render-"));
+    roots.push(path);
+    return path;
+  }
+  function files(dir: string): Record<string, string> {
+    return Object.fromEntries(readdirSync(dir, { recursive: true, withFileTypes: true })
+      .filter((entry) => entry.isFile())
+      .map((entry) => {
+        const path = join(entry.parentPath, entry.name);
+        return [relative(dir, path), readFileSync(path, "utf8")];
+      }));
+  }
+
+  it("match the committed catalog and agents", () => {
+    expect(driftMessage(driftReport(REGISTRY, PLUGIN_ROOT))).toBe("");
+  });
+
+  it("change nothing on a second write", () => {
+    const dir = root();
+    writeGenerated(REGISTRY, dir);
+    const first = files(dir);
+    expect(Object.keys(first)).toContain(CATALOG_PATH);
+    writeGenerated(REGISTRY, dir);
+    expect(files(dir)).toEqual(first);
+    expect(main(["--check"], dir)).toBe(0);
+  });
+
+  it("report a hand edit, a missing file and a stray agent with the write command, and --write repairs them", () => {
+    const dir = root();
+    writeGenerated(REGISTRY, dir);
+    const [agent] = renderNativeAgents(REGISTRY);
+    writeFileSync(join(dir, CATALOG_PATH), "hand edit\n", { flag: "a" });
+    rmSync(join(dir, agent!.path));
+    for (const name of ["pstack-retired-max.md", "poteto-agent.md", "comment-sicko.md"]) {
+      writeFileSync(join(dir, "agents", name), `${name}\n`);
+    }
+
+    expect(driftReport(REGISTRY, dir)).toEqual([
+      `stale ${CATALOG_PATH}`,
+      `missing ${agent!.path}`,
+      "stray agents/pstack-retired-max.md",
+    ]);
+    expect(driftMessage(driftReport(REGISTRY, dir))).toContain(WRITE_COMMAND);
+    expect(main(["--check"], dir)).toBe(1);
+
+    expect(main(["--write"], dir)).toBe(0);
+    expect(driftReport(REGISTRY, dir)).toEqual([]);
+    expect(readFileSync(join(dir, "agents/poteto-agent.md"), "utf8")).toBe("poteto-agent.md\n");
+    expect(readFileSync(join(dir, "agents/comment-sicko.md"), "utf8")).toBe("comment-sicko.md\n");
+    expect(main([], dir)).toBe(64);
+  });
+});
+
+describe("hand-written dispatch and setup rules", () => {
+  const dispatch = readFileSync(join(PLUGIN_ROOT, "skills/poteto-mode/references/provider-dispatch.md"), "utf8");
+  const setup = readFileSync(join(PLUGIN_ROOT, "skills/setup-pstack/SKILL.md"), "utf8");
+  const section = (text: string, from: string, to: string): string => {
+    const start = text.indexOf(from), end = text.indexOf(to);
+    expect(start).toBeGreaterThan(-1);
+    expect(end).toBeGreaterThan(start);
+    return text.slice(start, end);
+  };
+
+  it("binds Claude-native dispatch to the generated agents", () => {
+    const native = section(dispatch, "## Native lanes", "## External lanes");
+    expect(native).toContain("match the descriptor's `(provider, model)` to one model-matrix row");
+    expect(native).toContain("`pstack-<family>-<effort>`");
+  });
+
+  it("normalizes rolling-alias pins and keeps predecessors before any runtime route", () => {
+    const normalization = section(dispatch, "## Read-time normalization", "## The parent owns the route");
+    expect(normalization).toContain("replace that model component in memory");
+    expect(normalization).toContain("Never pass the versioned predecessor to Claude.");
+    expect(normalization).toContain("without writing user files");
+    expect(normalization).toContain("`/setup-pstack` will rewrite it");
+    expect(normalization).toContain("runner rejects a missed rolling-alias version pin");
+    expect(normalization).toContain("A kept predecessor in the catalog matches its family. Dispatch it unchanged");
+  });
+
+  it("keeps setup's fail-closed reconfiguration order", () => {
+    let previous = -1;
+    for (const heading of [
+      "### 2. Load current state",
+      "### 3. Parse per-family efforts",
+      "### 4. Collect one requested effort per family",
+      "### 5. Probe the requested pairs",
+      "### 6. Render, preserving role families",
+      "### 7. Confirm and commit",
+    ]) {
+      const current = setup.indexOf(heading);
+      expect(current).toBeGreaterThan(previous);
+      previous = current;
+    }
+    for (const rule of [
+      "Do not invent a precedence rule.",
+      "Do not probe or write while any inconsistency is unresolved.",
+      "A failed probe writes nothing:",
+      "Run one probe per family",
+      "normalized complete role map from step 2",
+      "starts with `claude-fable-` or `claude-opus-`",
+      "preserving the provider, effort, role, and lane order",
+      "Show any rolling-alias migrations",
+      "Every documented role remains present.",
+      "An effort-only rerun cannot change a role's family.",
+      "<!-- pstack:models:begin -->",
+      "<!-- pstack:models:end -->",
+    ]) {
+      expect(setup).toContain(rule);
+    }
+  });
+
+  it("proposes a kept predecessor's current model at the same effort and keeps it on a decline", () => {
+    expect(setup).toContain("model-catalog.md#kept-predecessors-and-normalization) is not inconsistent state.");
+    expect(setup).toContain("propose replacing every occurrence with its family's current model at the same effort, and ask.");
+    expect(setup).toContain("that family's model stays the kept predecessor for steps 3 to 7: probe it, render it, and write it unchanged.");
+    expect(setup).toContain("matching a kept predecessor to its family");
+    expect(REGISTRY.families.flatMap((entry) => (entry.predecessors ?? []).map((kept) => `${entry.provider}:${kept.model}`)))
+      .toEqual(expect.arrayContaining(["codex:gpt-5.6-sol", "grok:grok-4.6"]));
+  });
+
+  // Setup's in-file first-run sheet goes when its steps point at the catalog's role defaults.
+  it("keeps setup's first-run sheet equal to the catalog's role defaults", () => {
+    const catalog = renderCatalog(REGISTRY).content;
+    expect(setup).toContain(catalog.slice(catalog.indexOf("```markdown\n"), catalog.lastIndexOf("```")));
   });
 });
 

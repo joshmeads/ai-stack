@@ -79,6 +79,7 @@ Each headless session exits on its own. Verify any setup restoration before publ
 Read receipts as data, never shell input. Do not put credentials in prompts or public artifacts.
 
 ## Scripts
+- scripts/catalog.test.ts
 - scripts/cli.test.ts
 - scripts/cli.ts
 - scripts/core.test.ts

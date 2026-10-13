@@ -77,7 +77,6 @@ fi
 # row is the default panel. The other panel rows and the arena, architect, and
 # interrogate defaults copy it verbatim.
 setup="$repo/plugins/pstack/skills/setup-pstack/SKILL.md"
-dispatch="$repo/plugins/pstack/skills/poteto-mode/references/provider-dispatch.md"
 
 # Config-home port invariant (#120): guard upstream merges against daily-home writes.
 config_mapping="$repo/plugins/pstack/skills/poteto-mode/references/codex-tools.md"
@@ -400,35 +399,6 @@ if [ -n "$routed_model_bad" ]; then
   fail=1
 else
   note "ok: routed skills stay model-invocable"
-fi
-
-sol_descriptor="$(awk -F '|' '
-  $2 ~ /^[[:space:]]*sol[[:space:]]*$/ {
-    for (i = 4; i <= 6; i++) gsub(/^[[:space:]]+|[[:space:]]+$/, "", $i)
-    print $4 ":" $5 "@" $6
-  }
-' "$dispatch")"
-solo_code_bad=""
-if [ -z "$sol_descriptor" ]; then
-  solo_code_bad="could not read the sol row from $dispatch"$'\n'
-fi
-for role in bug-fix perf-issue hillclimb; do
-  setup_descriptor="$(sed -n "s/^${role}: //p" "$setup")"
-  if [ "$setup_descriptor" != "$sol_descriptor" ]; then
-    solo_code_bad="${solo_code_bad}${setup} ${role}: [${setup_descriptor}] != [${sol_descriptor}]"$'\n'
-  fi
-  role_playbook="$plugin/skills/poteto-mode/playbooks/$role.md"
-  playbook_descriptor="$(sed -n 's/.*default `\([^`]*\)`.*/\1/p' "$role_playbook")"
-  if [ "$playbook_descriptor" != "$sol_descriptor" ]; then
-    solo_code_bad="${solo_code_bad}${role_playbook}: [${playbook_descriptor}] != [${sol_descriptor}]"$'\n'
-  fi
-done
-if [ -n "$solo_code_bad" ]; then
-  note "FAIL: solo code roles must use the sol row:"
-  note "$solo_code_bad"
-  fail=1
-else
-  note "ok: solo code roles stay on the sol row ($sol_descriptor)"
 fi
 
 codex_manifest="$plugin/.codex-plugin/plugin.json"

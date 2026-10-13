@@ -34,7 +34,7 @@ describe('registry and ownership', () => {
     for (const filename of paths) expect(() => classify([{ filename }], registry)).not.toThrow();
   });
   test('validates external registry shape', () => {
-    for (const value of [null, {}, { ...registry, skills: ['../bad'] }, { ...registry, tools: ['x', 'x'] }, { ...registry, shared: [3] }, { ...registry, assets: undefined }, { ...registry, assets: ['../asset'] }, { ...registry, assets: ['x', 'x'] }]) {
+    for (const value of [null, {}, { ...registry, skills: ['../bad'] }, { ...registry, tools: ['x', 'x'] }, { ...registry, shared: [3] }, { ...registry, assets: undefined }, { ...registry, assets: ['../asset'] }, { ...registry, assets: ['x', 'x'] }, { ...registry, catalog: undefined }]) {
       expect(() => validateRegistry(value)).toThrow();
     }
   });
@@ -58,6 +58,31 @@ describe('registry and ownership', () => {
     const s = classify([{ filename: 'plugins/pstack/skills/poteto-mode/references/codex-tools.md' }], registry);
     expect(s.skills).toEqual([...registry.skills].sort());
     for (const feature of ['setup', 'runner', 'shipped-tools']) expect(s.features).toContain(feature);
+  });
+  const CATALOG = 'plugins/pstack/skills/poteto-mode/references/model-catalog.md';
+  test('catalog-only changes select catalog, setup and runner and no skill check', () => {
+    for (const filename of [CATALOG, 'plugins/pstack/agents/pstack-opus-max.md', 'plugins/pstack/agents/pstack-fable-low.md',
+      'plugins/pstack/skills/poteto-mode/scripts/runner/registry/models.ts', 'plugins/pstack/skills/poteto-mode/scripts/runner/providers/grok.ts']) {
+      const s = classify([{ filename }], registry);
+      expect(s.skills).toEqual([]);
+      expect(s.features).toEqual(['catalog', 'runner', 'setup']);
+    }
+  });
+  test('a renamed or deleted catalog path keeps catalog ownership', () => {
+    for (const previous_filename of [CATALOG, 'plugins/pstack/agents/pstack-opus-max.md']) {
+      expect(classify([{ filename: 'docs/moved.md', previous_filename }], registry).features).toEqual(['catalog', 'runner', 'setup']);
+    }
+  });
+  test('a catalog change mixed with a shared reference or a skill keeps their checks', () => {
+    const shared = classify([{ filename: CATALOG }, { filename: 'plugins/pstack/skills/poteto-mode/references/provider-dispatch.md' }], registry);
+    expect(shared.skills).toEqual([...registry.skills].sort());
+    for (const feature of ['catalog', 'setup', 'runner', 'shipped-tools']) expect(shared.features).toContain(feature);
+    const skill = classify([{ filename: 'plugins/pstack/agents/pstack-opus-max.md' }, { filename: 'plugins/pstack/skills/arena/SKILL.md' }], registry);
+    expect(skill.features).toEqual(['catalog', 'runner', 'setup', 'skill-invocation:arena']);
+  });
+  test('an unlisted generated agent fails closed', () => {
+    expect(() => classify([{ filename: 'plugins/pstack/agents/pstack-sonnet-max.md' }], registry)).toThrow('Unmapped path');
+    expect(classify([{ filename: 'plugins/pstack/agents/poteto-agent.md' }], registry).skills).toEqual([...registry.skills].sort());
   });
   test('installed logo changes require only their actual Codex manifest consumer', () => {
     expect(codexManifest.interface.logo).toBe('./assets/logo.png');

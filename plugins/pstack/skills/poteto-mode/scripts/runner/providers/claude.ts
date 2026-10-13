@@ -130,4 +130,10 @@ export const claude = adapter({
     kind: "inherit",
     dropPrefixes: access.mode === "isolated-write" ? ["GIT_"] : [],
   }),
+  docs: {
+    name: "Claude Code CLI",
+    hostPrerequisites: [],
+    statePaths: ["the Claude config home (`CLAUDE_CONFIG_DIR`, else `~/.claude`)"],
+    notes: [],
+  },
 });

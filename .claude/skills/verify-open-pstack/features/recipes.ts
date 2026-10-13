@@ -36,6 +36,39 @@ export const CLAUDE_TOOLS = 'Skill,Read,Glob,Grep,Write,Edit,Bash,Agent,Task,Tod
 export const DEFAULT_ROUTES: Record<Harness, string> = { claude: 'codex:gpt-6.1-sol@max', codex: 'claude:opus@max' };
 export const ROUTE = /^(claude|codex|grok):([A-Za-z0-9._-]+)@([a-z]+)$/;
 const SETUP_DESCRIPTOR = 'claude:opus@high';
+const DESCRIPTOR = /\b(?:claude|codex|grok):[A-Za-z0-9._-]+@[a-z]+/g;
+const SHEET_HEADER = '# pstack model configuration\n\n';
+
+/** The installed candidate's registry, as its generated model catalog renders it. */
+export interface Catalog {
+  /** Role-default lanes by role, in sheet order. */
+  defaults: Map<string, string[]>;
+  /** Kept predecessor `provider:model` to its family's current `provider:model`. */
+  kept: Map<string, string>;
+  route(harness: Harness, descriptor: string): 'native' | 'external';
+}
+
+export async function readCatalog(location: string): Promise<Catalog> {
+  const text = await readFile(join(location, 'skills/poteto-mode/references/model-catalog.md'), 'utf8');
+  const section = (heading: string) => text.split(`\n## ${heading}\n`)[1]?.split('\n## ')[0] ?? '';
+  const rows = (body: string) => body.split('\n').filter(line => line.startsWith('| ') && !line.startsWith('| ---')).map(line => line.slice(2, -2).split(' | '));
+  const sheet = /```markdown\n([\s\S]*?)```/.exec(section('Role defaults'))?.[1] ?? '';
+  const defaults = new Map(sheet.split('\n').filter(line => /^[a-z][^:]*: \S/.test(line))
+    .map((line): [string, string[]] => [line.slice(0, line.indexOf(': ')), line.slice(line.indexOf(': ') + 2).split(', ')]));
+  const kept = new Map(rows(section('Kept predecessors and normalization').split('\nRolling aliases:')[0]!).slice(1)
+    .map(([provider, model, , current]): [string, string] => [`${provider}:${model}`, `${provider}:${current}`]));
+  const [header = [], ...routes] = rows(section('Routes'));
+  const column = { claude: header.indexOf('Claude Code parent'), codex: header.indexOf('Codex parent') };
+  if (!defaults.size || column.claude < 0 || column.codex < 0) throw new Error('catalog-unreadable');
+  return { defaults, kept, route(harness, descriptor) {
+    if (!descriptor.includes(':')) return 'native';
+    const cell = routes.find(row => row[0] === descriptor.slice(0, descriptor.indexOf(':')))?.[column[harness]];
+    if (cell === undefined) throw new Error(`catalog-route-missing:${descriptor}`);
+    return cell.startsWith('native') ? 'native' : 'external';
+  } };
+}
+
+const sheetText = (lines: [string, string[]][]): string => SHEET_HEADER + lines.map(([role, lanes]) => `${role}: ${lanes.join(', ')}`).join('\n') + '\n';
 
 const rules = (dir: string): string => `Work only inside ${dir}. Do not push, post, open, merge, or modify pull requests, issues, or remote branches, and do not write outside ${dir}. Do not edit any skill, plugin, or configuration file outside ${dir}. Do not ask questions: where the skill would ask, choose its documented default and continue. This is a headless session that ends at your first final reply and stops any background work still running, so run every command and subagent in the foreground, even where the skill says to use the background, and finish all work before you reply.`;
 
@@ -293,7 +326,7 @@ const setup: Case[] = [{
   prompt: f => `${invoke(f.harness, 'setup-pstack', `Use these answers and ask nothing else. Role assignments: change every role assigned to a model-matrix family to the Opus family, and keep inherit-parent and auto roles unchanged. Opus requested effort: high. I confirm every write. Write the setup report to ${join(f.dir, 'result.md')}.`)} Do not push, post, or contact GitHub.`,
   async assert(record, f) {
     const sheet = join(f.configHome, 'pstack-models.md'), assertions = [loaded(record, 'pstack:setup-pstack'), await written(record, sheet)];
-    const descriptors = (await readFile(sheet, 'utf8')).match(/\b(?:claude|codex|grok):[A-Za-z0-9._-]+@[a-z]+/g) ?? [];
+    const descriptors = (await readFile(sheet, 'utf8')).match(DESCRIPTOR) ?? [];
     if (!descriptors.length || descriptors.some(d => d !== SETUP_DESCRIPTOR)) throw new Error('sheet-descriptors-mismatch');
     return { assertions: [...assertions, `sheet:${SETUP_DESCRIPTOR}`], files: [sheet] };
   },
@@ -305,7 +338,65 @@ const setup: Case[] = [{
     if (!(await readFile(path, 'utf8')).includes(SETUP_DESCRIPTOR)) throw new Error('consumer-route-mismatch');
     return { assertions: [...assertions, 'consumer-route'], files: [path] };
   },
-}];
+}, keptPredecessor()];
+
+// Releases before v1.5.0 wrote this pair; setup must offer its family's current model and keep it on a decline.
+const KEPT = 'grok:grok-4.6', KEPT_EFFORT = 'high';
+function keptPredecessor(): Case {
+  const proposal = (f: Fixture) => join(f.dir, 'proposal.json');
+  let omitted = '', proposed = '';
+  return {
+    id: 'keep-predecessor',
+    codexSandbox: 'danger-full-access',
+    claudePermission: 'bypassPermissions',
+    async prepare(f) {
+      const installed = await readCatalog(f.location), current = installed.kept.get(KEPT);
+      if (!current) throw new Error(`catalog-kept-missing:${KEPT}`);
+      proposed = `${current}@${KEPT_EFFORT}`;
+      // Every family lane takes the kept model, so setup probes only it. One alias role is left out, so the rerun must write.
+      const roles = [...installed.defaults];
+      omitted = roles.find(([, lanes]) => lanes.every(lane => !lane.includes(':')))?.[0] ?? '';
+      await writeFile(join(f.configHome, 'pstack-models.md'), sheetText(roles.filter(([role]) => role !== omitted)
+        .map(([role, lanes]) => [role, lanes.map(lane => lane.includes(':') ? `${KEPT}@${KEPT_EFFORT}` : lane)])));
+      // Codex mirrors the sheet in a run-owned AGENTS.md block; without it the sheet is the only source.
+      if (f.harness === 'codex') await rm(join(f.configHome, 'AGENTS.md'), { force: true });
+    },
+    prompt: f => `${invoke(f.harness, 'setup-pstack', `Use these answers and ask nothing else. Keep every role assignment and the requested effort ${KEPT_EFFORT}. When setup proposes replacing ${KEPT}, decline and keep it. I confirm every write. Write to ${proposal(f)} only JSON of the form {"kept":"<descriptor>","proposed":"<descriptor>"} naming the kept descriptor and the replacement setup proposed. Write the setup report to ${join(f.dir, 'result.md')}.`)} Do not push, post, or contact GitHub.`,
+    async assert(record, f) {
+      const sheet = join(f.configHome, 'pstack-models.md'), assertions = [loaded(record, 'pstack:setup-pstack'), await written(record, sheet), await written(record, proposal(f))];
+      const text = await readFile(sheet, 'utf8'), descriptors = text.match(DESCRIPTOR) ?? [];
+      if (!descriptors.length || descriptors.some(d => d !== `${KEPT}@${KEPT_EFFORT}`)) throw new Error('kept-predecessor-replaced');
+      if (omitted && !text.includes(`\n${omitted}: `)) throw new Error(`role-not-materialized:${omitted}`);
+      if (!Bun.deepEquals(parseJson(await readFile(proposal(f), 'utf8')), { kept: `${KEPT}@${KEPT_EFFORT}`, proposed })) throw new Error('proposal-mismatch');
+      return { assertions: [...assertions, `kept:${KEPT}@${KEPT_EFFORT}`, `proposed:${proposed}`], files: [sheet, proposal(f)] };
+    },
+  };
+}
+
+// The parent reads a fixture sheet and reports each role's descriptors and routes, which must equal what the
+// installed candidate's catalog gives for that sheet and parent.
+const CONFIGURED_ROLE = 'judgment and prose';
+function catalog(harness: Harness): Case[] {
+  const sheet = (f: Fixture) => join(f.dir, 'pstack-models.md'), report = (f: Fixture) => join(f.dir, 'routes.json');
+  let expected: { roles: { role: string; descriptors: string[]; routes: string[] }[] } = { roles: [] };
+  return [{
+    id: 'consume-sheet',
+    async prepare(f) {
+      const installed = await readCatalog(f.location), defaults = installed.defaults.get(CONFIGURED_ROLE);
+      // The configured role takes another role's default, so only a read of the fixture sheet reports it.
+      const configured = [...installed.defaults.values()].flat().find(lane => lane.includes(':') && !defaults?.includes(lane));
+      if (!defaults || !configured) throw new Error(`catalog-role-missing:${CONFIGURED_ROLE}`);
+      await writeFile(sheet(f), sheetText([...installed.defaults].map(([role, lanes]) => [role, role === CONFIGURED_ROLE ? [configured] : lanes])));
+      expected = { roles: [{ role: CONFIGURED_ROLE, descriptors: [configured], routes: [installed.route(harness, configured)] }] };
+    },
+    prompt: f => `${invoke(f.harness, 'poteto-mode', `Do no engineering work and launch no lane. For this task the pstack model sheet is ${sheet(f)}; use it in place of any configured sheet. For each of these roles, in this order, find the descriptors this parent would dispatch and the route of each: ${expected.roles.map(r => JSON.stringify(r.role)).join(', ')}. Write to ${report(f)} only JSON of the form {"roles":[{"role":"<role>","descriptors":["<provider:model@effort>"],"routes":["native" or "external"]}]}, one route per descriptor, where "native" is this parent's own subagent primitive and "external" is the external runner.`)} ${rules(f.dir)}`,
+    async assert(record, f) {
+      const assertions = [loaded(record, 'pstack:poteto-mode'), await written(record, report(f))];
+      if (!Bun.deepEquals(parseJson(await readFile(report(f), 'utf8')), expected)) throw new Error('catalog-route-mismatch');
+      return { assertions: [...assertions, ...expected.roles.map(r => `role:${r.role.replaceAll(' ', '-')}`)], files: [report(f), sheet(f)] };
+    },
+  }];
+}
 
 const shippedTools: Case = {
   id: 'log',
@@ -359,6 +450,7 @@ export function recipe(feature: string, harness: Harness, routes: string[] = [])
   if (feature === 'hook:startup') return [startupHook];
   if (feature === 'runner') return runner(harness, routes);
   if (feature === 'setup' || feature === 'skill-invocation:setup-pstack') return setup;
+  if (feature === 'catalog') return catalog(harness);
   if (feature === 'shipped-tools') return [shippedTools];
   if (feature === 'agent-preload:poteto-agent' && harness === 'claude') return [agentPreload];
   if (feature === 'skill-invocation:reflect') return reflect(harness);
