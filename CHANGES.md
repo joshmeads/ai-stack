@@ -5,7 +5,7 @@ This port applies the Cursor → Claude Code substitutions in skill bodies. Earl
 
 ## 1.8.0 adds a generated model catalog and fixes the Windows SessionStart hook
 
-Open Pstack 1.8.0 keeps the Cursor pstack 0.15.20 sync. It ships the first three units of the model and provider registry and the Windows hook fix, all merged after 1.7.0.
+Open Pstack 1.8.0 keeps the Cursor pstack 0.15.20 sync. It ships registry units U2 and U3 and the Windows hook fix, merged after 1.7.0, and adds the note for registry unit U1, which shipped in 1.7.0.
 
 **Model catalog.** Model facts live in the runner registry, `skills/poteto-mode/scripts/runner/registry/`. Its `render.ts` generates `references/model-catalog.md` and the Claude-native `pstack-<family>-<effort>` agents. The catalog holds the model matrix, kept predecessors and rolling aliases, each provider's route from each parent, provider notes and the role defaults. `provider-dispatch.md` keeps the hand-written dispatch rules and links to the catalog. A hand edit of a generated file fails the tests and prints the write command (#156).
 
