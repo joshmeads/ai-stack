@@ -16,7 +16,9 @@ if "%~1"=="" (
     exit /b 1
 )
 
-setlocal
+REM hooks.json starts this wrapper from Codex on Windows under cmd /v:on, so
+REM turn delayed expansion off here: a ! in a path must stay literal.
+setlocal DisableDelayedExpansion
 set "HOOK_DIR=%~dp0"
 set "BASH_EXE="
 
