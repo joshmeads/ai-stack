@@ -71,6 +71,22 @@ describe("registry data", () => {
     for (const role of ["arena runners", "arena cross-judge pool", "architect runners", "interrogate reviewers"]) {
       expect([role, lanes(role)]).toEqual([role, ["opus", "sol", "grok"]]);
     }
+    // External lanes lack the parent's MCP surface (provider-dispatch.md), so Why and Reflect stay on the parent.
+    for (const role of ["why investigators, synthesizer", "reflect tooling, judgment, divergent, synthesizer"]) {
+      expect([role, lanes(role)]).toEqual([role, ["inherit-parent"]]);
+    }
+  });
+
+  it("keeps the default efforts, the Claude rolling aliases and Sol's ultra", () => {
+    expect(REGISTRY.families.map((entry) => [entry.name, entry.defaultEffort])).toEqual([
+      ["fable", "max"],
+      ["sol", "max"],
+      ["grok", "xhigh"],
+      ["opus", "max"],
+    ]);
+    expect(REGISTRY.families.filter((entry) => entry.provider === "claude").map((entry) => [entry.name, entry.model]))
+      .toEqual([["fable", "fable"], ["opus", "opus"]]);
+    expect(REGISTRY.families.filter((entry) => entry.efforts.includes("ultra")).map((entry) => entry.name)).toEqual(["sol"]);
   });
 
   it("keeps family names and (provider, model) pairs unique, and efforts ordered", () => {
