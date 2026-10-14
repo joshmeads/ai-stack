@@ -1,7 +1,7 @@
 {
   "name": "jm-tools",
   "version": "0.1.0",
-  "description": "Working tools: continuation handoffs for a fresh session, adversarial try-to-break-it checks, and before/after visual evidence for UI changes.",
+  "description": "Working tools: continuation handoffs for a fresh session, adversarial try-to-break checks, before/after visual evidence for UI changes, static hosting, feedback logging, and Codex session export.",
   "author": {
     "name": "Josh Meads"
   },
@@ -16,8 +16,8 @@
   "skills": "./skills/",
   "interface": {
     "displayName": "jm:tools",
-    "shortDescription": "Fresh-session handoffs, adversarial checks, and visual evidence",
-    "longDescription": "handoff writes a continuation packet so work can resume in a fresh session. try-to-break-it exercises a change adversarially and reports reproducible evidence. visual-evidence takes matching before/after screenshots of UI changes.",
+    "shortDescription": "Handoffs, adversarial checks, visual evidence, hosting, feedback, session export",
+    "longDescription": "handoff writes a continuation packet so work can resume in a fresh session. try-to-break tries to break a change on purpose and reports what fails, with evidence. visual-evidence takes matching before/after screenshots of UI changes. host-static hosts a built static folder at an unlisted URL. feedback records the user's feedback in FEEDBACK.md. codex-session-export finds and exports the Codex sessions behind a project.",
     "developerName": "Josh Meads",
     "category": "Developer Tools",
     "capabilities": [

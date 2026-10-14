@@ -1,24 +1,28 @@
 {
   "name": "jm-games",
   "version": "0.1.0",
-  "description": "Game and graphics skills: version-specific three.js and react-three-fiber facts, and a reference-driven art iteration loop with an image-only critic.",
+  "description": "Game and graphics skills: GDD and staged browser-game delivery (mini-GDD, MVP, final), three.js, react-three-fiber, Phaser, audio, Blender and web QA tools, version-specific three.js facts, and a reference-driven art iteration loop.",
   "author": {
     "name": "Josh Meads"
   },
-  "license": "MIT",
+  "license": "MIT AND Apache-2.0",
   "keywords": [
     "threejs",
     "webgpu",
     "tsl",
     "react-three-fiber",
     "art",
-    "vfx"
+    "vfx",
+    "game-design",
+    "phaser",
+    "blender",
+    "web-audio"
   ],
   "skills": "./skills/",
   "interface": {
     "displayName": "jm:games",
-    "shortDescription": "three.js r180+ facts and a reference-driven art iteration loop",
-    "longDescription": "threejs holds version-specific three.js and react-three-fiber facts that models get wrong from training data. art-iteration iterates a visual deliverable against reference images until an image-only critic passes it.",
+    "shortDescription": "Game design, staged browser-game builds, engine tools, and art iteration",
+    "longDescription": "gdd writes a game design document and the build's agent files. mini-gdd, mvp and final take a browser game from prompt to finished build under the delivery contract; feather-prep packages a Feather submission. The tools-* skills cover three.js (scene, materials, glTF, gameplay, look, procedural meshes, UI, debugging), react-three-fiber, pmndrs postprocessing, Phaser 4, Web Audio, Blender models and web QA. threejs holds version-specific three.js and react-three-fiber facts that models get wrong from training data. art-iteration iterates a visual deliverable against reference images until an image-only critic passes it.",
     "developerName": "Josh Meads",
     "category": "Developer Tools",
     "capabilities": [

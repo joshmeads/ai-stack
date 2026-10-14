@@ -26,6 +26,20 @@ The `jm-stack` plugin ("jm:stack", in `plugins/pstack/`) is Josh Meads's distrib
 | `plugins/pstack/skills/` (0.15.6 to 0.15.17 changes: `benchmark-checklist`, `correct`, `ketchup`, `poteto-help`, `principle-explain-the-number`, architect red flags, fresh subagents, hourly audit tick, PR headings, performance mantras, prompt distillation), `plugins/pstack/agents/poteto-agent.md`, `README-UPSTREAM.md` | [cursor/plugins/pstack @ 978ca6e](https://github.com/cursor/plugins/tree/978ca6e9c0e012047cd5058b8e829240336e704e/pstack) | (c) 2026 Lauren Tan | MIT | [LICENSE](LICENSE) |
 | `plugins/pstack/skills/` (0.15.18 to 0.15.20 changes: `ketchup` before-and-after visuals, prompt cuts in `how`, `why`, poteto-mode playbooks, and four principles, the `/poteto-mode` chat as the playbook runner, `create-verification-skill` usable readiness, plan-checker fences, `watch-pr` review-thread pagination, `worktree-audit.sh -b`), `plugins/pstack/agents/poteto-agent.md`, `README-UPSTREAM.md` | [cursor/plugins/pstack @ 1b6d44f](https://github.com/cursor/plugins/tree/1b6d44ff26d4e242f4e8f68c391e6d2f7ca16def/pstack) | (c) 2026 Lauren Tan | MIT | [LICENSE](LICENSE) |
 
+## jm-games third-party skills
+
+These `plugins/jm-games/skills/` directories are adapted from third-party agent skills. Each keeps its licence file in its directory. Their skill names and cross-references to other skills were changed for the `jm-games` plugin (for example `games:tools:threejs-scene` became `jm-games:tools-threejs-scene`).
+
+| Component | Upstream | Copyright | License | License file |
+| --- | --- | --- | --- | --- |
+| `tools-audio/`, `tools-threejs-gltf/`, `tools-threejs-materials/`, `tools-threejs-scene/` | awesome-gamedev-agent-skills | 2026 Abhishek Barali and the awesome-gamedev-agent-skills contributors | Apache-2.0 | `LICENSE` in each directory |
+| `tools-blender-model/` | AlexConnolly/agent-skills @ bd3beb8 | (c) 2026 Alex Connolly | MIT | `tools-blender-model/LICENSE` |
+| `tools-r3f/` | not recorded; vendored references from [Impertio-Studio/Three.js-Claude-Skill-Package](https://github.com/Impertio-Studio/Three.js-Claude-Skill-Package) and [emalorenzo/three-agent-skills](https://github.com/emalorenzo/three-agent-skills), both MIT | (c) 2026 Ciro Autuori | MIT | `tools-r3f/LICENSE`, `tools-r3f/CREDITS.md` |
+| `tools-threejs-debug/`, `tools-threejs-gameplay/`, `tools-threejs-look/`, `tools-threejs-ui/` | not recorded | (c) 2026 Majid Manzarpour | MIT | `LICENSE` in each directory |
+| `tools-threejs-procedural/` | not recorded | (c) 2026 Scott Sun | MIT | `tools-threejs-procedural/LICENSE` |
+
+The other `jm-games` and `jm-tools` skills are Josh Meads's own work under MIT.
+
 ## What changed in the port
 
 The port is editorial, not mechanical. See [CHANGES.md](CHANGES.md) for the full per-skill audit of substitutions applied.

@@ -29,22 +29,22 @@
     {
       "name": "jm-games",
       "source": "./plugins/jm-games",
-      "description": "Game and graphics skills: version-specific three.js and react-three-fiber facts, and a reference-driven art iteration loop with an image-only critic.",
+      "description": "Game and graphics skills: GDD and staged browser-game delivery (mini-GDD, MVP, final), three.js, react-three-fiber, Phaser, audio, Blender and web QA tools, version-specific three.js facts, and a reference-driven art iteration loop.",
+      "author": {
+        "name": "Josh Meads"
+      },
+      "homepage": "https://github.com/joshmeads/ai-stack",
+      "license": "MIT AND Apache-2.0"
+    },
+    {
+      "name": "jm-tools",
+      "source": "./plugins/jm-tools",
+      "description": "Working tools: continuation handoffs for a fresh session, adversarial try-to-break checks, before/after visual evidence for UI changes, static hosting, feedback logging, and Codex session export.",
       "author": {
         "name": "Josh Meads"
       },
       "homepage": "https://github.com/joshmeads/ai-stack",
       "license": "MIT"
-    },
-    {
-      "name": "jm-tools",
-      "source": "./plugins/jm-tools",
-      "description": "Working tools: continuation handoffs for a fresh session, adversarial try-to-break-it checks, and before/after visual evidence for UI changes.",
-      "author": {
-        "name": "Josh Meads"
-      },
-      "homepage": "https://github.com/joshmeads/ai-stack",
-      "license": "MIT AND CC-BY-SA-4.0"
     }
   ]
 }
