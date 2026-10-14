@@ -105,13 +105,14 @@ for (const harness of ['claude', 'codex'] as const) {
     const path = join(f.dir, 'pstack-models.md'), prepared = await readFile(path, 'utf8'), lines = await sheet(path);
     expect([...lines.keys()]).toEqual([...installed.defaults.keys()]);
     expect(['swarm workers', 'hardest tasks', 'how explainer', 'judgment and prose'].map(role => lines.get(role))).toEqual([
-      ['codex:gpt-6-luna@max'], ['claude:claude-opus-5-5@max'], ['claude:sonnet@max'], ['claude:claude-opus-5@max'],
+      ['codex:gpt-6-luna@max'], ['claude:claude-opus-5-5@max'], ['claude:claude-sonnet-5-5@max'], ['claude:claude-opus-5@max'],
     ]);
     for (const [role, lanes] of installed.defaults) {
       if (!['swarm workers', 'hardest tasks', 'how explainer', 'judgment and prose'].includes(role)) expect(lines.get(role)).toEqual(lanes);
     }
 
-    const rerun = prepared.replace('judgment and prose: claude:claude-opus-5@max', 'judgment and prose: claude:opus@max');
+    const rerun = prepared.replace('judgment and prose: claude:claude-opus-5@max', 'judgment and prose: claude:opus@max')
+      .replace('how explainer: claude:claude-sonnet-5-5@max', 'how explainer: claude:sonnet@max');
     await writeFile(path, rerun);
     if (harness === 'codex') await mirror(f, rerun);
     expect((await c.assert(record(harness, 'pstack:setup-pstack'), f)).assertions).toEqual([
@@ -119,8 +120,8 @@ for (const harness of ['claude', 'codex'] as const) {
       'sheet:codex:gpt-6-luna@max', 'sheet:claude:claude-opus-5-5@max', 'sheet:claude:sonnet@max', 'sheet:claude:opus@max',
     ]);
 
-    // Keeping the old pin, normalizing the registered pin, or dropping a role each fails.
-    for (const wrong of [prepared, rerun.replace('claude:claude-opus-5-5@max', 'claude:opus@max'), rerun.replace(/\nbug-fix: [^\n]*/, '')]) {
+    // Keeping an old revision, normalizing the registered pin, or dropping a role each fails.
+    for (const wrong of [prepared, rerun.replace('how explainer: claude:sonnet@max', 'how explainer: claude:claude-sonnet-5-5@max'), rerun.replace('claude:claude-opus-5-5@max', 'claude:opus@max'), rerun.replace(/\nbug-fix: [^\n]*/, '')]) {
       await writeFile(path, wrong);
       await expect(c.assert(record(harness, 'pstack:setup-pstack'), f)).rejects.toThrow('new-families-sheet-mismatch');
     }
@@ -131,7 +132,8 @@ for (const harness of ['claude', 'codex'] as const) {
       // A stale block, a block missing the sheet's last newline, or a second block each fails.
       for (const agents of [`<!-- pstack:models:begin -->\n${prepared}<!-- pstack:models:end -->\n`,
         `<!-- pstack:models:begin -->\n${rerun.replace(/\n$/, '')}<!-- pstack:models:end -->\n`,
-        `<!-- pstack:models:begin -->\n${rerun}<!-- pstack:models:end -->\n<!-- pstack:models:begin -->\nold\n<!-- pstack:models:end -->\n`]) {
+        `<!-- pstack:models:begin -->\n${rerun}<!-- pstack:models:end -->\n<!-- pstack:models:begin -->\nold\n<!-- pstack:models:end -->\n`,
+        `<!-- pstack:models:begin -->\n${rerun}<!-- pstack:models:end -->\n<!-- pstack:models:begin -->`]) {
         await writeFile(join(f.dir, 'AGENTS.md'), agents);
         await expect(c.assert(record(harness, 'pstack:setup-pstack'), f)).rejects.toThrow('codex-mirror-mismatch');
       }
@@ -163,6 +165,10 @@ test('the native-agents case needs each new agent dispatched, its child run, and
 
   await expect(c.assert(run(['pstack-sonnet-max', 'pstack-opus-max']), f)).rejects.toThrow('agent-not-dispatched:pstack:pstack-opus-5-5-max');
   await expect(c.assert(run(agents, ['pstack-sonnet-max']), f)).rejects.toThrow('child-did-not-run:pstack:pstack-opus-5-5-max');
+  // A model override on the dispatch would run the agent on another model.
+  const overridden = run(agents);
+  overridden.tools[1]!.input.model = 'opus';
+  await expect(c.assert(overridden, f)).rejects.toThrow('agent-not-dispatched:pstack:pstack-opus-5-5-max');
   await writeFile(join(f.dir, 'pstack-sonnet-max.out'), 'guess\n');
   await expect(c.assert(run(agents), f)).rejects.toThrow('nonce-mismatch:pstack:pstack-sonnet-max');
 });

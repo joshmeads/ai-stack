@@ -366,13 +366,13 @@ const setup: Case[] = [{
 
 // On Codex, setup's parent integration is one bounded AGENTS.md block: the begin marker and a newline, the sheet's
 // exact bytes, then the end marker. A case that removes the block before the run checks that setup wrote it back.
-const MIRROR_BEGIN = '<!-- pstack:models:begin -->\n', MIRROR_END = '<!-- pstack:models:end -->';
+const MIRROR_BEGIN = '<!-- pstack:models:begin -->', MIRROR_END = '<!-- pstack:models:end -->';
 export async function mirrored(f: Fixture, sheet: string): Promise<string[]> {
   if (f.harness !== 'codex') return [];
   const agents = await readFile(join(f.configHome, 'AGENTS.md'), 'utf8').catch(() => '');
   const once = (marker: string) => agents.split(marker).length === 2;
   const from = agents.indexOf(MIRROR_BEGIN) + MIRROR_BEGIN.length, to = agents.indexOf(MIRROR_END);
-  if (!once(MIRROR_BEGIN) || !once(MIRROR_END) || to < from || agents.slice(from, to) !== await readFile(sheet, 'utf8')) {
+  if (!once(MIRROR_BEGIN) || !once(MIRROR_END) || to < from || agents.slice(from, to) !== `\n${await readFile(sheet, 'utf8')}`) {
     throw new Error('codex-mirror-mismatch');
   }
   return ['codex-mirror'];
@@ -411,12 +411,12 @@ function keptPredecessor(): Case {
   };
 }
 
-// A rerun on a sheet that assigns Luna, Sonnet and the registered Opus 5.5 pin, plus an older Opus revision. Setup keeps
-// the first three and writes the revision as its rolling alias.
+// A rerun on a sheet that assigns Luna, a versioned Sonnet, the registered Opus 5.5 pin and an older Opus revision. Setup
+// keeps Luna and the pin, and writes each revision as its rolling alias.
 const NEW_FAMILY_LANES: Record<string, [string, string]> = {
   'swarm workers': ['codex:gpt-6-luna@max', 'codex:gpt-6-luna@max'],
   'hardest tasks': ['claude:claude-opus-5-5@max', 'claude:claude-opus-5-5@max'],
-  'how explainer': ['claude:sonnet@max', 'claude:sonnet@max'],
+  'how explainer': ['claude:claude-sonnet-5-5@max', 'claude:sonnet@max'],
   'judgment and prose': ['claude:claude-opus-5@max', 'claude:opus@max'],
 };
 function newFamilies(): Case {
@@ -470,7 +470,8 @@ const nativeAgents: Case = {
   async assert(record, f) {
     const assertions: string[] = [];
     for (const agent of NATIVE_AGENTS) {
-      const call = record.tools.find(t => t.name === 'Agent' && t.input.subagent_type === `pstack:${agent}` && !t.failed);
+      // A model override would run the agent on another model, so the call must leave the agent's own model in place.
+      const call = record.tools.find(t => t.name === 'Agent' && t.input.subagent_type === `pstack:${agent}` && t.input.model === undefined && !t.failed);
       if (!call) throw new Error(`agent-not-dispatched:pstack:${agent}`);
       if (!record.tools.some(t => t.parent === call.id)) throw new Error(`child-did-not-run:pstack:${agent}`);
       const wrote = await readFile(join(f.dir, `${agent}.out`), 'utf8').catch(() => null);
