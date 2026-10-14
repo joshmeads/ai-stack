@@ -19,6 +19,8 @@ const record = (harness: Harness, skill: string): SessionRecord =>
 const sheet = async (path: string): Promise<Map<string, string[]>> => new Map((await readFile(path, 'utf8')).split('\n')
   .filter(line => /^[a-z][^:]*: \S/.test(line)).map((line): [string, string[]] => [line.slice(0, line.indexOf(': ')), line.slice(line.indexOf(': ') + 2).split(', ')]));
 const setupCase = (id: string): Case => recipe('setup', 'claude').find(c => c.id === id)!;
+const mirror = (f: Fixture, text: string) =>
+  writeFile(join(f.dir, 'AGENTS.md'), `notes\n<!-- pstack:models:begin -->\n${text}<!-- pstack:models:end -->\n`);
 
 test('reads role defaults, kept predecessors and routes from the generated catalog', async () => {
   const installed = await readCatalog(location);
@@ -111,23 +113,38 @@ for (const harness of ['claude', 'codex'] as const) {
     const path = join(f.dir, 'pstack-models.md'), prepared = await readFile(path, 'utf8'), lines = await sheet(path);
     expect([...lines.keys()]).toEqual([...installed.defaults.keys()]);
     expect(['swarm workers', 'hardest tasks', 'how explainer', 'judgment and prose'].map(role => lines.get(role))).toEqual([
-      ['codex:gpt-6-luna@max'], ['claude:claude-opus-5-5@max'], ['claude:sonnet@max'], ['claude:claude-opus-5@max'],
+      ['codex:gpt-6-luna@max'], ['claude:claude-opus-5-5@max'], ['claude:claude-sonnet-5-5@max'], ['claude:claude-opus-5@max'],
     ]);
     for (const [role, lanes] of installed.defaults) {
       if (!['swarm workers', 'hardest tasks', 'how explainer', 'judgment and prose'].includes(role)) expect(lines.get(role)).toEqual(lanes);
     }
 
-    const rerun = prepared.replace('judgment and prose: claude:claude-opus-5@max', 'judgment and prose: claude:opus@max');
+    const rerun = prepared.replace('judgment and prose: claude:claude-opus-5@max', 'judgment and prose: claude:opus@max')
+      .replace('how explainer: claude:claude-sonnet-5-5@max', 'how explainer: claude:sonnet@max');
     await writeFile(path, rerun);
+    if (harness === 'codex') await mirror(f, rerun);
     expect((await c.assert(record(harness, 'pstack:setup-pstack'), f)).assertions).toEqual([
-      'skill-loaded', 'file:pstack-models.md',
+      'skill-loaded', 'file:pstack-models.md', ...(harness === 'codex' ? ['codex-mirror'] : []),
       'sheet:codex:gpt-6-luna@max', 'sheet:claude:claude-opus-5-5@max', 'sheet:claude:sonnet@max', 'sheet:claude:opus@max',
     ]);
 
-    // Keeping the old pin, normalizing the registered pin, or dropping a role each fails.
-    for (const wrong of [prepared, rerun.replace('claude:claude-opus-5-5@max', 'claude:opus@max'), rerun.replace(/\nbug-fix: [^\n]*/, '')]) {
+    // Keeping an old revision, normalizing the registered pin, or dropping a role each fails.
+    for (const wrong of [prepared, rerun.replace('how explainer: claude:sonnet@max', 'how explainer: claude:claude-sonnet-5-5@max'), rerun.replace('claude:claude-opus-5-5@max', 'claude:opus@max'), rerun.replace(/\nbug-fix: [^\n]*/, '')]) {
       await writeFile(path, wrong);
       await expect(c.assert(record(harness, 'pstack:setup-pstack'), f)).rejects.toThrow('new-families-sheet-mismatch');
+    }
+    await writeFile(path, rerun);
+
+    // On Codex, the AGENTS.md block must mirror the rewritten sheet.
+    if (harness === 'codex') {
+      // A stale block, a block missing the sheet's last newline, or a second block each fails.
+      for (const agents of [`<!-- pstack:models:begin -->\n${prepared}<!-- pstack:models:end -->\n`,
+        `<!-- pstack:models:begin -->\n${rerun.replace(/\n$/, '')}<!-- pstack:models:end -->\n`,
+        `<!-- pstack:models:begin -->\n${rerun}<!-- pstack:models:end -->\n<!-- pstack:models:begin -->\nold\n<!-- pstack:models:end -->\n`,
+        `<!-- pstack:models:begin -->\n${rerun}<!-- pstack:models:end -->\n<!-- pstack:models:begin -->`]) {
+        await writeFile(join(f.dir, 'AGENTS.md'), agents);
+        await expect(c.assert(record(harness, 'pstack:setup-pstack'), f)).rejects.toThrow('codex-mirror-mismatch');
+      }
     }
   });
 
@@ -142,7 +159,7 @@ for (const harness of ['claude', 'codex'] as const) {
 }
 
 for (const harness of ['claude', 'codex'] as const) {
-  test(`${harness}: the read-only-provider case requires every role line, with how explorer on Devin, and a runner probe`, async () => {
+  test(`${harness}: the read-only-provider case requires every role line, with how explorer on Devin`, async () => {
     const f = await fixture(harness), c = recipe('setup', harness).find(c => c.id === 'read-only-provider')!, installed = await readCatalog(location);
     await writeFile(join(f.dir, 'AGENTS.md'), 'mirror\n');
     await c.prepare!(f);
@@ -152,11 +169,13 @@ for (const harness of ['claude', 'codex'] as const) {
     expect([...lines.keys()]).toEqual([...installed.defaults.keys()]);
     for (const [role, lanes] of installed.defaults) expect(lines.get(role)).toEqual(role === 'how explorer' ? ['devin:swe-2@max'] : lanes);
 
-    const probed = { ...record(harness, 'pstack:setup-pstack'), commands: ['"$RUNNER/pstack-runner" --provider devin'] };
-    expect((await c.assert(probed, f)).assertions).toEqual(['skill-loaded', 'file:pstack-models.md', 'runner-ran', 'sheet:devin:swe-2@max']);
+    if (harness === 'codex') await mirror(f, prepared);
+    const probed = record(harness, 'pstack:setup-pstack');
+    expect((await c.assert(probed, f)).assertions).toEqual([
+      'skill-loaded', 'file:pstack-models.md', ...(harness === 'codex' ? ['codex-mirror'] : []), 'sheet:devin:swe-2@max',
+    ]);
 
-    // No runner call fails; so does dropping the Devin lane or another role.
-    await expect(c.assert(record(harness, 'pstack:setup-pstack'), f)).rejects.toThrow('runner-not-run');
+    // Dropping the Devin lane or another role fails.
     for (const wrong of [prepared.replace('how explorer: devin:swe-2@max', `how explorer: ${installed.defaults.get('how explorer')!.join(', ')}`), prepared.replace(/\nbug-fix: [^\n]*/, '')]) {
       await writeFile(path, wrong);
       await expect(c.assert(probed, f)).rejects.toThrow('read-only-provider-sheet-mismatch');
@@ -175,6 +194,29 @@ for (const harness of ['claude', 'codex'] as const) {
   });
 }
 
+test('the native-agents case needs each new agent dispatched, its child run, and its own nonce written', async () => {
+  const f = await fixture('claude'), c = recipe('catalog', 'claude').find(c => c.id === 'native-agents')!;
+  expect(recipe('catalog', 'codex').some(c => c.id === 'native-agents')).toBe(false);
+  await c.prepare!(f);
+  const agents = ['pstack-sonnet-max', 'pstack-opus-5-5-max'];
+  const tools = (names: string[], children = names) => [
+    ...names.map((agent, i) => ({ name: 'Agent', id: `a${i}`, input: { subagent_type: `pstack:${agent}` }, parent: null, failed: false })),
+    ...children.map(agent => ({ name: 'Read', id: `r-${agent}`, input: {}, parent: `a${names.indexOf(agent)}`, failed: false })),
+  ];
+  const run = (names: string[], children?: string[]): SessionRecord => ({ ...record('claude', 'pstack:poteto-mode'), tools: tools(names, children) });
+  for (const agent of agents) await writeFile(join(f.dir, `${agent}.out`), await readFile(join(f.dir, `${agent}.nonce`), 'utf8'));
+  expect((await c.assert(run(agents), f)).assertions).toEqual(agents.map(agent => `native:${agent}`));
+
+  await expect(c.assert(run(['pstack-sonnet-max', 'pstack-opus-max']), f)).rejects.toThrow('agent-not-dispatched:pstack:pstack-opus-5-5-max');
+  await expect(c.assert(run(agents, ['pstack-sonnet-max']), f)).rejects.toThrow('child-did-not-run:pstack:pstack-opus-5-5-max');
+  // A model override on the dispatch would run the agent on another model.
+  const overridden = run(agents);
+  overridden.tools[1]!.input.model = 'opus';
+  await expect(c.assert(overridden, f)).rejects.toThrow('agent-not-dispatched:pstack:pstack-opus-5-5-max');
+  await writeFile(join(f.dir, 'pstack-sonnet-max.out'), 'guess\n');
+  await expect(c.assert(run(agents), f)).rejects.toThrow('nonce-mismatch:pstack:pstack-sonnet-max');
+});
+
 test('the first-run case requires a sheet equal to the catalog role defaults', async () => {
   const f = await fixture('codex'), c = setupCase('first-run'), installed = await readCatalog(location);
   const path = join(f.dir, 'pstack-models.md');
@@ -183,7 +225,10 @@ test('the first-run case requires a sheet equal to the catalog role defaults', a
   await expect(readFile(path)).rejects.toThrow();
   await expect(readFile(join(f.dir, 'AGENTS.md'))).rejects.toThrow();
   const lines = [...installed.defaults].map(([role, lanes]) => `${role}: ${lanes.join(', ')}`);
-  await writeFile(path, `# pstack model configuration\n\n${lines.join('\n')}\n`);
+  const written = `# pstack model configuration\n\n${lines.join('\n')}\n`;
+  await writeFile(path, written);
+  await expect(c.assert(record('codex', 'pstack:setup-pstack'), f)).rejects.toThrow('codex-mirror-mismatch');
+  await mirror(f, written);
   expect((await c.assert(record('codex', 'pstack:setup-pstack'), f)).assertions).toContain('sheet:role-defaults');
   await writeFile(path, `# pstack model configuration\n\n${lines.slice(1).join('\n')}\n`);
   await expect(c.assert(record('codex', 'pstack:setup-pstack'), f)).rejects.toThrow('first-run-not-role-defaults');

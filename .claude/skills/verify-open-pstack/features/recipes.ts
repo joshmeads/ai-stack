@@ -362,9 +362,23 @@ const setup: Case[] = [{
     const sheet = join(f.configHome, 'pstack-models.md'), assertions = [loaded(record, 'pstack:setup-pstack'), await written(record, sheet)];
     const lines = (await readFile(sheet, 'utf8')).split('\n').filter(line => /^[a-z][^:]*: \S/.test(line));
     if (!Bun.deepEquals(lines, [...(await readCatalog(f.location)).defaults].map(([role, lanes]) => `${role}: ${lanes.join(', ')}`))) throw new Error('first-run-not-role-defaults');
-    return { assertions: [...assertions, 'sheet:role-defaults'], files: [sheet] };
+    return { assertions: [...assertions, ...await mirrored(f, sheet), 'sheet:role-defaults'], files: [sheet] };
   },
 }];
+
+// On Codex, setup's parent integration is one bounded AGENTS.md block: the begin marker and a newline, the sheet's
+// exact bytes, then the end marker. A case that removes the block before the run checks that setup wrote it back.
+const MIRROR_BEGIN = '<!-- pstack:models:begin -->', MIRROR_END = '<!-- pstack:models:end -->';
+export async function mirrored(f: Fixture, sheet: string): Promise<string[]> {
+  if (f.harness !== 'codex') return [];
+  const agents = await readFile(join(f.configHome, 'AGENTS.md'), 'utf8').catch(() => '');
+  const once = (marker: string) => agents.split(marker).length === 2;
+  const from = agents.indexOf(MIRROR_BEGIN) + MIRROR_BEGIN.length, to = agents.indexOf(MIRROR_END);
+  if (!once(MIRROR_BEGIN) || !once(MIRROR_END) || to < from || agents.slice(from, to) !== `\n${await readFile(sheet, 'utf8')}`) {
+    throw new Error('codex-mirror-mismatch');
+  }
+  return ['codex-mirror'];
+}
 
 // Releases before v1.5.0 wrote this pair; setup must offer its family's current model and keep it on a decline.
 const KEPT = 'grok:grok-4.6', KEPT_EFFORT = 'high';
@@ -394,17 +408,17 @@ function keptPredecessor(): Case {
       const lines = (await readFile(sheet, 'utf8')).split('\n').filter(line => /^[a-z][^:]*: \S/.test(line)).sort();
       if (!Bun.deepEquals(lines, expected)) throw new Error('kept-sheet-mismatch');
       if (!Bun.deepEquals(parseJson(await readFile(proposal(f), 'utf8')), { kept: `${KEPT}@${KEPT_EFFORT}`, proposed })) throw new Error('proposal-mismatch');
-      return { assertions: [...assertions, `kept:${KEPT}@${KEPT_EFFORT}`, `proposed:${proposed}`], files: [sheet, proposal(f)] };
+      return { assertions: [...assertions, ...await mirrored(f, sheet), `kept:${KEPT}@${KEPT_EFFORT}`, `proposed:${proposed}`], files: [sheet, proposal(f)] };
     },
   };
 }
 
-// A rerun on a sheet that assigns Luna, Sonnet and the registered Opus 5.5 pin, plus an older Opus revision. Setup keeps
-// the first three and writes the revision as its rolling alias.
+// A rerun on a sheet that assigns Luna, a versioned Sonnet, the registered Opus 5.5 pin and an older Opus revision. Setup
+// keeps Luna and the pin, and writes each revision as its rolling alias.
 const NEW_FAMILY_LANES: Record<string, [string, string]> = {
   'swarm workers': ['codex:gpt-6-luna@max', 'codex:gpt-6-luna@max'],
   'hardest tasks': ['claude:claude-opus-5-5@max', 'claude:claude-opus-5-5@max'],
-  'how explainer': ['claude:sonnet@max', 'claude:sonnet@max'],
+  'how explainer': ['claude:claude-sonnet-5-5@max', 'claude:sonnet@max'],
   'judgment and prose': ['claude:claude-opus-5@max', 'claude:opus@max'],
 };
 function newFamilies(): Case {
@@ -427,7 +441,10 @@ function newFamilies(): Case {
       const sheet = join(f.configHome, 'pstack-models.md'), assertions = [loaded(record, 'pstack:setup-pstack'), await written(record, sheet)];
       const lines = (await readFile(sheet, 'utf8')).split('\n').filter(line => /^[a-z][^:]*: \S/.test(line)).sort();
       if (!Bun.deepEquals(lines, expected)) throw new Error('new-families-sheet-mismatch');
-      return { assertions: [...assertions, ...Object.values(NEW_FAMILY_LANES).map(([, written]) => `sheet:${written}`)], files: [sheet] };
+      return {
+        assertions: [...assertions, ...await mirrored(f, sheet), ...Object.values(NEW_FAMILY_LANES).map(([, written]) => `sheet:${written}`)],
+        files: [sheet],
+      };
     },
   };
 }
@@ -454,11 +471,9 @@ function readOnlyProvider(): Case {
     prompt: f => `${invoke(f.harness, 'setup-pstack', `Use these answers and ask nothing else. Keep every role assignment and every family's current effort. I confirm every write. Write the setup report to ${join(f.dir, 'result.md')}.`)} Do not push, post, or contact GitHub.`,
     async assert(record, f) {
       const sheet = join(f.configHome, 'pstack-models.md'), assertions = [loaded(record, 'pstack:setup-pstack'), await written(record, sheet)];
-      // An external probe runs the launcher; the kept sheet line shows the probe passed.
-      if (!record.commands.some(c => c.includes('pstack-runner'))) throw new Error('runner-not-run');
       const lines = (await readFile(sheet, 'utf8')).split('\n').filter(line => /^[a-z][^:]*: \S/.test(line)).sort();
       if (!Bun.deepEquals(lines, expected)) throw new Error('read-only-provider-sheet-mismatch');
-      return { assertions: [...assertions, 'runner-ran', `sheet:${READ_ONLY_LANE}`], files: [sheet] };
+      return { assertions: [...assertions, ...await mirrored(f, sheet), `sheet:${READ_ONLY_LANE}`], files: [sheet] };
     },
   };
 }
@@ -474,6 +489,31 @@ const CATALOG_LANES: Record<string, [string, string]> = {
   'how explainer': ['claude:claude-sonnet-5-5@high', 'claude:sonnet@high'],
   'how explorer': ['devin:swe-2@max', 'devin:swe-2@max'],
 };
+// Each generated agent for a new Claude family runs natively: the child reads a fixture nonce and writes it to its own
+// output file. The Agent call returns only a launch notice, so the evidence is the child's recorded tool calls and the
+// nonce it wrote.
+const NATIVE_AGENTS = ['pstack-sonnet-max', 'pstack-opus-5-5-max'];
+const nativeAgents: Case = {
+  id: 'native-agents',
+  async prepare(f) {
+    for (const agent of NATIVE_AGENTS) await writeFile(join(f.dir, `${agent}.nonce`), `${crypto.randomUUID()}\n`);
+  },
+  prompt: f => `Do no engineering work. ${NATIVE_AGENTS.map(agent => `Use the Agent tool once with subagent_type pstack:${agent}, and give it exactly this task: "Read ${join(f.dir, `${agent}.nonce`)} and write its exact contents to ${join(f.dir, `${agent}.out`)}. Do nothing else."`).join(' ')} Wait until both output files exist, then reply DONE. ${rules(f.dir)}`,
+  async assert(record, f) {
+    const assertions: string[] = [];
+    for (const agent of NATIVE_AGENTS) {
+      // A model override would run the agent on another model, so the call must leave the agent's own model in place.
+      const call = record.tools.find(t => t.name === 'Agent' && t.input.subagent_type === `pstack:${agent}` && t.input.model === undefined && !t.failed);
+      if (!call) throw new Error(`agent-not-dispatched:pstack:${agent}`);
+      if (!record.tools.some(t => t.parent === call.id)) throw new Error(`child-did-not-run:pstack:${agent}`);
+      const wrote = await readFile(join(f.dir, `${agent}.out`), 'utf8').catch(() => null);
+      if (wrote?.trim() !== (await readFile(join(f.dir, `${agent}.nonce`), 'utf8')).trim()) throw new Error(`nonce-mismatch:pstack:${agent}`);
+      assertions.push(`native:${agent}`);
+    }
+    return { assertions, files: NATIVE_AGENTS.map(agent => join(f.dir, `${agent}.out`)) };
+  },
+};
+
 function catalog(harness: Harness): Case[] {
   const sheet = (f: Fixture) => join(f.dir, 'pstack-models.md'), report = (f: Fixture) => join(f.dir, 'routes.json');
   let expected: { roles: { role: string; descriptors: string[]; routes: string[] }[] } = { roles: [] };
@@ -500,7 +540,7 @@ function catalog(harness: Harness): Case[] {
       if (!Bun.deepEquals(parseJson(await readFile(report(f), 'utf8')), expected)) throw new Error('catalog-route-mismatch');
       return { assertions: [...assertions, ...expected.roles.map(r => `role:${r.role.replaceAll(' ', '-')}`)], files: [report(f), sheet(f)] };
     },
-  }];
+  }, ...(harness === 'claude' ? [nativeAgents] : [])];
 }
 
 const shippedTools: Case = {
