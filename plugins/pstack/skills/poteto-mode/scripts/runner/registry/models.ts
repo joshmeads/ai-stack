@@ -44,6 +44,34 @@ export const FAMILIES = [
     upstream: "opus",
     rolling: { revisionPrefix: "claude-opus-" },
   }),
+  family({
+    name: "luna",
+    label: "GPT-6 Luna",
+    provider: "codex",
+    model: "gpt-6-luna",
+    efforts: UP_TO_MAX, // no ultra in `codex debug models`, Codex CLI 0.159.0
+    defaultEffort: "max",
+    upstream: null,
+  }),
+  family({
+    name: "sonnet",
+    label: "Sonnet",
+    provider: "claude",
+    model: "sonnet",
+    efforts: UP_TO_MAX,
+    defaultEffort: "max",
+    upstream: null,
+    rolling: { revisionPrefix: "claude-sonnet-" },
+  }),
+  family({
+    name: "opus-5-5",
+    label: "Opus 5.5",
+    provider: "claude",
+    model: "claude-opus-5-5", // an exact pin: resolveModel matches it before the opus revision pattern
+    efforts: UP_TO_MAX,
+    defaultEffort: "max",
+    upstream: "claude-opus-5-5-xhigh",
+  }),
 ] as const;
 export type FamilyName = (typeof FAMILIES)[number]["name"];
 
@@ -76,4 +104,7 @@ export const RELEASED_PAIRS = [
   { pair: "codex:gpt-6.1-sol", family: "sol" },
   { pair: "grok:grok-4.6", family: "grok" },
   { pair: "grok:grok-4.7", family: "grok" },
+  { pair: "codex:gpt-6-luna", family: "luna" },
+  { pair: "claude:sonnet", family: "sonnet" },
+  { pair: "claude:claude-opus-5-5", family: "opus-5-5" },
 ] as const satisfies readonly ReleasedPair<FamilyName>[];

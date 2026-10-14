@@ -69,11 +69,11 @@ describe("runner CLI parsing", () => {
   it("refuses an unnormalized Claude revision with a usage error", async () => {
     let stderr = "";
     const args = argv().map((value) =>
-      value === "claude" ? "codex" : value === "codex" ? "claude" : value === "gpt-5.6-sol" ? "claude-opus-5-5" : value
+      value === "claude" ? "codex" : value === "codex" ? "claude" : value === "gpt-5.6-sol" ? "claude-opus-5-6" : value
     );
     expect(await main(args, Date.now(), { stdout: () => {}, stderr: (value) => { stderr += value; } })).toBe(64);
     expect(stderr).toStartWith(
-      "error: Claude model claude-opus-5-5 is a version pin; normalize it to opus before invoking the runner\n"
+      "error: Claude model claude-opus-5-6 is a version pin; normalize it to opus before invoking the runner\n"
     );
   });
 });

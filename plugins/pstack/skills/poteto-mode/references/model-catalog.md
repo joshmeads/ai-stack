@@ -12,6 +12,9 @@ Model and provider facts for [`provider-dispatch.md`](provider-dispatch.md), whi
 | sol | GPT-6.1 Sol | codex | gpt-6.1-sol | max | low medium high xhigh max ultra | - | default | gpt-5.6-sol-max |
 | grok | Grok 4.7 | grok | grok-4.7 | xhigh | low medium high xhigh max | - | default | grok-4.7-xhigh-fast |
 | opus | Opus | claude | opus | max | low medium high xhigh max | `pstack-opus-<effort>` | default | opus |
+| luna | GPT-6 Luna | codex | gpt-6-luna | max | low medium high xhigh max | - | optional | - |
+| sonnet | Sonnet | claude | sonnet | max | low medium high xhigh max | `pstack-sonnet-<effort>` | optional | - |
+| opus-5-5 | Opus 5.5 | claude | claude-opus-5-5 | max | low medium high xhigh max | `pstack-opus-5-5-<effort>` | optional | claude-opus-5-5-xhigh |
 
 A family is `default` when a role default names it and `optional` otherwise. A Claude-native agent exists for each selectable effort of a Claude family.
 
@@ -28,6 +31,7 @@ Rolling aliases:
 | --- | --- | --- |
 | fable | `fable` | `claude-fable-<revision>`, where the revision contains only digits and hyphens |
 | opus | `opus` | `claude-opus-<revision>`, where the revision contains only digits and hyphens |
+| sonnet | `sonnet` | `claude-sonnet-<revision>`, where the revision contains only digits and hyphens |
 
 ## Routes
 

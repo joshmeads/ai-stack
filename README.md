@@ -91,9 +91,9 @@ In Codex, ask:
 Use pstack:setup-pstack to configure pstack.
 ```
 
-Setup checks the models you can actually run, shows how each one will start, and asks before saving the choices. The default review panel uses Opus, Sol, and Grok, and setup probes only the models your roles use. Fable remains available.
+Setup checks the models you can actually run, shows how each one will start, and asks before saving the choices. The default review panel uses Opus, Sol, and Grok, and setup probes only the models your roles use. Fable, Sonnet, Luna and an exact Opus pin remain available.
 
-An older model sheet starts using the rolling aliases in memory as soon as this release is installed. Run setup once after updating to persist that migration. It replaces versioned Fable and Opus entries while preserving every role assignment and effort selection.
+An older model sheet starts using the rolling aliases in memory as soon as this release is installed. Run setup once after updating to persist that migration. It replaces versioned entries of a rolling-alias family, such as Opus, while preserving every role assignment and effort selection. A registered exact pin is kept.
 
 A model sheet from an earlier release keeps its panel. To take the new defaults, delete those role lines and run setup again; setup fills missing roles from the defaults. An entry for a model that a later release replaced keeps running until the next setup run asks you to replace it.
 

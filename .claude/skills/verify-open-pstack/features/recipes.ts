@@ -346,7 +346,7 @@ const setup: Case[] = [{
     if (!(await readFile(path, 'utf8')).includes(SETUP_DESCRIPTOR)) throw new Error('consumer-route-mismatch');
     return { assertions: [...assertions, 'consumer-route'], files: [path] };
   },
-}, keptPredecessor(), {
+}, keptPredecessor(), newFamilies(), {
   id: 'first-run',
   codexSandbox: 'danger-full-access',
   claudePermission: 'bypassPermissions',
@@ -360,9 +360,23 @@ const setup: Case[] = [{
     const sheet = join(f.configHome, 'pstack-models.md'), assertions = [loaded(record, 'pstack:setup-pstack'), await written(record, sheet)];
     const lines = (await readFile(sheet, 'utf8')).split('\n').filter(line => /^[a-z][^:]*: \S/.test(line));
     if (!Bun.deepEquals(lines, [...(await readCatalog(f.location)).defaults].map(([role, lanes]) => `${role}: ${lanes.join(', ')}`))) throw new Error('first-run-not-role-defaults');
-    return { assertions: [...assertions, 'sheet:role-defaults'], files: [sheet] };
+    return { assertions: [...assertions, ...await mirrored(f, sheet), 'sheet:role-defaults'], files: [sheet] };
   },
 }];
+
+// On Codex, setup's parent integration is one bounded AGENTS.md block: the begin marker and a newline, the sheet's
+// exact bytes, then the end marker. A case that removes the block before the run checks that setup wrote it back.
+const MIRROR_BEGIN = '<!-- pstack:models:begin -->', MIRROR_END = '<!-- pstack:models:end -->';
+export async function mirrored(f: Fixture, sheet: string): Promise<string[]> {
+  if (f.harness !== 'codex') return [];
+  const agents = await readFile(join(f.configHome, 'AGENTS.md'), 'utf8').catch(() => '');
+  const once = (marker: string) => agents.split(marker).length === 2;
+  const from = agents.indexOf(MIRROR_BEGIN) + MIRROR_BEGIN.length, to = agents.indexOf(MIRROR_END);
+  if (!once(MIRROR_BEGIN) || !once(MIRROR_END) || to < from || agents.slice(from, to) !== `\n${await readFile(sheet, 'utf8')}`) {
+    throw new Error('codex-mirror-mismatch');
+  }
+  return ['codex-mirror'];
+}
 
 // Releases before v1.5.0 wrote this pair; setup must offer its family's current model and keep it on a decline.
 const KEPT = 'grok:grok-4.6', KEPT_EFFORT = 'high';
@@ -392,7 +406,43 @@ function keptPredecessor(): Case {
       const lines = (await readFile(sheet, 'utf8')).split('\n').filter(line => /^[a-z][^:]*: \S/.test(line)).sort();
       if (!Bun.deepEquals(lines, expected)) throw new Error('kept-sheet-mismatch');
       if (!Bun.deepEquals(parseJson(await readFile(proposal(f), 'utf8')), { kept: `${KEPT}@${KEPT_EFFORT}`, proposed })) throw new Error('proposal-mismatch');
-      return { assertions: [...assertions, `kept:${KEPT}@${KEPT_EFFORT}`, `proposed:${proposed}`], files: [sheet, proposal(f)] };
+      return { assertions: [...assertions, ...await mirrored(f, sheet), `kept:${KEPT}@${KEPT_EFFORT}`, `proposed:${proposed}`], files: [sheet, proposal(f)] };
+    },
+  };
+}
+
+// A rerun on a sheet that assigns Luna, a versioned Sonnet, the registered Opus 5.5 pin and an older Opus revision. Setup
+// keeps Luna and the pin, and writes each revision as its rolling alias.
+const NEW_FAMILY_LANES: Record<string, [string, string]> = {
+  'swarm workers': ['codex:gpt-6-luna@max', 'codex:gpt-6-luna@max'],
+  'hardest tasks': ['claude:claude-opus-5-5@max', 'claude:claude-opus-5-5@max'],
+  'how explainer': ['claude:claude-sonnet-5-5@max', 'claude:sonnet@max'],
+  'judgment and prose': ['claude:claude-opus-5@max', 'claude:opus@max'],
+};
+function newFamilies(): Case {
+  let expected: string[] = [];
+  return {
+    id: 'new-families',
+    codexSandbox: 'danger-full-access',
+    claudePermission: 'bypassPermissions',
+    async prepare(f) {
+      const roles = [...(await readCatalog(f.location)).defaults];
+      const lane = (role: string, index: 0 | 1, lanes: string[]) => role in NEW_FAMILY_LANES ? [NEW_FAMILY_LANES[role]![index]] : lanes;
+      for (const role of Object.keys(NEW_FAMILY_LANES)) if (!roles.some(([name]) => name === role)) throw new Error(`catalog-role-missing:${role}`);
+      expected = roles.map(([role, lanes]) => `${role}: ${lane(role, 1, lanes).join(', ')}`).sort();
+      await writeFile(join(f.configHome, 'pstack-models.md'), sheetText(roles.map(([role, lanes]) => [role, lane(role, 0, lanes)])));
+      // Codex mirrors the sheet in a run-owned AGENTS.md block; without it the sheet is the only source.
+      if (f.harness === 'codex') await rm(join(f.configHome, 'AGENTS.md'), { force: true });
+    },
+    prompt: f => `${invoke(f.harness, 'setup-pstack', `Use these answers and ask nothing else. Keep every role assignment and every family's current effort. I confirm every write. Write the setup report to ${join(f.dir, 'result.md')}.`)} Do not push, post, or contact GitHub.`,
+    async assert(record, f) {
+      const sheet = join(f.configHome, 'pstack-models.md'), assertions = [loaded(record, 'pstack:setup-pstack'), await written(record, sheet)];
+      const lines = (await readFile(sheet, 'utf8')).split('\n').filter(line => /^[a-z][^:]*: \S/.test(line)).sort();
+      if (!Bun.deepEquals(lines, expected)) throw new Error('new-families-sheet-mismatch');
+      return {
+        assertions: [...assertions, ...await mirrored(f, sheet), ...Object.values(NEW_FAMILY_LANES).map(([, written]) => `sheet:${written}`)],
+        files: [sheet],
+      };
     },
   };
 }
@@ -400,6 +450,38 @@ function keptPredecessor(): Case {
 // The parent reads a fixture sheet and reports each role's descriptors and routes, which must equal what the
 // installed candidate's catalog gives for that sheet and parent.
 const CONFIGURED_ROLE = 'judgment and prose', MISSING_ROLES = ['arena runners', 'bug-fix'];
+// Sheet lanes for the new families, and the descriptor the parent dispatches for each: a pin and Luna unchanged, a
+// versioned Sonnet as its rolling alias.
+const CATALOG_LANES: Record<string, [string, string]> = {
+  'swarm workers': ['codex:gpt-6-luna@max', 'codex:gpt-6-luna@max'],
+  'hardest tasks': ['claude:claude-opus-5-5@max', 'claude:claude-opus-5-5@max'],
+  'how explainer': ['claude:claude-sonnet-5-5@high', 'claude:sonnet@high'],
+};
+// Each generated agent for a new Claude family runs natively: the child reads a fixture nonce and writes it to its own
+// output file. The Agent call returns only a launch notice, so the evidence is the child's recorded tool calls and the
+// nonce it wrote.
+const NATIVE_AGENTS = ['pstack-sonnet-max', 'pstack-opus-5-5-max'];
+const nativeAgents: Case = {
+  id: 'native-agents',
+  async prepare(f) {
+    for (const agent of NATIVE_AGENTS) await writeFile(join(f.dir, `${agent}.nonce`), `${crypto.randomUUID()}\n`);
+  },
+  prompt: f => `Do no engineering work. ${NATIVE_AGENTS.map(agent => `Use the Agent tool once with subagent_type pstack:${agent}, and give it exactly this task: "Read ${join(f.dir, `${agent}.nonce`)} and write its exact contents to ${join(f.dir, `${agent}.out`)}. Do nothing else."`).join(' ')} Wait until both output files exist, then reply DONE. ${rules(f.dir)}`,
+  async assert(record, f) {
+    const assertions: string[] = [];
+    for (const agent of NATIVE_AGENTS) {
+      // A model override would run the agent on another model, so the call must leave the agent's own model in place.
+      const call = record.tools.find(t => t.name === 'Agent' && t.input.subagent_type === `pstack:${agent}` && t.input.model === undefined && !t.failed);
+      if (!call) throw new Error(`agent-not-dispatched:pstack:${agent}`);
+      if (!record.tools.some(t => t.parent === call.id)) throw new Error(`child-did-not-run:pstack:${agent}`);
+      const wrote = await readFile(join(f.dir, `${agent}.out`), 'utf8').catch(() => null);
+      if (wrote?.trim() !== (await readFile(join(f.dir, `${agent}.nonce`), 'utf8')).trim()) throw new Error(`nonce-mismatch:pstack:${agent}`);
+      assertions.push(`native:${agent}`);
+    }
+    return { assertions, files: NATIVE_AGENTS.map(agent => join(f.dir, `${agent}.out`)) };
+  },
+};
+
 function catalog(harness: Harness): Case[] {
   const sheet = (f: Fixture) => join(f.dir, 'pstack-models.md'), report = (f: Fixture) => join(f.dir, 'routes.json');
   let expected: { roles: { role: string; descriptors: string[]; routes: string[] }[] } = { roles: [] };
@@ -413,9 +495,11 @@ function catalog(harness: Harness): Case[] {
       if (!defaults || !configured) throw new Error(`catalog-role-missing:${CONFIGURED_ROLE}`);
       const missing = MISSING_ROLES.map(role => ({ role, descriptors: installed.defaults.get(role) ?? [] }));
       if (missing.some(m => !m.descriptors.length)) throw new Error(`catalog-role-missing:${MISSING_ROLES.join(',')}`);
+      for (const role of Object.keys(CATALOG_LANES)) if (!installed.defaults.has(role)) throw new Error(`catalog-role-missing:${role}`);
       await writeFile(sheet(f), sheetText([...installed.defaults].filter(([role]) => !MISSING_ROLES.includes(role))
-        .map(([role, lanes]) => [role, role === CONFIGURED_ROLE ? [configured] : lanes])));
-      expected = { roles: [{ role: CONFIGURED_ROLE, descriptors: [configured] }, ...missing]
+        .map(([role, lanes]) => [role, role === CONFIGURED_ROLE ? [configured] : role in CATALOG_LANES ? [CATALOG_LANES[role]![0]] : lanes])));
+      const added = Object.entries(CATALOG_LANES).map(([role, [, dispatched]]) => ({ role, descriptors: [dispatched] }));
+      expected = { roles: [{ role: CONFIGURED_ROLE, descriptors: [configured] }, ...missing, ...added]
         .map(r => ({ ...r, routes: r.descriptors.map(d => installed.route(harness, d)) })) };
     },
     prompt: f => `${invoke(f.harness, 'poteto-mode', `Do no engineering work and launch no lane. For this task the pstack model sheet is ${sheet(f)}; use it in place of any configured sheet. For each of these roles, in this order, find the descriptors this parent would dispatch and the route of each: ${expected.roles.map(r => JSON.stringify(r.role)).join(', ')}. Write to ${report(f)} only JSON of the form {"roles":[{"role":"<role>","descriptors":["<provider:model@effort>"],"routes":["native" or "external"]}]}, one route per descriptor, where "native" is this parent's own subagent primitive and "external" is the external runner.`)} ${rules(f.dir)}`,
@@ -424,7 +508,7 @@ function catalog(harness: Harness): Case[] {
       if (!Bun.deepEquals(parseJson(await readFile(report(f), 'utf8')), expected)) throw new Error('catalog-route-mismatch');
       return { assertions: [...assertions, ...expected.roles.map(r => `role:${r.role.replaceAll(' ', '-')}`)], files: [report(f), sheet(f)] };
     },
-  }];
+  }, ...(harness === 'claude' ? [nativeAgents] : [])];
 }
 
 const shippedTools: Case = {
