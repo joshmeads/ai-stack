@@ -6,7 +6,7 @@ Personal plugins for Claude Code and Codex, maintained at [joshmeads/ai-stack](h
 | --- | --- | --- |
 | `jm-stack` | `jm-stack:how`, `jm-stack:poteto-mode`, … | [Open Pstack](https://github.com/ericlitman/open-pstack), the Claude Code and Codex port of Lauren Tan's [pstack](https://github.com/cursor/plugins/tree/main/pstack), renamed jm:stack and set up for the models below. Everything else is upstream's. |
 | `jm-games` | `jm-games:threejs`, `jm-games:art-iteration` | three.js and react-three-fiber facts, and a loop for visual work judged against reference images. |
-| `jm-tools` | `jm-tools:handoff`, `jm-tools:try-to-break-it`, `jm-tools:visual-evidence` | Hand off work to a fresh session, try to break a change before calling it done, and capture before/after UI evidence. |
+| `jm-tools` | `jm-tools:handoff`, `jm-tools:try-to-break-it`, `jm-tools:visual-evidence`, `jm-tools:host-static` | Hand off work to a fresh session, try to break a change before calling it done, capture before/after UI evidence, and host a static build at an unlisted URL. |
 
 ## Install
 

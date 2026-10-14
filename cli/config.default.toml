@@ -8,7 +8,7 @@ remote = "origin"
 branch = "main"
 # Older checkout roots. Skill and agent links and settings hooks that point
 # into the stack or these roots are leftovers of older installs and are removed.
-legacy_paths = []
+legacy_paths = ["~/.local/share/open-pstack"]
 
 [harness.claude]
 home = "~/.claude"
