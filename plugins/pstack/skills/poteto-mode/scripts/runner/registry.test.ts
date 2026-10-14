@@ -260,14 +260,20 @@ describe("hand-written dispatch and setup rules", () => {
     }
   });
 
-  it("refuses a read-only-only provider for exactly the roles whose playbooks delegate with isolated-write", () => {
+  it("refuses a read-only-only provider for every role whose lanes write files", () => {
     const writers = Object.entries(ROLE_POINTERS)
       .filter(([file]) => file.includes("/playbooks/"))
       .filter(([file]) => readFileSync(join(PLUGIN_ROOT, file), "utf8").includes("`isolated-write`"))
       .flatMap(([, roles]) => roles);
     expect(new Set(writers)).toEqual(new Set(["feature, refactoring", "bug-fix", "perf-issue", "hillclimb"]));
     const rule = section(setup, "### 3. Parse per-family efforts", "### 4. Collect one requested effort per family");
-    expect(rule).toContain("The `feature, refactoring`, `bug-fix`, `perf-issue`, and `hillclimb` playbooks delegate with `isolated-write`.");
+    expect(rule).toContain("Lanes for these roles write files: `feature, refactoring`, `bug-fix`, `perf-issue`, and `hillclimb`, whose playbooks delegate with `isolated-write`; `hardest tasks`, which takes the hardest code changes; and `arena runners`, `architect runners` and `swarm workers`, which write to their own worktrees or output directories.");
+    // poteto-mode sends the hardest changes to `hardest tasks`; arena and architect candidates and swarm workers each write
+    // to their own location.
+    expect(readFileSync(join(PLUGIN_ROOT, "skills/poteto-mode/SKILL.md"), "utf8")).toContain("the hardest changes read `hardest tasks`");
+    expect(readFileSync(join(PLUGIN_ROOT, "skills/arena/SKILL.md"), "utf8")).toContain("Give each candidate its own output location (a git worktree");
+    expect(readFileSync(join(PLUGIN_ROOT, "skills/swarm/SKILL.md"), "utf8")).toContain("in the worker's own worktree");
+    expect(readFileSync(join(PLUGIN_ROOT, "skills/architect/SKILL.md"), "utf8")).toContain("Take the runners from `architect runners` in the current harness's pstack model sheet, in place of Arena's `arena runners`.");
     expect(rule).toContain("lacks `isolated-write`: name the role and the provider, and say why.");
     expect(rule).toContain("The runner refuses that provider's writer lane before launch");
     expect(REGISTRY.adapters.filter((adapter) => !adapter.launch.supports.includes("isolated-write")).map((adapter) => adapter.id))

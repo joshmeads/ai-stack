@@ -61,7 +61,8 @@ function parse(run: ModelRun): ParseResult {
   if (exported === null || steps.length === 0) return { kind: "malformed", message: "devin export has no steps" };
   const last = object(steps.at(-1));
   const found = metadata(exported, last);
-  if (last?.message === INTERRUPTED) {
+  // Devin writes the interruption as a system step; an agent reply with the same text is a reply.
+  if (last?.source === "system" && last.message === INTERRUPTED) {
     return { kind: "provider-failure", status: "cancelled", message: "devin reported the response was interrupted", metadata: found };
   }
   if (last?.source !== "agent") return { kind: "malformed", message: "devin export did not end with an agent step" };
@@ -100,6 +101,8 @@ export const devin = adapter({
     // `--sandbox` forces Devin's autonomous mode, which lets shell commands write in the cwd while it
     // rejects the edit tools, so Devin has no bounded writer mode.
     supports: ["read-only"],
+    // The lane bypasses workspace trust, so a repository's .devin/ hooks, permissions and MCP servers would load.
+    projectConfigDir: ".devin",
     needsSharedGitDir: () => false,
     argv(lane, facts) {
       const paths = sidecar(facts);
@@ -134,6 +137,7 @@ export const devin = adapter({
     notes: [
       "Effort is part of the model ID. The runner passes the CLI model ID that the effort table gives for the requested effort. An unregistered Devin model must be a CLI model ID with the `default` effort.",
       "Read-only only. A lane runs `--permission-mode auto` without `--sandbox`, so Devin's approval policy, not an OS sandbox, rejects edits and writing shell commands, as Claude's `plan` mode does. With `--sandbox`, approved shell commands write in the cwd while the edit tools are rejected, so no Devin mode is a bounded writer. The runner refuses an `isolated-write` lane before launch.",
+      "The lane passes `--respect-workspace-trust false`, so the runner refuses a Devin lane whose cwd, or any parent up to the git root, holds `.devin/`: Devin would load that repository's hooks, permissions and MCP servers.",
       "Each lane gets a run-owned `--config` file in its private `<receipt>.provider/` directory (0700). It turns off subagents, every host rule source (such as `CLAUDE.md`) and MCP tools, and denies web search and the fetch tools. Devin still loads its own skills. Network isolation is not established: shell network access and the fetch denials were not measured.",
       "The preflight passes when `devin auth status` exits 0 and starts with `Logged in (via Devin).`. It also exits 0 when logged out, so output starting with `Not logged in.` is `unauthenticated`/77, and any other output is `child-failed`/70.",
       "The reply, session, token usage and model proof come from the `--export` ATIF file at `<receipt>.provider/export.json`, never from stdout. The proof is the last step's `extra.generation_model`, which must equal the CLI model ID. An empty final message, as after a rejected tool call, is `child-failed`/70. An interrupted response, or exit 143 after SIGTERM, is `cancelled`/130. `Error: Unknown model:` is `unavailable-model`/69.",

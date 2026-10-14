@@ -138,6 +138,9 @@ export interface ProviderAdapter {
     readonly sidecar: ProviderSidecar | null;
     /** resolveLane refuses any other access kind before launch. */
     readonly supports: readonly AccessKind[];
+    /** A directory name that holds the provider's project config, such as hooks. run.ts refuses the lane when the cwd
+     *  or any parent up to the git root holds it, because the CLI would load that repository-controlled config. */
+    readonly projectConfigDir: string | null;
     needsSharedGitDir(access: Access): boolean;
     /** Omits the effort flag for the `default` effort. */
     argv(lane: Lane, facts: LaunchFacts): readonly string[];
