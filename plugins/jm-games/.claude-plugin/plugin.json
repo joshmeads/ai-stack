@@ -2,17 +2,21 @@
   "name": "jm-games",
   "displayName": "jm:games",
   "version": "0.1.0",
-  "description": "Game and graphics skills: version-specific three.js and react-three-fiber facts, and a reference-driven art iteration loop with an image-only critic.",
+  "description": "Game and graphics skills: GDD and staged browser-game delivery (mini-GDD, MVP, final), three.js, react-three-fiber, Phaser, audio, Blender and web QA tools, version-specific three.js facts, and a reference-driven art iteration loop.",
   "author": {
     "name": "Josh Meads"
   },
-  "license": "MIT",
+  "license": "MIT AND Apache-2.0",
   "keywords": [
     "threejs",
     "webgpu",
     "tsl",
     "react-three-fiber",
     "art",
-    "vfx"
+    "vfx",
+    "game-design",
+    "phaser",
+    "blender",
+    "web-audio"
   ]
 }
