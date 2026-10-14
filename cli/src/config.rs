@@ -190,10 +190,10 @@ impl Default for CleanSection {
 }
 
 const SKILL_ROOTS: [&str; 3] = ["~/.claude/skills", "~/.codex/skills", "~/.agents/skills"];
-const KEEP_SKILLS: [&str; 19] = [
+const KEEP_SKILLS: [&str; 21] = [
     "better-*", "brandkit", "break", "variant", "explain-interface", "interface-review", "design-taste-frontend",
     "gpt-taste", "high-end-visual-design", "image-to-code", "redesign-existing-projects", "full-output-enforcement",
-    "make-interfaces-feel-better", "oklch-skill", "color-expert", "cua-*", "gui-automation", "hatch-pet", "turborepo",
+    "make-interfaces-feel-better", "oklch-skill", "color-expert", "minimalist-ui", "cua-*", "gui-automation", "hatch-pet", "turborepo", "computer-use-linux",
 ];
 const KEEP_PLUGINS: [&str; 4] = ["jm-*@jm", "github@claude-plugins-official", "chrome-devtools-mcp@claude-plugins-official", "*@openai-*"];
 
@@ -473,7 +473,7 @@ mod tests {
     #[test]
     fn default_config_resolves() {
         let cfg = from_str(default_config_text(), Path::new("/h")).unwrap();
-        assert_eq!(cfg.stack.path, PathBuf::from("/h/.local/share/open-pstack"));
+        assert_eq!(cfg.stack.path, PathBuf::from("/h/Documents/Projects/@joshmeads/ai-stack"));
         assert_eq!(cfg.leads[&Harness::Claude].model.id, "claude-opus-5-5");
         assert_eq!(cfg.review[&Harness::Codex].model.id, "gpt-6.1-sol");
         assert_eq!(cfg.models["haiku"].context, Some(100_000));

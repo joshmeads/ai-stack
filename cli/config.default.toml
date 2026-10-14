@@ -3,7 +3,7 @@
 [stack]
 # Checkout of joshmeads/ai-stack. ai-stack adds it to each harness as the
 # local `jm` plugin marketplace and installs jm-stack, jm-games and jm-tools.
-path = "~/.local/share/open-pstack"
+path = "~/Documents/Projects/@joshmeads/ai-stack"
 remote = "origin"
 branch = "main"
 # Older checkout roots. Skill and agent links and settings hooks that point
@@ -108,7 +108,8 @@ keep_skills = [
   "interface-review", "design-taste-frontend", "gpt-taste",
   "high-end-visual-design", "image-to-code", "redesign-existing-projects",
   "full-output-enforcement", "make-interfaces-feel-better", "oklch-skill",
-  "color-expert", "cua-*", "gui-automation", "hatch-pet", "turborepo",
+  "color-expert", "minimalist-ui", "cua-*", "gui-automation", "hatch-pet",
+  "turborepo", "computer-use-linux",
 ]
 # Codex's built-in plugins come from `openai-*` marketplaces.
 keep_plugins = [
