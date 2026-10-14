@@ -35,9 +35,10 @@ export interface Case {
 export const CLAUDE_TOOLS = 'Skill,Read,Glob,Grep,Write,Edit,Bash,Agent,Task,TodoWrite';
 /** Without --runner-route, the runner recipe dispatches the first lane of this role's default in the installed catalog. */
 export const DEFAULT_ROLES: Record<Harness, string> = { claude: 'bug-fix', codex: 'judgment and prose' };
-export const ROUTE = /^(claude|codex|grok):([A-Za-z0-9._-]+)@([a-z]+)$/;
+/** Any provider's route; the installed candidate's catalog decides whether the provider exists and is external. */
+export const ROUTE = /^([a-z][a-z0-9-]*):([A-Za-z0-9._-]+)@([a-z]+)$/;
 const SETUP_DESCRIPTOR = 'claude:opus@high';
-const DESCRIPTOR = /\b(?:claude|codex|grok):[A-Za-z0-9._-]+@[a-z]+/g;
+const DESCRIPTOR = /\b[a-z][a-z0-9-]*:[A-Za-z0-9._-]+@[a-z]+/g;
 const SHEET_HEADER = '# pstack model configuration\n\n';
 
 /** The installed candidate's registry, as its generated model catalog renders it. */
@@ -306,9 +307,10 @@ function runner(harness: Harness, routes: string[]): Case[] {
       id: `route-${index + 1}`,
       codexSandbox: 'danger-full-access',
       async prepare(f) {
-        route ||= (await readCatalog(f.location)).defaults.get(DEFAULT_ROLES[harness])?.[0] ?? '';
+        const installed = await readCatalog(f.location);
+        route ||= installed.defaults.get(DEFAULT_ROLES[harness])?.[0] ?? '';
         const parts = ROUTE.exec(route);
-        if (!parts || parts[1] === harness) throw new Error(`runner-route-not-external:${route || DEFAULT_ROLES[harness]}`);
+        if (!parts || installed.route(harness, route) !== 'external') throw new Error(`runner-route-not-external:${route || DEFAULT_ROLES[harness]}`);
         [, provider = '', model = '', effort = ''] = parts;
         await writeFile(lane(f, 'prompt.md'), 'Reply with the single word PONG.\n');
       },
@@ -346,7 +348,7 @@ const setup: Case[] = [{
     if (!(await readFile(path, 'utf8')).includes(SETUP_DESCRIPTOR)) throw new Error('consumer-route-mismatch');
     return { assertions: [...assertions, 'consumer-route'], files: [path] };
   },
-}, keptPredecessor(), newFamilies(), {
+}, keptPredecessor(), newFamilies(), readOnlyProvider(), writerRefusal(), {
   id: 'first-run',
   codexSandbox: 'danger-full-access',
   claudePermission: 'bypassPermissions',
@@ -447,15 +449,75 @@ function newFamilies(): Case {
   };
 }
 
+// A rerun on a sheet that assigns the read-only role `how explorer` to a read-only-only provider. Setup probes it
+// through the runner and keeps every role line.
+const READ_ONLY_ROLE = 'how explorer', READ_ONLY_LANE = 'devin:swe-2@max';
+function readOnlyProvider(): Case {
+  let expected: string[] = [];
+  return {
+    id: 'read-only-provider',
+    codexSandbox: 'danger-full-access',
+    claudePermission: 'bypassPermissions',
+    async prepare(f) {
+      const installed = await readCatalog(f.location), roles = [...installed.defaults];
+      if (!roles.some(([role]) => role === READ_ONLY_ROLE)) throw new Error(`catalog-role-missing:${READ_ONLY_ROLE}`);
+      if (installed.route(f.harness, READ_ONLY_LANE) !== 'external') throw new Error(`catalog-route-not-external:${READ_ONLY_LANE}`);
+      const lines = roles.map(([role, lanes]): [string, string[]] => [role, role === READ_ONLY_ROLE ? [READ_ONLY_LANE] : lanes]);
+      expected = lines.map(([role, lanes]) => `${role}: ${lanes.join(', ')}`).sort();
+      await writeFile(join(f.configHome, 'pstack-models.md'), sheetText(lines));
+      // Codex mirrors the sheet in a run-owned AGENTS.md block; without it the sheet is the only source.
+      if (f.harness === 'codex') await rm(join(f.configHome, 'AGENTS.md'), { force: true });
+    },
+    prompt: f => `${invoke(f.harness, 'setup-pstack', `Use these answers and ask nothing else. Keep every role assignment and every family's current effort. I confirm every write. Write the setup report to ${join(f.dir, 'result.md')}.`)} Do not push, post, or contact GitHub.`,
+    async assert(record, f) {
+      const sheet = join(f.configHome, 'pstack-models.md'), assertions = [loaded(record, 'pstack:setup-pstack'), await written(record, sheet)];
+      const lines = (await readFile(sheet, 'utf8')).split('\n').filter(line => /^[a-z][^:]*: \S/.test(line)).sort();
+      if (!Bun.deepEquals(lines, expected)) throw new Error('read-only-provider-sheet-mismatch');
+      return { assertions: [...assertions, ...await mirrored(f, sheet), `sheet:${READ_ONLY_LANE}`], files: [sheet] };
+    },
+  };
+}
+
+// Setup refuses a read-only-only provider for a writer role and changes no configuration: the sheet keeps its bytes,
+// Codex's removed mirror is not written back, and setup's refusal names the role and the provider.
+const WRITER_ROLE = 'bug-fix';
+function writerRefusal(): Case {
+  let prepared = '';
+  const refusal = (f: Fixture) => join(f.dir, 'refusal.txt');
+  return {
+    id: 'writer-refusal',
+    codexSandbox: 'danger-full-access',
+    claudePermission: 'bypassPermissions',
+    async prepare(f) {
+      const roles = [...(await readCatalog(f.location)).defaults];
+      if (!roles.some(([role]) => role === WRITER_ROLE)) throw new Error(`catalog-role-missing:${WRITER_ROLE}`);
+      prepared = sheetText(roles.map(([role, lanes]) => [role, role === WRITER_ROLE ? [READ_ONLY_LANE] : lanes]));
+      await writeFile(join(f.configHome, 'pstack-models.md'), prepared);
+      if (f.harness === 'codex') await rm(join(f.configHome, 'AGENTS.md'), { force: true });
+      await rm(refusal(f), { force: true });
+    },
+    prompt: f => `${invoke(f.harness, 'setup-pstack', `Use these answers and ask nothing else. Keep every role assignment and every family's current effort. If setup refuses a role assignment, write only setup's refusal message to ${refusal(f)} and stop without changing any configuration.`)} Do not push, post, or contact GitHub.`,
+    async assert(record, f) {
+      const assertions = [loaded(record, 'pstack:setup-pstack')];
+      if (await readFile(join(f.configHome, 'pstack-models.md'), 'utf8') !== prepared) throw new Error('writer-refusal-sheet-changed');
+      if (f.harness === 'codex' && await lstat(join(f.configHome, 'AGENTS.md')).then(() => true, () => false)) throw new Error('writer-refusal-integration-written');
+      const text = await readFile(refusal(f), 'utf8').catch(() => '');
+      if (!text.includes(WRITER_ROLE) || !text.toLowerCase().includes('devin')) throw new Error('writer-refusal-missing');
+      return { assertions: [...assertions, `refused:${WRITER_ROLE}:${READ_ONLY_LANE}`], files: [refusal(f)] };
+    },
+  };
+}
+
 // The parent reads a fixture sheet and reports each role's descriptors and routes, which must equal what the
 // installed candidate's catalog gives for that sheet and parent.
 const CONFIGURED_ROLE = 'judgment and prose', MISSING_ROLES = ['arena runners', 'bug-fix'];
-// Sheet lanes for the new families, and the descriptor the parent dispatches for each: a pin and Luna unchanged, a
-// versioned Sonnet as its rolling alias.
+// Sheet lanes for the new families, and the descriptor the parent dispatches for each: a pin, Luna and a Devin lane
+// unchanged, a versioned Sonnet as its rolling alias.
 const CATALOG_LANES: Record<string, [string, string]> = {
   'swarm workers': ['codex:gpt-6-luna@max', 'codex:gpt-6-luna@max'],
   'hardest tasks': ['claude:claude-opus-5-5@max', 'claude:claude-opus-5-5@max'],
   'how explainer': ['claude:claude-sonnet-5-5@high', 'claude:sonnet@high'],
+  'how explorer': ['devin:swe-2@max', 'devin:swe-2@max'],
 };
 // Each generated agent for a new Claude family runs natively: the child reads a fixture nonce and writes it to its own
 // output file. The Agent call returns only a launch notice, so the evidence is the child's recorded tool calls and the

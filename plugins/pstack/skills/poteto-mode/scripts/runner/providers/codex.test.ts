@@ -7,8 +7,8 @@ adapterSuite(codex);
 
 const lane = (request: Partial<LaneRequest> = {}) =>
   testLane({ provider: "codex", model: "gpt-5.6-sol", ...request });
-const argv = (request: Partial<LaneRequest> = {}) => codex.launch.argv(lane(request), { sharedGitDir: null });
-const parse = (stdout: string) => codex.parse({ exitCode: 0, stdout, stderr: "" }, lane());
+const argv = (request: Partial<LaneRequest> = {}) => codex.launch.argv(lane(request), { sharedGitDir: null, providerSidecar: null });
+const parse = (stdout: string) => codex.parse({ exitCode: 0, stdout, stderr: "", sidecar: null }, lane());
 
 describe("codex launch", () => {
   it("pins Codex model, effort, sandbox, cwd, and JSONL output", () => {
@@ -87,6 +87,7 @@ describe("codex parse", () => {
         }),
       ].join("\n"),
       stderr: "model: gpt-5.6-sol\nreasoning effort: max\n",
+      sidecar: null,
     }, lane());
     expect(parsed).toMatchObject({
       kind: "complete",

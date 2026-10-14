@@ -1,8 +1,9 @@
-import type { Effort } from "../types.ts";
+import { EFFORTS, type Effort } from "../types.ts";
 import type { RollingAlias } from "./contract.ts";
 import type { ADAPTERS } from "./providers.ts";
 
 export type ProviderId = (typeof ADAPTERS)[number]["id"];
+type EffortInOf<P extends ProviderId> = Extract<(typeof ADAPTERS)[number], { readonly id: P }>["effortIn"];
 
 export interface KeptPredecessor {
   readonly model: string;
@@ -10,21 +11,40 @@ export interface KeptPredecessor {
   readonly efforts: readonly Effort[];
 }
 
-export interface FamilyEntry {
+interface FamilyCommon<P extends ProviderId> {
   /** The key role defaults name. A Claude family's native agents are pstack-<name>-<effort>. */
   readonly name: string;
   /** The matrix label. */
   readonly label: string;
-  readonly provider: ProviderId;
+  readonly provider: P;
   /** The descriptor's model component. */
   readonly model: string;
-  readonly efforts: readonly Effort[];
   readonly defaultEffort: Effort;
   /** Cursor's selector for the same choice, kept for sync review. */
   readonly upstream: string | null;
   /** Present for Claude rolling aliases. Drives report matching and read-time normalization. */
   readonly rolling?: RollingAlias;
-  readonly predecessors?: readonly KeptPredecessor[];
+}
+
+type ModelIds = { readonly [E in Effort]?: string };
+
+/** The provider picks the effort shape, so a Sol-shaped entry for a model-ID provider fails `tsc`.
+ *  A model-ID family keeps no predecessor yet: no released pair of one has changed its model. */
+export type FamilyEntry<P extends ProviderId = ProviderId> = P extends ProviderId
+  ? FamilyCommon<P> & (EffortInOf<P> extends "model-id"
+    ? { readonly efforts: ModelIds; readonly predecessors?: never }
+    : { readonly efforts: readonly Effort[]; readonly predecessors?: readonly KeptPredecessor[] })
+  : never;
+
+/** A model-ID family's map from effort to CLI model ID, or null for a family whose argv carries the effort. */
+export function modelIds(entry: FamilyEntry): ModelIds | null {
+  return Array.isArray(entry.efforts) ? null : entry.efforts as ModelIds;
+}
+
+/** A family's selectable efforts, in EFFORTS order for a model-ID family. */
+export function effortsOf(entry: FamilyEntry): readonly Effort[] {
+  const ids = modelIds(entry);
+  return ids === null ? entry.efforts as readonly Effort[] : EFFORTS.filter((effort) => ids[effort] !== undefined);
 }
 
 export type LaneDefault<F extends string> = F | "inherit-parent" | "auto";

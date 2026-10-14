@@ -4,6 +4,7 @@ import { tmpdir } from "node:os";
 import { dirname, join, relative, resolve } from "node:path";
 import {
   defaultDescriptor,
+  effortsOf,
   type LaneRequest,
   REGISTRY,
   resolveLane,
@@ -86,6 +87,8 @@ describe("registry data", () => {
       ["luna", "max"],
       ["sonnet", "max"],
       ["opus-5-5", "max"],
+      ["swe-2", "max"],
+      ["swe-1.6", "default"],
     ]);
     expect(REGISTRY.families.filter((entry) => entry.provider === "claude").map((entry) => [entry.name, entry.model]))
       .toEqual([["fable", "fable"], ["opus", "opus"], ["sonnet", "sonnet"], ["opus-5-5", "claude-opus-5-5"]]);
@@ -94,7 +97,7 @@ describe("registry data", () => {
       .toEqual([["fable", "claude-fable-"], ["opus", "claude-opus-"], ["sonnet", "claude-sonnet-"]]);
     expect(REGISTRY.families.filter((entry) => entry.provider === "codex").map((entry) => [entry.name, entry.model]))
       .toEqual([["sol", "gpt-6.1-sol"], ["luna", "gpt-6-luna"]]);
-    expect(REGISTRY.families.filter((entry) => entry.efforts.includes("ultra")).map((entry) => entry.name)).toEqual(["sol"]);
+    expect(REGISTRY.families.filter((entry) => effortsOf(entry).includes("ultra")).map((entry) => entry.name)).toEqual(["sol"]);
   });
 
   it("keeps family names and (provider, model) pairs unique, and efforts ordered", () => {
@@ -105,11 +108,11 @@ describe("registry data", () => {
       .map((model) => `${entry.provider}:${model}`));
     expect(new Set(pairs).size).toBe(pairs.length);
     for (const entry of REGISTRY.families) {
-      for (const efforts of [entry.efforts, ...(entry.predecessors ?? []).map((kept) => kept.efforts)]) {
+      for (const efforts of [effortsOf(entry), ...(entry.predecessors ?? []).map((kept) => kept.efforts)]) {
         expect(efforts.length).toBeGreaterThan(0);
         expect([...efforts]).toEqual(EFFORTS.filter((effort) => efforts.includes(effort)));
       }
-      expect(entry.efforts).toContain(entry.defaultEffort);
+      expect(effortsOf(entry)).toContain(entry.defaultEffort);
     }
   });
 
@@ -257,6 +260,28 @@ describe("hand-written dispatch and setup rules", () => {
     }
   });
 
+  it("refuses a read-only-only provider for every role whose lanes write files", () => {
+    const writers = Object.entries(ROLE_POINTERS)
+      .filter(([file]) => file.includes("/playbooks/"))
+      .filter(([file]) => readFileSync(join(PLUGIN_ROOT, file), "utf8").includes("`isolated-write`"))
+      .flatMap(([, roles]) => roles);
+    expect(new Set(writers)).toEqual(new Set(["feature, refactoring", "bug-fix", "perf-issue", "hillclimb"]));
+    const rule = section(setup, "### 3. Parse per-family efforts", "### 4. Collect one requested effort per family");
+    expect(rule).toContain("Lanes for these roles write files: `feature, refactoring`, `bug-fix`, `perf-issue`, and `hillclimb`, whose playbooks delegate with `isolated-write`; `hardest tasks`, which takes the hardest code changes; and `arena runners`, `architect runners` and `swarm workers`, which write to their own worktrees or output directories.");
+    // poteto-mode sends the hardest changes to `hardest tasks`; arena and architect candidates and swarm workers each write
+    // to their own location.
+    expect(readFileSync(join(PLUGIN_ROOT, "skills/poteto-mode/SKILL.md"), "utf8")).toContain("the hardest changes read `hardest tasks`");
+    expect(readFileSync(join(PLUGIN_ROOT, "skills/arena/SKILL.md"), "utf8")).toContain("Give each candidate its own output location (a git worktree");
+    expect(readFileSync(join(PLUGIN_ROOT, "skills/swarm/SKILL.md"), "utf8")).toContain("in the worker's own worktree");
+    expect(readFileSync(join(PLUGIN_ROOT, "skills/architect/SKILL.md"), "utf8")).toContain("Take the runners from `architect runners` in the current harness's pstack model sheet, in place of Arena's `arena runners`.");
+    expect(rule).toContain("lacks `isolated-write`: name the role and the provider, and say why.");
+    expect(rule).toContain("The runner refuses that provider's writer lane before launch");
+    expect(REGISTRY.adapters.filter((adapter) => !adapter.launch.supports.includes("isolated-write")).map((adapter) => adapter.id))
+      .toEqual(["devin"]);
+    const devinRoute = renderCatalog(REGISTRY).content.split("\n").find((line) => line.startsWith("| devin |"));
+    expect(devinRoute).toContain("| `read-only` |");
+  });
+
   it("proposes a kept predecessor's current model at the same effort and keeps it on a decline", () => {
     expect(setup).toContain("model-catalog.md#kept-predecessors-and-normalization) is not inconsistent state.");
     expect(setup).toContain("propose replacing every occurrence with its family's current model at the same effort, and ask.");
@@ -339,7 +364,7 @@ describe("resolveLane", () => {
     const lane = resolveLane(request({ parent: "claude", provider: "grok", model: "grok-4.5", effort: "high" }));
     expect(lane.family).toBeNull();
     expect(lane.model).toBe("grok-4.5");
-    expect(lane.adapter.launch.argv(lane, { sharedGitDir: null }))
+    expect(lane.adapter.launch.argv(lane, { sharedGitDir: null, providerSidecar: null }))
       .toEqual(expect.arrayContaining(["--model", "grok-4.5", "--reasoning-effort", "high"]));
     expect(resolveLane(request({ parent: "claude", provider: "grok", model: "grok-4.5", effort: "default" })).effort)
       .toBe("default");
@@ -384,7 +409,7 @@ describe("resolveLane", () => {
     }
     const lane = resolveLane(request({ model: "claude-opus-5-5" }));
     expect([lane.family?.name, lane.family?.rolling, lane.model]).toEqual(["opus-5-5", null, "claude-opus-5-5"]);
-    expect(lane.adapter.launch.argv(lane, { sharedGitDir: null })).toEqual(expect.arrayContaining(["claude-opus-5-5"]));
+    expect(lane.adapter.launch.argv(lane, { sharedGitDir: null, providerSidecar: null })).toEqual(expect.arrayContaining(["claude-opus-5-5"]));
   });
 
   it("resolves Sonnet and Luna, and rejects ultra for both", () => {
@@ -397,10 +422,31 @@ describe("resolveLane", () => {
       .toThrow("effort ultra is not offered for claude:sonnet");
   });
 
+  it("maps each Devin effort to its CLI model ID and keeps the descriptor's model for the receipt", () => {
+    const devin = (model: string, effort: string, mode = "read-only") =>
+      resolveLane(request({ parent: "claude", provider: "devin", model, effort, mode }));
+    for (const [model, effort, cliModel] of [
+      ["swe-2", "medium", "swe-2-medium"], ["swe-2", "high", "swe-2-high"], ["swe-2", "max", "swe-2-max"],
+      ["swe-1.6", "default", "swe-1-6"],
+    ]) {
+      const lane = devin(model!, effort!);
+      expect([lane.family?.name, lane.model, lane.cliModel]).toEqual([model, model, cliModel]);
+    }
+    expect(() => devin("swe-2", "default")).toThrow("effort default is not offered for devin:swe-2; choose one of: medium, high, max");
+    // An unregistered Devin model is already a CLI model ID, so only the default effort runs it.
+    expect([devin("swe-1-7-medium", "default").cliModel, devin("swe-1-7-medium", "default").family]).toEqual(["swe-1-7-medium", null]);
+    expect(() => devin("swe-1-7-medium", "max")).toThrow("effort max is not offered for devin:swe-1-7-medium; choose one of: default");
+    expect(() => devin("swe-2", "max", "isolated-write"))
+      .toThrow("provider devin does not support isolated-write; it supports only: read-only");
+    for (const [provider, model] of [["codex", "gpt-6.1-sol"], ["grok", "grok-4.7"], ["grok", "grok-4.5"]]) {
+      expect(resolveLane(request({ parent: "claude", provider, model })).cliModel).toBe(model);
+    }
+  });
+
   it("rejects same-provider recursion and unknown names", () => {
     expect(() => resolveLane(request({ parent: "claude" })))
       .toThrow("provider claude is native to parent claude; use the parent subagent primitive");
-    expect(() => resolveLane(request({ provider: "devin" }))).toThrow("provider must be one of: claude, codex, grok");
+    expect(() => resolveLane(request({ provider: "cursor" }))).toThrow("provider must be one of: claude, codex, grok, devin");
     expect(() => resolveLane(request({ parent: "grok" }))).toThrow("parent must be one of: claude, codex");
     expect(() => resolveLane(request({ mode: "full" }))).toThrow("mode must be one of: read-only, isolated-write");
     expect(() => resolveLane(request({ model: " " }))).toThrow("model is required");

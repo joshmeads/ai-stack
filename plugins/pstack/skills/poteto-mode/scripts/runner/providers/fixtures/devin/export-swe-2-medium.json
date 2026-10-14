@@ -1,0 +1,12 @@
+{
+  "schema_version": "ATIF-v1.7",
+  "session_id": "fixture-session",
+  "agent": { "name": "devin", "version": "3000.11.3", "model_name": "SWE-2 Medium", "tool_definitions": [] },
+  "steps": [
+    { "step_id": 1, "timestamp": "2026-10-14T03:13:00.000000+00:00", "source": "system", "message": "<system prompt omitted>", "extra": { "telemetry": { "source": "system", "operation": "unknown" } } },
+    { "step_id": 2, "timestamp": "2026-10-14T03:13:00.100000+00:00", "source": "user", "message": "Read the file marker.txt in the current directory and reply with only its exact contents.", "extra": { "telemetry": { "source": "user", "operation": "unknown" } } },
+    { "step_id": 3, "timestamp": "2026-10-14T03:13:02.000000+00:00", "source": "agent", "model_name": "swe-2-medium", "message": "", "reasoning_content": null, "tool_calls": [{ "tool_call_id": "call_fixture", "function_name": "read", "arguments": { "file_path": "/tmp/worktree/marker.txt" } }], "observation": "{\"results\":[{\"source_call_id\":\"call_fixture\",\"content\":\"<file-view path=\\\"/tmp/worktree/marker.txt\\\">\\n  1|MARK-fixture\\n</file-view>\"}]}", "metrics": { "prompt_tokens": 23427, "completion_tokens": 75 }, "extra": { "generation_model": "swe-2-medium", "telemetry": { "source": "assistant", "operation": "inference" } } },
+    { "step_id": 4, "timestamp": "2026-10-14T03:13:03.000000+00:00", "source": "agent", "model_name": "swe-2-medium", "message": "MARK-fixture", "tool_calls": [], "metrics": { "prompt_tokens": 23592, "completion_tokens": 25, "cached_tokens": 23426 }, "extra": { "generation_model": "swe-2-medium", "telemetry": { "source": "assistant", "operation": "inference" } } }
+  ],
+  "final_metrics": { "total_prompt_tokens": 47019, "total_completion_tokens": 100, "total_cached_tokens": 31618, "total_steps": 4 }
+}

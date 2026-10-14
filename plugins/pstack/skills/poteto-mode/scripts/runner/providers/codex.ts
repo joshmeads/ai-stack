@@ -55,6 +55,7 @@ function parse(stdout: string): ParseResult {
 export const codex = adapter({
   id: "codex",
   executable: "codex",
+  effortIn: "flag",
   preflight: {
     argv: () => ["login", "status"],
     retryAfterUnauthenticatedMs: null,
@@ -64,6 +65,9 @@ export const codex = adapter({
   },
   launch: {
     prompt: "stdin",
+    sidecar: null,
+    supports: ["read-only", "isolated-write"],
+    projectConfigDir: null,
     needsSharedGitDir: () => false,
     argv: (lane) => [
       "exec",
