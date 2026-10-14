@@ -1,7 +1,7 @@
 // Headless recipes for every selectable feature. The trusted parent runs each case as one fresh
 // native session and evaluates `assert` against the parsed record and the fixture it created.
 import { Database } from 'bun:sqlite';
-import { lstat, mkdir, readFile, realpath, rm, writeFile } from 'node:fs/promises';
+import { lstat, mkdir, readdir, readFile, realpath, rm, writeFile } from 'node:fs/promises';
 import { basename, join } from 'node:path';
 import { sha256, type Command } from '../scripts/io.ts';
 import type { Harness, SessionRecord } from '../scripts/types.ts';
@@ -360,9 +360,20 @@ const setup: Case[] = [{
     const sheet = join(f.configHome, 'pstack-models.md'), assertions = [loaded(record, 'pstack:setup-pstack'), await written(record, sheet)];
     const lines = (await readFile(sheet, 'utf8')).split('\n').filter(line => /^[a-z][^:]*: \S/.test(line));
     if (!Bun.deepEquals(lines, [...(await readCatalog(f.location)).defaults].map(([role, lanes]) => `${role}: ${lanes.join(', ')}`))) throw new Error('first-run-not-role-defaults');
-    return { assertions: [...assertions, 'sheet:role-defaults'], files: [sheet] };
+    return { assertions: [...assertions, ...await mirrored(f, sheet), 'sheet:role-defaults'], files: [sheet] };
   },
 }];
+
+// On Codex, setup's parent integration is the sheet's exact bytes in one bounded AGENTS.md block. A case that removes
+// the block before the run checks that setup wrote it back.
+export async function mirrored(f: Fixture, sheet: string): Promise<string[]> {
+  if (f.harness !== 'codex') return [];
+  const agents = await readFile(join(f.configHome, 'AGENTS.md'), 'utf8').catch(() => '');
+  const block = /<!-- pstack:models:begin -->\n([\s\S]*?)<!-- pstack:models:end -->/.exec(agents)?.[1];
+  const trim = (text: string) => text.replace(/\n$/, '');
+  if (block === undefined || trim(block) !== trim(await readFile(sheet, 'utf8'))) throw new Error('codex-mirror-mismatch');
+  return ['codex-mirror'];
+}
 
 // Releases before v1.5.0 wrote this pair; setup must offer its family's current model and keep it on a decline.
 const KEPT = 'grok:grok-4.6', KEPT_EFFORT = 'high';
@@ -392,7 +403,7 @@ function keptPredecessor(): Case {
       const lines = (await readFile(sheet, 'utf8')).split('\n').filter(line => /^[a-z][^:]*: \S/.test(line)).sort();
       if (!Bun.deepEquals(lines, expected)) throw new Error('kept-sheet-mismatch');
       if (!Bun.deepEquals(parseJson(await readFile(proposal(f), 'utf8')), { kept: `${KEPT}@${KEPT_EFFORT}`, proposed })) throw new Error('proposal-mismatch');
-      return { assertions: [...assertions, `kept:${KEPT}@${KEPT_EFFORT}`, `proposed:${proposed}`], files: [sheet, proposal(f)] };
+      return { assertions: [...assertions, ...await mirrored(f, sheet), `kept:${KEPT}@${KEPT_EFFORT}`, `proposed:${proposed}`], files: [sheet, proposal(f)] };
     },
   };
 }
@@ -405,8 +416,31 @@ const NEW_FAMILY_LANES: Record<string, [string, string]> = {
   'how explainer': ['claude:sonnet@max', 'claude:sonnet@max'],
   'judgment and prose': ['claude:claude-opus-5@max', 'claude:opus@max'],
 };
+// Each new family's probe takes its parent-owned route: a Claude-native family through its own generated agent, and an
+// external family through the runner, whose receipt names the provider and model.
+const NEW_FAMILY_PROBES: Record<Harness, { native: string[]; external: [string, string][] }> = {
+  claude: { native: ['pstack-opus-5-5-max', 'pstack-sonnet-max'], external: [['codex', 'gpt-6-luna']] },
+  // Luna is native on Codex, and its spawn_agent call is not in the Codex session record.
+  codex: { native: [], external: [['claude', 'claude-opus-5-5'], ['claude', 'sonnet']] },
+};
+export async function probed(record: SessionRecord, f: Fixture, probes: string): Promise<string[]> {
+  const { native, external } = NEW_FAMILY_PROBES[f.harness];
+  for (const agent of native) {
+    if (!record.tools.some(t => t.name === 'Agent' && t.input.subagent_type === `pstack:${agent}` && !t.failed)) throw new Error(`native-probe-missing:${agent}`);
+  }
+  const receipts = await Promise.all((await readdir(probes).catch(() => [] as string[])).filter(name => name.endsWith('.json'))
+    .map(async name => { try { return JSON.parse(await readFile(join(probes, name), 'utf8')); } catch { return null; } }));
+  for (const [provider, model] of external) {
+    if (!receipts.some(r => r?.parent === f.harness && r.provider === provider && r.model === model && r.status === 'complete')) {
+      throw new Error(`runner-probe-missing:${provider}:${model}`);
+    }
+  }
+  return [...native.map(agent => `native:${agent}`), ...external.map(([provider, model]) => `runner:${provider}:${model}`)];
+}
+
 function newFamilies(): Case {
   let expected: string[] = [];
+  const probes = (f: Fixture) => join(f.dir, 'probes');
   return {
     id: 'new-families',
     codexSandbox: 'danger-full-access',
@@ -417,15 +451,22 @@ function newFamilies(): Case {
       for (const role of Object.keys(NEW_FAMILY_LANES)) if (!roles.some(([name]) => name === role)) throw new Error(`catalog-role-missing:${role}`);
       expected = roles.map(([role, lanes]) => `${role}: ${lane(role, 1, lanes).join(', ')}`).sort();
       await writeFile(join(f.configHome, 'pstack-models.md'), sheetText(roles.map(([role, lanes]) => [role, lane(role, 0, lanes)])));
+      // Setup cases share one fixture directory, so start from an empty one: only this run's receipts count.
+      await rm(probes(f), { recursive: true, force: true });
+      await mkdir(probes(f));
       // Codex mirrors the sheet in a run-owned AGENTS.md block; without it the sheet is the only source.
       if (f.harness === 'codex') await rm(join(f.configHome, 'AGENTS.md'), { force: true });
     },
-    prompt: f => `${invoke(f.harness, 'setup-pstack', `Use these answers and ask nothing else. Keep every role assignment and every family's current effort. I confirm every write. Write the setup report to ${join(f.dir, 'result.md')}.`)} Do not push, post, or contact GitHub.`,
+    prompt: f => `${invoke(f.harness, 'setup-pstack', `Use these answers and ask nothing else. Keep every role assignment and every family's current effort. Put the --prompt, --output and --receipt paths of every external runner probe inside ${probes(f)}. I confirm every write. Write the setup report to ${join(f.dir, 'result.md')}.`)} Do not push, post, or contact GitHub.`,
     async assert(record, f) {
       const sheet = join(f.configHome, 'pstack-models.md'), assertions = [loaded(record, 'pstack:setup-pstack'), await written(record, sheet)];
       const lines = (await readFile(sheet, 'utf8')).split('\n').filter(line => /^[a-z][^:]*: \S/.test(line)).sort();
       if (!Bun.deepEquals(lines, expected)) throw new Error('new-families-sheet-mismatch');
-      return { assertions: [...assertions, ...Object.values(NEW_FAMILY_LANES).map(([, written]) => `sheet:${written}`)], files: [sheet] };
+      return {
+        assertions: [...assertions, ...await mirrored(f, sheet), ...await probed(record, f, probes(f)),
+          ...Object.values(NEW_FAMILY_LANES).map(([, written]) => `sheet:${written}`)],
+        files: [sheet],
+      };
     },
   };
 }
