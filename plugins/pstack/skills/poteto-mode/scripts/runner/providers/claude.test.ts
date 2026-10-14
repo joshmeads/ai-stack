@@ -1,4 +1,5 @@
 import { describe, expect, it } from "bun:test";
+import { access } from "../registry/contract.ts";
 import type { LaneRequest } from "../registry/index.ts";
 import { adapterSuite, testLane } from "./adapter-suite.ts";
 import { claude } from "./claude.ts";
@@ -76,8 +77,8 @@ describe("claude launch", () => {
   });
 
   it("asks run.ts for the shared git directory only for a writer", () => {
-    expect(claude.launch.needsSharedGitDir({ mode: "isolated-write" })).toBe(true);
-    expect(claude.launch.needsSharedGitDir({ mode: "read-only" })).toBe(false);
+    expect(claude.launch.needsSharedGitDir(access("isolated-write"))).toBe(true);
+    expect(claude.launch.needsSharedGitDir(access("read-only"))).toBe(false);
   });
 
   it("covers low, medium, and high", () => {

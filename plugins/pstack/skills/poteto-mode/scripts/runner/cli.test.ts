@@ -41,6 +41,22 @@ describe("runner CLI parsing", () => {
     );
   });
 
+  it("defaults a writer to the bounded sandbox and passes an explicit full-access opt-in", () => {
+    const writer = argv().map((value) => (value === "read-only" ? "isolated-write" : value));
+    expect(parseArgs(writer)?.access).toEqual({ mode: "isolated-write", sandbox: "bounded" });
+    expect(parseArgs([...writer, "--writer-sandbox", "full-access"])?.access)
+      .toEqual({ mode: "isolated-write", sandbox: "full-access" });
+    expect(() => parseArgs(argv(["--writer-sandbox", "full-access"])))
+      .toThrow("writer sandbox full-access requires mode isolated-write");
+  });
+
+  it("names the writer sandbox flag and its default in the help text", async () => {
+    let stdout = "";
+    await main(["--help"], Date.now(), { stdout: (value) => { stdout += value; }, stderr: () => {} });
+    expect(stdout).toContain("[--writer-sandbox <bounded|full-access>]");
+    expect(stdout).toContain("--writer-sandbox\ndefaults to bounded");
+  });
+
   it("accepts the ultra effort", () => {
     const args = argv().map((value) => (value === "max" ? "ultra" : value));
     expect(parseArgs(args)?.effort).toBe("ultra");

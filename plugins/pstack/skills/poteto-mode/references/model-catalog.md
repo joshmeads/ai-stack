@@ -49,11 +49,11 @@ Rolling aliases:
 | Provider | Claude Code parent | Codex parent | Access modes | Prompt | Model proof | Child environment | Host prerequisites |
 | --- | --- | --- | --- | --- | --- | --- | --- |
 | claude | native `Agent` | external runner | `read-only`, `isolated-write` | stdin | provider report | read-only: inherited; isolated-write: inherited without `GIT_*` | - |
-| codex | external runner | native `spawn_agent` | `read-only`, `isolated-write` | stdin | pinned argv | inherited | - |
+| codex | external runner | native `spawn_agent` | `read-only`, `isolated-write`, `isolated-write-full-access` | stdin | pinned argv | inherited | - |
 | grok | external runner | external runner | `read-only`, `isolated-write` | file | provider report | allowlist | Linux: Landlock and `bwrap` |
 | devin | external runner | external runner | `read-only` | file | provider report | allowlist | - |
 
-The runner refuses an access mode outside a provider's Access modes cell before launch.
+The runner refuses an access mode outside a provider's Access modes cell before launch. `isolated-write-full-access` is a writer capability, not a `--mode` value: the runner takes it as `--mode isolated-write --writer-sandbox full-access`, which a parent passes only when the model sheet opts in, as [`provider-dispatch.md`](provider-dispatch.md#codex-writer-sandbox) says.
 
 ## Provider notes
 

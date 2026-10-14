@@ -830,6 +830,28 @@ printf '%s\\n' '{"type":"thread.started","thread_id":"isolated"}' '{"type":"item
     });
   }
 
+  it("records the writer sandbox the lane ran with: none for a reader, bounded by default, and full access on opt-in", async () => {
+    const lanes = [
+      [options("codex", "sandbox-reader"), null, "read-only"],
+      [{ ...options("codex", "sandbox-bounded"), mode: "isolated-write" }, "bounded", "workspace-write"],
+      [{ ...options("codex", "sandbox-full"), mode: "isolated-write", writerSandbox: "full-access" }, "full-access", "danger-full-access"],
+    ] as const;
+    for (const [input, writerSandbox, sandbox] of lanes) {
+      expect((await runLane(laneOf(input))).exitCode).toBe(0);
+      const saved = receipt(input.receiptPath);
+      expect([saved.status, saved.writerSandbox]).toEqual(["complete", writerSandbox]);
+      expect(saved.argv.slice(saved.argv.indexOf("--sandbox"), saved.argv.indexOf("--sandbox") + 2)).toEqual(["--sandbox", sandbox]);
+    }
+  });
+
+  it("records the opted-in writer sandbox on a failure receipt", async () => {
+    process.env.PATH = join(scratch, "empty-bin");
+    mkdirSync(process.env.PATH);
+    const input = { ...options("codex", "sandbox-missing-cli"), mode: "isolated-write", writerSandbox: "full-access" };
+    expect((await runLane(laneOf(input))).exitCode).toBe(69);
+    expect(receipt(input.receiptPath)).toMatchObject({ status: "unavailable-cli", writerSandbox: "full-access" });
+  });
+
   it("records Codex's exact argv without fabricating a reported model", async () => {
     const input = options("codex");
     const result = await runLane(laneOf(input));

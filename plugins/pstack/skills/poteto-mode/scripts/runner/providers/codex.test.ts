@@ -57,6 +57,18 @@ describe("codex launch", () => {
     );
   });
 
+  it("keeps an explicitly bounded writer on workspace-write", () => {
+    expect(argv({ mode: "isolated-write", writerSandbox: "bounded" })).toEqual(argv({ mode: "isolated-write" }));
+  });
+
+  it("gives only an opted-in writer the full-access sandbox", () => {
+    const bounded = argv({ mode: "isolated-write" });
+    const full = argv({ mode: "isolated-write", writerSandbox: "full-access" });
+    const at = bounded.indexOf("workspace-write");
+    expect(full).toEqual([...bounded.slice(0, at), "danger-full-access", ...bounded.slice(at + 1)]);
+    expect(full.slice(at - 1, at + 1)).toEqual(["--sandbox", "danger-full-access"]);
+  });
+
   it("covers low, medium, and high", () => {
     for (const effort of ["low", "medium", "high"] as const) {
       expect(argv({ effort })).toEqual(

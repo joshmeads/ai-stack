@@ -27,10 +27,16 @@ export const PARENTS = {
 /** `default` passes no effort, so the CLI or model uses its own setting. */
 export const EFFORTS = ["low", "medium", "high", "xhigh", "max", "ultra", "default"] as const;
 export const ACCESS_MODES = ["read-only", "isolated-write"] as const;
+/** A writer's sandbox. `full-access` is an explicit opt-in from the model sheet, never a recovery step. */
+export const WRITER_SANDBOXES = ["bounded", "full-access"] as const;
+/** What an adapter's `launch.supports` lists: each access mode, and the full-access writer as its own capability. */
+export const ACCESS_KINDS = [...ACCESS_MODES, "isolated-write-full-access"] as const;
 
 export type Parent = keyof typeof PARENTS;
 export type Effort = (typeof EFFORTS)[number];
 export type AccessMode = (typeof ACCESS_MODES)[number];
+export type WriterSandbox = (typeof WRITER_SANDBOXES)[number];
+export type AccessKind = (typeof ACCESS_KINDS)[number];
 
 export type ReceiptStatus =
   | "complete"
@@ -59,6 +65,8 @@ export interface RunnerReceipt {
   readonly model: string;
   readonly effort: Effort;
   readonly mode: AccessMode;
+  /** Null for a read-only lane. */
+  readonly writerSandbox: WriterSandbox | null;
   readonly cwd: string;
   readonly promptPath: string;
   readonly outputPath: string;

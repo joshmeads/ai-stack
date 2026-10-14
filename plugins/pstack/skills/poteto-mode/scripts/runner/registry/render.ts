@@ -1,7 +1,7 @@
 import { existsSync, mkdirSync, readdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { dirname, join } from "node:path";
 import { ACCESS_MODES, PARENTS, type Parent } from "../types.ts";
-import type { EnvPolicy, ProviderAdapter } from "./contract.ts";
+import { access, type EnvPolicy, type ProviderAdapter } from "./contract.ts";
 import { defaultDescriptor, effortsOf, modelIds, REGISTRY, type Registry } from "./index.ts";
 
 export interface GeneratedFile {
@@ -45,7 +45,7 @@ function policy(value: EnvPolicy, long: boolean): string {
 }
 
 function environment(adapter: ProviderAdapter, long: boolean): string {
-  const [read, write] = ACCESS_MODES.map((mode) => policy(adapter.environment({ mode }), long));
+  const [read, write] = ACCESS_MODES.map((mode) => policy(adapter.environment(access(mode)), long));
   return read === write ? read! : `read-only: ${read}; isolated-write: ${write}`;
 }
 
@@ -130,7 +130,7 @@ export function renderCatalog(registry: Registry): GeneratedFile {
       ])
     ),
     "",
-    "The runner refuses an access mode outside a provider's Access modes cell before launch.",
+    "The runner refuses an access mode outside a provider's Access modes cell before launch. `isolated-write-full-access` is a writer capability, not a `--mode` value: the runner takes it as `--mode isolated-write --writer-sandbox full-access`, which a parent passes only when the model sheet opts in, as [`provider-dispatch.md`](provider-dispatch.md#codex-writer-sandbox) says.",
     "",
     "## Provider notes",
     ...registry.adapters.flatMap((adapter) => [

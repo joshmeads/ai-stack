@@ -586,7 +586,7 @@ function modelProof(
 
 function completeReceipt(
   lane: Lane,
-  partial: Omit<RunnerReceipt, "schemaVersion" | "parent" | "provider" | "model" | "effort" | "mode" | "cwd" | "promptPath" | "outputPath" | "stdoutPath" | "stderrPath">
+  partial: Omit<RunnerReceipt, "schemaVersion" | "parent" | "provider" | "model" | "effort" | "mode" | "writerSandbox" | "cwd" | "promptPath" | "outputPath" | "stdoutPath" | "stderrPath">
 ): RunnerReceipt {
   return {
     schemaVersion: 1,
@@ -595,6 +595,7 @@ function completeReceipt(
     model: lane.model,
     effort: lane.effort,
     mode: lane.access.mode,
+    writerSandbox: lane.access.mode === "read-only" ? null : lane.access.sandbox,
     cwd: lane.cwd,
     promptPath: lane.promptPath,
     outputPath: lane.outputPath,
