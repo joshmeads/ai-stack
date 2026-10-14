@@ -1817,6 +1817,22 @@ await Bun.sleep(5_000);`);
     }
   });
 
+  it("refuses a Devin lane whose workspace holds .devin/ project config, up to the git root", async () => {
+    fakeDevin(LOGGED_IN, "writeFileSync(exportPath, '{}'); process.exit(0);");
+    const repo = join(scratch, "repo"), nested = join(repo, "src");
+    fs.mkdirSync(join(repo, ".devin"), { recursive: true });
+    fs.mkdirSync(nested);
+    const input = devinOptions("devin-project-config", { cwd: nested });
+    expect((await runLane(laneOf(input))).exitCode).toBe(70);
+    expect(receipt(input.receiptPath)).toMatchObject({ status: "child-failed", error: { message: expect.stringContaining(`${join(fs.realpathSync(repo), ".devin")}: the CLI would load its repository-controlled hooks, permissions and MCP servers`) } });
+
+    // The walk stops at the git root: a .devin/ above it belongs to another project.
+    fs.mkdirSync(join(nested, ".git"));
+    fakeDevin(LOGGED_IN, OBSERVE);
+    const inside = devinOptions("devin-below-git-root", { cwd: nested });
+    expect((await runLane(laneOf(inside))).exitCode).toBe(0);
+  });
+
   it("refuses an isolated-write Devin lane before launch", () => {
     const input = devinOptions("devin-writer", { mode: "isolated-write" });
     expect(() => laneOf(input)).toThrow("provider devin does not support isolated-write");

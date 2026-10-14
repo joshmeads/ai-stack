@@ -126,6 +126,11 @@ describe("devin parse", () => {
       });
   });
 
+  it("reads an agent reply with the interruption text as a reply, not a cancellation", () => {
+    const sidecar = JSON.stringify({ session_id: "s", steps: [{ source: "agent", message: "[Response interrupted by user]", extra: { generation_model: "swe-2-medium" } }] });
+    expect(devin.parse(run({ sidecar }), lane())).toMatchObject({ kind: "complete", text: "[Response interrupted by user]" });
+  });
+
   it("reads SIGINT's interrupted export and SIGTERM's exit 143 as cancelled", () => {
     expect(devin.parse(run({ exitCode: 1, stdout: "The history of rivers is,", stderr: "Error: Operation canceled by user\n", sidecar: fixture("export-sigint.json") }), lane()))
       .toMatchObject({ kind: "provider-failure", status: "cancelled", message: "devin reported the response was interrupted", metadata: { reportedModel: null, sessionId: "fixture-session" } });

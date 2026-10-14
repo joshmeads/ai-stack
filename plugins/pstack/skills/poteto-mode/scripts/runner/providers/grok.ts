@@ -106,6 +106,7 @@ export const grok = adapter({
     prompt: "file",
     sidecar: null,
     supports: ["read-only", "isolated-write"],
+    projectConfigDir: null,
     needsSharedGitDir: () => false,
     argv: (lane) => [
       "--prompt-file",

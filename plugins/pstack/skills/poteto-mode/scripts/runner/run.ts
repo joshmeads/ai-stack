@@ -423,6 +423,16 @@ function within(parent: string, child: string): boolean {
 // what the writer's own git will use. Returns null for a non-repository or a directory the cwd
 // contains, and refuses whatever cannot be denied literally: denyWrite entries are globs that
 // cannot be escaped, and Claude Code 2.1.288 on Linux drops entries containing * ? [ ].
+// The provider's project config directory in the cwd or a parent up to the git root, or null. A CLI that loads
+// repository-controlled config from there does not run: the runner bypasses its workspace trust.
+export function projectConfigIn(cwd: string, name: string): string | null {
+  for (let dir = realpathSync(cwd); ; dir = dirname(dir)) {
+    const candidate = join(dir, name);
+    if (existsSync(candidate)) return candidate;
+    if (existsSync(join(dir, ".git")) || dirname(dir) === dir) return null;
+  }
+}
+
 export async function discoverSharedGitDir(
   cwd: string,
   env: NodeJS.ProcessEnv,
@@ -709,6 +719,35 @@ async function executeLane(
       costUsd: null,
       error: {
         message: `${adapter.executable} executable not found`,
+        evidence: "",
+      },
+    });
+    removeIfExists(lane.outputPath);
+    writeReceipt(lane.receiptPath, receipt);
+    return { exitCode: statusExitCode(receipt.status), receipt };
+  }
+
+  const projectConfig = adapter.launch.projectConfigDir === null ? null : projectConfigIn(lane.cwd, adapter.launch.projectConfigDir);
+  if (projectConfig !== null) {
+    const completed = Date.now();
+    receipt = completeReceipt(lane, {
+      status: "child-failed",
+      startedAt,
+      completedAt: new Date(completed).toISOString(),
+      elapsedMs: completed - started,
+      executable,
+      preflight: preflightState,
+      argv: [executable, ...launchArgs],
+      exitCode: null,
+      signal: null,
+      reportedModel: null,
+      modelVerified: false,
+      modelEvidence: null,
+      sessionId: null,
+      usage: null,
+      costUsd: null,
+      error: {
+        message: `${adapter.id} lanes do not run in a workspace with ${projectConfig}: the CLI would load its repository-controlled hooks, permissions and MCP servers`,
         evidence: "",
       },
     });
