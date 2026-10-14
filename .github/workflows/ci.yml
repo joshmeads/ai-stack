@@ -17,18 +17,9 @@ jobs:
         with:
           node-version: 22.23.2
       - uses: oven-sh/setup-bun@v2
-        with:
-          bun-version: 1.4.0
-      - name: Install
-        working-directory: plugins/pstack/skills/poteto-mode/scripts
-        run: bun install --frozen-lockfile
       - name: Test
-        working-directory: plugins/pstack/skills/poteto-mode/scripts
         run: bun run test
       - name: Typecheck
-        working-directory: plugins/pstack/skills/poteto-mode/scripts
         run: bun run typecheck
       - name: Validate manifests and static invariants
-        run: |
-          bun -e 'for (const path of [".claude-plugin/marketplace.json", ".agents/plugins/marketplace.json", "plugins/pstack/.claude-plugin/plugin.json", "plugins/pstack/.codex-plugin/plugin.json"]) JSON.parse(await Bun.file(path).text())'
-          PSTACK_STATIC_ONLY=1 bash tests/skill-collision-repro.sh
+        run: bun run static
