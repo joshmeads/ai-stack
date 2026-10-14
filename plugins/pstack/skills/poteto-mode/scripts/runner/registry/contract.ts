@@ -1,9 +1,29 @@
-import type { AccessMode, Effort, NormalizedUsage, Parent } from "../types.ts";
+import {
+  type AccessKind,
+  type AccessMode,
+  type Effort,
+  type NormalizedUsage,
+  type Parent,
+  UsageError,
+  type WriterSandbox,
+} from "../types.ts";
 
 declare const laneBrand: unique symbol;
 
-export interface Access {
-  readonly mode: AccessMode;
+/** Full access exists only on a writer, so "read-only with full access" cannot be built. */
+export type Access =
+  | { readonly mode: "read-only" }
+  | { readonly mode: "isolated-write"; readonly sandbox: WriterSandbox };
+
+/** The only Access constructor. A writer is bounded unless the caller passes `full-access`. */
+export function access(mode: AccessMode, sandbox: WriterSandbox = "bounded"): Access {
+  if (mode === "isolated-write") return { mode, sandbox };
+  if (sandbox === "full-access") throw new UsageError("writer sandbox full-access requires mode isolated-write");
+  return { mode };
+}
+
+export function accessKind(value: Access): AccessKind {
+  return value.mode === "isolated-write" && value.sandbox === "full-access" ? "isolated-write-full-access" : value.mode;
 }
 
 /** A validated lane. resolveLane is the only constructor, so nothing downstream re-parses strings. */
@@ -116,8 +136,8 @@ export interface ProviderAdapter {
     /** "stdin": run.ts writes the prompt to stdin. "file": argv carries lane.promptPath. */
     readonly prompt: "stdin" | "file";
     readonly sidecar: ProviderSidecar | null;
-    /** resolveLane refuses any other access mode before launch. */
-    readonly supports: readonly AccessMode[];
+    /** resolveLane refuses any other access kind before launch. */
+    readonly supports: readonly AccessKind[];
     needsSharedGitDir(access: Access): boolean;
     /** Omits the effort flag for the `default` effort. */
     argv(lane: Lane, facts: LaunchFacts): readonly string[];

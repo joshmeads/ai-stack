@@ -2,7 +2,7 @@
 import { describe, expect, it } from "bun:test";
 import type { LaunchFacts, ProviderAdapter } from "../registry/contract.ts";
 import { effortsOf, type Lane, type LaneRequest, modelIds, REGISTRY, resolveLane } from "../registry/index.ts";
-import { ACCESS_MODES, PARENTS, type Parent } from "../types.ts";
+import { ACCESS_KINDS, type AccessKind, PARENTS, type Parent } from "../types.ts";
 
 const BYPASS_TOKENS = [
   "danger-full-access",
@@ -11,6 +11,13 @@ const BYPASS_TOKENS = [
   "--always-approve",
   "dangerous",
 ];
+
+/** The request fields that ask for one access kind. */
+export function accessRequest(kind: AccessKind): Pick<LaneRequest, "mode" | "writerSandbox"> {
+  return kind === "isolated-write-full-access"
+    ? { mode: "isolated-write", writerSandbox: "full-access" }
+    : { mode: kind, writerSandbox: "bounded" };
+}
 
 /** A lane from raw request fields, with a parent that differs from the provider. */
 export function testLane(request: Partial<LaneRequest> & { readonly provider: string }): Lane {
@@ -77,22 +84,23 @@ export function adapterSuite(adapter: ProviderAdapter): void {
     }
 
     it("delivers the prompt one way only", () => {
-      for (const mode of adapter.launch.supports) {
-        expect(argv({ mode }).includes("/tmp/prompt.md")).toBe(adapter.launch.prompt === "file");
+      for (const kind of adapter.launch.supports) {
+        expect(argv(accessRequest(kind)).includes("/tmp/prompt.md")).toBe(adapter.launch.prompt === "file");
       }
     });
 
+    // The opted-in full-access writer is the one kind allowed a bypass; each adapter's own test pins its argv.
     it("uses bounded modes without bypass tokens", () => {
-      for (const mode of adapter.launch.supports) {
-        for (const token of argv({ mode })) {
+      for (const kind of adapter.launch.supports.filter((entry) => entry !== "isolated-write-full-access")) {
+        for (const token of argv(accessRequest(kind))) {
           for (const bypass of BYPASS_TOKENS) expect(token).not.toContain(bypass);
         }
       }
     });
 
-    it("refuses every access mode it does not support before launch", () => {
-      for (const mode of ACCESS_MODES.filter((entry) => !adapter.launch.supports.includes(entry))) {
-        expect(() => lane({ mode })).toThrow(`provider ${adapter.id} does not support ${mode}`);
+    it("refuses every access kind it does not support before launch", () => {
+      for (const kind of ACCESS_KINDS.filter((entry) => !adapter.launch.supports.includes(entry))) {
+        expect(() => lane(accessRequest(kind))).toThrow(`provider ${adapter.id} does not support ${kind}`);
       }
     });
   });

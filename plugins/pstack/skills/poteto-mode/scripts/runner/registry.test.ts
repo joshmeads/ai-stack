@@ -285,6 +285,23 @@ describe("hand-written dispatch and setup rules", () => {
       .toEqual(expect.arrayContaining(["codex:gpt-5.6-sol", "grok:grok-4.6"]));
   });
 
+  it("passes full access only to an opted-in external Codex writer, and setup keeps the setting line", () => {
+    const rule = section(dispatch, "### Codex writer sandbox", "### Host and parent prerequisites");
+    expect(rule).toContain("`codex writer sandbox: full-access` or `codex writer sandbox: bounded`");
+    expect(rule).toContain("Append `--writer-sandbox full-access` only when that line says `full-access` and the lane is an external Codex `isolated-write` lane.");
+    expect(rule).toContain("the setting never moves a native lane to the runner");
+    expect(rule).toContain("Never add the flag, or retry with it, after a sandbox failure");
+    expect(rule).toContain("it confines nothing");
+    expect(dispatch).not.toMatch(/Bash sandbox, Codex `workspace-write`, and/);
+    const load = section(setup, "### 2. Load current state", "### 3. Parse per-family efforts");
+    expect(load.indexOf("Set it aside before the role overlay, the retired-role rule, and descriptor validation"))
+      .toBeLessThan(load.indexOf("is from a retired role. Drop it"));
+    expect(load).toContain("Record `codex writer sandbox: full-access` on a yes and `codex writer sandbox: bounded` on a decline");
+    expect(load).toContain("When the line exists, keep it unless the operator names a change, and do not ask.");
+    expect(setup).toContain("Keep the setting line from step 2 where the loaded sheet had it.");
+    expect(setup).not.toContain("Every non-alias value must match");
+  });
+
 });
 
 const REPO_ROOT = join(PLUGIN_ROOT, "../..");
@@ -435,6 +452,28 @@ describe("resolveLane", () => {
     for (const [provider, model] of [["codex", "gpt-6.1-sol"], ["grok", "grok-4.7"], ["grok", "grok-4.5"]]) {
       expect(resolveLane(request({ parent: "claude", provider, model })).cliModel).toBe(model);
     }
+  });
+
+  it("builds a bounded writer unless full access is requested, and refuses full access off a Codex writer", () => {
+    const codex = (overrides: Partial<LaneRequest>) =>
+      resolveLane(request({ parent: "claude", provider: "codex", model: "gpt-6.1-sol", ...overrides }));
+    expect(codex({}).access).toEqual({ mode: "read-only" });
+    expect(codex({ writerSandbox: "bounded" }).access).toEqual({ mode: "read-only" });
+    expect(codex({ mode: "isolated-write" }).access).toEqual({ mode: "isolated-write", sandbox: "bounded" });
+    expect(codex({ mode: "isolated-write", writerSandbox: "bounded" }).access).toEqual({ mode: "isolated-write", sandbox: "bounded" });
+    expect(codex({ mode: "isolated-write", writerSandbox: "full-access" }).access)
+      .toEqual({ mode: "isolated-write", sandbox: "full-access" });
+    expect(() => codex({ writerSandbox: "full-access" })).toThrow("writer sandbox full-access requires mode isolated-write");
+    expect(() => codex({ mode: "isolated-write", writerSandbox: "danger-full-access" }))
+      .toThrow("writer-sandbox must be one of: bounded, full-access");
+    expect(REGISTRY.adapters.filter((adapter) => adapter.launch.supports.includes("isolated-write-full-access"))
+      .map((adapter) => adapter.id)).toEqual(["codex"]);
+    for (const [parent, provider, model] of [["codex", "claude", "opus"], ["claude", "grok", "grok-4.7"]]) {
+      expect(() => resolveLane(request({ parent, provider, model, mode: "isolated-write", writerSandbox: "full-access" })))
+        .toThrow(`provider ${provider} does not support isolated-write-full-access; it supports only: read-only, isolated-write`);
+    }
+    expect(() => resolveLane(request({ parent: "claude", provider: "devin", model: "swe-2", mode: "isolated-write", writerSandbox: "full-access" })))
+      .toThrow("provider devin does not support isolated-write-full-access; it supports only: read-only");
   });
 
   it("rejects same-provider recursion and unknown names", () => {

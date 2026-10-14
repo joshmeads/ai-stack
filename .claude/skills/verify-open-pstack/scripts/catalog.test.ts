@@ -1,5 +1,5 @@
 import { afterEach, expect, test } from 'bun:test';
-import { mkdtemp, readFile, realpath, rm, writeFile } from 'node:fs/promises';
+import { chmod, mkdir, mkdtemp, readFile, realpath, rm, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join, resolve } from 'node:path';
 import { readCatalog, recipe, type Case, type Fixture } from '../features/recipes.ts';
@@ -43,22 +43,26 @@ for (const harness of ['claude', 'codex'] as const) {
     // What a correct parent reports: the sheet's line, else the role default, with a Sonnet revision normalized to
     // its rolling alias, routed by the catalog.
     const dispatched = (d: string) => d.replace(/^claude:claude-sonnet-[0-9-]+@/, 'claude:sonnet@');
+    // The sheet opts Codex writers into full access, which only Claude's external runner route passes on.
+    expect(lines.get('codex writer sandbox')).toEqual(['full-access']);
     const report = { roles: roles.map(role => {
       const descriptors = (lines.get(role) ?? installed.defaults.get(role)!).map(dispatched);
       return { role, descriptors, routes: descriptors.map(d => installed.route(harness, d)) };
-    }) };
+    }), writerSandbox: harness === 'claude' ? 'full-access' : null };
     expect(report.roles[0]!.descriptors).not.toEqual(installed.defaults.get(report.roles[0]!.role));
     expect(roles.slice(1, 3)).toEqual(['arena runners', 'bug-fix']);
     for (const role of roles.slice(1, 3)) expect(lines.has(role)).toBe(false);
-    expect(roles.slice(3)).toEqual(['swarm workers', 'hardest tasks', 'how explainer', 'how explorer']);
+    expect(roles.slice(3)).toEqual(['swarm workers', 'hardest tasks', 'how explainer', 'how explorer', 'feature, refactoring']);
     expect(roles.slice(3).map(role => lines.get(role))).toEqual([
       ['codex:gpt-6-luna@max'], ['claude:claude-opus-5-5@max'], ['claude:claude-sonnet-5-5@high'], ['devin:swe-2@max'],
+      ['codex:gpt-6.1-sol@max'],
     ]);
     expect(report.roles.slice(3).map(r => [r.descriptors, r.routes])).toEqual([
       [['codex:gpt-6-luna@max'], [harness === 'codex' ? 'native' : 'external']],
       [['claude:claude-opus-5-5@max'], [harness === 'claude' ? 'native' : 'external']],
       [['claude:sonnet@high'], [harness === 'claude' ? 'native' : 'external']],
       [['devin:swe-2@max'], ['external']],
+      [['codex:gpt-6.1-sol@max'], [harness === 'codex' ? 'native' : 'external']],
     ]);
     await writeFile(join(f.dir, 'routes.json'), JSON.stringify(report));
     expect((await c!.assert(record(harness, 'pstack:poteto-mode'), f)).assertions.slice(0, 2)).toEqual(['skill-loaded', 'file:routes.json']);
@@ -70,6 +74,10 @@ for (const harness of ['claude', 'codex'] as const) {
       await writeFile(join(f.dir, 'routes.json'), JSON.stringify(changed));
       await expect(c!.assert(record(harness, 'pstack:poteto-mode'), f)).rejects.toThrow('catalog-route-mismatch');
     }
+
+    // A Claude parent that passes no writer sandbox fails, and so does a Codex parent that passes one to its native writer.
+    await writeFile(join(f.dir, 'routes.json'), JSON.stringify({ ...report, writerSandbox: harness === 'claude' ? null : 'full-access' }));
+    await expect(c!.assert(record(harness, 'pstack:poteto-mode'), f)).rejects.toThrow('catalog-route-mismatch');
 
     // A parent that routes the Devin lane natively fails.
     const nativeDevin = { roles: report.roles.map(r => r.role === 'how explorer' ? { ...r, routes: ['native'] } : r) };
@@ -187,4 +195,81 @@ test('the first-run case requires a sheet equal to the catalog role defaults', a
   expect((await c.assert(record('codex', 'pstack:setup-pstack'), f)).assertions).toContain('sheet:role-defaults');
   await writeFile(path, `# pstack model configuration\n\n${lines.slice(1).join('\n')}\n`);
   await expect(c.assert(record('codex', 'pstack:setup-pstack'), f)).rejects.toThrow('first-run-not-role-defaults');
+});
+
+for (const harness of ['claude', 'codex'] as const) {
+  test(`${harness}: the keep-setting case requires the setting line and every role line after a rerun`, async () => {
+    const f = await fixture(harness), c = recipe('setup', harness).find(c => c.id === 'keep-setting')!, installed = await readCatalog(location);
+    await writeFile(join(f.dir, 'AGENTS.md'), 'mirror\n');
+    await c.prepare!(f);
+    if (harness === 'codex') await expect(readFile(join(f.dir, 'AGENTS.md'))).rejects.toThrow();
+    else expect(await readFile(join(f.dir, 'AGENTS.md'), 'utf8')).toBe('mirror\n');
+    const path = join(f.dir, 'pstack-models.md'), prepared = await readFile(path, 'utf8');
+    expect(prepared).toEndWith('\ncodex writer sandbox: full-access\n');
+    const omitted = [...installed.defaults.keys()].find(role => !prepared.includes(`\n${role}: `))!;
+    expect(installed.defaults.get(omitted)).toEqual(['inherit-parent']);
+    const rerun = prepared.replace('codex writer sandbox: full-access\n', `${omitted}: inherit-parent\ncodex writer sandbox: full-access\n`);
+    await writeFile(path, rerun);
+    expect((await c.assert(record(harness, 'pstack:setup-pstack'), f)).assertions)
+      .toEqual(['skill-loaded', 'file:pstack-models.md', 'setting:codex writer sandbox: full-access']);
+
+    // Dropping the setting, changing it, or dropping a role fails.
+    for (const [wrong, reason] of [
+      [rerun.replace('codex writer sandbox: full-access\n', ''), 'setting-not-kept'],
+      [rerun.replace('sandbox: full-access', 'sandbox: bounded'), 'setting-not-kept'],
+      [rerun.replace(/\nbug-fix: [^\n]*/, ''), 'keep-setting-sheet-mismatch'],
+    ]) {
+      await writeFile(path, wrong!);
+      await expect(c.assert(record(harness, 'pstack:setup-pstack'), f)).rejects.toThrow(reason);
+    }
+  });
+}
+
+// Stands in for Codex: logged in, and the model call writes the result the test hands it under `.agents/`.
+const FAKE_CODEX = `#!/bin/sh
+if [ "$1" = "login" ]; then echo 'Logged in using ChatGPT'; exit 0; fi
+cat > /dev/null
+mkdir -p .agents && printf '%s' "$FAKE_RESULT" > .agents/result.json
+echo '{"type":"item.completed","item":{"type":"agent_message","text":"DONE"}}'
+`;
+
+test('the full-access writer case requires the opted-in receipt and both nonces in the child result', async () => {
+  const f = await fixture('claude'), c = recipe('runner', 'claude').find(c => c.id === 'full-access-writer')!;
+  await c.prepare!(f);
+  // The parent gets the sheet and the role, never the flag; the sheet holds the opt-in and the writer lane.
+  expect(c.prompt(f)).not.toContain('--writer-sandbox');
+  const lines = await sheet(join(f.dir, 'full-access.sheet.md'));
+  expect([lines.get('feature, refactoring'), lines.get('codex writer sandbox')]).toEqual([['codex:gpt-6.1-sol@max'], ['full-access']]);
+  // Only the browser's DOM holds the page nonce; the child prompt holds the file nonce.
+  const page = await readFile(join(f.dir, 'full-access.page.html'), 'utf8');
+  const pageNonce = atob(/atob\('([^']+)'\)/.exec(page)![1]!), fileNonce = /"written":"([0-9a-f-]+)"/.exec(await readFile(join(f.dir, 'full-access.prompt.md'), 'utf8'))![1]!;
+  expect(page).not.toContain(pageNonce);
+
+  const bin = join(f.dir, 'bin');
+  await mkdir(bin);
+  await writeFile(join(bin, 'codex'), FAKE_CODEX); await chmod(join(bin, 'codex'), 0o755);
+  const launch = async (sandbox: string, name: string): Promise<Record<string, unknown>> => {
+    const args = ['--parent', 'claude', '--provider', 'codex', '--model', 'gpt-6.1-sol', '--effort', 'max', '--mode', 'isolated-write',
+      '--writer-sandbox', sandbox, '--prompt', join(f.dir, 'full-access.prompt.md'), '--cwd', join(f.dir, 'full-access-lane'),
+      '--output', join(f.dir, `${name}.md`), '--receipt', join(f.dir, `${name}.json`)];
+    const child = Bun.spawn([join(location, 'skills/poteto-mode/scripts/runner/pstack-runner'), ...args], { stdout: 'pipe', stderr: 'pipe',
+      env: { ...process.env, PATH: `${bin}:${process.env.PATH}`, FAKE_RESULT: JSON.stringify({ written: fileNonce, browser: pageNonce }) } });
+    const [code, stderr] = await Promise.all([child.exited, new Response(child.stderr).text()]);
+    expect(code, stderr).toBe(0);
+    return JSON.parse(await readFile(join(f.dir, `${name}.json`), 'utf8'));
+  };
+  const run = { ...record('claude', 'pstack:poteto-mode'), commands: ['"$RUNNER/pstack-runner" --provider codex'] };
+  // The case reads the receipt and output at full-access.receipt.json and full-access.output.md.
+  const receipt = await launch('full-access', 'full-access.receipt');
+  await rm(join(f.dir, 'full-access.receipt.md'));
+  await writeFile(join(f.dir, 'full-access.receipt.json'), JSON.stringify({ ...receipt, outputPath: join(f.dir, 'full-access.output.md') }));
+  expect((await c.assert(run, f)).assertions).toEqual(['runner-ran', 'receipt-complete', 'writer-sandbox:full-access', 'file:result.json', 'browser-nonce']);
+
+  // A bounded writer fails, and so does a result without the browser's nonce.
+  const bounded = await launch('bounded', 'bounded.receipt');
+  await writeFile(join(f.dir, 'full-access.receipt.json'), JSON.stringify({ ...bounded, outputPath: join(f.dir, 'full-access.output.md') }));
+  await expect(c.assert(run, f)).rejects.toThrow('writer-sandbox:bounded');
+  await writeFile(join(f.dir, 'full-access.receipt.json'), JSON.stringify({ ...receipt, outputPath: join(f.dir, 'full-access.output.md') }));
+  await writeFile(join(f.dir, 'full-access-lane/.agents/result.json'), JSON.stringify({ written: fileNonce, browser: 'unrendered' }));
+  await expect(c.assert(run, f)).rejects.toThrow('full-access-effect-mismatch');
 });
