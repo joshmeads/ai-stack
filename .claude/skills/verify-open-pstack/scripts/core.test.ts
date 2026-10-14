@@ -168,7 +168,7 @@ describe('registry and ownership', () => {
     expect(s.features).toEqual([]);
   });
   test('consumed instructions and known verifier enforcement require native project proof', () => {
-    for (const filename of ['AGENTS.md', 'CLAUDE.md', 'tests/skill-collision-repro.sh']) {
+    for (const filename of ['AGENTS.md', 'CLAUDE.md', 'tests/skill-collision-repro.sh', '.github/workflows/ci.yml', 'package.json']) {
       const s = classify([{ filename }], registry);
       expect(s.noRuntime).toBe(false);
       expect(s.features).toEqual(['project-skill']);
@@ -185,7 +185,7 @@ describe('registry and ownership', () => {
     }
   });
   test('unregistered CI, tests, and scripts fail closed instead of bypassing runtime proof', () => {
-    for (const filename of ['.github/workflows/ci.yml', '.github/pull_request_template.md', 'tests/new-gate.sh', 'scripts/disable-proof.ts']) {
+    for (const filename of ['.github/workflows/new-gate.yml', '.github/pull_request_template.md', 'tests/new-gate.sh', 'scripts/disable-proof.ts']) {
       expect(() => classify([{ filename }], registry)).toThrow();
       expect(() => classify([{ filename: 'README.md', previous_filename: filename }], registry)).toThrow();
     }

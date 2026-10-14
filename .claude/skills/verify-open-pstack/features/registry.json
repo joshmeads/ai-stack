@@ -67,7 +67,7 @@
   ],
   "project": [
     ".claude/skills/verify-open-pstack/**", ".agents/skills/verify-open-pstack",
-    "AGENTS.md", "CLAUDE.md", "tests/skill-collision-repro.sh",
+    "AGENTS.md", "CLAUDE.md", "tests/skill-collision-repro.sh", ".github/workflows/ci.yml", "package.json",
     ".github/workflows/windows-hooks.yml"
   ],
   "nonRuntime": [
