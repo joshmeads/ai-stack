@@ -1826,6 +1826,15 @@ await Bun.sleep(5_000);`);
     expect((await runLane(laneOf(input))).exitCode).toBe(70);
     expect(receipt(input.receiptPath)).toMatchObject({ status: "child-failed", error: { message: expect.stringContaining(`${join(fs.realpathSync(repo), ".devin")}: the CLI would load its repository-controlled hooks, permissions and MCP servers`) } });
 
+    // A plain .devin file holds no project config.
+    fs.rmSync(join(repo, ".devin"), { recursive: true });
+    fs.writeFileSync(join(repo, ".devin"), "not a directory\n");
+    fakeDevin(LOGGED_IN, OBSERVE);
+    const plain = devinOptions("devin-plain-file", { cwd: nested });
+    expect((await runLane(laneOf(plain))).exitCode).toBe(0);
+    fs.rmSync(join(repo, ".devin"));
+    fs.mkdirSync(join(repo, ".devin"));
+
     // The walk stops at the git root: a .devin/ above it belongs to another project.
     fs.mkdirSync(join(nested, ".git"));
     fakeDevin(LOGGED_IN, OBSERVE);

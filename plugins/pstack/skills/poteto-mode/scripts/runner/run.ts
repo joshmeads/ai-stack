@@ -428,7 +428,7 @@ function within(parent: string, child: string): boolean {
 export function projectConfigIn(cwd: string, name: string): string | null {
   for (let dir = realpathSync(cwd); ; dir = dirname(dir)) {
     const candidate = join(dir, name);
-    if (existsSync(candidate)) return candidate;
+    if (statSync(candidate, { throwIfNoEntry: false })?.isDirectory()) return candidate;
     if (existsSync(join(dir, ".git")) || dirname(dir) === dir) return null;
   }
 }

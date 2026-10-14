@@ -194,6 +194,30 @@ for (const harness of ['claude', 'codex'] as const) {
   });
 }
 
+for (const harness of ['claude', 'codex'] as const) {
+  test(`${harness}: the writer-refusal case needs the sheet unchanged, no new mirror, and a refusal naming the role and provider`, async () => {
+    const f = await fixture(harness), c = recipe('setup', harness).find(c => c.id === 'writer-refusal')!;
+    await writeFile(join(f.dir, 'AGENTS.md'), 'mirror\n');
+    await c.prepare!(f);
+    const path = join(f.dir, 'pstack-models.md'), prepared = await readFile(path, 'utf8');
+    expect((await sheet(path)).get('bug-fix')).toEqual(['devin:swe-2@max']);
+    if (harness === 'codex') await expect(readFile(join(f.dir, 'AGENTS.md'))).rejects.toThrow();
+    const done = record(harness, 'pstack:setup-pstack');
+    await expect(c.assert(done, f)).rejects.toThrow('writer-refusal-missing');
+    await writeFile(join(f.dir, 'refusal.txt'), 'Refusing bug-fix on devin:swe-2@max: Devin runs read-only lanes only.\n');
+    expect((await c.assert(done, f)).assertions).toEqual(['skill-loaded', 'refused:bug-fix:devin:swe-2@max']);
+
+    // Rewriting the sheet, or writing Codex's mirror back, fails.
+    await writeFile(path, prepared.replace('bug-fix: devin:swe-2@max', 'bug-fix: codex:gpt-6.1-sol@max'));
+    await expect(c.assert(done, f)).rejects.toThrow('writer-refusal-sheet-changed');
+    await writeFile(path, prepared);
+    if (harness === 'codex') {
+      await mirror(f, prepared);
+      await expect(c.assert(done, f)).rejects.toThrow('writer-refusal-integration-written');
+    }
+  });
+}
+
 test('the native-agents case needs each new agent dispatched, its child run, and its own nonce written', async () => {
   const f = await fixture('claude'), c = recipe('catalog', 'claude').find(c => c.id === 'native-agents')!;
   expect(recipe('catalog', 'codex').some(c => c.id === 'native-agents')).toBe(false);

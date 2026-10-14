@@ -348,7 +348,7 @@ const setup: Case[] = [{
     if (!(await readFile(path, 'utf8')).includes(SETUP_DESCRIPTOR)) throw new Error('consumer-route-mismatch');
     return { assertions: [...assertions, 'consumer-route'], files: [path] };
   },
-}, keptPredecessor(), newFamilies(), readOnlyProvider(), {
+}, keptPredecessor(), newFamilies(), readOnlyProvider(), writerRefusal(), {
   id: 'first-run',
   codexSandbox: 'danger-full-access',
   claudePermission: 'bypassPermissions',
@@ -474,6 +474,36 @@ function readOnlyProvider(): Case {
       const lines = (await readFile(sheet, 'utf8')).split('\n').filter(line => /^[a-z][^:]*: \S/.test(line)).sort();
       if (!Bun.deepEquals(lines, expected)) throw new Error('read-only-provider-sheet-mismatch');
       return { assertions: [...assertions, ...await mirrored(f, sheet), `sheet:${READ_ONLY_LANE}`], files: [sheet] };
+    },
+  };
+}
+
+// Setup refuses a read-only-only provider for a writer role and changes no configuration: the sheet keeps its bytes,
+// Codex's removed mirror is not written back, and setup's refusal names the role and the provider.
+const WRITER_ROLE = 'bug-fix';
+function writerRefusal(): Case {
+  let prepared = '';
+  const refusal = (f: Fixture) => join(f.dir, 'refusal.txt');
+  return {
+    id: 'writer-refusal',
+    codexSandbox: 'danger-full-access',
+    claudePermission: 'bypassPermissions',
+    async prepare(f) {
+      const roles = [...(await readCatalog(f.location)).defaults];
+      if (!roles.some(([role]) => role === WRITER_ROLE)) throw new Error(`catalog-role-missing:${WRITER_ROLE}`);
+      prepared = sheetText(roles.map(([role, lanes]) => [role, role === WRITER_ROLE ? [READ_ONLY_LANE] : lanes]));
+      await writeFile(join(f.configHome, 'pstack-models.md'), prepared);
+      if (f.harness === 'codex') await rm(join(f.configHome, 'AGENTS.md'), { force: true });
+      await rm(refusal(f), { force: true });
+    },
+    prompt: f => `${invoke(f.harness, 'setup-pstack', `Use these answers and ask nothing else. Keep every role assignment and every family's current effort. If setup refuses a role assignment, write only setup's refusal message to ${refusal(f)} and stop without changing any configuration.`)} Do not push, post, or contact GitHub.`,
+    async assert(record, f) {
+      const assertions = [loaded(record, 'pstack:setup-pstack')];
+      if (await readFile(join(f.configHome, 'pstack-models.md'), 'utf8') !== prepared) throw new Error('writer-refusal-sheet-changed');
+      if (f.harness === 'codex' && await lstat(join(f.configHome, 'AGENTS.md')).then(() => true, () => false)) throw new Error('writer-refusal-integration-written');
+      const text = await readFile(refusal(f), 'utf8').catch(() => '');
+      if (!text.includes(WRITER_ROLE) || !text.toLowerCase().includes('devin')) throw new Error('writer-refusal-missing');
+      return { assertions: [...assertions, `refused:${WRITER_ROLE}:${READ_ONLY_LANE}`], files: [refusal(f)] };
     },
   };
 }
