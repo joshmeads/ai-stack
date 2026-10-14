@@ -60,7 +60,7 @@ legacy_model_pins="$(
     "claude:claude-($rolling)-[0-9]|^model: claude-($rolling)-[0-9]|--model claude-($rolling)-[0-9]" \
     "$repo/plugins/pstack" "$repo/tests" "$repo/README.md" "$repo/docs/reference.md" \
     2>/dev/null | grep -Ev '^[^:]*/skills/poteto-mode/scripts/runner/registry/models\.ts:[0-9]+:  \{ pair: "claude:claude-(fable|opus)-[0-9]+", family: "(fable|opus)" \},$' |
-    sed -E 's/claude-opus-5-5([^0-9-]|$)/\1/g' |
+    sed -E 's/claude-opus-5-5([^0-9A-Za-z_.-]|$)/\1/g' |
     grep -E "claude:claude-($rolling)-[0-9]|^[^:]+:[0-9]+:model: claude-($rolling)-[0-9]|--model claude-($rolling)-[0-9]" || true
 )"
 if [ -n "$legacy_model_pins" ]; then

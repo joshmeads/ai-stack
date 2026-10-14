@@ -1,7 +1,7 @@
 // Headless recipes for every selectable feature. The trusted parent runs each case as one fresh
 // native session and evaluates `assert` against the parsed record and the fixture it created.
 import { Database } from 'bun:sqlite';
-import { lstat, mkdir, readdir, readFile, realpath, rm, writeFile } from 'node:fs/promises';
+import { lstat, mkdir, readFile, realpath, rm, writeFile } from 'node:fs/promises';
 import { basename, join } from 'node:path';
 import { sha256, type Command } from '../scripts/io.ts';
 import type { Harness, SessionRecord } from '../scripts/types.ts';
@@ -364,14 +364,17 @@ const setup: Case[] = [{
   },
 }];
 
-// On Codex, setup's parent integration is the sheet's exact bytes in one bounded AGENTS.md block. A case that removes
-// the block before the run checks that setup wrote it back.
+// On Codex, setup's parent integration is one bounded AGENTS.md block: the begin marker and a newline, the sheet's
+// exact bytes, then the end marker. A case that removes the block before the run checks that setup wrote it back.
+const MIRROR_BEGIN = '<!-- pstack:models:begin -->\n', MIRROR_END = '<!-- pstack:models:end -->';
 export async function mirrored(f: Fixture, sheet: string): Promise<string[]> {
   if (f.harness !== 'codex') return [];
   const agents = await readFile(join(f.configHome, 'AGENTS.md'), 'utf8').catch(() => '');
-  const block = /<!-- pstack:models:begin -->\n([\s\S]*?)<!-- pstack:models:end -->/.exec(agents)?.[1];
-  const trim = (text: string) => text.replace(/\n$/, '');
-  if (block === undefined || trim(block) !== trim(await readFile(sheet, 'utf8'))) throw new Error('codex-mirror-mismatch');
+  const once = (marker: string) => agents.split(marker).length === 2;
+  const from = agents.indexOf(MIRROR_BEGIN) + MIRROR_BEGIN.length, to = agents.indexOf(MIRROR_END);
+  if (!once(MIRROR_BEGIN) || !once(MIRROR_END) || to < from || agents.slice(from, to) !== await readFile(sheet, 'utf8')) {
+    throw new Error('codex-mirror-mismatch');
+  }
   return ['codex-mirror'];
 }
 
@@ -416,31 +419,8 @@ const NEW_FAMILY_LANES: Record<string, [string, string]> = {
   'how explainer': ['claude:sonnet@max', 'claude:sonnet@max'],
   'judgment and prose': ['claude:claude-opus-5@max', 'claude:opus@max'],
 };
-// Each new family's probe takes its parent-owned route: a Claude-native family through its own generated agent, and an
-// external family through the runner, whose receipt names the provider and model.
-const NEW_FAMILY_PROBES: Record<Harness, { native: string[]; external: [string, string][] }> = {
-  claude: { native: ['pstack-opus-5-5-max', 'pstack-sonnet-max'], external: [['codex', 'gpt-6-luna']] },
-  // Luna is native on Codex, and its spawn_agent call is not in the Codex session record.
-  codex: { native: [], external: [['claude', 'claude-opus-5-5'], ['claude', 'sonnet']] },
-};
-export async function probed(record: SessionRecord, f: Fixture, probes: string): Promise<string[]> {
-  const { native, external } = NEW_FAMILY_PROBES[f.harness];
-  for (const agent of native) {
-    if (!record.tools.some(t => t.name === 'Agent' && t.input.subagent_type === `pstack:${agent}` && !t.failed)) throw new Error(`native-probe-missing:${agent}`);
-  }
-  const receipts = await Promise.all((await readdir(probes).catch(() => [] as string[])).filter(name => name.endsWith('.json'))
-    .map(async name => { try { return JSON.parse(await readFile(join(probes, name), 'utf8')); } catch { return null; } }));
-  for (const [provider, model] of external) {
-    if (!receipts.some(r => r?.parent === f.harness && r.provider === provider && r.model === model && r.status === 'complete')) {
-      throw new Error(`runner-probe-missing:${provider}:${model}`);
-    }
-  }
-  return [...native.map(agent => `native:${agent}`), ...external.map(([provider, model]) => `runner:${provider}:${model}`)];
-}
-
 function newFamilies(): Case {
   let expected: string[] = [];
-  const probes = (f: Fixture) => join(f.dir, 'probes');
   return {
     id: 'new-families',
     codexSandbox: 'danger-full-access',
@@ -451,20 +431,16 @@ function newFamilies(): Case {
       for (const role of Object.keys(NEW_FAMILY_LANES)) if (!roles.some(([name]) => name === role)) throw new Error(`catalog-role-missing:${role}`);
       expected = roles.map(([role, lanes]) => `${role}: ${lane(role, 1, lanes).join(', ')}`).sort();
       await writeFile(join(f.configHome, 'pstack-models.md'), sheetText(roles.map(([role, lanes]) => [role, lane(role, 0, lanes)])));
-      // Setup cases share one fixture directory, so start from an empty one: only this run's receipts count.
-      await rm(probes(f), { recursive: true, force: true });
-      await mkdir(probes(f));
       // Codex mirrors the sheet in a run-owned AGENTS.md block; without it the sheet is the only source.
       if (f.harness === 'codex') await rm(join(f.configHome, 'AGENTS.md'), { force: true });
     },
-    prompt: f => `${invoke(f.harness, 'setup-pstack', `Use these answers and ask nothing else. Keep every role assignment and every family's current effort. Put the --prompt, --output and --receipt paths of every external runner probe inside ${probes(f)}. I confirm every write. Write the setup report to ${join(f.dir, 'result.md')}.`)} Do not push, post, or contact GitHub.`,
+    prompt: f => `${invoke(f.harness, 'setup-pstack', `Use these answers and ask nothing else. Keep every role assignment and every family's current effort. I confirm every write. Write the setup report to ${join(f.dir, 'result.md')}.`)} Do not push, post, or contact GitHub.`,
     async assert(record, f) {
       const sheet = join(f.configHome, 'pstack-models.md'), assertions = [loaded(record, 'pstack:setup-pstack'), await written(record, sheet)];
       const lines = (await readFile(sheet, 'utf8')).split('\n').filter(line => /^[a-z][^:]*: \S/.test(line)).sort();
       if (!Bun.deepEquals(lines, expected)) throw new Error('new-families-sheet-mismatch');
       return {
-        assertions: [...assertions, ...await mirrored(f, sheet), ...await probed(record, f, probes(f)),
-          ...Object.values(NEW_FAMILY_LANES).map(([, written]) => `sheet:${written}`)],
+        assertions: [...assertions, ...await mirrored(f, sheet), ...Object.values(NEW_FAMILY_LANES).map(([, written]) => `sheet:${written}`)],
         files: [sheet],
       };
     },
@@ -481,6 +457,30 @@ const CATALOG_LANES: Record<string, [string, string]> = {
   'hardest tasks': ['claude:claude-opus-5-5@max', 'claude:claude-opus-5-5@max'],
   'how explainer': ['claude:claude-sonnet-5-5@high', 'claude:sonnet@high'],
 };
+// Each generated agent for a new Claude family runs natively: the child reads a fixture nonce and writes it to its own
+// output file. The Agent call returns only a launch notice, so the evidence is the child's recorded tool calls and the
+// nonce it wrote.
+const NATIVE_AGENTS = ['pstack-sonnet-max', 'pstack-opus-5-5-max'];
+const nativeAgents: Case = {
+  id: 'native-agents',
+  async prepare(f) {
+    for (const agent of NATIVE_AGENTS) await writeFile(join(f.dir, `${agent}.nonce`), `${crypto.randomUUID()}\n`);
+  },
+  prompt: f => `Do no engineering work. ${NATIVE_AGENTS.map(agent => `Use the Agent tool once with subagent_type pstack:${agent}, and give it exactly this task: "Read ${join(f.dir, `${agent}.nonce`)} and write its exact contents to ${join(f.dir, `${agent}.out`)}. Do nothing else."`).join(' ')} Wait until both output files exist, then reply DONE. ${rules(f.dir)}`,
+  async assert(record, f) {
+    const assertions: string[] = [];
+    for (const agent of NATIVE_AGENTS) {
+      const call = record.tools.find(t => t.name === 'Agent' && t.input.subagent_type === `pstack:${agent}` && !t.failed);
+      if (!call) throw new Error(`agent-not-dispatched:pstack:${agent}`);
+      if (!record.tools.some(t => t.parent === call.id)) throw new Error(`child-did-not-run:pstack:${agent}`);
+      const wrote = await readFile(join(f.dir, `${agent}.out`), 'utf8').catch(() => null);
+      if (wrote?.trim() !== (await readFile(join(f.dir, `${agent}.nonce`), 'utf8')).trim()) throw new Error(`nonce-mismatch:pstack:${agent}`);
+      assertions.push(`native:${agent}`);
+    }
+    return { assertions, files: NATIVE_AGENTS.map(agent => join(f.dir, `${agent}.out`)) };
+  },
+};
+
 function catalog(harness: Harness): Case[] {
   const sheet = (f: Fixture) => join(f.dir, 'pstack-models.md'), report = (f: Fixture) => join(f.dir, 'routes.json');
   let expected: { roles: { role: string; descriptors: string[]; routes: string[] }[] } = { roles: [] };
@@ -507,7 +507,7 @@ function catalog(harness: Harness): Case[] {
       if (!Bun.deepEquals(parseJson(await readFile(report(f), 'utf8')), expected)) throw new Error('catalog-route-mismatch');
       return { assertions: [...assertions, ...expected.roles.map(r => `role:${r.role.replaceAll(' ', '-')}`)], files: [report(f), sheet(f)] };
     },
-  }];
+  }, ...(harness === 'claude' ? [nativeAgents] : [])];
 }
 
 const shippedTools: Case = {

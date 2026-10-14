@@ -113,43 +113,28 @@ for (const harness of ['claude', 'codex'] as const) {
 
     const rerun = prepared.replace('judgment and prose: claude:claude-opus-5@max', 'judgment and prose: claude:opus@max');
     await writeFile(path, rerun);
-    // Native probes leave Agent calls on Claude; external probes leave runner receipts in the case's probes directory.
-    const native = harness === 'claude' ? ['pstack-opus-5-5-max', 'pstack-sonnet-max'] : [];
-    const external: [string, string][] = harness === 'claude' ? [['codex', 'gpt-6-luna']] : [['claude', 'claude-opus-5-5'], ['claude', 'sonnet']];
-    const receipt = (provider: string, model: string, parent: string = harness) =>
-      writeFile(join(f.dir, 'probes', `${model}.receipt.json`), JSON.stringify({ parent, provider, model, status: 'complete' }));
-    for (const [provider, model] of external) await receipt(provider, model);
     if (harness === 'codex') await mirror(f, rerun);
-    const agents = (names: string[]) => names.map((agent, i) => ({ name: 'Agent', id: `a${i}`, input: { subagent_type: `pstack:${agent}` }, parent: null, failed: false }));
-    const probed = (names = native): SessionRecord => ({ ...record(harness, 'pstack:setup-pstack'), tools: agents(names) });
-    expect((await c.assert(probed(), f)).assertions).toEqual([
+    expect((await c.assert(record(harness, 'pstack:setup-pstack'), f)).assertions).toEqual([
       'skill-loaded', 'file:pstack-models.md', ...(harness === 'codex' ? ['codex-mirror'] : []),
-      ...native.map(agent => `native:${agent}`), ...external.map(([provider, model]) => `runner:${provider}:${model}`),
       'sheet:codex:gpt-6-luna@max', 'sheet:claude:claude-opus-5-5@max', 'sheet:claude:sonnet@max', 'sheet:claude:opus@max',
     ]);
 
     // Keeping the old pin, normalizing the registered pin, or dropping a role each fails.
     for (const wrong of [prepared, rerun.replace('claude:claude-opus-5-5@max', 'claude:opus@max'), rerun.replace(/\nbug-fix: [^\n]*/, '')]) {
       await writeFile(path, wrong);
-      await expect(c.assert(probed(), f)).rejects.toThrow('new-families-sheet-mismatch');
+      await expect(c.assert(record(harness, 'pstack:setup-pstack'), f)).rejects.toThrow('new-families-sheet-mismatch');
     }
     await writeFile(path, rerun);
 
-    // A probe on the wrong route fails: a missing native Agent call, or a missing or foreign runner receipt.
-    if (harness === 'claude') {
-      await expect(c.assert(probed(['pstack-opus-5-5-max', 'pstack-opus-max']), f)).rejects.toThrow('native-probe-missing:pstack-sonnet-max');
-    }
-    const [provider, model] = external[0]!;
-    await receipt(provider, model, harness === 'claude' ? 'codex' : 'claude');
-    await expect(c.assert(probed(), f)).rejects.toThrow(`runner-probe-missing:${provider}:${model}`);
-    await rm(join(f.dir, 'probes', `${model}.receipt.json`));
-    await expect(c.assert(probed(), f)).rejects.toThrow(`runner-probe-missing:${provider}:${model}`);
-    await receipt(provider, model);
-
     // On Codex, the AGENTS.md block must mirror the rewritten sheet.
     if (harness === 'codex') {
-      await mirror(f, prepared);
-      await expect(c.assert(probed(), f)).rejects.toThrow('codex-mirror-mismatch');
+      // A stale block, a block missing the sheet's last newline, or a second block each fails.
+      for (const agents of [`<!-- pstack:models:begin -->\n${prepared}<!-- pstack:models:end -->\n`,
+        `<!-- pstack:models:begin -->\n${rerun.replace(/\n$/, '')}<!-- pstack:models:end -->\n`,
+        `<!-- pstack:models:begin -->\n${rerun}<!-- pstack:models:end -->\n<!-- pstack:models:begin -->\nold\n<!-- pstack:models:end -->\n`]) {
+        await writeFile(join(f.dir, 'AGENTS.md'), agents);
+        await expect(c.assert(record(harness, 'pstack:setup-pstack'), f)).rejects.toThrow('codex-mirror-mismatch');
+      }
     }
   });
 
@@ -162,6 +147,25 @@ for (const harness of ['claude', 'codex'] as const) {
     expect(c!.prompt(f)).toContain(`--parent ${harness} --provider ${provider} --model ${model} --effort ${effort} --mode read-only`);
   });
 }
+
+test('the native-agents case needs each new agent dispatched, its child run, and its own nonce written', async () => {
+  const f = await fixture('claude'), c = recipe('catalog', 'claude').find(c => c.id === 'native-agents')!;
+  expect(recipe('catalog', 'codex').some(c => c.id === 'native-agents')).toBe(false);
+  await c.prepare!(f);
+  const agents = ['pstack-sonnet-max', 'pstack-opus-5-5-max'];
+  const tools = (names: string[], children = names) => [
+    ...names.map((agent, i) => ({ name: 'Agent', id: `a${i}`, input: { subagent_type: `pstack:${agent}` }, parent: null, failed: false })),
+    ...children.map(agent => ({ name: 'Read', id: `r-${agent}`, input: {}, parent: `a${names.indexOf(agent)}`, failed: false })),
+  ];
+  const run = (names: string[], children?: string[]): SessionRecord => ({ ...record('claude', 'pstack:poteto-mode'), tools: tools(names, children) });
+  for (const agent of agents) await writeFile(join(f.dir, `${agent}.out`), await readFile(join(f.dir, `${agent}.nonce`), 'utf8'));
+  expect((await c.assert(run(agents), f)).assertions).toEqual(agents.map(agent => `native:${agent}`));
+
+  await expect(c.assert(run(['pstack-sonnet-max', 'pstack-opus-max']), f)).rejects.toThrow('agent-not-dispatched:pstack:pstack-opus-5-5-max');
+  await expect(c.assert(run(agents, ['pstack-sonnet-max']), f)).rejects.toThrow('child-did-not-run:pstack:pstack-opus-5-5-max');
+  await writeFile(join(f.dir, 'pstack-sonnet-max.out'), 'guess\n');
+  await expect(c.assert(run(agents), f)).rejects.toThrow('nonce-mismatch:pstack:pstack-sonnet-max');
+});
 
 test('the first-run case requires a sheet equal to the catalog role defaults', async () => {
   const f = await fixture('codex'), c = setupCase('first-run'), installed = await readCatalog(location);
