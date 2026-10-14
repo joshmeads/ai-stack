@@ -104,13 +104,13 @@ for (const harness of ['claude', 'codex'] as const) {
     await expect(c!.assert(record(harness, 'pstack:poteto-mode'), f)).rejects.toThrow('catalog-route-mismatch');
   });
 
-  test(`${harness}: the bounded consume-sheet case takes the same sheet without the setting line and requires no writer sandbox`, async () => {
+  test(`${harness}: the bounded consume-sheet case takes the same sheet with the bounded setting line and requires no writer sandbox`, async () => {
     const opted = await fixture(harness), f = await fixture(harness), installed = await readCatalog(location);
     const [optIn, c] = recipe('catalog', harness);
     expect(c!.id).toBe('consume-sheet-bounded');
     await optIn!.prepare!(opted); await c!.prepare!(f);
     const path = join(f.dir, 'pstack-models.md');
-    expect(await readFile(path, 'utf8')).toBe((await readFile(join(opted.dir, 'pstack-models.md'), 'utf8')).replace(FULL_ACCESS, ''));
+    expect(await readFile(path, 'utf8')).toBe((await readFile(join(opted.dir, 'pstack-models.md'), 'utf8')).replace(FULL_ACCESS, BOUNDED));
     const roles = promptRoles(c!, f);
     expect(roles).toEqual(promptRoles(optIn!, opted));
     const report = { roles: reportRoles(roles, await sheet(path), installed, harness), writerSandbox: null };
@@ -322,21 +322,34 @@ test('the configure case answers yes to full access and requires that setting wi
   }
 });
 
+test('the configure case starts from the daily sheet with only its setting line removed, so setup asks', async () => {
+  const f = await fixture('claude'), c = setupCase('configure'), path = join(f.dir, 'pstack-models.md');
+  await c.prepare!(f);
+  await expect(readFile(path)).rejects.toThrow();
+  const daily = `# pstack model configuration\n\nbug-fix: codex:gpt-6.1-sol@max\n${FULL_ACCESS}hillclimb: codex:gpt-6.1-sol@max  \n\n`;
+  for (const setting of [FULL_ACCESS, BOUNDED]) {
+    await writeFile(path, daily.replace(FULL_ACCESS, setting));
+    await c.prepare!(f);
+    expect(await readFile(path, 'utf8')).toBe(daily.replace(FULL_ACCESS, ''));
+  }
+});
+
 test('the full-access writer case quotes each browser argument for sh and encodes the page as a file URL', async () => {
   const base = await realpath(await mkdtemp(join(tmpdir(), 'pstack-catalog-recipe-'))); roots.push(base);
-  const dir = join(base, "x$(touch pwned)'q#r?s");
+  const dir = join(base, "x$(touch pwned)'q#r?s\nt");
   await mkdir(dir);
   const f: Fixture = { harness: 'claude', dir, workspace, location, configHome: dir, run: command };
   await recipe('runner', 'claude').find(c => c.id === 'full-access-writer')!.prepare!(f);
-  const line = /^Run this command and read the text of the element with id "nonce" in the DOM it prints: (.*)$/m
-    .exec(await readFile(join(dir, 'full-access.prompt.md'), 'utf8'))![1]!;
+  // The command runs from the lead-in to the next instruction; a quoted path may hold a newline.
+  const prompt = await readFile(join(dir, 'full-access.prompt.md'), 'utf8'), lead = 'in the DOM it prints: ';
+  const line = prompt.slice(prompt.indexOf(lead) + lead.length, prompt.lastIndexOf('\nThen create the file'));
   // `set --` splits the command into words as sh runs it, without starting the browser.
   const child = Bun.spawn(['sh', '-c', `set -- ${line}; printf '%s\\0' "$@"`], { cwd: base, stdout: 'pipe' });
   const args = (await new Response(child.stdout).text()).split('\0').slice(0, -1);
   expect(await child.exited).toBe(0);
   const page = join(dir, 'full-access.page.html'), url = pathToFileURL(page).href;
   expect(args.slice(1)).toEqual(['--headless', '--no-first-run', `--user-data-dir=${join(dir, 'full-access.browser-profile')}`, '--dump-dom', url]);
-  expect(url).toContain('%23'); expect(url).toContain('%3F');
+  expect(url).toContain('%23'); expect(url).toContain('%3F'); expect(url).toContain('%0A');
   expect(fileURLToPath(url)).toBe(page);
   await expect(readFile(join(base, 'pwned'))).rejects.toThrow();
 });
@@ -370,13 +383,27 @@ for (const harness of ['claude', 'codex'] as const) {
   });
 }
 
-// Stands in for Codex: logged in, and the model call writes the result the test hands it under `.agents/`.
+// Stands in for Codex: logged in, and the model call writes the result the test hands it to the file it names.
 const FAKE_CODEX = `#!/bin/sh
 if [ "$1" = "login" ]; then echo 'Logged in using ChatGPT'; exit 0; fi
 cat > /dev/null
-mkdir -p .agents && printf '%s' "$FAKE_RESULT" > .agents/result.json
+mkdir -p "$(dirname "$FAKE_RESULT_FILE")" && printf '%s' "$FAKE_RESULT" > "$FAKE_RESULT_FILE"
 echo '{"type":"item.completed","item":{"type":"agent_message","text":"DONE"}}'
 `;
+
+/** Runs the installed runner as a Claude parent's Codex writer on case `name`'s prompt and lane, and returns its receipt. */
+async function launchWriter(f: Fixture, name: string, effort: string, flags: string[], receipt: string, result: object, file: string): Promise<Record<string, unknown>> {
+  const bin = join(f.dir, 'bin');
+  await mkdir(bin, { recursive: true });
+  await writeFile(join(bin, 'codex'), FAKE_CODEX); await chmod(join(bin, 'codex'), 0o755);
+  const args = ['--parent', 'claude', '--provider', 'codex', '--model', 'gpt-6.1-sol', '--effort', effort, '--mode', 'isolated-write', ...flags,
+    '--prompt', join(f.dir, `${name}.prompt.md`), '--cwd', join(f.dir, `${name}-lane`), '--output', join(f.dir, `${receipt}.md`), '--receipt', join(f.dir, `${receipt}.json`)];
+  const child = Bun.spawn([join(location, 'skills/poteto-mode/scripts/runner/pstack-runner'), ...args], { stdout: 'pipe', stderr: 'pipe',
+    env: { ...process.env, PATH: `${bin}:${process.env.PATH}`, FAKE_RESULT: JSON.stringify(result), FAKE_RESULT_FILE: file } });
+  const [code, stderr] = await Promise.all([child.exited, new Response(child.stderr).text()]);
+  expect(code, stderr).toBe(0);
+  return JSON.parse(await readFile(join(f.dir, `${receipt}.json`), 'utf8'));
+}
 
 test('the full-access writer case requires the opted-in receipt and both nonces in the child result', async () => {
   const f = await fixture('claude'), c = recipe('runner', 'claude').find(c => c.id === 'full-access-writer')!;
@@ -390,19 +417,8 @@ test('the full-access writer case requires the opted-in receipt and both nonces 
   const pageNonce = atob(/atob\('([^']+)'\)/.exec(page)![1]!), fileNonce = /"written":"([0-9a-f-]+)"/.exec(await readFile(join(f.dir, 'full-access.prompt.md'), 'utf8'))![1]!;
   expect(page).not.toContain(pageNonce);
 
-  const bin = join(f.dir, 'bin');
-  await mkdir(bin);
-  await writeFile(join(bin, 'codex'), FAKE_CODEX); await chmod(join(bin, 'codex'), 0o755);
-  const launch = async (sandbox: string, name: string): Promise<Record<string, unknown>> => {
-    const args = ['--parent', 'claude', '--provider', 'codex', '--model', 'gpt-6.1-sol', '--effort', 'max', '--mode', 'isolated-write',
-      '--writer-sandbox', sandbox, '--prompt', join(f.dir, 'full-access.prompt.md'), '--cwd', join(f.dir, 'full-access-lane'),
-      '--output', join(f.dir, `${name}.md`), '--receipt', join(f.dir, `${name}.json`)];
-    const child = Bun.spawn([join(location, 'skills/poteto-mode/scripts/runner/pstack-runner'), ...args], { stdout: 'pipe', stderr: 'pipe',
-      env: { ...process.env, PATH: `${bin}:${process.env.PATH}`, FAKE_RESULT: JSON.stringify({ written: fileNonce, browser: pageNonce }) } });
-    const [code, stderr] = await Promise.all([child.exited, new Response(child.stderr).text()]);
-    expect(code, stderr).toBe(0);
-    return JSON.parse(await readFile(join(f.dir, `${name}.json`), 'utf8'));
-  };
+  const launch = (sandbox: string, name: string) =>
+    launchWriter(f, 'full-access', 'max', ['--writer-sandbox', sandbox], name, { written: fileNonce, browser: pageNonce }, '.agents/result.json');
   const run = { ...record('claude', 'pstack:poteto-mode'), commands: ['"$RUNNER/pstack-runner" --provider codex'] };
   // The case reads the receipt and output at full-access.receipt.json and full-access.output.md.
   const receipt = await launch('full-access', 'full-access.receipt');
@@ -417,4 +433,36 @@ test('the full-access writer case requires the opted-in receipt and both nonces 
   await writeFile(join(f.dir, 'full-access.receipt.json'), JSON.stringify({ ...receipt, outputPath: join(f.dir, 'full-access.output.md') }));
   await writeFile(join(f.dir, 'full-access-lane/.agents/result.json'), JSON.stringify({ written: fileNonce, browser: 'unrendered' }));
   await expect(c.assert(run, f)).rejects.toThrow('full-access-effect-mismatch');
+});
+
+test('the bounded writer case requires a bounded receipt from a sheet without the setting line, and the nonce in a plain file', async () => {
+  const f = await fixture('claude'), c = recipe('runner', 'claude').find(c => c.id === 'bounded-writer')!;
+  await c.prepare!(f);
+  // The parent gets the sheet and the role, never the flag; the sheet has no setting line and a low-effort writer lane.
+  expect(c.prompt(f)).not.toContain('--writer-sandbox');
+  const path = join(f.dir, 'bounded.sheet.md');
+  expect(await readFile(path, 'utf8')).not.toContain('codex writer sandbox:');
+  expect((await sheet(path)).get('feature, refactoring')).toEqual(['codex:gpt-6.1-sol@low']);
+  // The child writes its nonce to a plain file in its cwd, which workspace-write allows; no browser, no `.agents/`.
+  const prompt = await readFile(join(f.dir, 'bounded.prompt.md'), 'utf8'), fileNonce = /"written":"([0-9a-f-]+)"/.exec(prompt)![1]!;
+  expect(prompt).not.toContain('.agents/'); expect(prompt).not.toContain('--dump-dom');
+
+  const launch = (flags: string[], name: string) => launchWriter(f, 'bounded', 'low', flags, name, { written: fileNonce }, 'result.json');
+  const place = (receipt: Record<string, unknown>) =>
+    writeFile(join(f.dir, 'bounded.receipt.json'), JSON.stringify({ ...receipt, outputPath: join(f.dir, 'bounded.output.md') }));
+  const run = { ...record('claude', 'pstack:poteto-mode'), commands: ['"$RUNNER/pstack-runner" --provider codex'] };
+  // A parent passes no flag for a sheet without the setting line, and the runner's writer is bounded.
+  const receipt = await launch([], 'bounded.receipt');
+  expect([receipt.writerSandbox, (receipt.argv as string[]).includes('workspace-write')]).toEqual(['bounded', true]);
+  await place(receipt);
+  expect((await c.assert(run, f)).assertions).toEqual(['runner-ran', 'receipt-complete', 'writer-sandbox:bounded', 'file:result.json']);
+
+  // A full-access writer fails, so does a bounded receipt whose argv carries danger-full-access, and so does a wrong nonce.
+  await place(await launch(['--writer-sandbox', 'full-access'], 'opted.receipt'));
+  await expect(c.assert(run, f)).rejects.toThrow('writer-sandbox:full-access');
+  await place({ ...receipt, argv: [...receipt.argv as string[], '--sandbox', 'danger-full-access'] });
+  await expect(c.assert(run, f)).rejects.toThrow('writer-sandbox:bounded');
+  await place(receipt);
+  await writeFile(join(f.dir, 'bounded-lane/result.json'), JSON.stringify({ written: 'guess' }));
+  await expect(c.assert(run, f)).rejects.toThrow('bounded-effect-mismatch');
 });

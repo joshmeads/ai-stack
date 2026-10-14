@@ -321,21 +321,29 @@ async function browser(): Promise<string> {
   return CHROME;
 }
 
-// An opted-in Codex writer from a Claude parent. The prompt names the fixture sheet and the role, never the runner flag,
-// so the full-access receipt shows the parent applied the sheet's setting. The child writes one nonce under `.agents/`
-// and reads the other from a page only a browser renders; the bounded sandbox blocks both on macOS.
-function fullAccessWriter(): Case {
-  const at = (f: Fixture, name: string) => join(f.dir, `full-access.${name}`), lane = (f: Fixture) => join(f.dir, 'full-access-lane');
-  const result = (f: Fixture) => join(lane(f), '.agents/result.json');
+// A Codex writer from a Claude parent, opted in or bounded. The prompt names the fixture sheet and the role, never the
+// runner flag, so the receipt's sandbox shows the parent applied the sheet. Opted in, the child writes one nonce under
+// `.agents/` and reads the other from a page only a browser renders; the bounded sandbox blocks both on macOS. Bounded,
+// the sheet has no setting line and the child writes its nonce to a plain file, which workspace-write allows.
+const BOUNDED_WRITER_LANE = 'codex:gpt-6.1-sol@low';
+function codexWriter(optIn: boolean): Case {
+  const name = optIn ? 'full-access' : 'bounded', descriptor = optIn ? WRITER_LANE : BOUNDED_WRITER_LANE;
+  const [sandbox, argvSandbox] = optIn ? ['full-access', 'danger-full-access'] : ['bounded', 'workspace-write'];
+  const at = (f: Fixture, file: string) => join(f.dir, `${name}.${file}`), lane = (f: Fixture) => join(f.dir, `${name}-lane`);
+  const result = (f: Fixture) => join(lane(f), optIn ? '.agents/result.json' : 'result.json');
   let fileNonce = '', pageNonce = '';
   return {
-    id: 'full-access-writer',
+    id: `${name}-writer`,
     async prepare(f) {
       const installed = await readCatalog(f.location);
-      if (installed.route('claude', WRITER_LANE) !== 'external') throw new Error(`runner-route-not-external:${WRITER_LANE}`);
+      if (installed.route('claude', descriptor) !== 'external') throw new Error(`runner-route-not-external:${descriptor}`);
       fileNonce = crypto.randomUUID(); pageNonce = crypto.randomUUID();
       await mkdir(lane(f));
-      await writeFile(at(f, 'sheet.md'), sheetText([...installed.defaults].map(([role, lanes]) => [role, role === WRITER_ROLE ? [WRITER_LANE] : lanes])) + `${FULL_ACCESS_SETTING}\n`);
+      await writeFile(at(f, 'sheet.md'), sheetText([...installed.defaults].map(([role, lanes]) => [role, role === WRITER_ROLE ? [descriptor] : lanes])) + (optIn ? `${FULL_ACCESS_SETTING}\n` : ''));
+      if (!optIn) {
+        await writeFile(at(f, 'prompt.md'), `Create the file result.json in the current directory containing only the JSON {"written":"${fileNonce}"}, and reply DONE.\n`);
+        return;
+      }
       // The file holds the nonce only base64-encoded; the DOM a browser dumps holds it decoded.
       await writeFile(at(f, 'page.html'), `<!doctype html><html><body><p id="nonce"></p><script>document.getElementById('nonce').textContent = atob('${btoa(pageNonce)}');</script></body></html>\n`);
       await writeFile(at(f, 'prompt.md'), `Run this command and read the text of the element with id "nonce" in the DOM it prints: ${sh(await browser())} --headless --no-first-run ${sh(`--user-data-dir=${at(f, 'browser-profile')}`)} --dump-dom ${sh(pathToFileURL(at(f, 'page.html')).href)}\nThen create the file .agents/result.json in the current directory containing only the JSON {"written":"${fileNonce}","browser":"<the text you read>"}, and reply DONE.\n`);
@@ -343,15 +351,15 @@ function fullAccessWriter(): Case {
     prompt: f => `${invoke('claude', 'poteto-mode', `Do no engineering work. For this task the pstack model sheet is ${at(f, 'sheet.md')}; use it in place of any configured sheet. Dispatch exactly one lane and nothing else: the first descriptor of its "${WRITER_ROLE}" role as an isolated-write writer, on the route and with the launcher arguments provider dispatch gives this parent. Use the prompt file ${at(f, 'prompt.md')}, the dedicated directory ${lane(f)} as its cwd, the output ${at(f, 'output.md')} and the receipt ${at(f, 'receipt.json')}, and wait for the lane to exit.`)} ${rules(f.dir)}`,
     async assert(record, f) {
       if (!record.commands.some(c => c.includes('pstack-runner'))) throw new Error('runner-not-run');
-      const receipt = JSON.parse(await readFile(at(f, 'receipt.json'), 'utf8')), [, provider, model, effort] = ROUTE.exec(WRITER_LANE)!;
+      const receipt = JSON.parse(await readFile(at(f, 'receipt.json'), 'utf8')), [, provider, model, effort] = ROUTE.exec(descriptor)!;
       if (receipt.status !== 'complete') throw new Error(`receipt-status:${receipt.status}`);
       if (receipt.parent !== 'claude' || receipt.provider !== provider || receipt.model !== model || receipt.effort !== effort || receipt.mode !== 'isolated-write' || receipt.cwd !== lane(f)) throw new Error('receipt-route-mismatch');
       if (receipt.outputPath !== at(f, 'output.md') || !(Date.parse(receipt.startedAt) >= record.started)) throw new Error('receipt-not-this-session');
-      const sandbox = receipt.argv.indexOf('--sandbox');
-      if (receipt.writerSandbox !== 'full-access' || receipt.argv[sandbox + 1] !== 'danger-full-access') throw new Error(`writer-sandbox:${receipt.writerSandbox}`);
+      const flag = receipt.argv.indexOf('--sandbox');
+      if (receipt.writerSandbox !== sandbox || receipt.argv[flag + 1] !== argvSandbox || (!optIn && receipt.argv.includes('danger-full-access'))) throw new Error(`writer-sandbox:${receipt.writerSandbox}`);
       const effect = await written(record, result(f));
-      if (!Bun.deepEquals(parseJson(await readFile(result(f), 'utf8')), { written: fileNonce, browser: pageNonce })) throw new Error('full-access-effect-mismatch');
-      return { assertions: ['runner-ran', 'receipt-complete', 'writer-sandbox:full-access', effect, 'browser-nonce'], files: [at(f, 'receipt.json'), result(f)] };
+      if (!Bun.deepEquals(parseJson(await readFile(result(f), 'utf8')), optIn ? { written: fileNonce, browser: pageNonce } : { written: fileNonce })) throw new Error(`${name}-effect-mismatch`);
+      return { assertions: ['runner-ran', 'receipt-complete', `writer-sandbox:${sandbox}`, effect, ...(optIn ? ['browser-nonce'] : [])], files: [at(f, 'receipt.json'), result(f)] };
     },
   };
 }
@@ -384,13 +392,18 @@ function runner(harness: Harness, routes: string[]): Case[] {
       },
     };
   });
-  return harness === 'codex' ? [...cases, writer] : [...cases, fullAccessWriter()];
+  return harness === 'codex' ? [...cases, writer] : [...cases, codexWriter(true), codexWriter(false)];
 }
 
 const setup: Case[] = [{
   id: 'configure',
   codexSandbox: 'danger-full-access',
   claudePermission: 'bypassPermissions',
+  async prepare(f) {
+    // Setup keeps an existing setting line without asking, so drop it and keep every other byte; setup then asks.
+    const sheet = join(f.configHome, 'pstack-models.md'), text = await readFile(sheet, 'utf8').catch(() => undefined);
+    if (text !== undefined) await writeFile(sheet, text.split('\n').filter(line => !line.startsWith(SETTING)).join('\n'));
+  },
   prompt: f => `${invoke(f.harness, 'setup-pstack', `Use these answers and ask nothing else. Role assignments: change every role assigned to a model-matrix family to the Opus family, and keep inherit-parent and auto roles unchanged. Opus requested effort: high. When setup asks whether Codex writer lanes should run with full access, answer yes. I confirm every write. Write the setup report to ${join(f.dir, 'result.md')}.`)} Do not push, post, or contact GitHub.`,
   async assert(record, f) {
     const sheet = join(f.configHome, 'pstack-models.md'), assertions = [loaded(record, 'pstack:setup-pstack'), await written(record, sheet)];
@@ -640,7 +653,7 @@ const nativeAgents: Case = {
   },
 };
 
-// With the setting line opted in, or without it, where no parent passes a writer sandbox.
+// With the setting line opted in, or set to bounded, where no parent passes a writer sandbox.
 function consumeSheet(harness: Harness, optIn: boolean): Case {
   const sheet = (f: Fixture) => join(f.dir, 'pstack-models.md'), report = (f: Fixture) => join(f.dir, 'routes.json');
   let expected: { roles: { role: string; descriptors: string[]; routes: string[] }[]; writerSandbox: 'full-access' | null } = { roles: [], writerSandbox: null };
@@ -656,7 +669,7 @@ function consumeSheet(harness: Harness, optIn: boolean): Case {
       if (missing.some(m => !m.descriptors.length)) throw new Error(`catalog-role-missing:${MISSING_ROLES.join(',')}`);
       for (const role of Object.keys(CATALOG_LANES)) if (!installed.defaults.has(role)) throw new Error(`catalog-role-missing:${role}`);
       await writeFile(sheet(f), sheetText([...installed.defaults].filter(([role]) => !MISSING_ROLES.includes(role))
-        .map(([role, lanes]) => [role, role === CONFIGURED_ROLE ? [configured] : role in CATALOG_LANES ? [CATALOG_LANES[role]![0]] : lanes])) + (optIn ? `${FULL_ACCESS_SETTING}\n` : ''));
+        .map(([role, lanes]) => [role, role === CONFIGURED_ROLE ? [configured] : role in CATALOG_LANES ? [CATALOG_LANES[role]![0]] : lanes])) + `${optIn ? FULL_ACCESS_SETTING : BOUNDED_SETTING}\n`);
       const added = Object.entries(CATALOG_LANES).map(([role, [, dispatched]]) => ({ role, descriptors: [dispatched] }));
       expected = { roles: [{ role: CONFIGURED_ROLE, descriptors: [configured] }, ...missing, ...added]
         .map(r => ({ ...r, routes: r.descriptors.map(d => installed.route(harness, d)) })),
