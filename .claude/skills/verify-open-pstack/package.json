@@ -2,6 +2,6 @@
   "name": "@open-pstack/project-verification",
   "private": true,
   "type": "module",
-  "scripts": { "test": "bun test scripts", "typecheck": "tsc --noEmit --strict" },
+  "scripts": { "test": "USER=\"${USER:-$(id -un)}\" LOGNAME=\"${LOGNAME:-$(id -un)}\" bun test scripts", "typecheck": "tsc --noEmit --strict" },
   "devDependencies": { "bun-types": "1.4.0", "typescript": "5.9.3" }
 }
