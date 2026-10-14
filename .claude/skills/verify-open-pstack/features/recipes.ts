@@ -4,6 +4,7 @@ import { Database } from 'bun:sqlite';
 import { lstat, mkdir, readFile, realpath, rm, writeFile } from 'node:fs/promises';
 import { homedir } from 'node:os';
 import { basename, join } from 'node:path';
+import { pathToFileURL } from 'node:url';
 import { sha256, type Command } from '../scripts/io.ts';
 import type { Harness, SessionRecord } from '../scripts/types.ts';
 
@@ -43,7 +44,7 @@ const DESCRIPTOR = /\b[a-z][a-z0-9-]*:[A-Za-z0-9._-]+@[a-z]+/g;
 const SHEET_HEADER = '# pstack model configuration\n\n';
 /** The model sheet's one setting line. It is not a role, so role-line comparisons leave it out. */
 const SETTING = 'codex writer sandbox: ';
-const FULL_ACCESS_SETTING = `${SETTING}full-access`;
+const FULL_ACCESS_SETTING = `${SETTING}full-access`, BOUNDED_SETTING = `${SETTING}bounded`;
 /** The writer role and lane that the opt-in reaches on a Claude parent's external runner. */
 const WRITER_ROLE = 'feature, refactoring', WRITER_LANE = 'codex:gpt-6.1-sol@max';
 
@@ -78,6 +79,10 @@ export async function readCatalog(location: string): Promise<Catalog> {
 
 const sheetText = (lines: [string, string[]][]): string => SHEET_HEADER + lines.map(([role, lanes]) => `${role}: ${lanes.join(', ')}`).join('\n') + '\n';
 const roleLines = (text: string): string[] => text.split('\n').filter(line => /^[a-z][^:]*: \S/.test(line) && !line.startsWith(SETTING));
+/** Setup writes exactly one setting line after it asks: bounded on the default answer, full-access on a yes. */
+const settingLines = (text: string): string[] => text.split('\n').filter(line => line.startsWith(SETTING));
+/** One literal POSIX sh argument. */
+const sh = (text: string): string => `'${text.replaceAll("'", `'\\''`)}'`;
 
 const rules = (dir: string): string => `Work only inside ${dir}. Do not push, post, open, merge, or modify pull requests, issues, or remote branches, and do not write outside ${dir}. Do not edit any skill, plugin, or configuration file outside ${dir}. Do not ask questions: where the skill would ask, choose its documented default and continue. This is a headless session that ends at your first final reply and stops any background work still running, so run every command and subagent in the foreground, even where the skill says to use the background, and finish all work before you reply.`;
 
@@ -333,7 +338,7 @@ function fullAccessWriter(): Case {
       await writeFile(at(f, 'sheet.md'), sheetText([...installed.defaults].map(([role, lanes]) => [role, role === WRITER_ROLE ? [WRITER_LANE] : lanes])) + `${FULL_ACCESS_SETTING}\n`);
       // The file holds the nonce only base64-encoded; the DOM a browser dumps holds it decoded.
       await writeFile(at(f, 'page.html'), `<!doctype html><html><body><p id="nonce"></p><script>document.getElementById('nonce').textContent = atob('${btoa(pageNonce)}');</script></body></html>\n`);
-      await writeFile(at(f, 'prompt.md'), `Run this command and read the text of the element with id "nonce" in the DOM it prints: ${JSON.stringify(await browser())} --headless --no-first-run --user-data-dir=${JSON.stringify(at(f, 'browser-profile'))} --dump-dom ${JSON.stringify(`file://${at(f, 'page.html')}`)}\nThen create the file .agents/result.json in the current directory containing only the JSON {"written":"${fileNonce}","browser":"<the text you read>"}, and reply DONE.\n`);
+      await writeFile(at(f, 'prompt.md'), `Run this command and read the text of the element with id "nonce" in the DOM it prints: ${sh(await browser())} --headless --no-first-run ${sh(`--user-data-dir=${at(f, 'browser-profile')}`)} --dump-dom ${sh(pathToFileURL(at(f, 'page.html')).href)}\nThen create the file .agents/result.json in the current directory containing only the JSON {"written":"${fileNonce}","browser":"<the text you read>"}, and reply DONE.\n`);
     },
     prompt: f => `${invoke('claude', 'poteto-mode', `Do no engineering work. For this task the pstack model sheet is ${at(f, 'sheet.md')}; use it in place of any configured sheet. Dispatch exactly one lane and nothing else: the first descriptor of its "${WRITER_ROLE}" role as an isolated-write writer, on the route and with the launcher arguments provider dispatch gives this parent. Use the prompt file ${at(f, 'prompt.md')}, the dedicated directory ${lane(f)} as its cwd, the output ${at(f, 'output.md')} and the receipt ${at(f, 'receipt.json')}, and wait for the lane to exit.`)} ${rules(f.dir)}`,
     async assert(record, f) {
@@ -386,12 +391,13 @@ const setup: Case[] = [{
   id: 'configure',
   codexSandbox: 'danger-full-access',
   claudePermission: 'bypassPermissions',
-  prompt: f => `${invoke(f.harness, 'setup-pstack', `Use these answers and ask nothing else. Role assignments: change every role assigned to a model-matrix family to the Opus family, and keep inherit-parent and auto roles unchanged. Opus requested effort: high. I confirm every write. Write the setup report to ${join(f.dir, 'result.md')}.`)} Do not push, post, or contact GitHub.`,
+  prompt: f => `${invoke(f.harness, 'setup-pstack', `Use these answers and ask nothing else. Role assignments: change every role assigned to a model-matrix family to the Opus family, and keep inherit-parent and auto roles unchanged. Opus requested effort: high. When setup asks whether Codex writer lanes should run with full access, answer yes. I confirm every write. Write the setup report to ${join(f.dir, 'result.md')}.`)} Do not push, post, or contact GitHub.`,
   async assert(record, f) {
     const sheet = join(f.configHome, 'pstack-models.md'), assertions = [loaded(record, 'pstack:setup-pstack'), await written(record, sheet)];
-    const descriptors = (await readFile(sheet, 'utf8')).match(DESCRIPTOR) ?? [];
+    const text = await readFile(sheet, 'utf8'), descriptors = text.match(DESCRIPTOR) ?? [];
     if (!descriptors.length || descriptors.some(d => d !== SETUP_DESCRIPTOR)) throw new Error('sheet-descriptors-mismatch');
-    return { assertions: [...assertions, `sheet:${SETUP_DESCRIPTOR}`], files: [sheet] };
+    if (!Bun.deepEquals(settingLines(text), [FULL_ACCESS_SETTING])) throw new Error('setting-not-full-access');
+    return { assertions: [...assertions, `sheet:${SETUP_DESCRIPTOR}`, `setting:${FULL_ACCESS_SETTING}`], files: [sheet] };
   },
 }, {
   id: 'consume',
@@ -413,11 +419,17 @@ const setup: Case[] = [{
   prompt: f => `${invoke(f.harness, 'setup-pstack', `Use these answers and ask nothing else. Keep the first-run role assignments and every proposed effort. I confirm every write. Write the setup report to ${join(f.dir, 'result.md')}.`)} Do not push, post, or contact GitHub.`,
   async assert(record, f) {
     const sheet = join(f.configHome, 'pstack-models.md'), assertions = [loaded(record, 'pstack:setup-pstack'), await written(record, sheet)];
-    const lines = roleLines(await readFile(sheet, 'utf8'));
-    if (!Bun.deepEquals(lines, [...(await readCatalog(f.location)).defaults].map(([role, lanes]) => `${role}: ${lanes.join(', ')}`))) throw new Error('first-run-not-role-defaults');
-    return { assertions: [...assertions, ...await mirrored(f, sheet), 'sheet:role-defaults'], files: [sheet] };
+    const text = await readFile(sheet, 'utf8');
+    if (!Bun.deepEquals(roleLines(text), [...(await readCatalog(f.location)).defaults].map(([role, lanes]) => `${role}: ${lanes.join(', ')}`))) throw new Error('first-run-not-role-defaults');
+    bounded(text);
+    return { assertions: [...assertions, ...await mirrored(f, sheet), 'sheet:role-defaults', `setting:${BOUNDED_SETTING}`], files: [sheet] };
   },
 }];
+
+// A case that takes the default answer, on a sheet without a setting line, gets the bounded setting.
+function bounded(text: string): void {
+  if (!Bun.deepEquals(settingLines(text), [BOUNDED_SETTING])) throw new Error('setting-not-bounded');
+}
 
 // On Codex, setup's parent integration is one bounded AGENTS.md block: the begin marker and a newline, the sheet's
 // exact bytes, then the end marker. A case that removes the block before the run checks that setup wrote it back.
@@ -458,10 +470,11 @@ function keptPredecessor(): Case {
     prompt: f => `${invoke(f.harness, 'setup-pstack', `Use these answers and ask nothing else. Keep every role assignment and the requested effort ${KEPT_EFFORT}. When setup proposes replacing ${KEPT}, decline and keep it. I confirm every write. Write to ${proposal(f)} only JSON of the form {"kept":"<descriptor>","proposed":"<descriptor>"} naming the kept descriptor and the replacement setup proposed. Write the setup report to ${join(f.dir, 'result.md')}.`)} Do not push, post, or contact GitHub.`,
     async assert(record, f) {
       const sheet = join(f.configHome, 'pstack-models.md'), assertions = [loaded(record, 'pstack:setup-pstack'), await written(record, sheet), await written(record, proposal(f))];
-      const lines = roleLines(await readFile(sheet, 'utf8')).sort();
-      if (!Bun.deepEquals(lines, expected)) throw new Error('kept-sheet-mismatch');
+      const text = await readFile(sheet, 'utf8');
+      if (!Bun.deepEquals(roleLines(text).sort(), expected)) throw new Error('kept-sheet-mismatch');
+      bounded(text);
       if (!Bun.deepEquals(parseJson(await readFile(proposal(f), 'utf8')), { kept: `${KEPT}@${KEPT_EFFORT}`, proposed })) throw new Error('proposal-mismatch');
-      return { assertions: [...assertions, ...await mirrored(f, sheet), `kept:${KEPT}@${KEPT_EFFORT}`, `proposed:${proposed}`], files: [sheet, proposal(f)] };
+      return { assertions: [...assertions, ...await mirrored(f, sheet), `kept:${KEPT}@${KEPT_EFFORT}`, `proposed:${proposed}`, `setting:${BOUNDED_SETTING}`], files: [sheet, proposal(f)] };
     },
   };
 }
@@ -492,10 +505,11 @@ function newFamilies(): Case {
     prompt: f => `${invoke(f.harness, 'setup-pstack', `Use these answers and ask nothing else. Keep every role assignment and every family's current effort. I confirm every write. Write the setup report to ${join(f.dir, 'result.md')}.`)} Do not push, post, or contact GitHub.`,
     async assert(record, f) {
       const sheet = join(f.configHome, 'pstack-models.md'), assertions = [loaded(record, 'pstack:setup-pstack'), await written(record, sheet)];
-      const lines = roleLines(await readFile(sheet, 'utf8')).sort();
-      if (!Bun.deepEquals(lines, expected)) throw new Error('new-families-sheet-mismatch');
+      const text = await readFile(sheet, 'utf8');
+      if (!Bun.deepEquals(roleLines(text).sort(), expected)) throw new Error('new-families-sheet-mismatch');
+      bounded(text);
       return {
-        assertions: [...assertions, ...await mirrored(f, sheet), ...Object.values(NEW_FAMILY_LANES).map(([, written]) => `sheet:${written}`)],
+        assertions: [...assertions, ...await mirrored(f, sheet), ...Object.values(NEW_FAMILY_LANES).map(([, written]) => `sheet:${written}`), `setting:${BOUNDED_SETTING}`],
         files: [sheet],
       };
     },
@@ -524,9 +538,10 @@ function readOnlyProvider(): Case {
     prompt: f => `${invoke(f.harness, 'setup-pstack', `Use these answers and ask nothing else. Keep every role assignment and every family's current effort. I confirm every write. Write the setup report to ${join(f.dir, 'result.md')}.`)} Do not push, post, or contact GitHub.`,
     async assert(record, f) {
       const sheet = join(f.configHome, 'pstack-models.md'), assertions = [loaded(record, 'pstack:setup-pstack'), await written(record, sheet)];
-      const lines = roleLines(await readFile(sheet, 'utf8')).sort();
-      if (!Bun.deepEquals(lines, expected)) throw new Error('read-only-provider-sheet-mismatch');
-      return { assertions: [...assertions, ...await mirrored(f, sheet), `sheet:${READ_ONLY_LANE}`], files: [sheet] };
+      const text = await readFile(sheet, 'utf8');
+      if (!Bun.deepEquals(roleLines(text).sort(), expected)) throw new Error('read-only-provider-sheet-mismatch');
+      bounded(text);
+      return { assertions: [...assertions, ...await mirrored(f, sheet), `sheet:${READ_ONLY_LANE}`, `setting:${BOUNDED_SETTING}`], files: [sheet] };
     },
   };
 }
@@ -581,7 +596,7 @@ function keepSetting(): Case {
     async assert(record, f) {
       const sheet = join(f.configHome, 'pstack-models.md'), assertions = [loaded(record, 'pstack:setup-pstack'), await written(record, sheet)];
       const text = await readFile(sheet, 'utf8');
-      if (!Bun.deepEquals(text.split('\n').filter(line => line.startsWith(SETTING)), [FULL_ACCESS_SETTING])) throw new Error('setting-not-kept');
+      if (!Bun.deepEquals(settingLines(text), [FULL_ACCESS_SETTING])) throw new Error('setting-not-kept');
       if (!Bun.deepEquals(roleLines(text).sort(), expected)) throw new Error('keep-setting-sheet-mismatch');
       return { assertions: [...assertions, ...await mirrored(f, sheet), `setting:${FULL_ACCESS_SETTING}`], files: [sheet] };
     },
@@ -625,11 +640,12 @@ const nativeAgents: Case = {
   },
 };
 
-function catalog(harness: Harness): Case[] {
+// With the setting line opted in, or without it, where no parent passes a writer sandbox.
+function consumeSheet(harness: Harness, optIn: boolean): Case {
   const sheet = (f: Fixture) => join(f.dir, 'pstack-models.md'), report = (f: Fixture) => join(f.dir, 'routes.json');
   let expected: { roles: { role: string; descriptors: string[]; routes: string[] }[]; writerSandbox: 'full-access' | null } = { roles: [], writerSandbox: null };
-  return [{
-    id: 'consume-sheet',
+  return {
+    id: optIn ? 'consume-sheet' : 'consume-sheet-bounded',
     async prepare(f) {
       const installed = await readCatalog(f.location), defaults = installed.defaults.get(CONFIGURED_ROLE);
       // The configured role takes another role's default, so only a read of the fixture sheet reports it.
@@ -640,12 +656,12 @@ function catalog(harness: Harness): Case[] {
       if (missing.some(m => !m.descriptors.length)) throw new Error(`catalog-role-missing:${MISSING_ROLES.join(',')}`);
       for (const role of Object.keys(CATALOG_LANES)) if (!installed.defaults.has(role)) throw new Error(`catalog-role-missing:${role}`);
       await writeFile(sheet(f), sheetText([...installed.defaults].filter(([role]) => !MISSING_ROLES.includes(role))
-        .map(([role, lanes]) => [role, role === CONFIGURED_ROLE ? [configured] : role in CATALOG_LANES ? [CATALOG_LANES[role]![0]] : lanes])) + `${FULL_ACCESS_SETTING}\n`);
+        .map(([role, lanes]) => [role, role === CONFIGURED_ROLE ? [configured] : role in CATALOG_LANES ? [CATALOG_LANES[role]![0]] : lanes])) + (optIn ? `${FULL_ACCESS_SETTING}\n` : ''));
       const added = Object.entries(CATALOG_LANES).map(([role, [, dispatched]]) => ({ role, descriptors: [dispatched] }));
       expected = { roles: [{ role: CONFIGURED_ROLE, descriptors: [configured] }, ...missing, ...added]
         .map(r => ({ ...r, routes: r.descriptors.map(d => installed.route(harness, d)) })),
-        // The sheet opts in, so only an external route passes the flag; a native Codex writer passes none.
-        writerSandbox: installed.route(harness, WRITER_LANE) === 'external' ? 'full-access' : null };
+        // An opted-in sheet passes the flag only on an external route; a native Codex writer passes none.
+        writerSandbox: optIn && installed.route(harness, WRITER_LANE) === 'external' ? 'full-access' : null };
     },
     prompt: f => `${invoke(f.harness, 'poteto-mode', `Do no engineering work and launch no lane. For this task the pstack model sheet is ${sheet(f)}; use it in place of any configured sheet. For each of these roles, in this order, find the descriptors this parent would dispatch and the route of each: ${expected.roles.map(r => JSON.stringify(r.role)).join(', ')}. Write to ${report(f)} only JSON of the form {"roles":[{"role":"<role>","descriptors":["<provider:model@effort>"],"routes":["native" or "external"]}],"writerSandbox":"<value>" or null}, one route per descriptor, where "native" is this parent's own subagent primitive and "external" is the external runner. writerSandbox is the --writer-sandbox value this parent would pass when it dispatches the first descriptor of the ${JSON.stringify(WRITER_ROLE)} role as an isolated-write writer, or null if it would pass none.`)} ${rules(f.dir)}`,
     async assert(record, f) {
@@ -653,7 +669,11 @@ function catalog(harness: Harness): Case[] {
       if (!Bun.deepEquals(parseJson(await readFile(report(f), 'utf8')), expected)) throw new Error('catalog-route-mismatch');
       return { assertions: [...assertions, ...expected.roles.map(r => `role:${r.role.replaceAll(' ', '-')}`)], files: [report(f), sheet(f)] };
     },
-  }, ...(harness === 'claude' ? [nativeAgents] : [])];
+  };
+}
+
+function catalog(harness: Harness): Case[] {
+  return [consumeSheet(harness, true), consumeSheet(harness, false), ...(harness === 'claude' ? [nativeAgents] : [])];
 }
 
 const shippedTools: Case = {
