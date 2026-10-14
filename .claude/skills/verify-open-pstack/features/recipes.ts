@@ -346,7 +346,7 @@ const setup: Case[] = [{
     if (!(await readFile(path, 'utf8')).includes(SETUP_DESCRIPTOR)) throw new Error('consumer-route-mismatch');
     return { assertions: [...assertions, 'consumer-route'], files: [path] };
   },
-}, keptPredecessor(), {
+}, keptPredecessor(), newFamilies(), {
   id: 'first-run',
   codexSandbox: 'danger-full-access',
   claudePermission: 'bypassPermissions',
@@ -397,9 +397,49 @@ function keptPredecessor(): Case {
   };
 }
 
+// A rerun on a sheet that assigns Luna, Sonnet and the registered Opus 5.5 pin, plus an older Opus revision. Setup keeps
+// the first three and writes the revision as its rolling alias.
+const NEW_FAMILY_LANES: Record<string, [string, string]> = {
+  'swarm workers': ['codex:gpt-6-luna@max', 'codex:gpt-6-luna@max'],
+  'hardest tasks': ['claude:claude-opus-5-5@max', 'claude:claude-opus-5-5@max'],
+  'how explainer': ['claude:sonnet@max', 'claude:sonnet@max'],
+  'judgment and prose': ['claude:claude-opus-5@max', 'claude:opus@max'],
+};
+function newFamilies(): Case {
+  let expected: string[] = [];
+  return {
+    id: 'new-families',
+    codexSandbox: 'danger-full-access',
+    claudePermission: 'bypassPermissions',
+    async prepare(f) {
+      const roles = [...(await readCatalog(f.location)).defaults];
+      const lane = (role: string, index: 0 | 1, lanes: string[]) => role in NEW_FAMILY_LANES ? [NEW_FAMILY_LANES[role]![index]] : lanes;
+      for (const role of Object.keys(NEW_FAMILY_LANES)) if (!roles.some(([name]) => name === role)) throw new Error(`catalog-role-missing:${role}`);
+      expected = roles.map(([role, lanes]) => `${role}: ${lane(role, 1, lanes).join(', ')}`).sort();
+      await writeFile(join(f.configHome, 'pstack-models.md'), sheetText(roles.map(([role, lanes]) => [role, lane(role, 0, lanes)])));
+      // Codex mirrors the sheet in a run-owned AGENTS.md block; without it the sheet is the only source.
+      if (f.harness === 'codex') await rm(join(f.configHome, 'AGENTS.md'), { force: true });
+    },
+    prompt: f => `${invoke(f.harness, 'setup-pstack', `Use these answers and ask nothing else. Keep every role assignment and every family's current effort. I confirm every write. Write the setup report to ${join(f.dir, 'result.md')}.`)} Do not push, post, or contact GitHub.`,
+    async assert(record, f) {
+      const sheet = join(f.configHome, 'pstack-models.md'), assertions = [loaded(record, 'pstack:setup-pstack'), await written(record, sheet)];
+      const lines = (await readFile(sheet, 'utf8')).split('\n').filter(line => /^[a-z][^:]*: \S/.test(line)).sort();
+      if (!Bun.deepEquals(lines, expected)) throw new Error('new-families-sheet-mismatch');
+      return { assertions: [...assertions, ...Object.values(NEW_FAMILY_LANES).map(([, written]) => `sheet:${written}`)], files: [sheet] };
+    },
+  };
+}
+
 // The parent reads a fixture sheet and reports each role's descriptors and routes, which must equal what the
 // installed candidate's catalog gives for that sheet and parent.
 const CONFIGURED_ROLE = 'judgment and prose', MISSING_ROLES = ['arena runners', 'bug-fix'];
+// Sheet lanes for the new families, and the descriptor the parent dispatches for each: a pin and Luna unchanged, a
+// versioned Sonnet as its rolling alias.
+const CATALOG_LANES: Record<string, [string, string]> = {
+  'swarm workers': ['codex:gpt-6-luna@max', 'codex:gpt-6-luna@max'],
+  'hardest tasks': ['claude:claude-opus-5-5@max', 'claude:claude-opus-5-5@max'],
+  'how explainer': ['claude:claude-sonnet-5-5@high', 'claude:sonnet@high'],
+};
 function catalog(harness: Harness): Case[] {
   const sheet = (f: Fixture) => join(f.dir, 'pstack-models.md'), report = (f: Fixture) => join(f.dir, 'routes.json');
   let expected: { roles: { role: string; descriptors: string[]; routes: string[] }[] } = { roles: [] };
@@ -413,9 +453,11 @@ function catalog(harness: Harness): Case[] {
       if (!defaults || !configured) throw new Error(`catalog-role-missing:${CONFIGURED_ROLE}`);
       const missing = MISSING_ROLES.map(role => ({ role, descriptors: installed.defaults.get(role) ?? [] }));
       if (missing.some(m => !m.descriptors.length)) throw new Error(`catalog-role-missing:${MISSING_ROLES.join(',')}`);
+      for (const role of Object.keys(CATALOG_LANES)) if (!installed.defaults.has(role)) throw new Error(`catalog-role-missing:${role}`);
       await writeFile(sheet(f), sheetText([...installed.defaults].filter(([role]) => !MISSING_ROLES.includes(role))
-        .map(([role, lanes]) => [role, role === CONFIGURED_ROLE ? [configured] : lanes])));
-      expected = { roles: [{ role: CONFIGURED_ROLE, descriptors: [configured] }, ...missing]
+        .map(([role, lanes]) => [role, role === CONFIGURED_ROLE ? [configured] : role in CATALOG_LANES ? [CATALOG_LANES[role]![0]] : lanes])));
+      const added = Object.entries(CATALOG_LANES).map(([role, [, dispatched]]) => ({ role, descriptors: [dispatched] }));
+      expected = { roles: [{ role: CONFIGURED_ROLE, descriptors: [configured] }, ...missing, ...added]
         .map(r => ({ ...r, routes: r.descriptors.map(d => installed.route(harness, d)) })) };
     },
     prompt: f => `${invoke(f.harness, 'poteto-mode', `Do no engineering work and launch no lane. For this task the pstack model sheet is ${sheet(f)}; use it in place of any configured sheet. For each of these roles, in this order, find the descriptors this parent would dispatch and the route of each: ${expected.roles.map(r => JSON.stringify(r.role)).join(', ')}. Write to ${report(f)} only JSON of the form {"roles":[{"role":"<role>","descriptors":["<provider:model@effort>"],"routes":["native" or "external"]}]}, one route per descriptor, where "native" is this parent's own subagent primitive and "external" is the external runner.`)} ${rules(f.dir)}`,

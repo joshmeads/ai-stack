@@ -39,16 +39,34 @@ for (const harness of ['claude', 'codex'] as const) {
     const lines = await sheet(join(f.dir, 'pstack-models.md'));
     const roles: string[] = JSON.parse(`[${/the route of each: (.*?)\. Write to/.exec(c!.prompt(f))![1]}]`);
     expect(roles.length).toBeGreaterThan(0);
-    // What a correct parent reports: the sheet's line, else the role default, routed by the catalog.
+    // What a correct parent reports: the sheet's line, else the role default, with a Sonnet revision normalized to
+    // its rolling alias, routed by the catalog.
+    const dispatched = (d: string) => d.replace(/^claude:claude-sonnet-[0-9-]+@/, 'claude:sonnet@');
     const report = { roles: roles.map(role => {
-      const descriptors = lines.get(role) ?? installed.defaults.get(role)!;
+      const descriptors = (lines.get(role) ?? installed.defaults.get(role)!).map(dispatched);
       return { role, descriptors, routes: descriptors.map(d => installed.route(harness, d)) };
     }) };
     expect(report.roles[0]!.descriptors).not.toEqual(installed.defaults.get(report.roles[0]!.role));
-    expect(roles.slice(1)).toEqual(['arena runners', 'bug-fix']);
-    for (const role of roles.slice(1)) expect(lines.has(role)).toBe(false);
+    expect(roles.slice(1, 3)).toEqual(['arena runners', 'bug-fix']);
+    for (const role of roles.slice(1, 3)) expect(lines.has(role)).toBe(false);
+    expect(roles.slice(3)).toEqual(['swarm workers', 'hardest tasks', 'how explainer']);
+    expect(roles.slice(3).map(role => lines.get(role))).toEqual([
+      ['codex:gpt-6-luna@max'], ['claude:claude-opus-5-5@max'], ['claude:claude-sonnet-5-5@high'],
+    ]);
+    expect(report.roles.slice(3).map(r => [r.descriptors, r.routes])).toEqual([
+      [['codex:gpt-6-luna@max'], [harness === 'codex' ? 'native' : 'external']],
+      [['claude:claude-opus-5-5@max'], [harness === 'claude' ? 'native' : 'external']],
+      [['claude:sonnet@high'], [harness === 'claude' ? 'native' : 'external']],
+    ]);
     await writeFile(join(f.dir, 'routes.json'), JSON.stringify(report));
     expect((await c!.assert(record(harness, 'pstack:poteto-mode'), f)).assertions.slice(0, 2)).toEqual(['skill-loaded', 'file:routes.json']);
+
+    // A parent that leaves the Sonnet revision unnormalized, or normalizes the pin to opus, fails.
+    for (const [role, wrong] of [['how explainer', 'claude:claude-sonnet-5-5@high'], ['hardest tasks', 'claude:opus@max']]) {
+      const changed = { roles: report.roles.map(r => r.role === role ? { ...r, descriptors: [wrong!] } : r) };
+      await writeFile(join(f.dir, 'routes.json'), JSON.stringify(changed));
+      await expect(c!.assert(record(harness, 'pstack:poteto-mode'), f)).rejects.toThrow('catalog-route-mismatch');
+    }
 
     report.roles[0]!.routes = report.roles[0]!.routes.map(r => r === 'native' ? 'external' : 'native');
     await writeFile(join(f.dir, 'routes.json'), JSON.stringify(report));
@@ -76,6 +94,35 @@ test('the kept-predecessor case requires every loaded role, the materialized rol
 });
 
 for (const harness of ['claude', 'codex'] as const) {
+  test(`${harness}: the new-families case keeps Luna, Sonnet and the pin, and requires the old pin as opus`, async () => {
+    const f = await fixture(harness), c = recipe('setup', harness).find(c => c.id === 'new-families')!, installed = await readCatalog(location);
+    await writeFile(join(f.dir, 'AGENTS.md'), 'mirror\n');
+    await c.prepare!(f);
+    if (harness === 'codex') await expect(readFile(join(f.dir, 'AGENTS.md'))).rejects.toThrow();
+    else expect(await readFile(join(f.dir, 'AGENTS.md'), 'utf8')).toBe('mirror\n');
+    const path = join(f.dir, 'pstack-models.md'), prepared = await readFile(path, 'utf8'), lines = await sheet(path);
+    expect([...lines.keys()]).toEqual([...installed.defaults.keys()]);
+    expect(['swarm workers', 'hardest tasks', 'how explainer', 'judgment and prose'].map(role => lines.get(role))).toEqual([
+      ['codex:gpt-6-luna@max'], ['claude:claude-opus-5-5@max'], ['claude:sonnet@max'], ['claude:claude-opus-5@max'],
+    ]);
+    for (const [role, lanes] of installed.defaults) {
+      if (!['swarm workers', 'hardest tasks', 'how explainer', 'judgment and prose'].includes(role)) expect(lines.get(role)).toEqual(lanes);
+    }
+
+    const rerun = prepared.replace('judgment and prose: claude:claude-opus-5@max', 'judgment and prose: claude:opus@max');
+    await writeFile(path, rerun);
+    expect((await c.assert(record(harness, 'pstack:setup-pstack'), f)).assertions).toEqual([
+      'skill-loaded', 'file:pstack-models.md',
+      'sheet:codex:gpt-6-luna@max', 'sheet:claude:claude-opus-5-5@max', 'sheet:claude:sonnet@max', 'sheet:claude:opus@max',
+    ]);
+
+    // Keeping the old pin, normalizing the registered pin, or dropping a role each fails.
+    for (const wrong of [prepared, rerun.replace('claude:claude-opus-5-5@max', 'claude:opus@max'), rerun.replace(/\nbug-fix: [^\n]*/, '')]) {
+      await writeFile(path, wrong);
+      await expect(c.assert(record(harness, 'pstack:setup-pstack'), f)).rejects.toThrow('new-families-sheet-mismatch');
+    }
+  });
+
   test(`${harness}: the runner recipe's default route is the candidate's role default for this parent`, async () => {
     const f = await fixture(harness), [c] = recipe('runner', harness), installed = await readCatalog(location);
     await c!.prepare!(f);

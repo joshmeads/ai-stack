@@ -49,13 +49,15 @@ fi
 # provider reports may still appear in runner fixtures, but no shipped
 # descriptor, native-agent model field, or live test invocation may pin one.
 # The registry's released pairs record old pins so they keep resolving to their family.
+# The registered exact pin claude-opus-5-5 is its own family, with its own generated agents.
 # registry.test.ts scans TypeScript and JavaScript string literals for the same pins.
 legacy_model_pins="$(
   grep -REn \
     --include='*.md' --include='*.ts' --include='*.sh' \
     'claude:claude-(fable|opus)-[0-9]|^model: claude-(fable|opus)-[0-9]|--model claude-(fable|opus)-[0-9]' \
     "$repo/plugins/pstack" "$repo/tests" "$repo/README.md" "$repo/docs/reference.md" \
-    2>/dev/null | grep -Ev '^[^:]*/skills/poteto-mode/scripts/runner/registry/models\.ts:[0-9]+:  \{ pair: "claude:claude-(fable|opus)-[0-9]+", family: "(fable|opus)" \},$' || true
+    2>/dev/null | grep -Ev '^[^:]*/skills/poteto-mode/scripts/runner/registry/models\.ts:[0-9]+:  \{ pair: "claude:claude-(fable|opus)-[0-9]+", family: "(fable|opus)" \},$' |
+    grep -Ev 'claude-opus-5-5([^0-9-]|$)' || true
 )"
 if [ -n "$legacy_model_pins" ]; then
   note "FAIL: active Fable or Opus configuration still pins a model revision:"

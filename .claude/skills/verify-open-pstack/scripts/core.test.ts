@@ -62,6 +62,7 @@ describe('registry and ownership', () => {
   const CATALOG = 'plugins/pstack/skills/poteto-mode/references/model-catalog.md';
   test('catalog-only changes select catalog, setup and runner and no skill check', () => {
     for (const filename of [CATALOG, 'plugins/pstack/agents/pstack-opus-max.md', 'plugins/pstack/agents/pstack-fable-low.md',
+      'plugins/pstack/agents/pstack-sonnet-max.md', 'plugins/pstack/agents/pstack-opus-5-5-low.md',
       'plugins/pstack/skills/poteto-mode/scripts/runner/registry/models.ts', 'plugins/pstack/skills/poteto-mode/scripts/runner/providers/grok.ts']) {
       const s = classify([{ filename }], registry);
       expect(s.skills).toEqual([]);
@@ -81,7 +82,7 @@ describe('registry and ownership', () => {
     expect(skill.features).toEqual(['catalog', 'runner', 'setup', 'skill-invocation:arena']);
   });
   test('an unlisted generated agent fails closed', () => {
-    expect(() => classify([{ filename: 'plugins/pstack/agents/pstack-sonnet-max.md' }], registry)).toThrow('Unmapped path');
+    expect(() => classify([{ filename: 'plugins/pstack/agents/pstack-retired-max.md' }], registry)).toThrow('Unmapped path');
     expect(classify([{ filename: 'plugins/pstack/agents/poteto-agent.md' }], registry).skills).toEqual([...registry.skills].sort());
   });
   test('installed logo changes require only their actual Codex manifest consumer', () => {

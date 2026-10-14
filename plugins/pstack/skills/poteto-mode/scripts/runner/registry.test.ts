@@ -83,9 +83,17 @@ describe("registry data", () => {
       ["sol", "max"],
       ["grok", "xhigh"],
       ["opus", "max"],
+      ["luna", "max"],
+      ["sonnet", "max"],
+      ["opus-5-5", "max"],
     ]);
     expect(REGISTRY.families.filter((entry) => entry.provider === "claude").map((entry) => [entry.name, entry.model]))
-      .toEqual([["fable", "fable"], ["opus", "opus"]]);
+      .toEqual([["fable", "fable"], ["opus", "opus"], ["sonnet", "sonnet"], ["opus-5-5", "claude-opus-5-5"]]);
+    expect(REGISTRY.families.filter((entry) => entry.rolling !== undefined)
+      .map((entry) => [entry.name, entry.rolling!.revisionPrefix]))
+      .toEqual([["fable", "claude-fable-"], ["opus", "claude-opus-"], ["sonnet", "claude-sonnet-"]]);
+    expect(REGISTRY.families.filter((entry) => entry.provider === "codex").map((entry) => [entry.name, entry.model]))
+      .toEqual([["sol", "gpt-6.1-sol"], ["luna", "gpt-6-luna"]]);
     expect(REGISTRY.families.filter((entry) => entry.efforts.includes("ultra")).map((entry) => entry.name)).toEqual(["sol"]);
   });
 
@@ -206,6 +214,8 @@ describe("hand-written dispatch and setup rules", () => {
 
   it("normalizes rolling-alias pins and keeps predecessors before any runtime route", () => {
     const normalization = section(dispatch, "## Read-time normalization", "## The parent owns the route");
+    expect(normalization).toContain("an exact model-matrix row, then a kept predecessor, then a rolling-alias revision");
+    expect(normalization).toContain("such as a registered exact pin, is never normalized");
     expect(normalization).toContain("replace that model component in memory");
     expect(normalization).toContain("Never pass the versioned predecessor to Claude.");
     expect(normalization).toContain("without writing user files");
@@ -234,7 +244,9 @@ describe("hand-written dispatch and setup rules", () => {
       "A failed probe writes nothing:",
       "Run one probe per family",
       "normalized complete role map from step 2",
-      "starts with `claude-fable-` or `claude-opus-`",
+      "Match in this order: an exact model-matrix row, then a kept predecessor, then a rolling-alias revision.",
+      "such as a registered exact pin, is never migratable",
+      "starts with a rolling alias's versioned-predecessor prefix",
       "preserving the provider, effort, role, and lane order",
       "Show any rolling-alias migrations",
       "An effort-only rerun cannot change a role's family.",
@@ -349,11 +361,40 @@ describe("resolveLane", () => {
   });
 
   it("refuses an unnormalized Claude revision with today's message", () => {
-    for (const [model, alias] of [["claude-opus-5", "opus"], ["claude-fable-9-9", "fable"]]) {
+    for (const [model, alias] of [
+      ["claude-opus-5", "opus"],
+      ["claude-fable-9-9", "fable"],
+      ["claude-sonnet-5-5", "sonnet"],
+    ]) {
       expect(() => resolveLane(request({ model })))
         .toThrow(`Claude model ${model} is a version pin; normalize it to ${alias} before invoking the runner`);
     }
     expect(resolveLane(request({ model: "claude-opus-beta" })).family).toBeNull();
+  });
+
+  it("resolves the registered Opus 5.5 pin before the opus revision pattern", () => {
+    expect(resolveModel("claude", "claude-opus-5-5")).toEqual({
+      kind: "current",
+      family: REGISTRY.families.find((entry) => entry.name === "opus-5-5")!,
+    });
+    for (const model of ["claude-opus-5", "claude-opus-5-6", "claude-opus-5-5-1"]) {
+      const match = resolveModel("claude", model);
+      expect([model, match.kind, match.kind === "stale-revision" ? match.family.name : null])
+        .toEqual([model, "stale-revision", "opus"]);
+    }
+    const lane = resolveLane(request({ model: "claude-opus-5-5" }));
+    expect([lane.family?.name, lane.family?.rolling, lane.model]).toEqual(["opus-5-5", null, "claude-opus-5-5"]);
+    expect(lane.adapter.launch.argv(lane, { sharedGitDir: null })).toEqual(expect.arrayContaining(["claude-opus-5-5"]));
+  });
+
+  it("resolves Sonnet and Luna, and rejects ultra for both", () => {
+    expect(resolveLane(request({ model: "sonnet", effort: "low" })).family?.name).toBe("sonnet");
+    const luna = resolveLane(request({ parent: "claude", provider: "codex", model: "gpt-6-luna" }));
+    expect([luna.family?.name, luna.effort]).toEqual(["luna", "max"]);
+    expect(() => resolveLane(request({ parent: "claude", provider: "codex", model: "gpt-6-luna", effort: "ultra" })))
+      .toThrow("effort ultra is not offered for codex:gpt-6-luna; choose one of: low, medium, high, xhigh, max");
+    expect(() => resolveLane(request({ model: "sonnet", effort: "ultra" })))
+      .toThrow("effort ultra is not offered for claude:sonnet");
   });
 
   it("rejects same-provider recursion and unknown names", () => {

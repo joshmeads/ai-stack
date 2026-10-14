@@ -193,6 +193,17 @@ describe("claude model proof", () => {
     expect(claude.proof.matches(pinned, "claude-sonnet-x-20260101")).toBe(true);
     expect(claude.proof.matches(pinned, "claude-sonnet-y")).toBe(false);
   });
+
+  it("holds the registered Opus 5.5 pin to its own model and Sonnet to its own revisions", () => {
+    const pin = lane({ model: "claude-opus-5-5" });
+    expect(pin.family?.name).toBe("opus-5-5");
+    expect(claude.proof.matches(pin, "claude-opus-5-5")).toBe(true);
+    expect(claude.proof.matches(pin, "claude-opus-5-6")).toBe(false);
+    expect(claude.proof.matches(pin, "claude-opus-5")).toBe(false);
+    const sonnet = lane({ model: "sonnet" });
+    expect(claude.proof.matches(sonnet, "claude-sonnet-5-5")).toBe(true);
+    expect(claude.proof.matches(sonnet, "claude-opus-5-5")).toBe(false);
+  });
 });
 
 describe("claude preflight", () => {

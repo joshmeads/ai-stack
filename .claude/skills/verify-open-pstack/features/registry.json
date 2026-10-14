@@ -37,7 +37,17 @@
     "plugins/pstack/agents/pstack-opus-medium.md",
     "plugins/pstack/agents/pstack-opus-high.md",
     "plugins/pstack/agents/pstack-opus-xhigh.md",
-    "plugins/pstack/agents/pstack-opus-max.md"
+    "plugins/pstack/agents/pstack-opus-max.md",
+    "plugins/pstack/agents/pstack-sonnet-low.md",
+    "plugins/pstack/agents/pstack-sonnet-medium.md",
+    "plugins/pstack/agents/pstack-sonnet-high.md",
+    "plugins/pstack/agents/pstack-sonnet-xhigh.md",
+    "plugins/pstack/agents/pstack-sonnet-max.md",
+    "plugins/pstack/agents/pstack-opus-5-5-low.md",
+    "plugins/pstack/agents/pstack-opus-5-5-medium.md",
+    "plugins/pstack/agents/pstack-opus-5-5-high.md",
+    "plugins/pstack/agents/pstack-opus-5-5-xhigh.md",
+    "plugins/pstack/agents/pstack-opus-5-5-max.md"
   ],
   "assets": ["plugins/pstack/assets/**"],
   "setup": ["plugins/pstack/skills/setup-pstack/SKILL.md"],
