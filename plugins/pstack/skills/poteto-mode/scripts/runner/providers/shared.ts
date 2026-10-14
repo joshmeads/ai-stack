@@ -1,6 +1,33 @@
 import type { ChildRun, Lane, PreflightVerdict } from "../registry/contract.ts";
 import { evidence, modelFailureStatus, type NormalizedUsage } from "../types.ts";
 
+/** What an allowlisted CLI needs to start, authenticate and reach the network. A lane's shell can
+ *  read every variable it inherits, so an allowlist adapter adds only its own prefixes (#141). */
+export const BASE_ALLOWLIST = [
+  "PATH",
+  "HOME",
+  "USER",
+  "LOGNAME",
+  "SHELL",
+  "TMPDIR",
+  "LANG",
+  "TERM",
+  "COLORTERM",
+  "TZ",
+  "HTTP_PROXY",
+  "HTTPS_PROXY",
+  "NO_PROXY",
+  "ALL_PROXY",
+  "http_proxy",
+  "https_proxy",
+  "no_proxy",
+  "all_proxy",
+  "SSL_CERT_FILE",
+  "SSL_CERT_DIR",
+  "NODE_EXTRA_CA_CERTS",
+];
+export const BASE_PREFIXES = ["LC_", "XDG_"];
+
 export type JsonObject = Record<string, unknown>;
 
 export function object(value: unknown): JsonObject | null {

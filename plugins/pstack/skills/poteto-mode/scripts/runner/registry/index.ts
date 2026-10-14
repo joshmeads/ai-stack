@@ -1,10 +1,11 @@
 import { ACCESS_MODES, EFFORTS, PARENTS, type Parent, UsageError } from "../types.ts";
 import { isRevision, type Lane, type ProviderAdapter } from "./contract.ts";
-import type { FamilyEntry, KeptPredecessor, ReleasedPair, RoleDefault } from "./family.ts";
+import { effortsOf, type FamilyEntry, type KeptPredecessor, modelIds, type ReleasedPair, type RoleDefault } from "./family.ts";
 import { FAMILIES, type FamilyName, RELEASED_PAIRS, ROLE_DEFAULTS } from "./models.ts";
 import { ADAPTERS } from "./providers.ts";
 
 export type { Lane, LaunchFacts, ParseResult } from "./contract.ts";
+export { effortsOf, modelIds } from "./family.ts";
 
 /** The only registry module code outside registry/ imports. */
 export interface Registry {
@@ -83,10 +84,20 @@ export function resolveLane(request: LaneRequest): Lane {
     );
   }
   const family = match.kind === "unregistered" ? null : match.family;
-  const offered = match.kind === "kept" ? match.predecessor.efforts : family?.efforts ?? EFFORTS;
+  // An unregistered model-ID pair names the CLI model ID itself, so no effort can be mapped onto it.
+  const offered = match.kind === "kept"
+    ? match.predecessor.efforts
+    : family === null
+      ? adapter.effortIn === "model-id" ? ["default" as const] : EFFORTS
+      : effortsOf(family);
   if (!offered.includes(effort)) {
     throw new UsageError(
       `effort ${effort} is not offered for ${adapter.id}:${request.model}; choose one of: ${offered.join(", ")}`
+    );
+  }
+  if (!adapter.launch.supports.includes(mode)) {
+    throw new UsageError(
+      `provider ${adapter.id} does not support ${mode}; it supports only: ${adapter.launch.supports.join(", ")}`
     );
   }
   return {
@@ -99,6 +110,7 @@ export function resolveLane(request: LaneRequest): Lane {
       rolling: family.rolling ?? null,
     },
     model: request.model,
+    cliModel: (family === null ? undefined : modelIds(family)?.[effort]) ?? request.model,
     effort,
     access: { mode },
     promptPath: request.promptPath,

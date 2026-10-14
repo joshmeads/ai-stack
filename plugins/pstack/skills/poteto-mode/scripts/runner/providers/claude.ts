@@ -93,6 +93,7 @@ function parse(stdout: string, lane: Lane): ParseResult {
 export const claude = adapter({
   id: "claude",
   executable: "claude",
+  effortIn: "flag",
   preflight: {
     argv: () => ["auth", "status", "--json"],
     retryAfterUnauthenticatedMs: null,
@@ -102,6 +103,8 @@ export const claude = adapter({
   },
   launch: {
     prompt: "stdin",
+    sidecar: null,
+    supports: ["read-only", "isolated-write"],
     needsSharedGitDir: (access) => access.mode === "isolated-write",
     argv: (lane, facts) => [
       "-p",

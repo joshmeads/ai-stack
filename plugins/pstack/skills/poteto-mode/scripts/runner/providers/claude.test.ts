@@ -9,8 +9,8 @@ adapterSuite(claude);
 const lane = (request: Partial<LaneRequest> = {}) =>
   testLane({ provider: "claude", model: "fable", ...request });
 const argv = (request: Partial<LaneRequest> = {}, sharedGitDir: string | null = null) =>
-  claude.launch.argv(lane(request), { sharedGitDir });
-const parse = (stdout: string) => claude.parse({ exitCode: 0, stdout, stderr: "" }, lane());
+  claude.launch.argv(lane(request), { sharedGitDir, providerSidecar: null });
+const parse = (stdout: string) => claude.parse({ exitCode: 0, stdout, stderr: "", sidecar: null }, lane());
 
 describe("claude launch", () => {
   it("passes Claude model, effort, permissions, and no-recursion controls", () => {

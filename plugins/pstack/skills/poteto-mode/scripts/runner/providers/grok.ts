@@ -1,6 +1,8 @@
 import { adapter, type Lane, type ParseResult } from "../registry/contract.ts";
 import type { AccessMode } from "../types.ts";
 import {
+  BASE_ALLOWLIST,
+  BASE_PREFIXES,
   boundedOutput,
   effortArgs,
   exactOrSuffixed,
@@ -14,33 +16,8 @@ import {
   type JsonObject,
 } from "./shared.ts";
 
-// A Grok lane's shell can read every variable it inherits in both access modes, so it gets
-// only what grok needs to start, authenticate and reach the network.
-const ENVIRONMENT = [
-  "PATH",
-  "HOME",
-  "USER",
-  "LOGNAME",
-  "SHELL",
-  "TMPDIR",
-  "LANG",
-  "TERM",
-  "COLORTERM",
-  "TZ",
-  "HTTP_PROXY",
-  "HTTPS_PROXY",
-  "NO_PROXY",
-  "ALL_PROXY",
-  "http_proxy",
-  "https_proxy",
-  "no_proxy",
-  "all_proxy",
-  "SSL_CERT_FILE",
-  "SSL_CERT_DIR",
-  "NODE_EXTRA_CA_CERTS",
-];
-
-const ENVIRONMENT_PREFIXES = ["LC_", "XDG_", "GROK_", "XAI_"];
+// Grok's shell can read what it inherits in both access modes, so it adds only its own prefixes.
+const ENVIRONMENT_PREFIXES = [...BASE_PREFIXES, "GROK_", "XAI_"];
 
 const LOGIN = /\blogged in\b|\bYou are using XAI_API_KEY\.|\bYou are authenticated via deployment key\./i;
 
@@ -109,6 +86,7 @@ function parse(stdout: string, lane: Lane): ParseResult {
 export const grok = adapter({
   id: "grok",
   executable: "grok",
+  effortIn: "flag",
   preflight: {
     argv: () => ["models"],
     retryAfterUnauthenticatedMs: 5_000,
@@ -126,6 +104,8 @@ export const grok = adapter({
   },
   launch: {
     prompt: "file",
+    sidecar: null,
+    supports: ["read-only", "isolated-write"],
     needsSharedGitDir: () => false,
     argv: (lane) => [
       "--prompt-file",
@@ -155,7 +135,7 @@ export const grok = adapter({
   },
   parse: (run, lane) => parse(run.stdout, lane),
   proof: { report: "required", matches: exactOrSuffixed },
-  environment: () => ({ kind: "allowlist", names: ENVIRONMENT, prefixes: ENVIRONMENT_PREFIXES }),
+  environment: () => ({ kind: "allowlist", names: BASE_ALLOWLIST, prefixes: ENVIRONMENT_PREFIXES }),
   docs: {
     name: "Grok Build CLI",
     hostPrerequisites: ["Linux: Landlock and `bwrap`"],

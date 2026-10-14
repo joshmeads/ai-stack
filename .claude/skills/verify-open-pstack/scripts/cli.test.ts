@@ -73,7 +73,10 @@ test('credential-directory and account options are removed', () => {
 test('runner routes are explicit, repeatable, and distinct', () => {
   expect(parse(['run', '--pr', '1', '--runner-route', 'codex:gpt-6.1-sol@max', '--runner-route', 'codex:gpt-6.1-sol@ultra', '--output', '/fresh/run']))
     .toMatchObject({ routes: ['codex:gpt-6.1-sol@max', 'codex:gpt-6.1-sol@ultra'] });
-  for (const args of [['--runner-route', 'gpt-6.1-sol'], ['--runner-route', 'codex:a@max', '--runner-route', 'codex:a@max']]) {
+  // Any provider spelling parses; the installed catalog decides whether it exists before a session starts.
+  expect(parse(['run', '--pr', '1', '--runner-route', 'devin:swe-2@max', '--runner-route', 'devin:swe-1.6@default', '--output', '/fresh/run']))
+    .toMatchObject({ routes: ['devin:swe-2@max', 'devin:swe-1.6@default'] });
+  for (const args of [['--runner-route', 'gpt-6.1-sol'], ['--runner-route', 'codex:a@max', '--runner-route', 'codex:a@max'], ['--runner-route', 'Devin:swe-2@max']]) {
     expect(() => parse(['run', '--pr', '1', '--output', '/fresh/run', ...args])).toThrow();
   }
 });

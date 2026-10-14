@@ -1661,6 +1661,169 @@ const startedPath =`));
   });
 });
 
+describe("devin lanes", () => {
+  const LOGGED_IN = "Logged in (via Devin).\n\nUser: <redacted>";
+  const DEVIN_VARIABLES = ["DEVIN_PERMISSION_MODE", "DEVIN_SANDBOX", "DEVIN_MODEL", "DEVIN_REFUSAL_FALLBACK"];
+
+  // A Devin stand-in: `auth status` prints `status`; the model call runs `turn`, which sees `args`, `at`,
+  // `exportPath` and `config`. The child environment keeps no test variable, so each case bakes its own.
+  function fakeDevin(status: string, turn: string): void {
+    writeFileSync(join(bin, "devin"), `#!/usr/bin/env bun
+import { existsSync, readFileSync, statSync, writeFileSync } from "node:fs";
+import { dirname } from "node:path";
+const args = process.argv.slice(2);
+if (args[0] === "auth") {
+  console.log(${JSON.stringify(status)});
+  process.exit(0);
+}
+const at = (flag) => args[args.indexOf(flag) + 1];
+const exportPath = at("--export"), config = at("--config");
+${turn}
+`);
+    chmodSync(join(bin, "devin"), 0o755);
+  }
+
+  // Reports what the child saw as the export's final message, and prints a decoy on stdout.
+  const OBSERVE = `const observed = {
+  model: at("--model"),
+  exportAbsent: !existsSync(exportPath),
+  dirMode: (statSync(dirname(config)).mode & 0o777).toString(8),
+  configMode: (statSync(config).mode & 0o777).toString(8),
+  subagents: JSON.parse(readFileSync(config, "utf8")).subagents_enabled,
+  devinVariables: Object.keys(process.env).filter((key) => key.startsWith("DEVIN_")),
+};
+console.log("Welcome to Devin CLI!\\nSTDOUT_IS_NOT_THE_REPLY");
+writeFileSync(exportPath, JSON.stringify({
+  session_id: "d1",
+  steps: [{ source: "agent", message: JSON.stringify(observed), extra: { generation_model: at("--model") } }],
+  final_metrics: { total_prompt_tokens: 5, total_completion_tokens: 2 },
+}));`;
+
+  function devinOptions(suffix: string, overrides: Partial<LaneRequest> = {}): LaneRequest {
+    return { ...options("grok", suffix), provider: "devin", model: "swe-2", effort: "max", ...overrides };
+  }
+
+  beforeEach(() => {
+    for (const name of DEVIN_VARIABLES) process.env[name] = `${name}-value`;
+  });
+  afterEach(() => {
+    for (const name of DEVIN_VARIABLES) delete process.env[name];
+  });
+
+  for (const [model, effort, cliModel] of [["swe-2", "max", "swe-2-max"], ["swe-1.6", "default", "swe-1-6"]] as const) {
+    it(`runs devin:${model}@${effort} as ${cliModel}, with the reply and proof from the export`, async () => {
+      fakeDevin(LOGGED_IN, OBSERVE);
+      const input = devinOptions(`devin-${model}`, { model, effort });
+      const result = await runLane(laneOf(input));
+      expect(result.exitCode).toBe(0);
+      const saved = receipt(input.receiptPath);
+      expect(saved).toMatchObject({
+        status: "complete",
+        provider: "devin",
+        model,
+        effort,
+        mode: "read-only",
+        reportedModel: cliModel,
+        modelVerified: true,
+        modelEvidence: "provider-report",
+        sessionId: "d1",
+        usage: { inputTokens: 5, outputTokens: 2 },
+        preflight: { status: "passed", evidence: "authenticated" },
+      });
+      const dir = `${input.receiptPath}.provider`;
+      expect(saved.argv.slice(1)).toEqual([
+        "-p", "--prompt-file", input.promptPath, "--model", cliModel, "--permission-mode", "auto",
+        "--respect-workspace-trust", "false", "--export", join(dir, "export.json"), "--config", join(dir, "lockdown.json"),
+      ]);
+      expect(JSON.parse(readFileSync(input.outputPath, "utf8"))).toEqual({
+        model: cliModel,
+        exportAbsent: true,
+        dirMode: "700",
+        configMode: "600",
+        subagents: false,
+        devinVariables: [],
+      });
+      expect(readFileSync(streamPath(saved.stdoutPath), "utf8")).toContain("STDOUT_IS_NOT_THE_REPLY");
+      expect(statSync(dir).mode & 0o777).toBe(0o700);
+    });
+  }
+
+  it("refuses an export whose generation model is not the CLI model ID", async () => {
+    fakeDevin(LOGGED_IN, `writeFileSync(exportPath, JSON.stringify({ steps: [{ source: "agent", message: "OK", extra: { generation_model: "swe-2" } }] }));`);
+    const input = devinOptions("devin-mismatch");
+    expect((await runLane(laneOf(input))).exitCode).toBe(65);
+    expect(receipt(input.receiptPath)).toMatchObject({
+      status: "malformed-output",
+      error: { message: "requested model swe-2 was not reported by devin" },
+    });
+    expect(existsSync(input.outputPath)).toBe(false);
+  });
+
+  for (const [name, status, exitCode, message] of [
+    ["logged out at exit 0", "Not logged in.\n  Credentials path: /home/fixture/.local/share/devin/credentials.toml", 77, "authentication or model preflight failed"],
+    ["an unknown status", "Welcome to Devin CLI!", 70, "authentication preflight output was inconclusive"],
+  ] as const) {
+    it(`classifies ${name} before any model call`, async () => {
+      const started = join(scratch, "devin-model.started");
+      fakeDevin(status, `writeFileSync(${JSON.stringify(started)}, "started");`);
+      const input = devinOptions(`devin-preflight-${exitCode}`);
+      const result = await runLane(laneOf(input));
+      expect(result.exitCode).toBe(exitCode);
+      expect(result.receipt).toMatchObject({
+        status: exitCode === 77 ? "unauthenticated" : "child-failed",
+        preflight: { status: "failed" },
+        error: { message },
+      });
+      expect(existsSync(started)).toBe(false);
+    });
+  }
+
+  it("classifies an unknown model, a rejected tool and SIGTERM from the captured shapes", async () => {
+    fakeDevin(LOGGED_IN, `console.error("Error: Unknown model: 'swe-2-max'\\nAvailable: adaptive, swe-2, swe-1.6");
+process.exit(1);`);
+    const unknown = devinOptions("devin-unknown-model");
+    expect((await runLane(laneOf(unknown))).receipt).toMatchObject({ status: "unavailable-model", exitCode: 1 });
+
+    fakeDevin(LOGGED_IN, `console.error("warning: rejected a tool call that requires confirmation.");
+writeFileSync(exportPath, JSON.stringify({ steps: [{ source: "agent", message: "", extra: { generation_model: at("--model") } }] }));`);
+    const rejected = devinOptions("devin-rejected");
+    const rejectedResult = await runLane(laneOf(rejected));
+    expect(rejectedResult.exitCode).toBe(70);
+    expect(rejectedResult.receipt).toMatchObject({
+      status: "child-failed",
+      exitCode: 0,
+      error: { message: "devin ended with an empty final message" },
+    });
+    expect(rejectedResult.receipt.error?.evidence).toContain("rejected a tool call");
+    expect(existsSync(rejected.outputPath)).toBe(false);
+
+    fakeDevin(LOGGED_IN, `process.stdout.write("partial reply");
+process.kill(process.pid, "SIGTERM");
+await Bun.sleep(5_000);`);
+    const terminated = devinOptions("devin-sigterm");
+    const terminatedResult = await runLane(laneOf(terminated));
+    expect(terminatedResult.exitCode).toBe(130);
+    expect(terminatedResult.receipt).toMatchObject({ status: "cancelled", exitCode: 143, signal: null });
+    expect(existsSync(terminated.outputPath)).toBe(false);
+  });
+
+  it("refuses a lane whose provider directory already exists and rolls back its reservations", async () => {
+    fakeDevin(LOGGED_IN, OBSERVE);
+    const input = devinOptions("devin-taken");
+    mkdirSync(`${input.receiptPath}.provider`);
+    await expect(runLane(laneOf(input))).rejects.toThrow();
+    for (const path of [input.outputPath, input.receiptPath, `${input.receiptPath}.stdout`, `${input.receiptPath}.stderr`]) {
+      expect([path, existsSync(path)]).toEqual([path, false]);
+    }
+  });
+
+  it("refuses an isolated-write Devin lane before launch", () => {
+    const input = devinOptions("devin-writer", { mode: "isolated-write" });
+    expect(() => laneOf(input)).toThrow("provider devin does not support isolated-write");
+    expect(existsSync(input.receiptPath)).toBe(false);
+  });
+});
+
 describe("childEnvironment", () => {
   it("removes only inherited runtime identity needed to avoid nested detection", () => {
     const source = {
@@ -1716,6 +1879,34 @@ describe("childEnvironment", () => {
       expect(childEnvironment(laneOf({ ...options("claude"), mode }), source)).toEqual(withoutCodex);
       expect(childEnvironment(laneOf({ ...options("codex"), mode }), source)).toEqual(withoutClaude);
     }
+  });
+
+  it("passes a Devin lane the shared base allowlist without any DEVIN_* or Grok variable", () => {
+    const cases: [name: string, kept: boolean][] = [
+      ["PATH", true],
+      ["HOME", true],
+      ["TZ", true],
+      ["LC_ALL", true],
+      ["XDG_DATA_HOME", true],
+      ["HTTPS_PROXY", true],
+      ["NODE_EXTRA_CA_CERTS", true],
+      ["DEVIN_PERMISSION_MODE", false],
+      ["DEVIN_SANDBOX", false],
+      ["DEVIN_MODEL", false],
+      ["DEVIN_REFUSAL_FALLBACK", false],
+      ["GROK_HOME", false],
+      ["XAI_API_KEY", false],
+      ["GITHUB_TOKEN", false],
+      ["CLAUDECODE", false],
+      ["CODEX_THREAD_ID", false],
+    ];
+    const source = Object.fromEntries(cases.map(([name]) => [name, `${name}-value`]));
+    const kept = Object.fromEntries(cases.filter(([, keep]) => keep).map(([name]) => [name, `${name}-value`]));
+    const devin = laneOf({ ...options("grok"), provider: "devin", model: "swe-2", effort: "max" });
+    expect(childEnvironment(devin, source)).toEqual(kept);
+    const grokOnly = ["GROK_HOME", "XAI_API_KEY"];
+    expect(Object.keys(childEnvironment(laneOf(options("grok")), source)).sort())
+      .toEqual([...Object.keys(kept), ...grokOnly].sort());
   });
 
   it("drops GIT_* only for a Claude writer", () => {

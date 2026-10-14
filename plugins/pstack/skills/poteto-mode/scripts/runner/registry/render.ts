@@ -2,7 +2,7 @@ import { existsSync, mkdirSync, readdirSync, readFileSync, rmSync, writeFileSync
 import { dirname, join } from "node:path";
 import { ACCESS_MODES, PARENTS, type Parent } from "../types.ts";
 import type { EnvPolicy, ProviderAdapter } from "./contract.ts";
-import { defaultDescriptor, REGISTRY, type Registry } from "./index.ts";
+import { defaultDescriptor, effortsOf, modelIds, REGISTRY, type Registry } from "./index.ts";
 
 export interface GeneratedFile {
   /** Relative to the plugin root. */
@@ -72,7 +72,7 @@ export function renderCatalog(registry: Registry): GeneratedFile {
         family.provider,
         family.model,
         family.defaultEffort,
-        family.efforts.join(" "),
+        effortsOf(family).join(" "),
         family.provider === "claude" ? code(`pstack-${family.name}-<effort>`) : "-",
         named.has(family.name) ? "default" : "optional",
         family.upstream ?? "-",
@@ -80,6 +80,16 @@ export function renderCatalog(registry: Registry): GeneratedFile {
     ),
     "",
     "A family is `default` when a role default names it and `optional` otherwise. A Claude-native agent exists for each selectable effort of a Claude family.",
+    "",
+    "Effort in the model ID: for these families the effort selects the CLI model, and argv carries no effort flag.",
+    "",
+    ...table(
+      ["Family", "Effort", "CLI model"],
+      registry.families.flatMap((family) => effortsOf(family).flatMap((effort) => {
+        const id = modelIds(family)?.[effort];
+        return id === undefined ? [] : [[family.name, effort, code(id)]];
+      }))
+    ),
     "",
     "## Kept predecessors and normalization",
     "",
@@ -108,16 +118,19 @@ export function renderCatalog(registry: Registry): GeneratedFile {
     "## Routes",
     "",
     ...table(
-      ["Provider", ...parents.map((parent) => `${PARENTS[parent].harness} parent`), "Prompt", "Model proof", "Child environment", "Host prerequisites"],
+      ["Provider", ...parents.map((parent) => `${PARENTS[parent].harness} parent`), "Access modes", "Prompt", "Model proof", "Child environment", "Host prerequisites"],
       registry.adapters.map((adapter) => [
         adapter.id,
         ...parents.map((parent) => route(adapter, parent)),
+        adapter.launch.supports.map(code).join(", "),
         adapter.launch.prompt,
         adapter.proof.report === "required" ? "provider report" : "pinned argv",
         environment(adapter, false),
         adapter.docs.hostPrerequisites.length === 0 ? "-" : adapter.docs.hostPrerequisites.join("; "),
       ])
     ),
+    "",
+    "The runner refuses an access mode outside a provider's Access modes cell before launch.",
     "",
     "## Provider notes",
     ...registry.adapters.flatMap((adapter) => [
@@ -151,7 +164,7 @@ export function renderCatalog(registry: Registry): GeneratedFile {
 /** pstack-<family>-<effort>.md for each Claude family and each selectable effort. */
 export function renderNativeAgents(registry: Registry): readonly GeneratedFile[] {
   return registry.families.filter((family) => family.provider === "claude").flatMap((family) =>
-    family.efforts.map((effort) => {
+    effortsOf(family).map((effort) => {
       const name = `pstack-${family.name}-${effort}`;
       return {
         path: `agents/${name}.md`,

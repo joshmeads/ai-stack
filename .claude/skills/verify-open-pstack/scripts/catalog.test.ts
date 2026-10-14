@@ -27,9 +27,10 @@ test('reads role defaults, kept predecessors and routes from the generated catal
   for (const harness of ['claude', 'codex'] as const) {
     expect(installed.route(harness, `${harness}:any@max`)).toBe('native');
     expect(installed.route(harness, 'grok:any@max')).toBe('external');
+    expect(installed.route(harness, 'devin:any@max')).toBe('external');
     expect(installed.route(harness, 'inherit-parent')).toBe('native');
   }
-  expect(() => installed.route('claude', 'devin:any@max')).toThrow('catalog-route-missing');
+  expect(() => installed.route('claude', 'cursor:any@max')).toThrow('catalog-route-missing');
 });
 
 for (const harness of ['claude', 'codex'] as const) {
@@ -49,24 +50,31 @@ for (const harness of ['claude', 'codex'] as const) {
     expect(report.roles[0]!.descriptors).not.toEqual(installed.defaults.get(report.roles[0]!.role));
     expect(roles.slice(1, 3)).toEqual(['arena runners', 'bug-fix']);
     for (const role of roles.slice(1, 3)) expect(lines.has(role)).toBe(false);
-    expect(roles.slice(3)).toEqual(['swarm workers', 'hardest tasks', 'how explainer']);
+    expect(roles.slice(3)).toEqual(['swarm workers', 'hardest tasks', 'how explainer', 'how explorer']);
     expect(roles.slice(3).map(role => lines.get(role))).toEqual([
-      ['codex:gpt-6-luna@max'], ['claude:claude-opus-5-5@max'], ['claude:claude-sonnet-5-5@high'],
+      ['codex:gpt-6-luna@max'], ['claude:claude-opus-5-5@max'], ['claude:claude-sonnet-5-5@high'], ['devin:swe-2@max'],
     ]);
     expect(report.roles.slice(3).map(r => [r.descriptors, r.routes])).toEqual([
       [['codex:gpt-6-luna@max'], [harness === 'codex' ? 'native' : 'external']],
       [['claude:claude-opus-5-5@max'], [harness === 'claude' ? 'native' : 'external']],
       [['claude:sonnet@high'], [harness === 'claude' ? 'native' : 'external']],
+      [['devin:swe-2@max'], ['external']],
     ]);
     await writeFile(join(f.dir, 'routes.json'), JSON.stringify(report));
     expect((await c!.assert(record(harness, 'pstack:poteto-mode'), f)).assertions.slice(0, 2)).toEqual(['skill-loaded', 'file:routes.json']);
 
-    // A parent that leaves the Sonnet revision unnormalized, or normalizes the pin to opus, fails.
-    for (const [role, wrong] of [['how explainer', 'claude:claude-sonnet-5-5@high'], ['hardest tasks', 'claude:opus@max']]) {
+    // A parent that leaves the Sonnet revision unnormalized, normalizes the pin to opus, or reports the role default
+    // in place of the Devin lane, fails.
+    for (const [role, wrong] of [['how explainer', 'claude:claude-sonnet-5-5@high'], ['hardest tasks', 'claude:opus@max'], ['how explorer', installed.defaults.get('how explorer')![0]]]) {
       const changed = { roles: report.roles.map(r => r.role === role ? { ...r, descriptors: [wrong!] } : r) };
       await writeFile(join(f.dir, 'routes.json'), JSON.stringify(changed));
       await expect(c!.assert(record(harness, 'pstack:poteto-mode'), f)).rejects.toThrow('catalog-route-mismatch');
     }
+
+    // A parent that routes the Devin lane natively fails.
+    const nativeDevin = { roles: report.roles.map(r => r.role === 'how explorer' ? { ...r, routes: ['native'] } : r) };
+    await writeFile(join(f.dir, 'routes.json'), JSON.stringify(nativeDevin));
+    await expect(c!.assert(record(harness, 'pstack:poteto-mode'), f)).rejects.toThrow('catalog-route-mismatch');
 
     report.roles[0]!.routes = report.roles[0]!.routes.map(r => r === 'native' ? 'external' : 'native');
     await writeFile(join(f.dir, 'routes.json'), JSON.stringify(report));
@@ -130,6 +138,40 @@ for (const harness of ['claude', 'codex'] as const) {
     const [provider, rest] = route!.split(':'), [model, effort] = rest!.split('@');
     expect(provider).not.toBe(harness);
     expect(c!.prompt(f)).toContain(`--parent ${harness} --provider ${provider} --model ${model} --effort ${effort} --mode read-only`);
+  });
+}
+
+for (const harness of ['claude', 'codex'] as const) {
+  test(`${harness}: the read-only-provider case requires every role line, with how explorer on Devin, and a runner probe`, async () => {
+    const f = await fixture(harness), c = recipe('setup', harness).find(c => c.id === 'read-only-provider')!, installed = await readCatalog(location);
+    await writeFile(join(f.dir, 'AGENTS.md'), 'mirror\n');
+    await c.prepare!(f);
+    if (harness === 'codex') await expect(readFile(join(f.dir, 'AGENTS.md'))).rejects.toThrow();
+    else expect(await readFile(join(f.dir, 'AGENTS.md'), 'utf8')).toBe('mirror\n');
+    const path = join(f.dir, 'pstack-models.md'), prepared = await readFile(path, 'utf8'), lines = await sheet(path);
+    expect([...lines.keys()]).toEqual([...installed.defaults.keys()]);
+    for (const [role, lanes] of installed.defaults) expect(lines.get(role)).toEqual(role === 'how explorer' ? ['devin:swe-2@max'] : lanes);
+
+    const probed = { ...record(harness, 'pstack:setup-pstack'), commands: ['"$RUNNER/pstack-runner" --provider devin'] };
+    expect((await c.assert(probed, f)).assertions).toEqual(['skill-loaded', 'file:pstack-models.md', 'runner-ran', 'sheet:devin:swe-2@max']);
+
+    // No runner call fails; so does dropping the Devin lane or another role.
+    await expect(c.assert(record(harness, 'pstack:setup-pstack'), f)).rejects.toThrow('runner-not-run');
+    for (const wrong of [prepared.replace('how explorer: devin:swe-2@max', `how explorer: ${installed.defaults.get('how explorer')!.join(', ')}`), prepared.replace(/\nbug-fix: [^\n]*/, '')]) {
+      await writeFile(path, wrong);
+      await expect(c.assert(probed, f)).rejects.toThrow('read-only-provider-sheet-mismatch');
+    }
+  });
+
+  test(`${harness}: the runner recipe accepts any external provider in the installed catalog and refuses others`, async () => {
+    const f = await fixture(harness);
+    const [devin, swe16] = recipe('runner', harness, ['devin:swe-2@max', 'devin:swe-1.6@default']);
+    await devin!.prepare!(f);
+    await swe16!.prepare!(f);
+    expect(devin!.prompt(f)).toContain(`--parent ${harness} --provider devin --model swe-2 --effort max --mode read-only`);
+    expect(swe16!.prompt(f)).toContain(`--parent ${harness} --provider devin --model swe-1.6 --effort default --mode read-only`);
+    const [unknown] = recipe('runner', harness, ['cursor:auto@default']);
+    await expect(unknown!.prepare!(f)).rejects.toThrow('catalog-route-missing:cursor:auto@default');
   });
 }
 

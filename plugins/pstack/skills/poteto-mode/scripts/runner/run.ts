@@ -5,12 +5,13 @@ import {
   openSync,
   readFileSync,
   realpathSync,
+  rmSync,
   statSync,
   unlinkSync,
   writeFileSync,
   writeSync,
 } from "node:fs";
-import { dirname, isAbsolute, relative, resolve, sep } from "node:path";
+import { dirname, isAbsolute, join, relative, resolve, sep } from "node:path";
 import type { Lane, LaunchFacts, ParseResult } from "./registry/index.ts";
 import {
   ERROR_EVIDENCE_LIMIT,
@@ -72,15 +73,35 @@ function modelStreamPaths(receiptPath: string): { stdoutPath: string; stderrPath
   return { stdoutPath: `${receiptPath}.stdout`, stderrPath: `${receiptPath}.stderr` };
 }
 
+interface ReservedSidecar {
+  readonly dir: string;
+  readonly facts: NonNullable<LaunchFacts["providerSidecar"]>;
+  readonly configContent: string | null;
+}
+
+// The provider sidecar directory sits next to the receipt, like the stream files.
+function providerSidecar(lane: Lane): ReservedSidecar | null {
+  const declared = lane.adapter.launch.sidecar;
+  if (declared === null) return null;
+  const dir = `${lane.receiptPath}.provider`;
+  return {
+    dir,
+    facts: { output: join(dir, declared.output), config: declared.config === null ? null : join(dir, declared.config.name) },
+    configContent: declared.config?.content ?? null,
+  };
+}
+
 function reserveOutputs(lane: Lane): ModelStreams {
   const { stdoutPath, stderrPath } = modelStreamPaths(lane.receiptPath);
-  const paths = [lane.outputPath, lane.receiptPath, stdoutPath, stderrPath];
+  const sidecar = providerSidecar(lane);
+  const paths = [lane.outputPath, lane.receiptPath, stdoutPath, stderrPath, ...(sidecar === null ? [] : [sidecar.dir])];
   const resolved = paths.map((path) => resolve(path));
   if (new Set(resolved).size !== paths.length || resolved.includes(resolve(lane.promptPath))) {
     throw new UsageError("prompt, output, receipt, and stream paths must be distinct");
   }
   const created: string[] = [];
   let stdout: number | null = null;
+  let stderr: number | null = null;
   try {
     for (const path of paths.slice(0, 2)) {
       reserve(path);
@@ -88,13 +109,27 @@ function reserveOutputs(lane: Lane): ModelStreams {
     }
     stdout = openSync(stdoutPath, "wx", 0o600);
     created.push(stdoutPath);
-    const stderr = openSync(stderrPath, "wx", 0o600);
+    stderr = openSync(stderrPath, "wx", 0o600);
+    created.push(stderrPath);
+    if (sidecar !== null) {
+      // Not recursive, so an existing directory refuses the lane like any other reserved path.
+      mkdirSync(sidecar.dir, { mode: 0o700 });
+      created.push(sidecar.dir);
+      if (sidecar.facts.config !== null && sidecar.configContent !== null) {
+        writeFileSync(sidecar.facts.config, sidecar.configContent, { encoding: "utf8", mode: 0o600, flag: "wx" });
+      }
+    }
     return { stdout, stderr };
   } catch (error) {
     if (stdout !== null) closeSync(stdout);
-    for (const path of created) removeIfExists(path);
+    if (stderr !== null) closeSync(stderr);
+    for (const path of created) rmSync(path, { recursive: true, force: true });
     throw error;
   }
+}
+
+function readIfPresent(path: string | undefined): string | null {
+  return path !== undefined && existsSync(path) ? readFileSync(path, "utf8") : null;
 }
 
 function writeReceipt(path: string, receipt: RunnerReceipt): void {
@@ -710,7 +745,7 @@ async function executeLane(
       writeReceipt(lane.receiptPath, receipt);
       return { exitCode: statusExitCode(discovery.status), receipt };
     }
-    const facts: LaunchFacts = { sharedGitDir: discovery.sharedGitDir };
+    const facts: LaunchFacts = { sharedGitDir: discovery.sharedGitDir, providerSidecar: providerSidecar(lane)?.facts ?? null };
     launchArgs = adapter.launch.argv(lane, facts);
     progress.argv = [executable, ...launchArgs];
   }
@@ -785,7 +820,9 @@ async function executeLane(
         ? "timed-out"
         : attempt.verdict.kind === "unavailable-model"
           ? "unavailable-model"
-          : "unauthenticated";
+          : attempt.verdict.kind === "inconclusive"
+            ? "child-failed"
+            : "unauthenticated";
     receipt = completeReceipt(lane, {
       status,
       startedAt,
@@ -807,7 +844,9 @@ async function executeLane(
           ? `launcher received ${preflightResult.cancelledBy} during preflight`
           : preflightResult.timedOut
             ? "authentication preflight timed out"
-            : "authentication or model preflight failed",
+            : attempt.verdict.kind === "inconclusive"
+              ? "authentication preflight output was inconclusive"
+              : "authentication or model preflight failed",
         evidence: preflightEvidence,
       },
     });
@@ -846,7 +885,7 @@ async function executeLane(
   } as const;
 
   const parsed: ParseResult | null = result.cancelledBy === null && !result.timedOut
-    ? adapter.parse(result, lane)
+    ? adapter.parse({ ...result, sidecar: readIfPresent(providerSidecar(lane)?.facts.output) }, lane)
     : null;
   const providerFailure = parsed?.kind === "provider-failure" ? parsed : null;
   const metadata = providerFailure?.metadata
@@ -941,7 +980,7 @@ export async function runLane(
 ): Promise<RunResult> {
   validateLane(lane);
   const deadlineAt = lane.timeoutMs === null ? null : started + lane.timeoutMs;
-  const launchArgs = lane.adapter.launch.argv(lane, { sharedGitDir: null });
+  const launchArgs = lane.adapter.launch.argv(lane, { sharedGitDir: null, providerSidecar: providerSidecar(lane)?.facts ?? null });
   const progress: LaneProgress = {
     executable: null,
     preflight: {
