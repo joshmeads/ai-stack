@@ -35,6 +35,8 @@ Restart Claude Code and Codex sessions after the first install.
 
 | Command | Effect |
 | --- | --- |
+| `ai-stack config show [--json]` | Print effective config as sorted dotted keys, preserving paths as written. Read-only; exit 0. |
+| `ai-stack fleet drift [--ignore KEY]... [--json]` | Compare every enabled machine with local config; exit 0 when all are in sync, otherwise 1. |
 | `ai-stack init [--force]` | Write the default config to `~/.config/ai-stack/config.toml`. Refuses to overwrite unless `--force`. |
 | `ai-stack diff [--clean]` | Print the install plan with unified diffs and the plugin commands it would run. Exit 0 when nothing would change, 1 when changes or conflicts are pending. It runs only the read-only `plugin marketplace list --json` and `plugin list --json` queries. `--clean` adds the clean actions (see [Clean](#clean)). |
 | `ai-stack stray [--json]` | Report what `--clean` alone would affect: `skills: N  plugins: M`, then each skill-root entry (as a `~/` path) and plugin id, indented. `--json` prints `{"skills":N,"plugins":M,"skill_names":[...],"plugin_ids":[...]}` on one line. Runs only the same read-only queries as `diff`; never writes. Exit 0. |
@@ -86,6 +88,27 @@ Known expiry prints a UTC date and `access token expires in Nd`, or `access toke
 - `[clean]`: what `--clean` keeps. `skill_roots` (default `~/.claude/skills`, `~/.codex/skills`, `~/.agents/skills`, resolved against `--home`), `keep_skills` (globs over entry names) and `keep_plugins` (globs over `name@marketplace`; the defaults keep `jm-*@jm`, `github@claude-plugins-official`, `chrome-devtools-mcp@claude-plugins-official` and Codex's built-in `*@openai-*`). Globs use `*` and `?`. A config without `[clean]`, or without one of its keys, gets the defaults that `init` writes.
 
 A config from an older ai-stack (with `[roles]`, `[stack.models]` or `[install]`) is rejected with a message to run `ai-stack init --force` and re-apply your edits.
+
+## Config drift
+
+`ai-stack config show` prints effective `config.toml` settings as sorted dotted keys with scalar or JSON-array values. `--json` prints one object. Defaults are filled in, including omitted `[clean]` settings, and disabled harness settings are included. Paths retain their spelling in the file (`~` is unexpanded). Only the config schema is included: this config holds no secrets, and credential files, harness configuration files and `fleet.toml` are never flattened. Nothing is written. The invocation's `--stack` override does not change this view of the stored config.
+
+`ai-stack fleet drift` uses the local effective config as its reference and runs `<bin> config show --json` on every enabled machine through the same local/SSH transport as fleet status. Local commands inherit explicit `--home` / `--config` flags; custom binaries and remote `~/` paths use the existing quoting. Like the status command's stray query, this query does not pass `--stack`, because it compares stored settings.
+
+Ignore patterns are merged from repeatable `--ignore KEY` flags, `[drift] ignore` in `fleet.toml`, and `drift_ignore` on each machine. They match dotted keys with `*` (any characters) and `?` (one character). The fleet template ignores `stack.path` and `harness.*.home`; an existing fleet without `[drift]` ignores nothing by default.
+
+```toml
+[drift]
+ignore = ["stack.path", "harness.*.home"]
+
+[machine.cachy]
+ssh = "cachy"
+drift_ignore = ["clean.skill_roots"]
+```
+
+Text reports `in sync` or `N keys differ`, followed by each differing key's local and remote values; missing keys show `(absent)`. `(N ignored)` counts differing keys removed by ignores, once per key. Patterns matching no keys are allowed. Older binaries or malformed output report `unavailable (<reason>)`; transport failures report `unreachable: <reason>`. Exit 0 requires every enabled machine in sync after ignores; drift, unavailable or unreachable results exit 1.
+
+`--json` emits `{"machines":{"cachy":{"state":"drift","keys":[{"key":"stack.remote","local":"origin","remote":"upstream"}],"ignored":0}}}`. States are `in_sync`, `drift`, `unavailable` and `unreachable`; failures carry `reason` instead of `keys` and `ignored`. A missing side of a key is JSON `null`.
 
 ## What install manages
 
@@ -192,7 +215,8 @@ cli/
     exec.rs     process seam for git, ssh, scripts and prompt runners; shell quoting
     manifest.rs skills manifest schema and validation
     skills.rs   skills add, status, update and the install pipeline
-    fleet.rs    fleet file, status, auth, update and switch
+    fleet.rs    fleet file, status, auth, drift, update and switch
+    drift.rs    pure comparison of flattened config keys
     auth.rs     provider descriptors, login status parsers, safe expiry readers
     render.rs   model sheet and routing block text
     blocks.rs   marker-bounded blocks in instruction files
