@@ -465,7 +465,8 @@ enabled = false
     fn auth_quotes_custom_binary_and_validates_json_and_health() {
         for (status, expected) in [
             (r#"{"providers":[{"id":"codex","state":"logged_in","expires_at":101,"expiry_source":"auth.json"},{"id":"cursor","state":"not_installed"}]}"#, 0),
-            (r#"{"providers":[{"id":"codex","state":"logged_in","expires_at":100,"expiry_source":"auth.json","refresh_available":true}]}"#, 1),
+            (r#"{"providers":[{"id":"codex","state":"logged_in","expires_at":100,"expiry_source":"auth.json","refresh_available":true}]}"#, 0),
+            (r#"{"providers":[{"id":"codex","state":"logged_in","expires_at":100,"expiry_source":"auth.json","refresh_available":false}]}"#, 1),
             (r#"{"providers":[{"id":"codex","state":"logged_out"}]}"#, 1),
             (r#"{"providers":[{"id":"codex","state":"unknown","reason":"failed"}]}"#, 1),
             (r#"{"providers":[]}"#, 1),
