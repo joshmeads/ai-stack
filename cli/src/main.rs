@@ -1,6 +1,7 @@
 mod blocks;
 mod config;
 mod exec;
+mod fleet;
 mod install;
 mod manifest;
 mod models;
@@ -98,6 +99,42 @@ enum Commands {
         #[command(subcommand)]
         command: SkillsCommand,
     },
+    /// Machines in <config dir>/fleet.toml that stack updates are pushed to.
+    Fleet {
+        #[command(subcommand)]
+        command: FleetCommand,
+    },
+}
+
+#[derive(Subcommand)]
+enum FleetCommand {
+    /// Write a commented fleet.toml template beside the config file.
+    Init {
+        /// Overwrite an existing fleet file.
+        #[arg(long)]
+        force: bool,
+    },
+    /// Print each machine's stack branch and commit against that branch's remote tip. Exit 0
+    /// when every machine is current.
+    Status,
+    /// Run `<bin> update --yes --plain --branch <B>` on every enabled machine.
+    Update {
+        /// Run the commands; without it they are only printed.
+        #[arg(long)]
+        yes: bool,
+        /// Branch to pull everywhere (default: each machine's current branch).
+        #[arg(long, value_name = "BRANCH")]
+        branch: Option<String>,
+    },
+    /// Fetch and check out BRANCH in the stack checkout, then update, on the named machines.
+    Switch {
+        branch: String,
+        /// Machines to switch (default: every enabled machine).
+        machines: Vec<String>,
+        /// Run the commands; without it they are only printed.
+        #[arg(long)]
+        yes: bool,
+    },
 }
 
 #[derive(Subcommand)]
@@ -169,6 +206,7 @@ fn main() -> Result<()> {
         Commands::Update { yes, plain, bump_models, branch } => cmd_update(&ctx, yes, plain, bump_models, branch)?,
         Commands::Models { bump } => cmd_models(&ctx, bump)?,
         Commands::Skills { command } => cmd_skills(&ctx, command)?,
+        Commands::Fleet { command } => cmd_fleet(&ctx, command)?,
     };
     io::stdout().flush()?;
     std::process::exit(code);
@@ -200,21 +238,20 @@ fn load_config(ctx: &Context) -> Result<Config> {
 }
 
 fn cmd_init(ctx: &Context, force: bool) -> Result<i32> {
-    init_at(&ctx.config_path, force)?;
+    init_at(&ctx.config_path, config::default_config_text(), force)?;
     println!("Wrote {}", ctx.config_path.display());
     Ok(0)
 }
 
-/// Writes the default config to `config_path`, refusing to overwrite unless `force`.
-fn init_at(config_path: &Path, force: bool) -> Result<()> {
-    if config_path.exists() && !force {
-        bail!("{} already exists; pass --force to overwrite it", config_path.display());
+/// Writes `text` to `path`, refusing to overwrite unless `force`.
+fn init_at(path: &Path, text: &str, force: bool) -> Result<()> {
+    if path.exists() && !force {
+        bail!("{} already exists; pass --force to overwrite it", path.display());
     }
-    if let Some(parent) = config_path.parent() {
+    if let Some(parent) = path.parent() {
         fs::create_dir_all(parent).with_context(|| format!("cannot create {}", parent.display()))?;
     }
-    fs::write(config_path, config::default_config_text())
-        .with_context(|| format!("cannot write {}", config_path.display()))
+    fs::write(path, text).with_context(|| format!("cannot write {}", path.display()))
 }
 
 fn cmd_diff(ctx: &Context, clean: bool) -> Result<i32> {
@@ -382,6 +419,30 @@ fn cmd_skills(ctx: &Context, command: SkillsCommand) -> Result<i32> {
     }
 }
 
+fn cmd_fleet(ctx: &Context, command: FleetCommand) -> Result<i32> {
+    let path = ctx.config_path.with_file_name("fleet.toml");
+    if let FleetCommand::Init { force } = command {
+        init_at(&path, fleet::default_text(), force)?;
+        println!("Wrote {}", path.display());
+        return Ok(0);
+    }
+    let cfg = load_config(ctx)?;
+    let fleet = fleet::Fleet {
+        exec: &exec::SystemExec,
+        home: &ctx.home,
+        local_stack: &cfg.stack.path,
+        remote: &cfg.stack.remote,
+        machines: fleet::load(&path, &cfg.stack.configured)?,
+    };
+    let mut out = io::stdout();
+    match command {
+        FleetCommand::Init { .. } => unreachable!("handled above"),
+        FleetCommand::Status => fleet.status(&mut out),
+        FleetCommand::Update { yes, branch } => fleet.update(branch.as_deref(), yes, &mut out),
+        FleetCommand::Switch { branch, machines, yes } => fleet.switch(&branch, &machines, yes, &mut out),
+    }
+}
+
 fn cmd_models(ctx: &Context, bump: bool) -> Result<i32> {
     let cfg = load_config(ctx)?;
     let catalogs = fetch_catalogs();
@@ -470,11 +531,12 @@ mod tests {
         let dir = tempfile::tempdir().unwrap();
         let path = dir.path().join(".config/ai-stack/config.toml");
 
-        init_at(&path, false).unwrap();
-        assert_eq!(fs::read_to_string(&path).unwrap(), config::default_config_text());
+        let text = config::default_config_text();
+        init_at(&path, text, false).unwrap();
+        assert_eq!(fs::read_to_string(&path).unwrap(), text);
 
-        let err = init_at(&path, false).unwrap_err();
+        let err = init_at(&path, text, false).unwrap_err();
         assert!(err.to_string().contains("--force"), "{err}");
-        init_at(&path, true).unwrap();
+        init_at(&path, text, true).unwrap();
     }
 }
