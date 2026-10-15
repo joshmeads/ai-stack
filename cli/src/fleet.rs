@@ -6,7 +6,9 @@ use std::io::Write;
 use std::path::Path;
 
 use anyhow::{Context as _, Result, anyhow, bail, ensure};
-use serde::Deserialize;
+use serde::{Deserialize, Serialize};
+
+use crate::auth;
 
 use crate::exec::{self, Exec, command_line, one_line, shell_quote, short};
 
@@ -195,6 +197,52 @@ impl Fleet<'_> {
         }
     }
 
+    pub fn auth(&self, json: bool, now: i64, out: &mut dyn Write) -> Result<i32> {
+        #[derive(Serialize)]
+        struct MachineStatus {
+            machine: String,
+            #[serde(skip_serializing_if = "Option::is_none")]
+            providers: Option<Vec<auth::Report>>,
+            #[serde(skip_serializing_if = "Option::is_none")]
+            error: Option<String>,
+        }
+        let mut reports = Vec::new();
+        let mut healthy = true;
+        for machine in &self.machines {
+            let words = self.ai_stack(machine, vec![Word::Arg("auth"), Word::Arg("status"), Word::Arg("--json")]);
+            let (program, args) = self.invocation(machine, &words);
+            let result = match self.exec.run(&program, &args, None) {
+                Err(_) => Err("unreachable: cannot run command".to_string()),
+                Ok(ran) if machine.ssh.is_some() && ran.code == Some(255) => Err("unreachable: ssh transport failed (exit 255)".to_string()),
+                Ok(ran) if !ran.ok => Err(format!("unavailable (status command failed, exit {})", ran.code.map_or("signal".into(), |n| n.to_string()))),
+                Ok(ran) => serde_json::from_str::<auth::Status>(ran.stdout.trim())
+                    .ok()
+                    .filter(|status| {
+                        let ids: std::collections::BTreeSet<_> = status.providers.iter().map(|p| p.provider.as_str()).collect();
+                        ids.len() == status.providers.len() && auth::PROVIDERS.iter().all(|provider| ids.contains(provider.id))
+                    })
+                    .ok_or_else(|| "unavailable (unexpected status output)".to_string()),
+            };
+            let (providers, error) = match result {
+                Ok(status) => {
+                    healthy &= status.providers.iter().all(|provider| provider.healthy(now));
+                    if !json {
+                        for provider in &status.providers { writeln!(out, "  {}  {}", machine.name, provider.text(now))?; }
+                    }
+                    (Some(status.providers), None)
+                }
+                Err(reason) => {
+                    healthy = false;
+                    if !json { writeln!(out, "  {}  {reason}", machine.name)?; }
+                    (None, Some(reason))
+                }
+            };
+            reports.push(MachineStatus { machine: machine.name.clone(), providers, error });
+        }
+        if json { writeln!(out, "{}", serde_json::to_string(&serde_json::json!({ "machines": reports }))?)?; }
+        Ok(if healthy { 0 } else { 1 })
+    }
+
     fn compare(&self, branch: &str, commit: &str, tips: &mut BTreeMap<String, Result<Option<String>, String>>) -> String {
         if branch == "HEAD" {
             return "detached".into();
@@ -380,6 +428,78 @@ enabled = false
         let mut out = Vec::new();
         let code = f(&mut out).unwrap();
         (code, String::from_utf8(out).unwrap())
+    }
+
+    fn auth_json(provider: &str) -> String {
+        let provider: serde_json::Value = serde_json::from_str(provider).unwrap();
+        let mut providers = vec![provider.clone()];
+        for descriptor in auth::PROVIDERS {
+            if provider["id"] != descriptor.id { providers.push(serde_json::json!({"id":descriptor.id,"state":"not_installed"})); }
+        }
+        serde_json::json!({"providers":providers}).to_string()
+    }
+
+    #[test]
+    fn auth_uses_existing_transport_and_reports_unavailable_and_unreachable() {
+        let exec = FakeExec::new(|line| {
+            if line.contains("me@box") { exit(255, "Connection refused") }
+            else if line.contains("cachy") { exit(2, "unrecognized subcommand 'auth'") }
+            else { ok(&auth_json(r#"{"id":"codex","state":"logged_in"}"#)) }
+        });
+        let flags = exec::strings(&["--config", "/custom config", "--home", "/custom home"]);
+        let mut f = fleet(&exec);
+        f.local_flags = &flags;
+        let (code, text) = run(|out| f.auth(false, 100, out));
+        assert_eq!(code, 1);
+        assert!(text.contains("box  unreachable: ssh transport failed"), "{text}");
+        assert!(text.contains("cachy  unavailable (status command failed, exit 2)"));
+        assert!(text.contains("mac  codex     logged in"));
+        assert_eq!(*exec.calls.borrow(), [
+            "ssh -o BatchMode=yes me@box -- 'ai-stack auth status --json'",
+            "ssh -o BatchMode=yes cachy -- 'ai-stack auth status --json'",
+            "/bin/self --config '/custom config' --home '/custom home' auth status --json",
+        ]);
+    }
+
+    #[test]
+    fn auth_quotes_custom_binary_and_validates_json_and_health() {
+        for (status, expected) in [
+            (r#"{"providers":[{"id":"codex","state":"logged_in","expires_at":101,"expiry_source":"auth.json"},{"id":"cursor","state":"not_installed"}]}"#, 0),
+            (r#"{"providers":[{"id":"codex","state":"logged_in","expires_at":100,"expiry_source":"auth.json","refresh_available":true}]}"#, 1),
+            (r#"{"providers":[{"id":"codex","state":"logged_out"}]}"#, 1),
+            (r#"{"providers":[{"id":"codex","state":"unknown","reason":"failed"}]}"#, 1),
+            (r#"{"providers":[]}"#, 1),
+            (r#"{"providers":[{"id":"codex","state":"logged_out","token":"secret"}]}"#, 1),
+            ("not json secret", 1),
+        ] {
+            let response = if let Ok(mut value) = serde_json::from_str::<serde_json::Value>(status) {
+                if let Some(providers) = value["providers"].as_array_mut().filter(|p| !p.is_empty()) {
+                    for provider in auth::PROVIDERS {
+                        if !providers.iter().any(|p| p["id"] == provider.id) {
+                            providers.push(serde_json::json!({"id":provider.id,"state":"not_installed"}));
+                        }
+                    }
+                }
+                value.to_string()
+            } else { status.to_string() };
+            let exec = FakeExec::new(move |_| ok(&response));
+            let mut f = fleet(&exec);
+            f.machines = vec![Machine { name: "custom".into(), ssh: Some("host".into()), stack: "~/My Stack".into(), bin: Some("~/My Bin/ai's-stack".into()) }];
+            let (code, text) = run(|out| f.auth(true, 100, out));
+            assert_eq!(code, expected, "{status}");
+            let value: serde_json::Value = serde_json::from_str(&text).unwrap();
+            assert_eq!(value["machines"][0]["machine"], "custom");
+            assert!(!text.contains("secret"));
+            assert_eq!(exec.calls.borrow()[0], command_line("ssh", &exec::strings(&["-o", "BatchMode=yes", "host", "--", "~/'My Bin/ai'\\''s-stack' auth status --json"])));
+        }
+    }
+
+    #[test]
+    fn auth_rejects_incomplete_reports() {
+        let exec = FakeExec::new(|_| ok(r#"{"providers":[{"id":"codex","state":"logged_in"}]}"#));
+        let (code, text) = run(|out| fleet(&exec).auth(false, 100, out));
+        assert_eq!(code, 1);
+        assert_eq!(text.matches("unavailable (unexpected status output)").count(), 3);
     }
 
     #[test]

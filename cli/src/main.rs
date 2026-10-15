@@ -128,6 +128,11 @@ enum AuthCommand {
 
 #[derive(Subcommand)]
 enum FleetCommand {
+    /// Report AI CLI login status on every enabled machine.
+    Auth {
+        #[arg(long)]
+        json: bool,
+    },
     /// Write a commented fleet.toml template beside the config file.
     Init {
         /// Overwrite an existing fleet file.
@@ -478,6 +483,7 @@ fn cmd_fleet(ctx: &Context, command: FleetCommand) -> Result<i32> {
     match command {
         FleetCommand::Init { .. } => unreachable!("handled above"),
         FleetCommand::Status => fleet.status(&mut out),
+        FleetCommand::Auth { json } => fleet.auth(json, auth::now(), &mut out),
         FleetCommand::Update { yes, branch } => fleet.update(branch.as_deref(), yes, &mut out),
         FleetCommand::Switch { branch, machines, yes } => fleet.switch(&branch, &machines, yes, &mut out),
     }
