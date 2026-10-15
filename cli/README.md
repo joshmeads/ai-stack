@@ -48,6 +48,7 @@ Restart Claude Code and Codex sessions after the first install.
 | `ai-stack skills update [NAME...] [--ref REF] [--reprocess] [--force]` | Rebuild the named entries (default all) whose upstream ref moved. `--ref` retargets the named entries to another upstream branch or tag and records it. `--reprocess` rebuilds every selected entry even when upstream has not moved, from the commit its ref names now; when the ref cannot be resolved (offline, or the branch is gone) it rebuilds from the pinned `commit` and says so. A missing skill directory is always rebuilt. Refuses to replace a skill directory with uncommitted, untracked or ignored files unless `--force`. One failure does not stop the rest; exit 1 if any failed. |
 | `ai-stack auth status [--json]` | Report local Claude Code, Codex, Cursor Agent and OpenCode login status. Read-only; exit 0 even when a provider is unavailable. |
 | `ai-stack fleet auth [--json]` | Report those providers on every enabled fleet machine. Exit 0 when every machine reports successfully and every installed provider is logged in with no expired access token that lacks a refresh token; otherwise 1. |
+| `ai-stack fleet login <MACHINE> <PROVIDER>` | Run a supported provider’s headless login on one fleet machine through your terminal, then print its status. Requires terminal stdin and stdout; exit 0 only when login succeeds and the provider reports logged in. |
 | `ai-stack fleet init [--force]` | Write a commented `fleet.toml` beside the config file. |
 | `ai-stack fleet status` | Print `machine  <branch>  <commit>  current \| behind \| ahead \| different \| unknown (fetch first) \| detached \| unreachable: <reason>`, comparing each machine's stack commit with the remote tip of its own branch, then, for each reachable machine, `  stray: N skills, M plugins` from `<bin> stray --json` on that machine, or `  stray: unavailable (<reason>)` when it fails (for example an older ai-stack there). Exit 0 when all are current; the stray line never changes it. |
 | `ai-stack fleet update [--yes] [--branch B]` | Run `<bin> --stack <stack> update --yes --plain --branch <B>` on every enabled machine, `B` being `--branch` or that machine's current branch. Without `--yes`, print the commands and exit 1. |
@@ -73,6 +74,27 @@ Known expiry prints a UTC date and `access token expires in Nd`, or `access toke
 `--json` emits one line with `providers`, each containing `id`, `state` (`logged_in`, `logged_out`, `not_installed`, `unknown`) and optional `account`, `expires_at` (Unix seconds), `expiry_source`, `refresh_available`, or `reason`. Secrets are never read into output: credential readers extract only expiry and refresh presence, and provider diagnostics are reduced to fixed reasons rather than echoing raw command output or credential parsing errors.
 
 `ai-stack fleet auth` uses the same local binary selection and SSH quoting as `fleet status`, running `<bin> auth status --json` on each enabled machine. Older binaries report `unavailable`; SSH transport failures report `unreachable`. `--json` emits `{"machines":[{"machine":"name","providers":[...]},{"machine":"old","error":"unavailable (...)"}]}`. Missing providers do not fail the check; logged-out, unknown, expired (with no refresh token), unavailable or unreachable results do. An expired access token with a refresh token present does not, because the CLI renews it itself. Unknown expiry alone does not fail it. Local auth status needs no ai-stack config file; fleet auth uses the normal fleet config.
+
+## Logging in over the fleet
+
+```sh
+ai-stack fleet login cachy codex
+ai-stack fleet login cachy cursor
+ai-stack fleet login cachy opencode
+```
+
+Choose a machine name from `fleet.toml` and a provider id: `claude`, `codex`, `cursor` or `opencode`. A disabled machine is allowed with a warning. ai-stack checks that the provider is installed on the target's `PATH`, prints what will run and where, and connects the provider directly to your terminal. Open the printed URL in a browser on your own device, then paste a code into the same terminal if prompted, or finish the device authorization in your browser. After the process exits, ai-stack prints that provider's status, including account and expiry when available. Login must exit successfully and the follow-up status must say `logged in` for exit 0; other results exit 1. SSH exit 255 reports `unreachable`.
+
+The initial deployment uses LAN machines. Remote login requires SSH key authentication already working and the host key already trusted. It runs `ssh -tt -o BatchMode=yes <dest> -- <one shell-quoted command line>` with inherited stdin, stdout and stderr. BatchMode prevents password prompts; `-tt` allocates the remote terminal. Both stdin and stdout must be terminals, so piping or redirecting either is refused. A `local = true` entry runs the same login argv directly. The status checks use the same `<bin>` selection as `fleet auth`; the target needs an ai-stack binary that supports `auth status --json`.
+
+| Provider id | Headless login argv | Browser on another device |
+| --- | --- | --- |
+| `codex` | `codex login --device-auth` | Device authorization; avoids the default localhost callback. |
+| `cursor` | `env NO_OPEN_BROWSER=1 cursor-agent login` | Prints the login URL without opening a browser on the target. |
+| `opencode` | `opencode auth login` | In its menus, choose OpenAI, then **ChatGPT Pro/Plus (headless)** for device authorization. Choose a headless method when using another provider; browser callback methods require a browser on the target. |
+| `claude` | Unsupported | The inspected `claude auth login` requires a localhost callback and has no code-paste handler. No headless flag is exposed by its help. |
+
+The provider owns credential storage. Login codes and tokens never pass through ai-stack's application code: inherited terminal streams go directly to the provider (through SSH for remote machines). ai-stack does not capture login output, parse URLs, read codes, forward tokens, or store credentials. The read-only status checks retain the expiry handling described above. There is no new daemon, port, timeout or retry added by ai-stack.
 
 ## Config
 
@@ -215,9 +237,9 @@ cli/
     exec.rs     process seam for git, ssh, scripts and prompt runners; shell quoting
     manifest.rs skills manifest schema and validation
     skills.rs   skills add, status, update and the install pipeline
-    fleet.rs    fleet file, status, auth, drift, update and switch
+    fleet.rs    fleet file, status, auth, login, drift, update and switch
     drift.rs    pure comparison of flattened config keys
-    auth.rs     provider descriptors, login status parsers, safe expiry readers
+    auth.rs     provider descriptors and login argv, status parsers, safe expiry readers
     render.rs   model sheet and routing block text
     blocks.rs   marker-bounded blocks in instruction files
     install.rs  the per-harness plan: sheet, blocks (including instructions), leftovers
