@@ -48,32 +48,20 @@ impl Skills<'_> {
                 .map(|name| name.to_string_lossy().into_owned())
                 .ok_or_else(|| anyhow!("cannot take a skill name from {:?}; pass --name", add.path))?,
         };
-        let mut manifest = manifest::load(self.stack)?;
-        let mut skill = Skill {
-            name,
-            source: add.source,
-            path: add.path,
-            git_ref: add.git_ref,
-            commit: "0".repeat(40),
-            dest: add.dest,
-            rename: add.rename,
-            process: add.process,
+        let source = match fs::canonicalize(&add.source) {
+            Ok(path) => path.to_string_lossy().into_owned(),
+            Err(_) => add.source,
         };
-        let target = crate::paths::normalize(&skill.target());
-        ensure!(
-            !manifest.skills.iter().any(|other| crate::paths::normalize(&other.target()) == target),
-            "the manifest already installs {}; use `ai-stack skills update`",
-            target.display()
-        );
+        let mut manifest = manifest::load(self.stack)?;
+        let commit = self.resolve(&source, &add.git_ref)?;
+        let skill = Skill { name, source, path: add.path, git_ref: add.git_ref, commit, dest: add.dest, rename: add.rename, process: add.process };
         manifest.skills.push(skill.clone());
         manifest.validate()?;
-        ensure!(!self.stack.join(&target).exists(), "{} already exists; remove it first", self.stack.join(&target).display());
+        let target = self.stack.join(skill.target());
+        ensure!(fs::symlink_metadata(&target).is_err(), "{} already exists; remove it first", target.display());
 
-        skill.commit = self.resolve(&skill.source, &skill.git_ref)?;
         self.install(&skill)?;
-        let short = short(&skill.commit);
-        writeln!(out, "added {} -> {} at {short}", skill.name, target.display())?;
-        *manifest.skills.last_mut().expect("pushed above") = skill;
+        writeln!(out, "added {} -> {} at {}", skill.name, skill.target().display(), short(&skill.commit))?;
         manifest::save(self.stack, &manifest)
     }
 
@@ -189,6 +177,8 @@ impl Skills<'_> {
 
     /// The commit `git_ref` names in `source`. A 40-hex ref is already a commit.
     fn resolve(&self, source: &str, git_ref: &str) -> Result<String> {
+        exec::check_ref(git_ref)?;
+        ensure!(!source.is_empty() && !source.starts_with('-'), "invalid source {source:?}");
         if is_commit(git_ref) {
             return Ok(git_ref.to_string());
         }
@@ -486,6 +476,35 @@ mod tests {
         assert_eq!(code, 0, "{out}");
         assert!(out.contains("rebuilt missing"), "{out}");
         assert!(fx.installed().contains("Body - v2"));
+    }
+
+    #[test]
+    fn add_stores_a_local_source_as_its_canonical_path_and_takes_a_root_skill_without_git() {
+        let fx = Fixture::new();
+        let root = fx._dir.path().join("root-skill");
+        fs::create_dir_all(&root).unwrap();
+        fs::write(root.join("SKILL.md"), "---\nname: root\n---\n").unwrap();
+        git(&root, &["init", "-q"]);
+        commit_all(&root, "root");
+        fs::write(root.join("untracked.md"), "x").unwrap();
+
+        let add = Add {
+            source: fx.stack.join("../root-skill").to_string_lossy().into_owned(),
+            path: ".".into(),
+            git_ref: "main".into(),
+            dest: manifest::DEFAULT_DEST.into(),
+            rename: None,
+            process: Vec::new(),
+            name: Some("root".into()),
+        };
+        fx.skills().add(add, &mut Vec::new()).unwrap();
+
+        let entry = &manifest::load(&fx.stack).unwrap().skills[0];
+        assert_eq!(Path::new(&entry.source), fs::canonicalize(&root).unwrap());
+        let installed = fx.stack.join("plugins/jm-tools/skills/root");
+        let mut names: Vec<_> = fs::read_dir(&installed).unwrap().map(|e| e.unwrap().file_name()).collect();
+        names.sort();
+        assert_eq!(names, ["SKILL.md"]);
     }
 
     #[test]
