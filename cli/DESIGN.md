@@ -11,7 +11,8 @@ The CLI turns one config into a per-harness setup of the `jm` plugin marketplace
 - `update [--yes] [--plain] [--bump-models] [--branch B]`: `git pull --ff-only <remote> <branch>` in the stack (`--branch` overrides `stack.branch` for the run), after checking `git symbolic-ref --short HEAD` names that branch (a detached HEAD or another branch is refused), print the rebuild note when `cli/` changed, report models, optionally bump, then install.
 - `models [--bump]`: compare model IDs with the provider catalogs (`codex debug models`; the Anthropic Models API or docs page) and optionally rewrite newer IDs in place.
 - `skills add|status|update`: vendored skills in `<stack>/manifest.toml` (see Skills).
-- `fleet init|status|update|switch`: machines in `<config dir>/fleet.toml` (see Fleet).
+- `auth status [--json]`: local AI CLI login status, without loading config (see Login status).
+- `fleet init|status|auth|update|switch`: machines in `<config dir>/fleet.toml` (see Fleet).
 
 ## Config
 
@@ -52,6 +53,20 @@ The `Runner` trait is the seam for the CLIs. `SystemRunner` runs the binaries fr
 
 All git, ssh, script and prompt invocations, including `update`'s pull, go through `exec::Exec` (`SystemExec`, stdin closed); fleet and pull tests use `exec::fake::FakeExec`, skills tests use real `git` on local repos. The harness plugin CLIs keep their own `plugins::Runner`, because each command carries per-harness env (`CLAUDE_CONFIG_DIR`, `CODEX_HOME`). Branch arguments go through `exec::check_branch` (a `check_ref` that also rejects `HEAD`, `refs/` and a leading `+`); skill refs through `check_ref`.
 
+## Login status
+
+`auth.rs` owns the const `PROVIDERS` descriptor table: id, display name, binary, read-only status argv, parser and optional expiry source (home environment variable, default directory, filename and reader). Add a provider with one table row and its parser, plus parser fixtures. A future login workflow can add a column to this table; no login or logout command is implemented here.
+
+`Report` holds a provider id and `State`. `LoggedIn` alone carries account, expiry, source and optional refresh presence, so logged-out and absent providers cannot carry an expiry. The wire schema flattens these into `id`, `state`, and optional fields inside `{"providers":[...]}`; deserialization rejects unknown fields and invalid state combinations. Provider CLI output is parsed selectively because their schemas may grow. The `Exec` seam includes PATH availability, so tests use fakes without executing provider commands.
+
+Claude uses `auth status --json`, Codex `login status` (including stderr), Cursor Agent `status --format json`, OpenCode `auth list` (ANSI stripped). OpenCode's configured-credential count means configured, not server-validated. Nonzero status exits may still convey a recognized logged-out result; other errors become fixed one-line unknown reasons and never stop the other providers. No timeout or retry is added. Local status exits 0 unless the command itself cannot run, such as an output-write failure.
+
+Expiry readers return only numeric seconds and refresh presence. Codex decodes only its access JWT payload's numeric `exp`; Claude's Linux `claudeAiOauth.expiresAt` is milliseconds and is converted to seconds. File and decode errors collapse to `expiry unavailable`, with no path, token or JSON error included, and are omitted from reports. File resolution honors `CODEX_HOME` / `CLAUDE_CONFIG_DIR` and follows symlinks normally. Claude on macOS has no file reader and never invokes `security`. Cursor and OpenCode have no expiry reader; OpenCode's multiple independent credentials have no single access-token deadline. An expired access token does not override the status command's logged-in state. Refresh presence does not imply a successful future refresh.
+
+`fleet auth [--json]` reuses `ai_stack` and `invocation` from fleet status, including explicit local `--config` / `--home`, custom binaries and remote path quoting; like status's stray query it does not add `--stack`. Each machine returns its local status JSON. Nonzero SSH exit 255 is unreachable, nonzero remote command exits and malformed, incomplete or duplicate-provider reports are unavailable. Raw stdout, stderr and deserialization errors are never echoed. Combined JSON is `{"machines":[{"machine":"name","providers":[...]},{"machine":"old","error":"unavailable (...)"}]}`. Exit 0 requires successful reports from every machine and every installed provider logged in without a known expired token; unknown expiry is allowed.
+
+This uses the existing SSH transport: BatchMode, the owner's key authentication and LAN hosts. The remote side returns only status, never secrets. Credential files are read locally only to extract expiry and refresh presence; neither raw files nor tokens enter output, serialization or error text. No keychain command, browser, login, logout or credential refresh is invoked.
+
 ## Adding a harness
 
 Cursor and OpenCode are not handled. Adding a harness needs:
@@ -89,4 +104,5 @@ OpenCode reads `~/.config/opencode/AGENTS.md`, so it can reuse the block writer 
 - `exec.rs`: process seam, `shell_quote`, `check_ref`, `check_branch`, commit text helpers.
 - `manifest.rs`, `skills.rs`: skills manifest and commands.
 - `fleet.rs`: fleet file and commands.
+- `auth.rs`: provider table, login-status domain and wire reports, parsers, expiry readers and rendering.
 - `tui.rs`: review screen.
