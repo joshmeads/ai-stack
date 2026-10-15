@@ -87,7 +87,12 @@ impl Skills<'_> {
         }
         let mut current = true;
         for skill in &manifest.skills {
+            let missing = fs::symlink_metadata(self.stack.join(skill.target())).is_err();
             let state = match self.resolve(&skill.source, &skill.git_ref) {
+                _ if missing => {
+                    current = false;
+                    "missing".to_string()
+                }
                 Ok(latest) if latest == skill.commit => "current".to_string(),
                 Ok(latest) => {
                     current = false;
@@ -152,20 +157,30 @@ impl Skills<'_> {
     }
 
     fn update_one(&self, before: &Skill, mut next: Skill, update: &Update) -> Result<(Skill, String)> {
-        let latest = self.resolve(&next.source, &next.git_ref)?;
-        if latest == before.commit && !update.reprocess {
+        let target = before.target();
+        let missing = fs::symlink_metadata(self.stack.join(&target)).is_err();
+        let (latest, pinned) = match self.resolve(&next.source, &next.git_ref) {
+            Ok(latest) => (latest, String::new()),
+            Err(err) if update.reprocess && next.git_ref == before.git_ref => {
+                (before.commit.clone(), format!(" from the pinned commit (cannot resolve {}: {})", next.git_ref, one_line(&format!("{err:#}"))))
+            }
+            Err(err) => return Err(err),
+        };
+        if latest == before.commit && !update.reprocess && !missing {
             let message = if next.git_ref == before.git_ref { "current".to_string() } else { format!("now tracks {} (same commit)", next.git_ref) };
             return Ok((next, message));
         }
-        if !update.force {
-            let target = before.target();
-            let dirty = exec::check(self.exec, "git", &strings(&["status", "--porcelain", "--", &target.to_string_lossy()]), Some(self.stack))?;
-            ensure!(dirty.trim().is_empty(), "{} has uncommitted changes; commit or discard them, or pass --force", target.display());
+        if !update.force && !missing {
+            let args = ["status", "--porcelain", "--untracked-files=all", "--ignored=matching", "--", &target.to_string_lossy()];
+            let dirty = exec::check(self.exec, "git", &strings(&args), Some(self.stack))?;
+            ensure!(dirty.trim().is_empty(), "{} has uncommitted, untracked or ignored changes; commit or discard them, or pass --force", target.display());
         }
         next.commit = latest;
         self.install(&next)?;
-        let message = if next.commit == before.commit {
-            format!("rebuilt at {}", short(&next.commit))
+        let message = if missing {
+            format!("rebuilt missing {} at {}", target.display(), short(&next.commit))
+        } else if next.commit == before.commit {
+            format!("rebuilt at {}{pinned}", short(&next.commit))
         } else {
             format!("{} -> {}", short(&before.commit), short(&next.commit))
         };
@@ -443,14 +458,49 @@ mod tests {
         fs::write(&skill_md, "local edit\n").unwrap();
         let (code, out) = fx.update(&[], None, false, false);
         assert_eq!(code, 1);
-        assert!(out.contains("uncommitted changes"), "{out}");
+        assert!(out.contains("uncommitted, untracked or ignored changes"), "{out}");
         assert_eq!(fs::read_to_string(&skill_md).unwrap(), "local edit\n");
 
         git(&fx.stack, &["checkout", "--", "."]);
+        fs::write(fx.stack.join(".gitignore"), "*.log\n").unwrap();
+        commit_all(&fx.stack, "ignore logs");
+        let ignored = fx.stack.join("plugins/jm-tools/skills/grill-docs/.cache/run.log");
+        fs::create_dir_all(ignored.parent().unwrap()).unwrap();
+        fs::write(&ignored, "x").unwrap();
+        let (code, out) = fx.update(&[], None, false, false);
+        assert_eq!(code, 1);
+        assert!(out.contains("ignored changes"), "{out}");
+        assert!(ignored.exists());
+
+        fs::remove_dir_all(ignored.parent().unwrap()).unwrap();
         let (code, out) = fx.update(&[], None, false, false);
         assert_eq!(code, 0, "{out}");
         assert!(fx.installed().contains("Body - v2"), "{}", fx.installed());
         assert_eq!(manifest::load(&fx.stack).unwrap().skills[0].commit, v2);
+        commit_all(&fx.stack, "v2");
+
+        fs::remove_dir_all(fx.stack.join("plugins/jm-tools/skills/grill-docs")).unwrap();
+        let mut out = Vec::new();
+        assert_eq!(fx.skills().status(&mut out).unwrap(), 1);
+        assert!(String::from_utf8(out).unwrap().contains("grill-with-docs  grill-docs  {}  missing".replace("{}", &v2[..7]).as_str()));
+        let (code, out) = fx.update(&[], None, false, false);
+        assert_eq!(code, 0, "{out}");
+        assert!(out.contains("rebuilt missing"), "{out}");
+        assert!(fx.installed().contains("Body - v2"));
+    }
+
+    #[test]
+    fn reprocess_rebuilds_the_pinned_commit_when_the_ref_cannot_be_resolved() {
+        let fx = Fixture::new();
+        fx.add();
+        git(&fx.upstream, &["branch", "-m", "main", "trunk"]);
+        let (code, out) = fx.update(&[], None, false, false);
+        assert_eq!(code, 1, "{out}");
+        assert!(out.contains("has no ref"), "{out}");
+        let (code, out) = fx.update(&[], None, true, false);
+        assert_eq!(code, 0, "{out}");
+        assert!(out.contains("from the pinned commit (cannot resolve main"), "{out}");
+        assert!(fx.installed().contains("name: grill-docs"));
     }
 
     #[test]
