@@ -7,8 +7,10 @@ The CLI turns one config into a per-harness setup of the `jm` plugin marketplace
 - `init [--force]`: write `config.default.toml` to the config path.
 - `diff [--clean]`: build the plan and print it. Exit 0 when empty, 1 otherwise. Runs only the read-only plugin `list --json` queries.
 - `install [--yes] [--force] [--plain] [--clean]`: plan, review (TUI, or plain text plus a y/N prompt), apply. The TUI's `c` toggles clean and re-plans.
-- `update [--yes] [--plain] [--bump-models]`: `git pull --ff-only <remote> <branch>` in the stack, print the rebuild note when `cli/` changed, report models, optionally bump, then install.
+- `update [--yes] [--plain] [--bump-models] [--branch B]`: `git pull --ff-only <remote> <branch>` in the stack (`--branch` overrides `stack.branch` for the run), print the rebuild note when `cli/` changed, report models, optionally bump, then install.
 - `models [--bump]`: compare model IDs with the provider catalogs (`codex debug models`; the Anthropic Models API or docs page) and optionally rewrite newer IDs in place.
+- `skills add|status|update`: vendored skills in `<stack>/manifest.toml` (see Skills).
+- `fleet init|status|update|switch`: machines in `<config dir>/fleet.toml` (see Fleet).
 
 ## Config
 
@@ -16,6 +18,7 @@ The CLI turns one config into a per-harness setup of the `jm` plugin marketplace
 - `[harness.<name>]`: `home`, `enabled`.
 - `[models.<alias>]`: `provider` (`anthropic` | `openai`), `id`, optional `efforts`, optional `context`.
 - `[leads]`, `[review]`: `"alias@effort"` per harness; effort required, and it must be in the model's `efforts` when set.
+- `[skills]`: `prompt_runner` argv, default `claude -p --permission-mode acceptEdits`; optional.
 - `[sheet.claude]`, `[sheet.codex]`: all 15 rows, lanes as descriptors. The accepted rows, panel rows, parent-only rows and the model matrix (provider, model, selectable efforts) live in constants at the top of `config.rs`, kept in step with `plugins/pstack/skills/poteto-mode/references/provider-dispatch.md`. Sheet descriptors are not tied to `[models]`: the sheet uses the plugin's spelling (Claude rolling aliases such as `opus`, Codex model slugs), while `[models]` holds exact IDs for the catalog check.
 
 ## Plan
@@ -36,11 +39,28 @@ The `Runner` trait is the seam for the CLIs. `SystemRunner` runs the binaries fr
 
 `plan::apply(plan, backup_root, runner)` refuses on conflicts, re-verifies every file action against the state it was planned from, backs up each existing target under `<backup_root>/<unix-time>[-n]/{home,abs}/`, applies the file actions, then runs the commands in order. A failed command stops apply with its stderr; the file changes already made stay, and the next run plans only what remains.
 
+## Skills
+
+`manifest.rs` holds the `[[skill]]` schema (`name`, `source`, `path`, `ref`, `commit`, `dest`, `move`, `process` as one-or-many `{type, input}`) and its validation: plain relative components only for `name`, `move`, `path`, `dest`; a valid git ref; one entry per installed directory. There is no stack-level stamp; the stack's own history is its git log.
+
+`skills.rs` resolves a ref with `git ls-remote` (peeled tag, exact name, `refs/heads/`, `refs/tags/`; a 40-hex ref is used as is), fetches the commit into a throwaway repo, stages the copy beside the target, applies `move` to the directory name and the frontmatter `name:` line, runs the process steps in order with the staging directory as cwd, then renames the old target to a reserved temp name, renames the staging directory into place and drops the old one. `update` checks `git status --porcelain -- <target>` before replacing anything, keeps going after a failed entry, and writes the manifest once at the end. `--ref` changes the tracked ref of the named entries.
+
+## Fleet
+
+`fleet.rs` loads enabled machines (exactly one of `ssh` / `local = true`) and builds each command as words, where path words keep a leading `~/` unquoted for the remote shell and everything else goes through `exec::shell_quote`. `status` caches one `ls-remote` per distinct branch and checks ancestry with `git merge-base --is-ancestor` in the local checkout. `update` resolves each machine's branch unless `--branch` is given and skips a detached HEAD. `switch` runs a dirty check, fetch, checkout with a tracking-branch fallback, then update, per machine. Without `--yes`, `update` and `switch` print and run nothing.
+
+All git, ssh, script and prompt invocations go through `exec::Exec` (`SystemExec`, stdin closed); fleet tests use `exec::fake::FakeExec`, skills tests use real `git` on local repos.
+
 ## Safety guarantees
 
 - **Atomic writes with the original mode.** A temp file is created exclusively beside the target (`tempfile::Builder`, random name), given the target's permissions when it exists, written, and renamed over the target.
 - **No escaping backups.** Harness homes are normalized at load; a target whose home-relative or absolute backup path has `..`, `.` or no file name is refused.
 - **Stale plans are refused.** `Write`/`Remove` compare text, `Unlink` compares the link target, `ReplaceWithFile` compares an lstat fingerprint of the whole tree.
+- **Skills stay inside the stack.** Manifest paths are validated at load and on every write, so no entry can address a directory outside the stack.
+- **Atomic skill replace.** A skill is built in a staging directory beside its target and swapped in by rename; a failed fetch, `move` or process step leaves the installed skill as it was.
+- **Dirty guard.** `skills update` refuses to replace a skill directory with uncommitted changes unless `--force`.
+- **Process steps run arbitrary code by design.** Scripts and prompt runners run with the user's permissions in the staging directory.
+- **Fleet never forces.** `switch` refuses a dirty checkout and never uses `-f` or `-B`; branch names are validated before they reach any command line.
 - **Exact ownership.** Links count as ai-stack's only when they resolve into the stack or a legacy root; hooks only when the command is one of the exact old forms for those roots; agent files only with the managed marker.
 
 ## Modules (`src/`)
@@ -53,4 +73,7 @@ The `Runner` trait is the seam for the CLIs. `SystemRunner` runs the binaries fr
 - `plugins.rs`: plugin commands and the runner seam.
 - `plan.rs`: actions, diffs, backups, apply.
 - `models.rs`: catalogs and `--bump`.
+- `exec.rs`: process seam, `shell_quote`, `check_ref`.
+- `manifest.rs`, `skills.rs`: skills manifest and commands.
+- `fleet.rs`: fleet file and commands.
 - `tui.rs`: review screen.

@@ -37,8 +37,15 @@ Restart Claude Code and Codex sessions after the first install.
 | `ai-stack init [--force]` | Write the default config to `~/.config/ai-stack/config.toml`. Refuses to overwrite unless `--force`. |
 | `ai-stack diff [--clean]` | Print the install plan with unified diffs and the plugin commands it would run. Exit 0 when nothing would change, 1 when changes or conflicts are pending. It runs only the read-only `plugin marketplace list --json` and `plugin list --json` queries. `--clean` adds the clean actions (see [Clean](#clean)). |
 | `ai-stack install [--yes] [--force] [--plain] [--clean]` | Build the plan, review it in the TUI (or print it with `--plain`), then apply. `--yes` applies without review. `--force` replaces an unmanaged `pstack-models.md`, after backing it up. `--clean` also removes skills and plugins outside the keep lists. Conflicts are printed and never applied. |
-| `ai-stack update [--yes] [--plain] [--bump-models]` | Run `git pull --ff-only` in the stack checkout, check models, then install. If the pull changed files under `cli/`, it prints a note to rebuild with `cargo install --path <stack>/cli`; it never rebuilds itself. |
+| `ai-stack update [--yes] [--plain] [--bump-models] [--branch B]` | Run `git pull --ff-only <remote> <branch>` in the stack checkout, check models, then install. `--branch` pulls that branch instead of `stack.branch` for this run only; the config is not changed. If the pull changed files under `cli/`, it prints a note to rebuild with `cargo install --path <stack>/cli`; it never rebuilds itself. |
 | `ai-stack models [--bump]` | Report each configured model as `current`, `newer: <id>`, `missing` or `unknown: <reason>`. `--bump` rewrites config IDs to the newest model in the same family. |
+| `ai-stack skills add <SOURCE> <PATH> [--ref REF] [--dest DIR] [--move NAME] [--process-script PATH \| --process-prompt TEXT] [--name NAME]` | Vendor the skill directory `PATH` from the git repo `SOURCE` into the stack and add it to the [manifest](#skills-manifest). Refuses when the manifest already installs that name in that `dest`, or the directory exists. |
+| `ai-stack skills status` | Print `name  installed-name  <commit>  current \| behind: <latest> \| unknown: <reason>` per entry. Exit 0 when every entry is current, 1 otherwise. A network error is `unknown`. |
+| `ai-stack skills update [NAME...] [--ref REF] [--reprocess] [--force]` | Rebuild the named entries (default all) whose upstream ref moved. `--ref` retargets the named entries to another upstream branch or tag and records it. `--reprocess` rebuilds from the pinned commit even when upstream has not moved. Refuses to replace a skill directory with uncommitted changes unless `--force`. One failure does not stop the rest; exit 1 if any failed. |
+| `ai-stack fleet init [--force]` | Write a commented `fleet.toml` beside the config file. |
+| `ai-stack fleet status` | Print `machine  <branch>  <commit>  current \| behind \| different \| detached \| unreachable: <reason>`, comparing each machine's stack commit with the remote tip of its own branch. Exit 0 when all are current. |
+| `ai-stack fleet update [--yes] [--branch B]` | Run `<bin> update --yes --plain --branch <B>` on every enabled machine, `B` being `--branch` or that machine's current branch. Without `--yes`, print the commands and exit 1. |
+| `ai-stack fleet switch <BRANCH> [MACHINE...] [--yes]` | On the named machines (default all enabled): fetch `BRANCH`, check it out (creating a tracking branch when needed), then update with `--branch BRANCH`. Without `--yes`, print the commands and exit 1. |
 
 Global flags, valid on every command:
 
@@ -59,6 +66,7 @@ Exit codes: 0 for success, 1 for pending changes that were not applied, conflict
 - `[leads]`, `[review]`: one `"alias@effort"` route per harness. The lead is described in the routing block; install does not change either CLI's default model. The review model is named in the routing block and used by jm-games' `art-iteration` critic.
 - `[sheet.claude]`, `[sheet.codex]`: the 15 jm:stack model-sheet rows for that harness. Each lane is a provider-qualified descriptor `<provider>:<model>@<effort>` from the jm-stack provider-dispatch reference, or `inherit-parent` / `auto`. The loader accepts providers `claude` (models `opus`, `haiku`, `fable`) and `codex` (models `gpt-6.1-sol`, `gpt-6-luna`), efforts `low` to `max`, and `ultra` for `gpt-6.1-sol` only. The four panel rows (`arena runners`, `arena cross-judge pool`, `architect runners`, `interrogate reviewers`) accept arrays. The Why and Reflect rows must be `inherit-parent` or `auto`, because those roles need the parent's MCP servers.
 
+- `[skills]`: `prompt_runner`, the argv that runs a `type = "prompt"` process step, with the prompt appended as the last argument. Default `["claude", "-p", "--permission-mode", "acceptEdits"]`. A config without `[skills]` gets the default.
 - `[clean]`: what `--clean` keeps. `skill_roots` (default `~/.claude/skills`, `~/.codex/skills`, `~/.agents/skills`, resolved against `--home`), `keep_skills` (globs over entry names) and `keep_plugins` (globs over `name@marketplace`; the defaults keep `jm-*@jm`, `github@claude-plugins-official`, `chrome-devtools-mcp@claude-plugins-official` and Codex's built-in `*@openai-*`). Globs use `*` and `?`. A config without `[clean]`, or without one of its keys, gets the defaults that `init` writes.
 
 A config from an older ai-stack (with `[roles]`, `[stack.models]` or `[install]`) is rejected with a message to run `ai-stack init --force` and re-apply your edits.
@@ -91,6 +99,50 @@ Other skills, agents, links and files are left alone unless `--clean` is on.
 
 In the review screen, `c` toggles clean and re-plans. The clean actions appear in their own `Clean (N)` section, and the footer shows `c clean: on` or `off`. `--plain` prints the same section, and `--yes` applies the plan with clean as the flag set it. After `install --clean`, `diff --clean` reports `No changes.`
 
+## Skills manifest
+
+`<stack>/manifest.toml` records every skill the stack vendors from an external git repo. It is checked into the stack repo, so `git pull` (and `ai-stack update`) carries it to every machine. Only `ai-stack skills` writes it.
+
+```toml
+[[skill]]
+name = "grill-with-docs"                 # upstream skill directory name
+source = "https://github.com/mattpocock/skills"
+path = "skills/grill-with-docs"          # skill directory inside the source repo
+ref = "main"                             # upstream branch or tag tracked (default "HEAD")
+commit = "<40-hex>"                      # upstream commit installed
+dest = "plugins/jm-tools/skills"         # parent directory in the stack (this is the default)
+move = "grill-docs"                      # optional installed name; also rewrites SKILL.md's `name:`
+process = [
+  { type = "script", input = "scripts/strip-emdashes.sh" },
+  { type = "prompt", input = "Rewrite in a terse style." },
+]
+```
+
+- `ref` is what `status` and `update` compare against. To try another upstream branch, run `ai-stack skills update --ref <branch> <name>`; it rebuilds from that branch and records the new `ref`. A 40-hex `ref` pins a commit.
+- `process` is one table or an array; steps run in order every time the skill is pulled in or rebuilt. A `script` step runs `sh <script> <staged skill dir>` in that directory; a relative script path resolves against the stack root. A `prompt` step runs `[skills] prompt_runner` with the prompt as its last argument in the staged directory, without a shell. Both run arbitrary code or agents by design; review what you add.
+- The pipeline: fetch the commit into a temp repo (`git init`, `git fetch --depth 1 <source> <commit>`, `git checkout FETCH_HEAD -- <path>`; never kept), copy the skill into a staging directory beside the target, apply `move`, run the steps, then swap the staging directory in by rename. A failing step leaves the installed skill untouched.
+- The loader rejects a `name`, `move`, `path` or `dest` that is absolute or has `.` or `..` components, so a manifest cannot write outside the stack, and two entries that install the same directory.
+- Typical flow: run `skills update` on one machine, review and commit the result with the manifest, push, then `ai-stack fleet update`.
+
+## Fleet
+
+`fleet.toml` beside the config file (default `~/.config/ai-stack/fleet.toml`) names the machines updates are pushed to. It is per owner and not in the repo.
+
+```toml
+[machine.cachy]
+ssh = "cachy"            # ssh destination; or omit it and set local = true
+stack = "~/Documents/Projects/@joshmeads/ai-stack"   # optional; default: this machine's stack.path as written
+bin = "ai-stack"         # optional
+enabled = true           # optional
+```
+
+Each machine sets exactly one of `ssh` or `local = true`. Remote commands run as `ssh -o BatchMode=yes <dest> -- <one shell-quoted command line>`, with a leading `~/` left unquoted so it expands on that machine. A non-interactive ssh shell may not have `~/.cargo/bin` on `PATH`; set `bin` to a full path then.
+
+- `status` reads each machine's branch and commit (`git -C <stack> rev-parse HEAD --abbrev-ref HEAD`), looks up each distinct branch's tip once with `git ls-remote <remote> refs/heads/<branch>` from this machine, and reports `current`, `behind` (the commit is an ancestor of the tip in this machine's checkout), `different` (anything else, including a commit this machine does not have), `detached` or `unreachable`.
+- `update` keeps every machine on its own branch, so a machine sitting on a test branch updates that branch. A machine on a detached HEAD is skipped and reported.
+- `switch` never forces. It refuses a checkout with uncommitted tracked changes, runs `git fetch <remote> <BRANCH>`, then `git checkout <BRANCH>`, falling back to `git checkout -b <BRANCH> --track <remote>/<BRANCH>`, then `<bin> update --yes --plain --branch <BRANCH>`.
+- Branch names are checked before use (no leading `-`, whitespace, control characters, `..` or other characters git refuses). A failing machine is reported with its stderr and the next one still runs. There is no timeout and no retry. `fleet update` does not run `skills update`.
+
 ## Safety
 
 - Apply re-reads every target before making any change. If a file changed since review, apply refuses the whole plan.
@@ -105,9 +157,14 @@ In the review screen, `c` toggles clean and re-plans. The clean actions appear i
 cli/
   Cargo.toml
   config.default.toml  reference config written by `ai-stack init`
+  fleet.default.toml   fleet template written by `ai-stack fleet init`
   src/
     main.rs     commands, git pull, model reports
     config.rs   config schema, validation, sheet descriptor rules
+    exec.rs     process seam for git, ssh, scripts and prompt runners; shell quoting
+    manifest.rs skills manifest schema and validation
+    skills.rs   skills add, status, update and the install pipeline
+    fleet.rs    fleet file, status, update and switch
     render.rs   model sheet and routing block text
     blocks.rs   marker-bounded blocks in instruction files
     install.rs  the per-harness plan: sheet, blocks, leftovers
