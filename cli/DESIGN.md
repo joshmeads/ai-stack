@@ -1,11 +1,12 @@
 # ai-stack CLI design
 
-The CLI turns one config into a per-harness setup of the `jm` plugin marketplace. The plugins carry the skills, agents and hooks; the CLI writes only what differs per user and per harness (the model sheet and the routing block), installs the plugins, and cleans up after older installs. It has one install mode: edit in place, idempotently, with `--force` for an unmanaged model sheet.
+The CLI turns one config into a per-harness setup of the `jm` plugin marketplace. The plugins carry the skills, agents and hooks; the CLI writes only what differs per user and per harness (the model sheet, the routing block and the owner's global instructions), installs the plugins, and cleans up after older installs. It has one install mode: edit in place, idempotently, with `--force` for an unmanaged model sheet.
 
 ## Commands
 
 - `init [--force]`: write `config.default.toml` to the config path.
 - `diff [--clean]`: build the plan and print it. Exit 0 when empty, 1 otherwise. Runs only the read-only plugin `list --json` queries.
+- `stray [--json]`: build the plan with `clean: true` and report only its clean lines (`Plan::stray`, via `Plan::is_clean`): skill-root entries as home-relative paths and plugin ids. Same read-only queries as `diff`; exit 0.
 - `install [--yes] [--force] [--plain] [--clean]`: plan, review (TUI, or plain text plus a y/N prompt), apply. The TUI's `c` toggles clean and re-plans.
 - `update [--yes] [--plain] [--bump-models] [--branch B]`: `git pull --ff-only <remote> <branch>` in the stack (`--branch` overrides `stack.branch` for the run), print the rebuild note when `cli/` changed, report models, optionally bump, then install.
 - `models [--bump]`: compare model IDs with the provider catalogs (`codex debug models`; the Anthropic Models API or docs page) and optionally rewrite newer IDs in place.
@@ -26,7 +27,7 @@ The CLI turns one config into a per-harness setup of the `jm` plugin marketplace
 `install::plan(cfg, opts, runner)` returns a `Plan` of file actions (`Write`, `Remove`, `Unlink`, `ReplaceWithFile`, `MoveToBackup`), plugin `commands`, `conflicts` and `warnings`. For each enabled harness:
 
 1. **Sheet.** `<home>/pstack-models.md` from `render::sheet`. First line `render::MANAGED_MD`; setup-stack's managed-sheet check matches its `<!-- Managed by ai-stack` prefix. Absent or managed: write if changed. A symlink into the stack or a legacy root: replace. Anything else: conflict, or replace with `--force`.
-2. **Instruction file.** Resolve a symlink to its target (write-through). Validate markers. Remove `open-pstack:local` and every `ai-stack:*` block except `routing` and `pstack-models`. Claude: remove other `@` lines that resolve to this sheet. Upsert `routing` (`render::routing`). Claude: upsert `pstack-models` with `@<abs sheet path>`. Codex: upsert the `pstack:models` mirror with the exact sheet bytes.
+2. **Instruction file** (`Harness::instruction_file`). Resolve a symlink to its target (write-through). Validate markers. Remove `open-pstack:local` and every `ai-stack:*` block except `instructions`, `routing`, `pstack-models` and Claude's `anthropic-guidance`. Claude: remove other `@` lines that resolve to this sheet. Upsert `instructions` from `<stack>/instructions/common.md` and `<stack>/instructions/<Harness::instructions_stem>.md` (each trimmed, blank or absent skipped, joined by a blank line), or remove it when both are absent; a source containing an `<!-- ai-stack:`, `<!-- pstack:` or `<!-- open-pstack:` marker is a conflict naming the file. The text is always inlined, never `@`-imported, so every harness gets the same mechanism. Upsert `routing` (`render::routing`). Claude: upsert `pstack-models` with `@<abs sheet path>`. Codex: upsert the `pstack:models` mirror with the exact sheet bytes.
 3. **Claude settings.json.** Write-through as above. Unparsable JSON is a conflict and the file is untouched. Remove hook commands that exactly match the old forms (`bash <root>/plugins/pstack/hooks/session-start`, optionally quoted and followed by `| sed 's/pstack://g'`; `python3 <root>/scripts/task-context.py`, optionally quoted) for the stack or a legacy root. A group loses only those commands; a group or event list emptied by the removal is dropped. Written only when something was removed.
 4. **Leftovers.** In `skills/` and `agents/`, unlink symlinks resolving into the stack or a legacy root, and remove role agent files carrying the managed marker.
 5. **Plugins** (`plugins::plan`, after all harnesses' file actions). Check that the stack's harness manifest (`.claude-plugin/marketplace.json` or `.agents/plugins/marketplace.json`) names `jm` and lists the three plugins; otherwise conflict. When the harness home does not exist yet, plan every command. Otherwise query `plugin marketplace list --json`: absent means add the marketplace and install every plugin; another source is a conflict; the stack means query `plugin list --json` and install each missing plugin, plus, for Codex, each whose installed version differs from the checkout's `.codex-plugin/plugin.json`. A missing CLI is a conflict; a failed query is a warning and plans every command (both CLIs treat repeats as no-ops). `CLAUDE_CONFIG_DIR` / `CODEX_HOME` is set on a command only when the harness home differs from what the CLI would use.
@@ -47,9 +48,19 @@ The `Runner` trait is the seam for the CLIs. `SystemRunner` runs the binaries fr
 
 ## Fleet
 
-`fleet.rs` loads enabled machines (exactly one of `ssh` / `local = true`) and builds each command as words, where path words keep a leading `~/` unquoted for the remote shell and everything else goes through `exec::shell_quote`. `status` caches one `ls-remote` per distinct branch and checks ancestry with `git merge-base --is-ancestor` in the local checkout. `update` resolves each machine's branch unless `--branch` is given and skips a detached HEAD. `switch` runs a dirty check, fetch, checkout with a tracking-branch fallback, then update, per machine. Without `--yes`, `update` and `switch` print and run nothing.
+`fleet.rs` loads enabled machines (exactly one of `ssh` / `local = true`) and builds each command as words, where path words keep a leading `~/` unquoted for the remote shell and everything else goes through `exec::shell_quote`. `status` caches one `ls-remote` per distinct branch and checks ancestry with `git merge-base --is-ancestor` in the local checkout; for each reachable machine it also runs `<bin> stray --json` through the same path and prints its counts, or `unavailable (<reason>)` when that fails or does not parse, without affecting the exit code. `update` resolves each machine's branch unless `--branch` is given and skips a detached HEAD. `switch` runs a dirty check, fetch, checkout with a tracking-branch fallback, then update, per machine. Without `--yes`, `update` and `switch` print and run nothing.
 
 All git, ssh, script and prompt invocations go through `exec::Exec` (`SystemExec`, stdin closed); fleet tests use `exec::fake::FakeExec`, skills tests use real `git` on local repos.
+
+## Adding a harness
+
+Cursor and OpenCode are not handled. Adding a harness needs:
+
+- a `Harness` variant in `config.rs` with `as_str`, `name`, `instruction_file` and `instructions_stem` arms (the compiler finds every other `match`);
+- `[harness.<name>]`, `[leads]`, `[review]` and `[sheet.<name>]` entries (`HarnessSection`, `PerHarness`, `config.default.toml`) and its model-sheet wording in `render.rs`;
+- plugin CLI wiring in `plugins.rs`: the marketplace manifest path, the install, list and remove commands and their JSON shapes, the home env var, and the fake runner.
+
+OpenCode reads `~/.config/opencode/AGENTS.md`, so it can reuse the block writer with that home and file name. Cursor keeps global rules as `.mdc` files with frontmatter in a rules directory, so it needs a file writer for whole managed files rather than a block in a markdown file.
 
 ## Safety guarantees
 
@@ -69,7 +80,7 @@ All git, ssh, script and prompt invocations go through `exec::Exec` (`SystemExec
 - `config.rs`: schema, validation, descriptor rules.
 - `render.rs`: sheet and routing text.
 - `blocks.rs`: marker-bounded blocks.
-- `install.rs`: the per-harness plan.
+- `install.rs`: the per-harness plan, including the instructions block.
 - `plugins.rs`: plugin commands and the runner seam.
 - `plan.rs`: actions, diffs, backups, apply.
 - `models.rs`: catalogs and `--bump`.

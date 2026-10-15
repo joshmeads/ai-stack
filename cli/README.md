@@ -5,7 +5,8 @@
 1. adds the stack checkout as the local `jm` plugin marketplace and installs `jm-stack`, `jm-games` and `jm-tools` through the harness's own CLI;
 2. writes the jm:stack model sheet `<home>/pstack-models.md` and wires it into `CLAUDE.md` (an `@` import) or `AGENTS.md` (a mirror of the sheet);
 3. writes one `ai-stack:routing` block into `CLAUDE.md` or `AGENTS.md`;
-4. removes what older ai-stack installs left behind.
+4. writes your own global instructions from `<stack>/instructions/` into the same file (see [Global instructions](#global-instructions));
+5. removes what older ai-stack installs left behind.
 
 It shows the plan before changing anything, backs up every file or link it replaces or removes, and is idempotent: a second run reports `No changes.` Cursor is not handled.
 
@@ -36,6 +37,7 @@ Restart Claude Code and Codex sessions after the first install.
 | --- | --- |
 | `ai-stack init [--force]` | Write the default config to `~/.config/ai-stack/config.toml`. Refuses to overwrite unless `--force`. |
 | `ai-stack diff [--clean]` | Print the install plan with unified diffs and the plugin commands it would run. Exit 0 when nothing would change, 1 when changes or conflicts are pending. It runs only the read-only `plugin marketplace list --json` and `plugin list --json` queries. `--clean` adds the clean actions (see [Clean](#clean)). |
+| `ai-stack stray [--json]` | Report what `--clean` alone would affect: `skills: N  plugins: M`, then each skill-root entry (as a `~/` path) and plugin id, indented. `--json` prints `{"skills":N,"plugins":M,"skill_names":[...],"plugin_ids":[...]}` on one line. Runs only the same read-only queries as `diff`; never writes. Exit 0. |
 | `ai-stack install [--yes] [--force] [--plain] [--clean]` | Build the plan, review it in the TUI (or print it with `--plain`), then apply. `--yes` applies without review. `--force` replaces an unmanaged `pstack-models.md`, after backing it up. `--clean` also removes skills and plugins outside the keep lists. Conflicts are printed and never applied. |
 | `ai-stack update [--yes] [--plain] [--bump-models] [--branch B]` | Run `git pull --ff-only <remote> <branch>` in the stack checkout, check models, then install. `--branch` pulls that branch instead of `stack.branch` for this run only; the config is not changed. If the pull changed files under `cli/`, it prints a note to rebuild with `cargo install --path <stack>/cli`; it never rebuilds itself. |
 | `ai-stack models [--bump]` | Report each configured model as `current`, `newer: <id>`, `missing` or `unknown: <reason>`. `--bump` rewrites config IDs to the newest model in the same family. |
@@ -43,7 +45,7 @@ Restart Claude Code and Codex sessions after the first install.
 | `ai-stack skills status` | Print `name  installed-name  <commit>  current \| behind: <latest> \| unknown: <reason>` per entry. Exit 0 when every entry is current, 1 otherwise. A network error is `unknown`. |
 | `ai-stack skills update [NAME...] [--ref REF] [--reprocess] [--force]` | Rebuild the named entries (default all) whose upstream ref moved. `--ref` retargets the named entries to another upstream branch or tag and records it. `--reprocess` rebuilds from the pinned commit even when upstream has not moved. Refuses to replace a skill directory with uncommitted changes unless `--force`. One failure does not stop the rest; exit 1 if any failed. |
 | `ai-stack fleet init [--force]` | Write a commented `fleet.toml` beside the config file. |
-| `ai-stack fleet status` | Print `machine  <branch>  <commit>  current \| behind \| different \| detached \| unreachable: <reason>`, comparing each machine's stack commit with the remote tip of its own branch. Exit 0 when all are current. |
+| `ai-stack fleet status` | Print `machine  <branch>  <commit>  current \| behind \| different \| detached \| unreachable: <reason>`, comparing each machine's stack commit with the remote tip of its own branch, then, for each reachable machine, `  stray: N skills, M plugins` from `<bin> stray --json` on that machine, or `  stray: unavailable (<reason>)` when it fails (for example an older ai-stack there). Exit 0 when all are current; the stray line never changes it. |
 | `ai-stack fleet update [--yes] [--branch B]` | Run `<bin> update --yes --plain --branch <B>` on every enabled machine, `B` being `--branch` or that machine's current branch. Without `--yes`, print the commands and exit 1. |
 | `ai-stack fleet switch <BRANCH> [MACHINE...] [--yes]` | On the named machines (default all enabled): fetch `BRANCH`, check it out (creating a tracking branch when needed), then update with `--branch BRANCH`. Without `--yes`, print the commands and exit 1. |
 
@@ -78,16 +80,26 @@ Per enabled harness, with `<home>` the harness home:
 - **Model sheet.** `<home>/pstack-models.md`, whose first line is `<!-- Managed by ai-stack. ... -->`. setup-stack treats a sheet with that first line as installer-owned. An existing sheet without it (for example one setup-stack wrote) is a conflict unless `--force`.
 - **Instruction file** (`CLAUDE.md` or `AGENTS.md`). Your text outside the managed blocks stays. Install writes:
   - `ai-stack:routing`: the lead, that jm:stack delegates through the sheet, when to run a major review with `interrogate` (after a design is settled and before a pull request or, without one, before calling a non-trivial change done; never for questions, assessments or trivial edits), each model's context cap, that a cross-provider lane may need approval and is reported as single-provider if refused, and the review model for `art-iteration`.
+  - `ai-stack:instructions`: your global instructions (see [Global instructions](#global-instructions)).
   - Claude: `ai-stack:pstack-models` holding `@<absolute path to pstack-models.md>`. Other `@` lines that import the same sheet are removed so the import appears once.
   - Codex: the exact sheet bytes between `<!-- pstack:models:begin -->` and `<!-- pstack:models:end -->`.
 - **Plugins.** `claude plugin marketplace add <stack>` and `claude plugin install <name>@jm`, or `codex plugin marketplace add <stack>` and `codex plugin add <name>@jm`, for `jm-stack`, `jm-games` and `jm-tools`. A step is skipped when the CLI's `list --json` output shows it done: the `jm` marketplace already points at the stack checkout, and the plugin is installed (for Codex, at the version the checkout declares, because Codex installs a copy). A `jm` marketplace from another source is a conflict. When the harness home is not the CLI's default, the command sets `CLAUDE_CONFIG_DIR` or `CODEX_HOME`. Commands run after every file change, because the CLIs edit `settings.json` and `config.toml` themselves.
 - **Leftovers of older installs.**
   - Symlinks in `<home>/skills` and `<home>/agents` that point into the stack or a legacy root.
   - Role agent files older ai-stack builds wrote (`agents/*.md` containing the managed marker, `agents/*.toml` starting with it).
-  - Every `ai-stack:<name>` block other than `routing` and `pstack-models`, and the `open-pstack:local` block.
+  - Every `ai-stack:<name>` block other than `instructions`, `routing`, `pstack-models` and Claude's `anthropic-guidance`, and the `open-pstack:local` block.
   - In Claude's `settings.json`, hook commands that run `<root>/plugins/pstack/hooks/session-start` with bash or `<root>/scripts/task-context.py` with python3, for the stack or a legacy root. Other commands in the same group stay. A malformed `settings.json` is reported as a conflict and never rewritten.
 
 Other skills, agents, links and files are left alone unless `--clean` is on.
+
+## Global instructions
+
+Your own global instructions live in the stack repo, so `git pull` and install carry them to every machine:
+
+- `<stack>/instructions/common.md`: every harness.
+- `<stack>/instructions/claude.md`, `<stack>/instructions/codex.md`: one harness each.
+
+Install writes one `ai-stack:instructions` block into `CLAUDE.md` and `AGENTS.md`: `common.md`, a blank line, then the harness's own file, each trimmed; a missing or blank file is skipped. The text is inlined, never `@`-imported. Editing a source changes only that block on the next install; when neither file exists for a harness, the block is removed. Text outside the managed blocks is never modified. A source containing `<!-- ai-stack:`, `<!-- pstack:` or `<!-- open-pstack:` is a conflict, because it would corrupt the file. There is no separate command: `diff`, `install`, `update` and `fleet update` pick it up.
 
 ## Clean
 
@@ -154,6 +166,7 @@ Each machine sets exactly one of `ssh` or `local = true`. Remote commands run as
 ## Layout
 
 ```
+instructions/          global instructions sources (common.md, claude.md, codex.md)
 cli/
   Cargo.toml
   config.default.toml  reference config written by `ai-stack init`
@@ -167,7 +180,7 @@ cli/
     fleet.rs    fleet file, status, update and switch
     render.rs   model sheet and routing block text
     blocks.rs   marker-bounded blocks in instruction files
-    install.rs  the per-harness plan: sheet, blocks, leftovers
+    install.rs  the per-harness plan: sheet, blocks (including instructions), leftovers
     plugins.rs  marketplace and plugin commands, runner seam
     plan.rs     actions, diffs, backups, atomic apply
     models.rs   provider catalogs and --bump
