@@ -1,5 +1,6 @@
 mod blocks;
 mod config;
+mod exec;
 mod install;
 mod models;
 mod paths;
