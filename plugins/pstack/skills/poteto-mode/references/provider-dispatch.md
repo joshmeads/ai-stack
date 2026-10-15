@@ -10,7 +10,7 @@ pstack model choices are provider-qualified descriptors:
 
 The generated [model catalog](model-catalog.md) holds the model facts: the model matrix, kept predecessors and rolling aliases, the route table, provider notes, and role defaults. Match a descriptor's `(provider, model)` there.
 
-The allowed effort universe is exactly `low`, `medium`, `high`, `xhigh`, `max`, `ultra`, and `default`, which passes no effort flag. A row offers `default` only when its Selectable efforts cell lists it. A row offers `ultra` only when its CLI's model entry lists that effort; for Codex, that is the model's entry in `codex`'s model list. First-run requested efforts are the Default effort cell of each row.
+The allowed effort universe is exactly `low`, `medium`, `high`, `xhigh`, `max`, `ultra`, and `default`, which passes no effort flag. A row offers `default` only when its Selectable efforts cell lists it. A row offers `ultra` only when its CLI's model entry lists that effort; for Codex, that is the model's entry in `codex`'s model list. First-run requested efforts are the Default effort cell of each row. Per spawn, the parent may move a role's effort to another effort that the row lists, under poteto-mode's Match the model to the job rule. A child never changes its assigned effort.
 
 A rolling alias, such as `opus`, names a family whose CLI resolves it to the latest available family revision. A runner receipt keeps the requested alias in `model` and the concrete provider-reported revision in `reportedModel`; verification accepts only a revision of the matching family, as the catalog's rolling-alias table gives it.
 
@@ -22,7 +22,7 @@ Match each configured descriptor before choosing a route, in this order: an exac
 
 This read-time rule makes an older installed sheet use the latest family revision immediately without writing user files. Once per parent run, report that the persisted sheet is stale and that `/setup-pstack` will rewrite it after its normal probes and confirmation. Unknown versioned Claude models remain invalid. The external runner rejects a missed rolling-alias version pin instead of silently executing it.
 
-A kept predecessor in the catalog matches its family. Dispatch it unchanged, with the sheet's model and effort, until `/setup-pstack` replaces it. Do not rewrite it in memory.
+A kept predecessor in the catalog matches its family. Dispatch it with the sheet's model until `/setup-pstack` replaces it, and with the sheet's effort or a per-spawn effort that its row lists. Do not rewrite its model in memory.
 
 ## The parent owns the route
 

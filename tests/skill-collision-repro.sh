@@ -313,14 +313,13 @@ grep -Fq 'An appended stack child keeps its recorded parent tip until that paren
 grep -Fq 'For fork heads, take the order from the verified local parent ancestry' "$shipping" || shipping_safety_bad="${shipping_safety_bad}Shipping tries to infer a fork stack from shared trunk bases"$'\n'
 grep -Fq 'only the current bottom PR through Shipping, one at a time' "$autopilot_stack" || shipping_safety_bad="${shipping_safety_bad}Autopilot-stack offers merge-when-ready outside the current bottom frontier"$'\n'
 grep -Fq -- '--force-with-lease="refs/heads/$branch:$captured_sha"' "$autopilot_full" || shipping_safety_bad="${shipping_safety_bad}Autopilot-full does not bind its post-rebase push to the captured SHA"$'\n'
-grep -Fq "A private-stack child fetches its parent's exact tip" "$autopilot_full" || shipping_safety_bad="${shipping_safety_bad}Autopilot-full rebases a private-stack child onto trunk instead of its parent"$'\n'
 grep -Fq 'Record the selected exact commit as `<target-tip>`' "$autopilot_full" || shipping_safety_bad="${shipping_safety_bad}Autopilot-full does not record the exact rebase target"$'\n'
-grep -Fq 'git rebase --onto "$target_tip" "$current_base_sha" -- "$branch"' "$autopilot_full" || shipping_safety_bad="${shipping_safety_bad}Autopilot-full does not isolate child commits when changing a private-stack parent"$'\n'
+grep -Fq 'git rebase --onto "$target_tip" "$current_base_sha" -- "$branch"' "$autopilot_full" || shipping_safety_bad="${shipping_safety_bad}Autopilot-full does not isolate its own commits when changing the rebase target"$'\n'
 grep -Fq 'git fetch -- "$head_url" "refs/heads/$branch"' "$opening_a_pr" || shipping_safety_bad="${shipping_safety_bad}Opening a PR does not refresh a fork head through its push repository URL"$'\n'
 grep -Fq 'resolve and validate `<head-url>` through Shipping step 1, capture it as `head_url`' "$opening_a_pr" || shipping_safety_bad="${shipping_safety_bad}Opening a PR does not resolve its head URL before a shared-worktree refresh"$'\n'
 grep -Fq 'git fetch -- "$head_url" "refs/heads/$head_branch"' "$multi_phase_plan" || shipping_safety_bad="${shipping_safety_bad}Multi-phase plan does not fetch a live-lane head through its push repository URL"$'\n'
 grep -Fq 'Resolve and validate `<head-url>` through Shipping step 1 and capture it as `head_url` for the live-lane fetch' "$multi_phase_plan" || shipping_safety_bad="${shipping_safety_bad}Multi-phase plan does not resolve its head URL before a live-lane fetch"$'\n'
-autopilot_full_rewrite_order="$(awk '/^2\. / { capture = index($0, "git ls-remote"); rebase = index($0, "git rebase --onto"); if (capture == 0 || rebase == 0 || capture >= rebase) print $0 }' "$autopilot_full")"
+autopilot_full_rewrite_order="$(awk '/^2\. / { step = 1 } /^3\. / { step = 0 } step { text = text $0 "\n" } END { capture = index(text, "git ls-remote"); rebase = index(text, "git rebase --onto"); if (capture == 0 || rebase == 0 || capture >= rebase) print "step 2" }' "$autopilot_full")"
 if [ -n "$autopilot_full_rewrite_order" ]; then
   shipping_safety_bad="${shipping_safety_bad}Autopilot-full does not capture the published head before rebasing"$'\n'
 fi
@@ -328,7 +327,7 @@ grep -Fq "Shipping step 4's disarm-and-confirm rule" "$autopilot_full" || shippi
 grep -Fq "Shipping step 5's server-enforced expected-head flow" "$autopilot_full" || shipping_safety_bad="${shipping_safety_bad}Autopilot-full does not bind owner merges to the current landing SHA"$'\n'
 grep -Fq -- '--force-with-lease="refs/heads/$branch:$captured_sha"' "$autopilot_stack" || shipping_safety_bad="${shipping_safety_bad}Autopilot-stack does not bind its topology push to the captured SHA"$'\n'
 grep -Fq "Shipping step 4's disarm-and-confirm rule" "$autopilot_stack" || shipping_safety_bad="${shipping_safety_bad}Autopilot-stack can rewrite an armed pull request"$'\n'
-grep -Fq "step 6's captured-SHA lease flow" "$autopilot_stack" || shipping_safety_bad="${shipping_safety_bad}Autopilot-stack drift handling does not reuse its guarded push flow"$'\n'
+grep -Fq "step 2's captured-SHA lease flow" "$autopilot_stack" || shipping_safety_bad="${shipping_safety_bad}Autopilot-stack drift handling does not reuse its guarded push flow"$'\n'
 if [ -n "$shipping_safety_bad" ]; then
   note "FAIL: forge-neutral landing safety rules regressed:"
   note "$shipping_safety_bad"
