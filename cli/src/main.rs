@@ -142,6 +142,8 @@ enum AuthCommand {
 
 #[derive(Subcommand)]
 enum FleetCommand {
+    /// Log in to an AI CLI on one fleet machine through this terminal.
+    Login { machine: String, provider: String },
     /// Compare effective configuration with this machine.
     Drift {
         #[arg(long, value_name = "KEY")]
@@ -513,13 +515,14 @@ fn cmd_fleet(ctx: &Context, command: FleetCommand) -> Result<i32> {
         home: &ctx.home,
         local_stack: &cfg.stack.path,
         remote: &cfg.stack.remote,
-        machines: fleet::load(&path, &cfg.stack.configured)?,
+        machines: fleet::load(&path, &cfg.stack.configured, matches!(command, FleetCommand::Login { .. }))?,
         self_bin: &self_bin,
         local_flags: &ctx.explicit_flags,
     };
     let mut out = io::stdout();
     match command {
         FleetCommand::Init { .. } => unreachable!("handled above"),
+        FleetCommand::Login { machine, provider } => fleet.login(&machine, &provider, io::stdin().is_terminal() && io::stdout().is_terminal(), auth::now(), &mut out),
         FleetCommand::Status => fleet.status(&mut out),
         FleetCommand::Drift { ignore, json } => fleet.drift(&ctx_flat(ctx)?, &ignore, json, &mut out),
         FleetCommand::Auth { json } => fleet.auth(json, auth::now(), &mut out),
@@ -610,6 +613,13 @@ fn bump_models(config_path: &Path, reports: &[ModelReport]) -> Result<usize> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn fleet_login_requires_machine_and_provider() {
+        assert!(matches!(Cli::try_parse_from(["ai-stack", "fleet", "login", "box", "codex"]).unwrap().command,
+            Commands::Fleet { command: FleetCommand::Login { machine, provider } } if machine == "box" && provider == "codex"));
+        assert!(Cli::try_parse_from(["ai-stack", "fleet", "login"]).is_err());
+    }
 
     #[test]
     fn update_refuses_a_checkout_on_another_branch_or_detached() {

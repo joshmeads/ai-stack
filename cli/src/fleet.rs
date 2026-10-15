@@ -48,6 +48,7 @@ fn default_true() -> bool {
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Machine {
+    pub enabled: bool,
     pub drift_ignore: Vec<String>,
     pub name: String,
     /// `None` runs on this machine.
@@ -64,6 +65,10 @@ pub fn default_text() -> &'static str {
 
 /// Enabled machines in name order. `default_stack` is this machine's `stack.path` as written.
 pub fn from_str(text: &str, default_stack: &str) -> Result<Vec<Machine>> {
+    parse(text, default_stack, false)
+}
+
+fn parse(text: &str, default_stack: &str, include_disabled: bool) -> Result<Vec<Machine>> {
     let file: FleetFile = toml::from_str(text)?;
     let mut machines = Vec::new();
     for (name, entry) in file.machine {
@@ -72,8 +77,9 @@ pub fn from_str(text: &str, default_stack: &str) -> Result<Vec<Machine>> {
             (None, true) => {}
             _ => bail!("[machine.{name}]: set exactly one of `ssh` or `local = true`"),
         }
-        if entry.enabled {
+        if entry.enabled || include_disabled {
             machines.push(Machine {
+                enabled: entry.enabled,
                 drift_ignore: file.drift.ignore.iter().cloned().chain(entry.drift_ignore).collect(),
                 name,
                 ssh: entry.ssh,
@@ -85,9 +91,9 @@ pub fn from_str(text: &str, default_stack: &str) -> Result<Vec<Machine>> {
     Ok(machines)
 }
 
-pub fn load(path: &Path, default_stack: &str) -> Result<Vec<Machine>> {
+pub fn load(path: &Path, default_stack: &str, include_disabled: bool) -> Result<Vec<Machine>> {
     let text = std::fs::read_to_string(path).map_err(|err| anyhow!("cannot read {}: {err}. Run `ai-stack fleet init`.", path.display()))?;
-    from_str(&text, default_stack).with_context(|| format!("invalid {}", path.display()))
+    (if include_disabled { parse(&text, default_stack, true) } else { from_str(&text, default_stack) }).with_context(|| format!("invalid {}", path.display()))
 }
 
 /// A command word: a path on the target machine (`~` expands there) or a plain argument.
@@ -275,20 +281,7 @@ impl Fleet<'_> {
         let mut reports = Vec::new();
         let mut healthy = true;
         for machine in &self.machines {
-            let words = self.ai_stack(machine, vec![Word::Arg("auth"), Word::Arg("status"), Word::Arg("--json")]);
-            let (program, args) = self.invocation(machine, &words);
-            let result = match self.exec.run(&program, &args, None) {
-                Err(_) => Err("unreachable: cannot run command".to_string()),
-                Ok(ran) if machine.ssh.is_some() && ran.code == Some(255) => Err("unreachable: ssh transport failed (exit 255)".to_string()),
-                Ok(ran) if !ran.ok => Err(format!("unavailable (status command failed, exit {})", ran.code.map_or("signal".into(), |n| n.to_string()))),
-                Ok(ran) => serde_json::from_str::<auth::Status>(ran.stdout.trim())
-                    .ok()
-                    .filter(|status| {
-                        let ids: std::collections::BTreeSet<_> = status.providers.iter().map(|p| p.provider.as_str()).collect();
-                        ids.len() == status.providers.len() && auth::PROVIDERS.iter().all(|provider| ids.contains(provider.id))
-                    })
-                    .ok_or_else(|| "unavailable (unexpected status output)".to_string()),
-            };
+            let result = self.auth_status(machine);
             let (providers, error) = match result {
                 Ok(status) => {
                     healthy &= status.providers.iter().all(|provider| provider.healthy(now));
@@ -307,6 +300,70 @@ impl Fleet<'_> {
         }
         if json { writeln!(out, "{}", serde_json::to_string(&serde_json::json!({ "machines": reports }))?)?; }
         Ok(if healthy { 0 } else { 1 })
+    }
+
+    fn auth_status(&self, machine: &Machine) -> Result<auth::Status, String> {
+        let words = self.ai_stack(machine, vec![Word::Arg("auth"), Word::Arg("status"), Word::Arg("--json")]);
+        let (program, args) = self.invocation(machine, &words);
+        match self.exec.run(&program, &args, None) {
+            Err(_) => Err("unreachable: cannot run command".to_string()),
+            Ok(ran) if machine.ssh.is_some() && ran.code == Some(255) => Err("unreachable: ssh transport failed (exit 255)".to_string()),
+            Ok(ran) if !ran.ok => Err(format!("unavailable (status command failed, exit {})", ran.code.map_or("signal".into(), |n| n.to_string()))),
+            Ok(ran) => serde_json::from_str::<auth::Status>(ran.stdout.trim())
+                .ok()
+                .filter(|status| {
+                    let ids: std::collections::BTreeSet<_> = status.providers.iter().map(|p| p.provider.as_str()).collect();
+                    ids.len() == status.providers.len() && auth::PROVIDERS.iter().all(|provider| ids.contains(provider.id))
+                })
+                .ok_or_else(|| "unavailable (unexpected status output)".to_string()),
+        }
+    }
+
+    pub fn login(&self, name: &str, id: &str, terminal: bool, now: i64, out: &mut dyn Write) -> Result<i32> {
+        let machine = self.machines.iter().find(|machine| machine.name == name).ok_or_else(|| anyhow!(
+            "unknown machine {name:?}; valid machines: {}", self.machines.iter().map(|m| m.name.as_str()).collect::<Vec<_>>().join(", ")
+        ))?;
+        let provider = auth::PROVIDERS.iter().find(|provider| provider.id == id).ok_or_else(|| anyhow!(
+            "unknown provider {id:?}; valid providers: {}", auth::PROVIDERS.iter().map(|p| p.id).collect::<Vec<_>>().join(", ")
+        ))?;
+        ensure!(terminal, "fleet login requires stdin and stdout to be terminals");
+        if !machine.enabled { writeln!(out, "warning: machine {} is disabled in fleet.toml", machine.name)?; }
+        let argv = match provider.login {
+            auth::Login::Supported(argv) => argv,
+            auth::Login::Unsupported(reason) => bail!("{}: headless login unsupported: {reason}", provider.name),
+        };
+        let before = match self.auth_status(machine) {
+            Ok(status) => status,
+            Err(reason) => { writeln!(out, "{}  {reason}", machine.name)?; return Ok(1); }
+        };
+        if before.providers.iter().any(|p| p.provider == id && p.state == auth::State::NotInstalled) {
+            writeln!(out, "{}  {} is not installed on PATH", machine.name, provider.binary)?;
+            return Ok(1);
+        }
+        let words = argv.iter().map(|arg| Word::Arg(arg)).collect::<Vec<_>>();
+        let (program, mut args) = self.invocation(machine, &words);
+        if machine.ssh.is_some() { args.insert(0, "-tt".into()); }
+        writeln!(out, "{}: {}", machine.name, command_line(&program, &args))?;
+        out.flush()?;
+        let code = match self.exec.interactive(&program, &args) {
+            Ok(code) => code,
+            Err(_) => { writeln!(out, "{}  unreachable: cannot run login command", machine.name)?; return Ok(1); }
+        };
+        if machine.ssh.is_some() && code == Some(255) {
+            writeln!(out, "{}  unreachable: ssh transport failed (exit 255)", machine.name)?;
+            return Ok(1);
+        }
+        if code != Some(0) {
+            writeln!(out, "{}  login failed, exit {}", machine.name, code.map_or("signal".into(), |n| n.to_string()))?;
+        }
+        match self.auth_status(machine) {
+            Ok(status) => {
+                let report = status.providers.iter().find(|p| p.provider == id).unwrap();
+                writeln!(out, "{}  {}", machine.name, report.text(now))?;
+                Ok(if code == Some(0) && matches!(report.state, auth::State::LoggedIn { .. }) { 0 } else { 1 })
+            }
+            Err(reason) => { writeln!(out, "{}  {reason}", machine.name)?; Ok(1) }
+        }
     }
 
     fn compare(&self, branch: &str, commit: &str, tips: &mut BTreeMap<String, Result<Option<String>, String>>) -> String {
@@ -620,7 +677,7 @@ drift_ignore = ["harness.*.home"]
             } else { status.to_string() };
             let exec = FakeExec::new(move |_| ok(&response));
             let mut f = fleet(&exec);
-            f.machines = vec![Machine { drift_ignore: vec![], name: "custom".into(), ssh: Some("host".into()), stack: "~/My Stack".into(), bin: Some("~/My Bin/ai's-stack".into()) }];
+            f.machines = vec![Machine { enabled: true, drift_ignore: vec![], name: "custom".into(), ssh: Some("host".into()), stack: "~/My Stack".into(), bin: Some("~/My Bin/ai's-stack".into()) }];
             let (code, text) = run(|out| f.auth(true, 100, out));
             assert_eq!(code, expected, "{status}");
             let value: serde_json::Value = serde_json::from_str(&text).unwrap();
@@ -636,6 +693,141 @@ drift_ignore = ["harness.*.home"]
         let (code, text) = run(|out| fleet(&exec).auth(false, 100, out));
         assert_eq!(code, 1);
         assert_eq!(text.matches("unavailable (unexpected status output)").count(), 3);
+    }
+
+    #[test]
+    fn login_passes_through_ssh_or_local_and_rechecks_status() {
+        let checks = std::cell::Cell::new(0);
+        let exec = FakeExec::new(move |line| {
+            if !line.contains("auth status") { return ok(""); }
+            let before_login = checks.get() % 2 == 0;
+            checks.set(checks.get() + 1);
+            ok(&auth_json(if before_login { r#"{"id":"codex","state":"logged_out"}"# }
+                else { r#"{"id":"codex","state":"logged_in","account":"owner@example.com","expires_at":2000000000}"# }))
+        });
+        let (code, text) = run(|out| fleet(&exec).login("box", "codex", true, 100, out));
+        assert_eq!(code, 0);
+        assert!(text.contains("box: ssh -tt -o BatchMode=yes me@box -- 'codex login --device-auth'"));
+        assert!(text.contains("logged in  owner@example.com  access token expires"));
+        assert_eq!(*exec.calls.borrow(), [
+            "ssh -o BatchMode=yes me@box -- 'ai-stack auth status --json'",
+            "ssh -tt -o BatchMode=yes me@box -- 'codex login --device-auth'",
+            "ssh -o BatchMode=yes me@box -- 'ai-stack auth status --json'",
+        ]);
+        assert_eq!(*exec.interactive_calls.borrow(), ["ssh -tt -o BatchMode=yes me@box -- 'codex login --device-auth'"]);
+
+        exec.calls.borrow_mut().clear();
+        exec.interactive_calls.borrow_mut().clear();
+        let flags = exec::strings(&["--home", "/custom home"]);
+        let mut f = fleet(&exec);
+        f.local_flags = &flags;
+        let (code, _) = run(|out| f.login("mac", "codex", true, 100, out));
+        assert_eq!(code, 0);
+        assert_eq!(*exec.calls.borrow(), [
+            "/bin/self --home '/custom home' auth status --json",
+            "codex login --device-auth",
+            "/bin/self --home '/custom home' auth status --json",
+        ]);
+        assert_eq!(*exec.interactive_calls.borrow(), ["codex login --device-auth"]);
+    }
+
+    #[test]
+    fn login_validates_names_terminal_and_headless_support_before_running() {
+        let exec = FakeExec::new(|_| panic!("must not run"));
+        let mut f = fleet(&exec);
+        f.machines = parse(FLEET, "~/default", true).unwrap();
+        for (machine, provider, expected) in [
+            ("nosuch", "codex", "valid machines: box, cachy, mac, off"),
+            ("box", "nosuchprovider", "valid providers: claude, codex, cursor, opencode"),
+        ] {
+            let err = f.login(machine, provider, true, 100, &mut Vec::new()).unwrap_err();
+            assert!(err.to_string().contains(expected), "{err}");
+        }
+        let err = f.login("box", "codex", false, 100, &mut Vec::new()).unwrap_err();
+        assert_eq!(err.to_string(), "fleet login requires stdin and stdout to be terminals");
+        let err = f.login("box", "claude", true, 100, &mut Vec::new()).unwrap_err();
+        assert!(err.to_string().contains("headless login unsupported"));
+        assert!(exec.calls.borrow().is_empty());
+    }
+
+    #[test]
+    fn login_disabled_machine_warns_and_custom_binary_is_quoted_for_status() {
+        let exec = FakeExec::new(|_| ok(&auth_json(r#"{"id":"cursor","state":"logged_in"}"#)));
+        let mut f = fleet(&exec);
+        f.machines = parse("[machine.off]\nssh = 'host'\nenabled = false\nbin = \"~/My Bin/ai's-stack\"", "~", true).unwrap();
+        let (code, text) = run(|out| f.login("off", "cursor", true, 100, out));
+        assert_eq!(code, 0);
+        assert!(text.starts_with("warning: machine off is disabled in fleet.toml\n"));
+        let status = command_line("ssh", &exec::strings(&["-o", "BatchMode=yes", "host", "--", "~/'My Bin/ai'\\''s-stack' auth status --json"]));
+        assert_eq!(*exec.calls.borrow(), [status.clone(), "ssh -tt -o BatchMode=yes host -- 'env NO_OPEN_BROWSER=1 cursor-agent login'".into(), status]);
+    }
+
+    #[test]
+    fn login_absent_provider_stops_before_interactive_run() {
+        let exec = FakeExec::new(|_| ok(&auth_json(r#"{"id":"codex","state":"not_installed"}"#)));
+        let (code, text) = run(|out| fleet(&exec).login("box", "codex", true, 100, out));
+        assert_eq!(code, 1);
+        assert!(text.contains("codex is not installed on PATH"));
+        assert_eq!(exec.calls.borrow().len(), 1);
+        assert!(exec.interactive_calls.borrow().is_empty());
+    }
+
+    #[test]
+    fn login_exit_requires_successful_process_and_logged_in_status() {
+        for (login_code, state, expected) in [
+            (Some(0), "logged_in", 0), (Some(0), "logged_out", 1),
+            (Some(1), "logged_in", 1), (None, "logged_in", 1),
+            (Some(255), "logged_in", 1),
+        ] {
+            let exec = FakeExec::new(move |line| {
+                if line.contains("auth status") { ok(&auth_json(&format!(r#"{{"id":"codex","state":"{state}"}}"#))) }
+                else { Ok(exec::Ran { ok: login_code == Some(0), code: login_code, stdout: String::new(), stderr: String::new() }) }
+            });
+            let (code, text) = run(|out| fleet(&exec).login("box", "codex", true, 100, out));
+            assert_eq!(code, expected, "{login_code:?}, {state}");
+            if login_code == Some(255) {
+                assert!(text.contains("unreachable: ssh transport failed (exit 255)"));
+                assert_eq!(exec.calls.borrow().len(), 2);
+            } else {
+                assert!(text.contains(if state == "logged_in" { "logged in" } else { "logged out" }));
+                assert_eq!(exec.calls.borrow().len(), 3);
+            }
+        }
+    }
+
+    #[test]
+    fn login_reports_status_failures_before_or_after_interactive_run() {
+        for fail_after_login in [false, true] {
+            for failure in ["transport", "exit", "malformed", "launch"] {
+                let calls = std::cell::Cell::new(0);
+                let exec = FakeExec::new(move |line| {
+                    if !line.contains("auth status") { return ok(""); }
+                    let call = calls.get();
+                    calls.set(call + 1);
+                    if !fail_after_login || call > 0 {
+                        match failure {
+                            "transport" => exit(255, "secret diagnostic"),
+                            "exit" => exit(2, "secret diagnostic"),
+                            "malformed" => ok("secret diagnostic"),
+                            _ => Err(std::io::Error::other("secret diagnostic")),
+                        }
+                    } else { ok(&auth_json(r#"{"id":"codex","state":"logged_out"}"#)) }
+                });
+                let (code, text) = run(|out| fleet(&exec).login("box", "codex", true, 100, out));
+                assert_eq!(code, 1);
+                assert!(text.contains(if matches!(failure, "transport" | "launch") { "unreachable" } else { "unavailable" }));
+                assert!(!text.contains("secret diagnostic"));
+                assert_eq!(exec.interactive_calls.borrow().len(), usize::from(fail_after_login));
+            }
+        }
+        let exec = FakeExec::new(|line| {
+            if line.contains("auth status") { ok(&auth_json(r#"{"id":"codex","state":"logged_out"}"#)) }
+            else { Err(std::io::Error::other("secret diagnostic")) }
+        });
+        let (code, text) = run(|out| fleet(&exec).login("box", "codex", true, 100, out));
+        assert_eq!(code, 1);
+        assert!(text.contains("unreachable: cannot run login command"));
+        assert!(!text.contains("secret diagnostic"));
     }
 
     #[test]
