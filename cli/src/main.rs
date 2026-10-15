@@ -1,6 +1,7 @@
 mod auth;
 mod blocks;
 mod config;
+mod drift;
 mod exec;
 mod fleet;
 mod install;
@@ -44,6 +45,11 @@ struct Cli {
 
 #[derive(Subcommand)]
 enum Commands {
+    /// Print this machine's effective configuration.
+    Config {
+        #[command(subcommand)]
+        command: ConfigCommand,
+    },
     /// Report local AI CLI login status.
     Auth {
         #[command(subcommand)]
@@ -118,6 +124,14 @@ enum Commands {
 }
 
 #[derive(Subcommand)]
+enum ConfigCommand {
+    Show {
+        #[arg(long)]
+        json: bool,
+    },
+}
+
+#[derive(Subcommand)]
 enum AuthCommand {
     /// Check installed AI CLIs without logging in or out.
     Status {
@@ -128,6 +142,13 @@ enum AuthCommand {
 
 #[derive(Subcommand)]
 enum FleetCommand {
+    /// Compare effective configuration with this machine.
+    Drift {
+        #[arg(long, value_name = "KEY")]
+        ignore: Vec<String>,
+        #[arg(long)]
+        json: bool,
+    },
     /// Report AI CLI login status on every enabled machine.
     Auth {
         #[arg(long)]
@@ -233,6 +254,10 @@ fn main() -> Result<()> {
             auth::write_status(&status, json, auth::now(), &mut io::stdout())?;
             0
         },
+        Commands::Config { command: ConfigCommand::Show { json } } => {
+            write_config(ctx_flat(&ctx)?, json, &mut io::stdout())?;
+            0
+        },
         Commands::Init { force } => cmd_init(&ctx, force)?,
         Commands::Diff { clean } => cmd_diff(&ctx, clean)?,
         Commands::Stray { json } => cmd_stray(&ctx, json)?,
@@ -275,6 +300,19 @@ fn load_config(ctx: &Context) -> Result<Config> {
         cfg.stack.legacy_paths.push(configured);
     }
     Ok(cfg)
+}
+
+fn ctx_flat(ctx: &Context) -> Result<drift::Flat> {
+    config::flat(&fs::read_to_string(&ctx.config_path).with_context(|| format!("cannot read config {}", ctx.config_path.display()))?, &ctx.home)
+}
+
+fn write_config(flat: drift::Flat, json: bool, out: &mut dyn Write) -> Result<()> {
+    if json {
+        writeln!(out, "{}", serde_json::to_string(&flat)?)?;
+    } else {
+        for (key, value) in flat { writeln!(out, "{key} = {}", drift::value(Some(&value)))?; }
+    }
+    Ok(())
 }
 
 fn cmd_init(ctx: &Context, force: bool) -> Result<i32> {
@@ -483,6 +521,7 @@ fn cmd_fleet(ctx: &Context, command: FleetCommand) -> Result<i32> {
     match command {
         FleetCommand::Init { .. } => unreachable!("handled above"),
         FleetCommand::Status => fleet.status(&mut out),
+        FleetCommand::Drift { ignore, json } => fleet.drift(&ctx_flat(ctx)?, &ignore, json, &mut out),
         FleetCommand::Auth { json } => fleet.auth(json, auth::now(), &mut out),
         FleetCommand::Update { yes, branch } => fleet.update(branch.as_deref(), yes, &mut out),
         FleetCommand::Switch { branch, machines, yes } => fleet.switch(&branch, &machines, yes, &mut out),
@@ -601,5 +640,35 @@ mod tests {
         let err = init_at(&path, text, false).unwrap_err();
         assert!(err.to_string().contains("--force"), "{err}");
         init_at(&path, text, true).unwrap();
+    }
+}
+
+#[cfg(test)]
+mod config_show_tests {
+    use super::*;
+
+    #[test]
+    fn config_show_json_is_sorted_and_fills_omitted_defaults() {
+        let fixture = tempfile::tempdir().unwrap();
+        let path = fixture.path().join("config.toml");
+        let text = config::default_config_text();
+        fs::write(&path, text).unwrap();
+        let ctx = Context { home: fixture.path().into(), config_path: path.clone(), stack_override: Some("/override".into()), explicit_flags: vec![] };
+        let expected = ctx_flat(&ctx).unwrap();
+        fs::write(&path, &text[..text.find("[clean]").unwrap()]).unwrap();
+        assert_eq!(ctx_flat(&ctx).unwrap(), expected);
+        assert_eq!(expected["harness.codex.home"], "~/.codex");
+        assert_eq!(expected["stack.path"], "~/Documents/Projects/@joshmeads/ai-stack");
+        assert!(expected["sheet.claude.arena runners"].is_array());
+        assert!(!expected.contains_key("home"));
+        let disabled = config::flat(&text.replace("enabled = true", "enabled = false"), fixture.path()).unwrap();
+        assert_eq!(disabled["harness.codex.enabled"], false);
+        assert_eq!(disabled["harness.codex.home"], "~/.codex");
+        let mut out = Vec::new();
+        write_config(expected.clone(), true, &mut out).unwrap();
+        let parsed: serde_json::Value = serde_json::from_slice(&out).unwrap();
+        assert_eq!(parsed.as_object().unwrap().keys().collect::<Vec<_>>(), expected.keys().collect::<Vec<_>>());
+        assert!(matches!(Cli::try_parse_from(["ai-stack", "config", "show", "--json"]).unwrap().command, Commands::Config { command: ConfigCommand::Show { json: true } }));
+        assert!(matches!(Cli::try_parse_from(["ai-stack", "fleet", "drift", "--ignore", "stack.*", "--ignore", "harness.*"]).unwrap().command, Commands::Fleet { command: FleetCommand::Drift { ignore, .. } } if ignore.len() == 2));
     }
 }
