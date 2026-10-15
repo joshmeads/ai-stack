@@ -367,6 +367,7 @@ mod tests {
         Config {
             stack: Stack {
                 path: PathBuf::from("/h/stack"),
+                configured: "/h/stack".into(),
                 remote: "origin".into(),
                 branch: "main".into(),
                 legacy_paths: Vec::new(),
