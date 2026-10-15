@@ -15,7 +15,6 @@ mod tui;
 use std::fs;
 use std::io::{self, IsTerminal, Write};
 use std::path::{Path, PathBuf};
-use std::process::Command as Process;
 
 use anyhow::{Context as _, Result, anyhow, bail};
 use clap::{Parser, Subcommand};
@@ -353,7 +352,7 @@ fn cmd_update(ctx: &Context, yes: bool, plain: bool, bump: bool, branch: Option<
         exec::check_branch(&branch)?;
         stack.branch = branch;
     }
-    if git_pull(&stack)? {
+    if git_pull(&exec::SystemExec, &stack)? {
         println!(
             "note: this pull changed files under cli/. The installed ai-stack binary is not rebuilt automatically; rebuild it with `cargo install --path {}`.",
             cfg.stack.path.join("cli").display()
@@ -371,51 +370,42 @@ fn cmd_update(ctx: &Context, yes: bool, plain: bool, bump: bool, branch: Option<
     install_flow(ctx, &cfg, Options::default(), yes, plain, &reports)
 }
 
-/// Fast-forwards the stack checkout from its configured remote and branch.
-/// Returns whether the pull changed any file under `cli/`.
-fn git_pull(stack: &Stack) -> Result<bool> {
-    let before = git_head(stack)?;
-    let output = Process::new("git")
-        .arg("-C")
-        .arg(&stack.path)
-        .args(["pull", "--ff-only"])
-        .arg(&stack.remote)
-        .arg(&stack.branch)
-        .output()
-        .with_context(|| format!("cannot run git in {}", stack.path.display()))?;
-    if !output.status.success() {
-        bail!(
-            "git pull --ff-only {} {} failed in {}: {}",
-            stack.remote,
-            stack.branch,
+/// Fast-forwards the stack checkout from its configured remote and branch, refusing when the
+/// checkout is on another branch. Returns whether the pull changed any file under `cli/`.
+fn git_pull(exec: &dyn exec::Exec, stack: &Stack) -> Result<bool> {
+    let current = exec.run("git", &git_args(stack, &["symbolic-ref", "-q", "--short", "HEAD"]), None).map_err(|err| anyhow!("cannot run git: {err}"))?;
+    let current = current.ok.then(|| current.stdout.trim().to_string()).filter(|branch| !branch.is_empty());
+    match current {
+        None => bail!(
+            "{} is on a detached HEAD, not {}; run `git switch {}` there first",
             stack.path.display(),
-            String::from_utf8_lossy(&output.stderr).trim()
-        );
+            stack.branch,
+            stack.branch
+        ),
+        Some(current) if current != stack.branch => bail!(
+            "{} is on branch {current}, not {}; run `ai-stack update --branch {current}` to update it, or `git switch {}` there first",
+            stack.path.display(),
+            stack.branch,
+            stack.branch
+        ),
+        Some(_) => {}
     }
-    print!("{}", String::from_utf8_lossy(&output.stdout));
-    let after = git_head(stack)?;
+    let before = git_head(exec, stack)?;
+    print!("{}", exec::check(exec, "git", &git_args(stack, &["pull", "--ff-only", &stack.remote, &stack.branch]), None)?);
+    let after = git_head(exec, stack)?;
     if before == after {
         return Ok(false);
     }
-    let diff = git(stack, &["diff", "--name-only", &before, &after, "--", "cli"])?;
+    let diff = exec::check(exec, "git", &git_args(stack, &["diff", "--name-only", &before, &after, "--", "cli"]), None)?;
     Ok(!diff.trim().is_empty())
 }
 
-fn git_head(stack: &Stack) -> Result<String> {
-    Ok(git(stack, &["rev-parse", "HEAD"])?.trim().to_string())
+fn git_head(exec: &dyn exec::Exec, stack: &Stack) -> Result<String> {
+    Ok(exec::check(exec, "git", &git_args(stack, &["rev-parse", "HEAD"]), None)?.trim().to_string())
 }
 
-fn git(stack: &Stack, args: &[&str]) -> Result<String> {
-    let output = Process::new("git")
-        .arg("-C")
-        .arg(&stack.path)
-        .args(args)
-        .output()
-        .with_context(|| format!("cannot run git in {}", stack.path.display()))?;
-    if !output.status.success() {
-        bail!("git {} failed in {}: {}", args.join(" "), stack.path.display(), String::from_utf8_lossy(&output.stderr).trim());
-    }
-    Ok(String::from_utf8_lossy(&output.stdout).into_owned())
+fn git_args(stack: &Stack, args: &[&str]) -> Vec<String> {
+    ["-C".to_string(), stack.path.to_string_lossy().into_owned()].into_iter().chain(args.iter().map(|arg| arg.to_string())).collect()
 }
 
 fn cmd_skills(ctx: &Context, command: SkillsCommand) -> Result<i32> {
@@ -543,6 +533,23 @@ fn bump_models(config_path: &Path, reports: &[ModelReport]) -> Result<usize> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn update_refuses_a_checkout_on_another_branch_or_detached() {
+        use crate::exec::fake::{FakeExec, fail, ok};
+        let stack = Stack { path: "/s".into(), configured: "/s".into(), remote: "origin".into(), branch: "main".into(), legacy_paths: Vec::new() };
+        let exec = FakeExec::new(|line| if line.contains("symbolic-ref") { ok("test\n") } else { ok("") });
+        let err = format!("{:#}", git_pull(&exec, &stack).unwrap_err());
+        assert!(err.contains("on branch test, not main") && err.contains("ai-stack update --branch test") && err.contains("git switch main"), "{err}");
+        assert_eq!(*exec.calls.borrow(), ["git -C /s symbolic-ref -q --short HEAD"]);
+
+        let exec = FakeExec::new(|_| fail(""));
+        assert!(format!("{:#}", git_pull(&exec, &stack).unwrap_err()).contains("detached HEAD"));
+
+        let exec = FakeExec::new(|line| if line.contains("symbolic-ref") { ok("main\n") } else { ok("abc\n") });
+        assert!(!git_pull(&exec, &stack).unwrap());
+        assert!(exec.calls.borrow().contains(&"git -C /s pull --ff-only origin main".to_string()));
+    }
 
     #[test]
     fn init_writes_default_config_and_refuses_overwrite() {
