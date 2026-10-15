@@ -4,6 +4,7 @@ The CLI turns one config into a per-harness setup of the `jm` plugin marketplace
 
 ## Commands
 
+- `config show [--json]`: print sorted, flattened effective config without writing.
 - `init [--force]`: write `config.default.toml` to the config path.
 - `diff [--clean]`: build the plan and print it. Exit 0 when empty, 1 otherwise. Runs only the read-only plugin `list --json` queries.
 - `stray [--json]`: build the plan with `clean: true` and report only its clean lines (`Plan::stray`, via `Plan::is_clean`): skill-root entries as home-relative paths and plugin ids. Same read-only queries as `diff`; exit 0.
@@ -12,7 +13,7 @@ The CLI turns one config into a per-harness setup of the `jm` plugin marketplace
 - `models [--bump]`: compare model IDs with the provider catalogs (`codex debug models`; the Anthropic Models API or docs page) and optionally rewrite newer IDs in place.
 - `skills add|status|update`: vendored skills in `<stack>/manifest.toml` (see Skills).
 - `auth status [--json]`: local AI CLI login status, without loading config (see Login status).
-- `fleet init|status|auth|update|switch`: machines in `<config dir>/fleet.toml` (see Fleet).
+- `fleet init|status|auth|drift|update|switch`: machines in `<config dir>/fleet.toml` (see Fleet).
 
 ## Config
 
@@ -22,6 +23,8 @@ The CLI turns one config into a per-harness setup of the `jm` plugin marketplace
 - `[leads]`, `[review]`: `"alias@effort"` per harness; effort required, and it must be in the model's `efforts` when set.
 - `[skills]`: `prompt_runner` argv, default `claude -p --permission-mode acceptEdits`; optional.
 - `[sheet.claude]`, `[sheet.codex]`: all 15 rows, lanes as descriptors. The accepted rows, panel rows, parent-only rows and the model matrix (provider, model, selectable efforts) live in constants at the top of `config.rs`, kept in step with `plugins/pstack/skills/poteto-mode/references/provider-dispatch.md`. Sheet descriptors are not tied to `[models]`: the sheet uses the plugin's spelling (Claude rolling aliases such as `opus`, Codex model slugs), while `[models]` holds exact IDs for the catalog check.
+
+`config::flat` validates with the normal loader, then serializes the parsed `ConfigFile` with serde defaults filled in and flattens its tables into `drift::Flat` (`BTreeMap<String, serde_json::Value>`). This uses the file schema because resolved `Config` expands paths and drops disabled harnesses. Paths stay exactly as written, including `~`; absent optional model fields stay absent. Only `config.toml` sections are flattened. This config contains no secrets. `--stack` is an execution override and does not alter the stored-config view.
 
 ## Plan
 
@@ -52,6 +55,8 @@ The `Runner` trait is the seam for the CLIs. `SystemRunner` runs the binaries fr
 `fleet.rs` loads enabled machines (exactly one of `ssh` / `local = true`) and builds each command as words, where path words keep a leading `~/` unquoted for the remote shell and everything else goes through `exec::shell_quote`. `status` requires a 40-hex commit line (otherwise `unreachable: unexpected output`), caches one `ls-remote` per distinct branch and checks ancestry both ways with `git merge-base --is-ancestor` in the local checkout (`behind`, `ahead`, `different`; exit 128, a missing object, is `unknown (fetch first)`); for each reachable machine it also runs `<bin> stray --json` through the same path and prints its counts, or `unavailable (<reason>)` when that fails or does not parse, without affecting the exit code. `update` resolves each machine's branch unless `--branch` is given, skips a detached HEAD, and runs `<bin> --stack <machine stack> update ...` so it pulls the checkout `status` reads. A local machine without `bin` runs `current_exe()` with the parent's explicit `--config` / `--home`. `switch` runs a dirty check, `fetch <remote> +refs/heads/<B>:refs/remotes/<remote>/<B>`, `switch <B>` with a `switch -c <B> --track` fallback, then update, per machine; an update failure after the switch says the machine is now on `<B>`. Without `--yes`, `update` and `switch` print and run nothing.
 
 All git, ssh, script and prompt invocations, including `update`'s pull, go through `exec::Exec` (`SystemExec`, stdin closed); fleet and pull tests use `exec::fake::FakeExec`, skills tests use real `git` on local repos. The harness plugin CLIs keep their own `plugins::Runner`, because each command carries per-harness env (`CLAUDE_CONFIG_DIR`, `CODEX_HOME`). Branch arguments go through `exec::check_branch` (a `check_ref` that also rejects `HEAD`, `refs/` and a leading `+`); skill refs through `check_ref`.
+
+`fleet drift [--ignore KEY]... [--json]` queries `<bin> config show --json` with `ai_stack` and `invocation`, preserving explicit local flags and local/SSH path quoting. As with status's stray query, no `--stack` is added: the comparison is between stored effective settings. `[drift] ignore` and each machine's `drift_ignore` are combined at fleet load, then merged with CLI patterns. `drift::drift` compares the union of sorted keys using the same `config::glob` matcher as clean keep lists; only differing ignored keys are counted. Missing sides serialize as null. Every enabled machine is reported; command failures or malformed flat JSON are unavailable, failed process launches or SSH exit 255 are unreachable. Exit 0 requires all reports in sync. JSON is keyed by machine name with state, keys and ignored count, or a failure reason. No timeout, retry or fallback is added.
 
 ## Login status
 
@@ -104,5 +109,6 @@ OpenCode reads `~/.config/opencode/AGENTS.md`, so it can reuse the block writer 
 - `exec.rs`: process seam, `shell_quote`, `check_ref`, `check_branch`, commit text helpers.
 - `manifest.rs`, `skills.rs`: skills manifest and commands.
 - `fleet.rs`: fleet file and commands.
+- `drift.rs`: flat config maps, pure key comparison and value rendering.
 - `auth.rs`: provider table, login-status domain and wire reports, parsers, expiry readers and rendering.
 - `tui.rs`: review screen.
