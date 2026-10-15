@@ -8,7 +8,7 @@ use std::path::Path;
 
 use anyhow::{Context as _, Result, anyhow, bail, ensure};
 
-use crate::exec::{self, Exec, strings};
+use crate::exec::{self, Exec, is_commit, one_line, short, strings};
 use crate::manifest::{self, Skill, Step, StepKind};
 
 pub struct Skills<'a> {
@@ -270,18 +270,6 @@ fn rename_frontmatter(path: &Path, name: &str) -> Result<()> {
     *line = format!("name: {name}{newline}");
     fs::write(path, lines.concat())?;
     Ok(())
-}
-
-fn is_commit(text: &str) -> bool {
-    text.len() == 40 && text.bytes().all(|b| b.is_ascii_hexdigit())
-}
-
-fn short(commit: &str) -> &str {
-    &commit[..commit.len().min(7)]
-}
-
-fn one_line(text: &str) -> String {
-    text.split_whitespace().collect::<Vec<_>>().join(" ")
 }
 
 #[cfg(test)]

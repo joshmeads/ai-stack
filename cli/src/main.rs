@@ -350,7 +350,7 @@ fn cmd_update(ctx: &Context, yes: bool, plain: bool, bump: bool, branch: Option<
     let mut cfg = load_config(ctx)?;
     let mut stack = cfg.stack.clone();
     if let Some(branch) = branch {
-        exec::check_ref(&branch)?;
+        exec::check_branch(&branch)?;
         stack.branch = branch;
     }
     if git_pull(&stack)? {
