@@ -27,6 +27,22 @@ impl Harness {
             Harness::Codex => "Codex",
         }
     }
+
+    /// The global instruction file in the harness home, which holds the managed blocks.
+    pub fn instruction_file(self) -> &'static str {
+        match self {
+            Harness::Claude => "CLAUDE.md",
+            Harness::Codex => "AGENTS.md",
+        }
+    }
+
+    /// The harness-specific instructions source: `<stack>/instructions/<stem>.md`.
+    pub fn instructions_stem(self) -> &'static str {
+        match self {
+            Harness::Claude => "claude",
+            Harness::Codex => "codex",
+        }
+    }
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]

@@ -64,6 +64,11 @@ pub fn validate(text: &str) -> Result<()> {
     Ok(())
 }
 
+/// The first ai-stack, pstack or open-pstack marker prefix in `text`, if any.
+pub fn find_marker(text: &str) -> Option<&'static str> {
+    [BLOCK_PREFIX, "<!-- pstack:", "<!-- open-pstack:"].into_iter().find(|prefix| text.contains(prefix))
+}
+
 /// Removes the `ai-stack:<name>` block and the blank line that separated it. No-op when absent.
 pub fn remove(text: &str, name: &str) -> Result<String> {
     remove_marked(text, &begin_marker(name), &end_marker(name))
