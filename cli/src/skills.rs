@@ -3,12 +3,16 @@
 
 use std::fs;
 use std::io::Write;
+use std::os::unix::fs::PermissionsExt as _;
 use std::path::{Path, PathBuf};
 
 use anyhow::{Context as _, Result, anyhow, bail, ensure};
 
 use crate::exec::{self, Exec, is_commit, one_line, short, strings};
 use crate::manifest::{self, Skill, Step, StepKind};
+
+/// Staging and aside directories, on the same filesystem as every target.
+pub const STAGE: &str = ".ai-stack/stage";
 
 pub struct Skills<'a> {
     pub exec: &'a dyn Exec,
@@ -36,6 +40,7 @@ pub struct Update<'n> {
 
 impl Skills<'_> {
     pub fn add(&self, add: Add, out: &mut dyn Write) -> Result<()> {
+        self.clear_stage(out)?;
         let name = match add.name {
             Some(name) => name,
             None => Path::new(&add.path)
@@ -74,6 +79,7 @@ impl Skills<'_> {
 
     /// Exit 0 when every entry is current, 1 otherwise.
     pub fn status(&self, out: &mut dyn Write) -> Result<i32> {
+        self.clear_stage(out)?;
         let manifest = manifest::load(self.stack)?;
         if manifest.skills.is_empty() {
             writeln!(out, "No skills in {}.", self.stack.join(manifest::FILE).display())?;
@@ -100,6 +106,7 @@ impl Skills<'_> {
     /// Rebuilds each selected entry whose upstream moved (all with `reprocess`). A failure is
     /// reported and the rest continue. Exit 1 when any failed.
     pub fn update(&self, update: Update, out: &mut dyn Write) -> Result<i32> {
+        self.clear_stage(out)?;
         let mut manifest = manifest::load(self.stack)?;
         if let Some(git_ref) = &update.git_ref {
             exec::check_ref(git_ref)?;
@@ -204,8 +211,11 @@ impl Skills<'_> {
         let target = self.stack.join(skill.target());
         let parent = target.parent().ok_or_else(|| anyhow!("{} has no parent", target.display()))?;
         fs::create_dir_all(parent).with_context(|| format!("cannot create {}", parent.display()))?;
+        let stage_root = self.stack.join(STAGE);
+        fs::create_dir_all(&stage_root).with_context(|| format!("cannot create {}", stage_root.display()))?;
         let installed = skill.installed_name();
-        let stage = tempfile::Builder::new().prefix(&format!(".{installed}.")).suffix(".ai-stack-stage").tempdir_in(parent)?;
+        let stage = tempfile::Builder::new().prefix(&format!("{installed}.new.")).tempdir_in(&stage_root)?;
+        fs::set_permissions(stage.path(), fs::Permissions::from_mode(0o755))?;
         copy_contents(&source, stage.path())?;
         if let Some(rename) = &skill.rename {
             rename_frontmatter(&stage.path().join("SKILL.md"), rename)?;
@@ -215,17 +225,37 @@ impl Skills<'_> {
         }
 
         if fs::symlink_metadata(&target).is_err() {
-            fs::rename(stage.keep(), &target).with_context(|| format!("cannot move the staged skill to {}", target.display()))?;
+            fs::rename(stage.path(), &target).with_context(|| format!("cannot move the staged skill to {}", target.display()))?;
+            let _ = stage.keep();
             return Ok(());
         }
         // Renaming a directory onto an empty one replaces it, so the old tree gets a reserved name.
-        let old = tempfile::Builder::new().prefix(&format!(".{installed}.")).suffix(".ai-stack-old").tempdir_in(parent)?;
+        let old = tempfile::Builder::new().prefix(&format!("{installed}.old.")).tempdir_in(&stage_root)?;
         fs::rename(&target, old.path()).with_context(|| format!("cannot move {} aside", target.display()))?;
-        let staged = stage.keep();
-        if let Err(err) = fs::rename(&staged, &target) {
-            let _ = fs::rename(old.path(), &target);
-            let _ = fs::remove_dir_all(&staged);
+        if let Err(err) = fs::rename(stage.path(), &target) {
+            if let Err(restore) = fs::rename(old.path(), &target) {
+                let kept = old.keep();
+                bail!(
+                    "cannot move the staged skill to {}: {err}; restoring the previous skill also failed: {restore}. It is at {}; move it back before running another `ai-stack skills` command",
+                    target.display(),
+                    kept.display()
+                );
+            }
             return Err(err).with_context(|| format!("cannot move the staged skill to {}", target.display()));
+        }
+        let _ = stage.keep();
+        Ok(())
+    }
+
+    /// Removes what an interrupted run left in the staging area.
+    fn clear_stage(&self, out: &mut dyn Write) -> Result<()> {
+        let stage_root = self.stack.join(STAGE);
+        let Ok(entries) = fs::read_dir(&stage_root) else { return Ok(()) };
+        for entry in entries {
+            let path = entry?.path();
+            let removed = if fs::symlink_metadata(&path)?.is_dir() { fs::remove_dir_all(&path) } else { fs::remove_file(&path) };
+            removed.with_context(|| format!("cannot remove {}", path.display()))?;
+            writeln!(out, "removed stale {}", path.display())?;
         }
         Ok(())
     }
@@ -477,5 +507,13 @@ mod tests {
         assert_eq!(fx.installed(), before);
         let leftovers: Vec<_> = fs::read_dir(fx.stack.join("plugins/jm-tools/skills")).unwrap().map(|e| e.unwrap().file_name()).collect();
         assert_eq!(leftovers, ["grill-docs"]);
+        let stage = fx.stack.join(STAGE);
+        assert_eq!(fs::read_dir(&stage).unwrap().count(), 0);
+
+        fs::create_dir_all(stage.join("grill-docs.old.x/refs")).unwrap();
+        let mut out = Vec::new();
+        fx.skills().status(&mut out).unwrap();
+        assert!(String::from_utf8(out).unwrap().starts_with("removed stale "));
+        assert_eq!(fs::read_dir(&stage).unwrap().count(), 0);
     }
 }

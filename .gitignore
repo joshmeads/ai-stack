@@ -13,3 +13,6 @@
 plugins/pstack/skills/poteto-mode/scripts/node_modules/
 
 # Non-shipped repository verification helper dependencies
+
+# ai-stack skills staging
+.ai-stack/
