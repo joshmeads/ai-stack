@@ -9,6 +9,8 @@ use anyhow::{Result, anyhow};
 
 pub struct Ran {
     pub ok: bool,
+    /// `None` when a signal ended the process.
+    pub code: Option<i32>,
     pub stdout: String,
     pub stderr: String,
 }
@@ -30,6 +32,7 @@ impl Exec for SystemExec {
         let output = command.output()?;
         Ok(Ran {
             ok: output.status.success(),
+            code: output.status.code(),
             stdout: String::from_utf8_lossy(&output.stdout).into_owned(),
             stderr: String::from_utf8_lossy(&output.stderr).into_owned(),
         })
@@ -69,6 +72,27 @@ pub fn check_ref(name: &str) -> Result<()> {
     Ok(())
 }
 
+/// A branch name for `update`, `fleet update` and `fleet switch`: a valid ref that is a plain
+/// branch, not `HEAD`, a full `refs/` name or a `+`-prefixed refspec.
+pub fn check_branch(name: &str) -> Result<()> {
+    check_ref(name)?;
+    anyhow::ensure!(name != "HEAD" && !name.starts_with("refs/") && !name.starts_with('+'), "{name:?} is not a plain branch name");
+    Ok(())
+}
+
+pub fn is_commit(text: &str) -> bool {
+    text.len() == 40 && text.bytes().all(|b| b.is_ascii_hexdigit())
+}
+
+/// The first 7 characters.
+pub fn short(text: &str) -> &str {
+    text.char_indices().nth(7).map_or(text, |(end, _)| &text[..end])
+}
+
+pub fn one_line(text: &str) -> String {
+    text.split_whitespace().collect::<Vec<_>>().join(" ")
+}
+
 /// Quotes `arg` for a POSIX shell, leaving plainly safe words bare.
 pub fn shell_quote(arg: &str) -> String {
     if !arg.is_empty() && arg.chars().all(|c| c.is_ascii_alphanumeric() || "/._-@:+=,".contains(c)) {
@@ -100,11 +124,15 @@ pub mod fake {
     }
 
     pub fn ok(stdout: &str) -> io::Result<Ran> {
-        Ok(Ran { ok: true, stdout: stdout.to_string(), stderr: String::new() })
+        Ok(Ran { ok: true, code: Some(0), stdout: stdout.to_string(), stderr: String::new() })
     }
 
     pub fn fail(stderr: &str) -> io::Result<Ran> {
-        Ok(Ran { ok: false, stdout: String::new(), stderr: stderr.to_string() })
+        exit(1, stderr)
+    }
+
+    pub fn exit(code: i32, stderr: &str) -> io::Result<Ran> {
+        Ok(Ran { ok: code == 0, code: Some(code), stdout: String::new(), stderr: stderr.to_string() })
     }
 
     impl Exec for FakeExec {
@@ -141,5 +169,10 @@ mod tests {
         for bad in ["", "-x", "--upload-pack=sh", "a..b", "a b", "a\tb", "a\u{7}", "x~1", "a:b"] {
             assert!(check_ref(bad).is_err(), "{bad:?}");
         }
+        assert!(check_branch("feature/x-1").is_ok());
+        for bad in ["HEAD", "refs/heads/main", "+main", "-main", "a b", "a..b", "a\u{1}"] {
+            assert!(check_branch(bad).is_err(), "{bad:?}");
+        }
+        assert_eq!((short("0123456789"), short("\u{e9}\u{e9}\u{e9}\u{e9}\u{e9}\u{e9}\u{e9}\u{e9}"), short("ab")), ("0123456", "\u{e9}\u{e9}\u{e9}\u{e9}\u{e9}\u{e9}\u{e9}", "ab"));
     }
 }

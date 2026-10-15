@@ -8,7 +8,7 @@ use std::path::Path;
 use anyhow::{Context as _, Result, anyhow, bail, ensure};
 use serde::Deserialize;
 
-use crate::exec::{self, Exec, command_line, shell_quote};
+use crate::exec::{self, Exec, command_line, one_line, shell_quote, short};
 
 #[derive(Deserialize)]
 #[serde(deny_unknown_fields)]
@@ -148,7 +148,7 @@ impl Fleet<'_> {
                 }
             };
             current &= state == "current";
-            writeln!(out, "{}  {branch}  {}  {state}", machine.name, &commit[..commit.len().min(7)])?;
+            writeln!(out, "{}  {branch}  {}  {state}", machine.name, short(&commit))?;
             if reachable {
                 writeln!(out, "  stray: {}", self.stray(machine))?;
             }
@@ -205,7 +205,7 @@ impl Fleet<'_> {
     /// machine's current branch. Without `yes`, prints the commands and runs nothing.
     pub fn update(&self, branch: Option<&str>, yes: bool, out: &mut dyn Write) -> Result<i32> {
         if let Some(branch) = branch {
-            exec::check_ref(branch)?;
+            exec::check_branch(branch)?;
         }
         if !yes {
             for machine in &self.machines {
@@ -250,7 +250,7 @@ impl Fleet<'_> {
     /// Fetches `branch`, checks it out (creating a tracking branch when needed) and updates, on
     /// the named machines or all. Never forces: a dirty tree or failed checkout fails that machine.
     pub fn switch(&self, branch: &str, names: &[String], yes: bool, out: &mut dyn Write) -> Result<i32> {
-        exec::check_ref(branch)?;
+        exec::check_branch(branch)?;
         let machines: Vec<&Machine> = if names.is_empty() {
             self.machines.iter().collect()
         } else {
@@ -311,10 +311,6 @@ fn remote_path(path: &str) -> String {
 
 fn indent(text: &str) -> String {
     text.lines().map(|line| format!("  {line}\n")).collect()
-}
-
-fn one_line(text: &str) -> String {
-    text.split_whitespace().collect::<Vec<_>>().join(" ")
 }
 
 #[cfg(test)]

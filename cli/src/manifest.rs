@@ -93,7 +93,7 @@ impl Manifest {
             inside(&skill.dest).with_context(|| format!("{what}: dest"))?;
             crate::exec::check_ref(&skill.git_ref).with_context(|| format!("{what}: ref"))?;
             ensure!(!skill.source.trim().is_empty() && !skill.source.starts_with('-'), "{what}: invalid source {:?}", skill.source);
-            ensure!(skill.commit.len() == 40 && skill.commit.bytes().all(|b| b.is_ascii_hexdigit()), "{what}: commit {:?} is not a 40-hex commit", skill.commit);
+            ensure!(crate::exec::is_commit(&skill.commit), "{what}: commit {:?} is not a 40-hex commit", skill.commit);
             let key = crate::paths::normalize(&skill.target());
             ensure!(seen.insert(key.clone()), "{what}: another entry also installs {}", key.display());
         }
