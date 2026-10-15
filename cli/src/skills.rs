@@ -3,8 +3,7 @@
 
 use std::fs;
 use std::io::Write;
-use std::os::unix::fs::symlink;
-use std::path::Path;
+use std::path::{Path, PathBuf};
 
 use anyhow::{Context as _, Result, anyhow, bail, ensure};
 
@@ -192,8 +191,15 @@ impl Skills<'_> {
         ] {
             exec::check(self.exec, "git", &strings(&args), Some(repo))?;
         }
+        for part in Path::new(&skill.path).ancestors().filter(|part| !part.as_os_str().is_empty()) {
+            let meta = fs::symlink_metadata(repo.join(part));
+            ensure!(!meta.is_ok_and(|meta| meta.file_type().is_symlink()), "{} is a symlink in {} at {}; refusing to install it", part.display(), skill.source, short(&skill.commit));
+        }
         let source = repo.join(&skill.path);
         ensure!(source.is_dir(), "{} has no directory {} at {}", skill.source, skill.path, short(&skill.commit));
+        if let Some(link) = find_symlink(&source)? {
+            bail!("{} contains the symlink {} at {}; refusing to install it", skill.source, link.strip_prefix(repo).unwrap_or(&link).display(), short(&skill.commit));
+        }
 
         let target = self.stack.join(skill.target());
         let parent = target.parent().ok_or_else(|| anyhow!("{} has no parent", target.display()))?;
@@ -241,14 +247,38 @@ impl Skills<'_> {
     }
 }
 
+/// The first symlink under `dir`, skipping `.git`.
+fn find_symlink(dir: &Path) -> Result<Option<PathBuf>> {
+    for entry in fs::read_dir(dir)? {
+        let entry = entry?;
+        if entry.file_name() == ".git" {
+            continue;
+        }
+        let kind = entry.file_type()?;
+        if kind.is_symlink() {
+            return Ok(Some(entry.path()));
+        }
+        if kind.is_dir() {
+            if let Some(link) = find_symlink(&entry.path())? {
+                return Ok(Some(link));
+            }
+        }
+    }
+    Ok(None)
+}
+
+/// Copies regular files and directories, never `.git`. Symlinks were refused before this runs.
 fn copy_contents(from: &Path, to: &Path) -> Result<()> {
     for entry in fs::read_dir(from)? {
         let entry = entry?;
+        if entry.file_name() == ".git" {
+            continue;
+        }
         let (src, dest) = (entry.path(), to.join(entry.file_name()));
-        let meta = fs::symlink_metadata(&src)?;
-        if meta.file_type().is_symlink() {
-            symlink(fs::read_link(&src)?, &dest)?;
-        } else if meta.is_dir() {
+        let kind = entry.file_type()?;
+        if kind.is_symlink() {
+            bail!("refusing to copy the symlink {}", src.display());
+        } else if kind.is_dir() {
             fs::create_dir(&dest)?;
             copy_contents(&src, &dest)?;
         } else {
@@ -260,7 +290,9 @@ fn copy_contents(from: &Path, to: &Path) -> Result<()> {
 
 /// Rewrites the `name:` line of the leading `---` frontmatter block.
 fn rename_frontmatter(path: &Path, name: &str) -> Result<()> {
-    let text = fs::read_to_string(path).with_context(|| format!("move needs {}", path.display()))?;
+    let meta = fs::symlink_metadata(path).with_context(|| format!("move needs {}", path.display()))?;
+    ensure!(meta.is_file(), "{} is not a regular file", path.display());
+    let text = fs::read_to_string(path)?;
     let mut lines: Vec<String> = text.split_inclusive('\n').map(str::to_string).collect();
     ensure!(lines.first().is_some_and(|line| line.trim_end() == "---"), "{} has no frontmatter", path.display());
     let end = lines.iter().skip(1).position(|line| line.trim_end() == "---").map(|i| i + 1);
@@ -389,6 +421,36 @@ mod tests {
         assert_eq!(code, 0, "{out}");
         assert!(fx.installed().contains("Body - v2"), "{}", fx.installed());
         assert_eq!(manifest::load(&fx.stack).unwrap().skills[0].commit, v2);
+    }
+
+    #[test]
+    fn symlinks_from_upstream_are_refused_and_nothing_is_written() {
+        let fx = Fixture::new();
+        let outside = fx._dir.path().join("outside");
+        fs::create_dir_all(&outside).unwrap();
+        fs::write(outside.join("SKILL.md"), "---\nname: outside\n---\n").unwrap();
+        std::os::unix::fs::symlink(&outside, fx.upstream.join("skills/linked")).unwrap();
+        fs::create_dir_all(fx.upstream.join("skills/inner")).unwrap();
+        std::os::unix::fs::symlink(outside.join("SKILL.md"), fx.upstream.join("skills/inner/SKILL.md")).unwrap();
+        commit_all(&fx.upstream, "links");
+
+        for (path, link) in [("skills/linked", "skills/linked is a symlink"), ("skills/inner", "contains the symlink skills/inner/SKILL.md")] {
+            let add = Add {
+                source: format!("file://{}", fx.upstream.display()),
+                path: path.into(),
+                git_ref: "main".into(),
+                dest: manifest::DEFAULT_DEST.into(),
+                rename: Some("renamed".into()),
+                process: Vec::new(),
+                name: None,
+            };
+            let err = format!("{:#}", fx.skills().add(add, &mut Vec::new()).unwrap_err());
+            assert!(err.contains(link), "{err}");
+            assert!(!fx.stack.join("plugins/jm-tools/skills/renamed").exists());
+        }
+        assert_eq!(fs::read_to_string(outside.join("SKILL.md")).unwrap(), "---\nname: outside\n---\n");
+        assert_eq!(fs::read_dir(&outside).unwrap().count(), 1);
+        assert!(manifest::load(&fx.stack).unwrap().skills.is_empty());
     }
 
     #[test]
