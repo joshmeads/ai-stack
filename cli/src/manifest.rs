@@ -82,20 +82,32 @@ impl Skill {
 
 impl Manifest {
     pub fn validate(&self) -> Result<()> {
-        let mut seen = BTreeSet::new();
+        let (mut targets, mut names) = (BTreeSet::new(), BTreeSet::new());
         for skill in &self.skills {
             let what = format!("[[skill]] {:?}", skill.name);
-            single_component(&skill.name).with_context(|| format!("{what}: name"))?;
+            plain_name(&skill.name).with_context(|| format!("{what}: name"))?;
             if let Some(rename) = &skill.rename {
-                single_component(rename).with_context(|| format!("{what}: move"))?;
+                plain_name(rename).with_context(|| format!("{what}: move"))?;
             }
-            inside(&skill.path).with_context(|| format!("{what}: path"))?;
+            if skill.path != "." {
+                inside(&skill.path).with_context(|| format!("{what}: path"))?;
+            }
             inside(&skill.dest).with_context(|| format!("{what}: dest"))?;
+            ensure!(!Path::new(&skill.dest).components().any(|part| part.as_os_str() == ".git"), "{what}: dest {:?} must not be inside a .git directory", skill.dest);
             crate::exec::check_ref(&skill.git_ref).with_context(|| format!("{what}: ref"))?;
             ensure!(!skill.source.trim().is_empty() && !skill.source.starts_with('-'), "{what}: invalid source {:?}", skill.source);
             ensure!(crate::exec::is_commit(&skill.commit), "{what}: commit {:?} is not a 40-hex commit", skill.commit);
+            for step in &skill.process {
+                match step.kind {
+                    StepKind::Script => inside(&step.input).with_context(|| format!("{what}: process script, relative to the stack root"))?,
+                    StepKind::Prompt => ensure!(!step.input.starts_with('-'), "{what}: a process prompt must not start with `-`, or the runner reads it as an option"),
+                }
+            }
             let key = crate::paths::normalize(&skill.target());
-            ensure!(seen.insert(key.clone()), "{what}: another entry also installs {}", key.display());
+            ensure!(targets.insert(key.clone()), "{what}: another entry also installs {}", key.display());
+            for name in BTreeSet::from([skill.name.as_str(), skill.installed_name()]) {
+                ensure!(names.insert(name), "{what}: another entry already uses the name {name:?}");
+            }
         }
         Ok(())
     }
@@ -109,9 +121,9 @@ fn inside(path: &str) -> Result<()> {
     Ok(())
 }
 
-fn single_component(name: &str) -> Result<()> {
-    inside(name)?;
-    ensure!(!name.contains('/') && !name.starts_with('.'), "{name:?} must be one plain directory name");
+fn plain_name(name: &str) -> Result<()> {
+    let plain = !name.is_empty() && !name.starts_with('.') && name.chars().all(|c| c.is_ascii_alphanumeric() || "._-".contains(c));
+    ensure!(plain, "{name:?} must be letters, digits, `.`, `_` or `-`, not starting with `.`");
     Ok(())
 }
 
@@ -170,19 +182,28 @@ mod tests {
     }
 
     #[test]
-    fn rejects_paths_outside_the_stack_and_duplicate_installs() {
-        for (extra, message) in [
-            ("dest = \"../elsewhere\"\n", "dest"),
-            ("dest = \"/abs\"\n", "dest"),
-            ("move = \"a/b\"\n", "move"),
-            ("ref = \"--upload-pack=x\"\n", "ref"),
+    fn rejects_invalid_entries() {
+        let other = entry("").replace("name = \"grill\"", "name = \"other\"").replace("skills/grill", "skills/other");
+        for (text, message) in [
+            (entry("dest = \"../elsewhere\"\n"), "dest"),
+            (entry("dest = \"/abs\"\n"), "dest"),
+            (entry("dest = \"plugins/.git/hooks\"\n"), ".git"),
+            (entry("move = \"a/b\"\n"), "move"),
+            (entry("move = \".hidden\"\n"), "move"),
+            (entry("move = \"a b\"\n"), "move"),
+            (entry("ref = \"--upload-pack=x\"\n"), "ref"),
+            (entry("").replace("skills/grill", "skills/../../x"), "path"),
+            (entry("process = { type = \"script\", input = \"/abs/s.sh\" }\n"), "process script"),
+            (entry("process = { type = \"script\", input = \"../s.sh\" }\n"), "process script"),
+            (entry("process = { type = \"prompt\", input = \"--help\" }\n"), "must not start with `-`"),
+            (format!("{}\n{}", entry(""), entry("").replace("name = \"grill\"", "name = \"other\"\nmove = \"grill\"")), "also installs"),
+            (format!("{}\n{}", entry(""), other.replace("commit", "dest = \"elsewhere\"\nmove = \"grill\"\ncommit")), "already uses the name \"grill\""),
+            (format!("{}\n{}", entry(""), entry("dest = \"elsewhere\"\n")), "already uses the name \"grill\""),
         ] {
-            let err = format!("{:#}", from_str(&entry(extra)).unwrap_err());
+            let err = format!("{:#}", from_str(&text).unwrap_err());
             assert!(err.contains(message), "{message}: {err}");
         }
-        let err = format!("{:#}", from_str(&entry("").replace("skills/grill", "skills/../../x")).unwrap_err());
-        assert!(err.contains("path"), "{err}");
-        let twice = format!("{}\n{}", entry(""), entry("").replace("name = \"grill\"", "name = \"other\"\nmove = \"grill\""));
-        assert!(format!("{:#}", from_str(&twice).unwrap_err()).contains("also installs"));
+        assert!(from_str(&entry("").replace("skills/grill", ".")).is_ok());
+        assert!(from_str(&format!("{}\n{other}", entry(""))).is_ok());
     }
 }
