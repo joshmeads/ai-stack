@@ -40,7 +40,8 @@ pub struct Machine {
     pub ssh: Option<String>,
     /// Checkout path on that machine, unexpanded so `~` expands there.
     pub stack: String,
-    pub bin: String,
+    /// `None`: `ai-stack` over ssh, this binary locally.
+    pub bin: Option<String>,
 }
 
 pub fn default_text() -> &'static str {
@@ -62,7 +63,7 @@ pub fn from_str(text: &str, default_stack: &str) -> Result<Vec<Machine>> {
                 name,
                 ssh: entry.ssh,
                 stack: entry.stack.unwrap_or_else(|| default_stack.to_string()),
-                bin: entry.bin.unwrap_or_else(|| "ai-stack".into()),
+                bin: entry.bin,
             });
         }
     }
@@ -87,6 +88,10 @@ pub struct Fleet<'a> {
     pub local_stack: &'a Path,
     pub remote: &'a str,
     pub machines: Vec<Machine>,
+    /// This binary, for a local machine without `bin`.
+    pub self_bin: &'a str,
+    /// The parent's explicit `--config` / `--home` flags, passed on to a local machine.
+    pub local_flags: &'a [String],
 }
 
 impl Fleet<'_> {
@@ -127,8 +132,20 @@ impl Fleet<'_> {
         [Word::Arg("git"), Word::Arg("-C"), Word::Path(&machine.stack)].into_iter().chain(args.iter().map(|arg| Word::Arg(arg))).collect()
     }
 
-    fn update_words<'w>(machine: &'w Machine, branch: &'w str) -> Vec<Word<'w>> {
-        vec![Word::Path(&machine.bin), Word::Arg("update"), Word::Arg("--yes"), Word::Arg("--plain"), Word::Arg("--branch"), Word::Arg(branch)]
+    fn ai_stack<'w>(&'w self, machine: &'w Machine, args: Vec<Word<'w>>) -> Vec<Word<'w>> {
+        let program = match (&machine.bin, &machine.ssh) {
+            (Some(bin), _) => Word::Path(bin),
+            (None, Some(_)) => Word::Arg("ai-stack"),
+            (None, None) => Word::Path(self.self_bin),
+        };
+        let flags = if machine.ssh.is_none() { self.local_flags } else { &[] };
+        std::iter::once(program).chain(flags.iter().map(|flag| Word::Arg(flag))).chain(args).collect()
+    }
+
+    /// `--stack` makes the update pull the same checkout `status` and `switch` use.
+    fn update_words<'w>(&'w self, machine: &'w Machine, branch: &'w str) -> Vec<Word<'w>> {
+        let args = vec![Word::Arg("--stack"), Word::Path(&machine.stack), Word::Arg("update"), Word::Arg("--yes"), Word::Arg("--plain"), Word::Arg("--branch"), Word::Arg(branch)];
+        self.ai_stack(machine, args)
     }
 
     /// Each machine's branch, commit and whether it matches the remote tip of its own branch.
@@ -143,8 +160,12 @@ impl Fleet<'_> {
                     let mut lines = text.lines().map(str::trim);
                     let commit = lines.next().unwrap_or_default().to_string();
                     let branch = lines.next().unwrap_or_default().to_string();
-                    let state = self.compare(&branch, &commit, &mut tips);
-                    (branch, commit, state, true)
+                    if exec::is_commit(&commit) {
+                        let state = self.compare(&branch, &commit, &mut tips);
+                        (branch, commit, state, true)
+                    } else {
+                        ("?".to_string(), "?".to_string(), "unreachable: unexpected output".to_string(), false)
+                    }
                 }
             };
             current &= state == "current";
@@ -164,7 +185,7 @@ impl Fleet<'_> {
             skills: usize,
             plugins: usize,
         }
-        let words = [Word::Path(&machine.bin), Word::Arg("stray"), Word::Arg("--json")];
+        let words = self.ai_stack(machine, vec![Word::Arg("stray"), Word::Arg("--json")]);
         let counts = self.run(machine, &words).and_then(|text| {
             serde_json::from_str::<Counts>(text.trim()).with_context(|| format!("unexpected output {:?}", text.trim()))
         });
@@ -192,12 +213,24 @@ impl Fleet<'_> {
             Ok(None) => format!("unknown: {} has no branch {branch}", self.remote),
             Ok(Some(tip)) if tip == commit => "current".into(),
             Ok(Some(tip)) => {
-                let args = ["-C", &self.local_stack.to_string_lossy(), "merge-base", "--is-ancestor", commit, tip.as_str()].map(String::from);
-                match self.exec.run("git", &args, None) {
-                    Ok(ran) if ran.ok => "behind".into(),
-                    _ => "different".into(),
+                let tip = tip.clone();
+                match (self.is_ancestor(commit, &tip), self.is_ancestor(&tip, commit)) {
+                    (Some(true), _) => "behind".into(),
+                    (Some(false), Some(true)) => "ahead".into(),
+                    (Some(false), Some(false)) => "different".into(),
+                    _ => "unknown (fetch first)".into(),
                 }
             }
+        }
+    }
+
+    /// `None` when this machine's checkout lacks one of the commits (exit 128) or git fails otherwise.
+    fn is_ancestor(&self, ancestor: &str, descendant: &str) -> Option<bool> {
+        let args = ["-C", &self.local_stack.to_string_lossy(), "merge-base", "--is-ancestor", ancestor, descendant].map(String::from);
+        match self.exec.run("git", &args, None).ok()?.code {
+            Some(0) => Some(true),
+            Some(1) => Some(false),
+            _ => None,
         }
     }
 
@@ -210,7 +243,7 @@ impl Fleet<'_> {
         if !yes {
             for machine in &self.machines {
                 let shown = branch.unwrap_or("<current branch>");
-                writeln!(out, "{}: {}", machine.name, self.display(machine, &Self::update_words(machine, shown)))?;
+                writeln!(out, "{}: {}", machine.name, self.display(machine, &self.update_words(machine, shown)))?;
             }
             if branch.is_none() {
                 writeln!(out, "<current branch> is read from each machine first; a detached HEAD is skipped.")?;
@@ -227,7 +260,7 @@ impl Fleet<'_> {
             let line = match result {
                 Err(err) => format!("failed: {err:#}"),
                 Ok(None) => "skipped: detached HEAD; run `ai-stack fleet switch <branch>` first".into(),
-                Ok(Some(branch)) => match self.run(machine, &Self::update_words(machine, &branch)) {
+                Ok(Some(branch)) => match self.run(machine, &self.update_words(machine, &branch)) {
                     Ok(stdout) => format!("updated {branch}\n{}", indent(&stdout)),
                     Err(err) => format!("failed: {err:#}"),
                 },
@@ -260,13 +293,14 @@ impl Fleet<'_> {
                 .collect::<Result<_>>()?
         };
         let tracking = format!("{}/{branch}", self.remote);
+        let refspec = format!("+refs/heads/{branch}:refs/remotes/{tracking}");
         let mut ok = true;
         for machine in machines {
             let dirty = Self::git(machine, &["status", "--porcelain", "--untracked-files=no"]);
-            let fetch = Self::git(machine, &["fetch", self.remote, branch]);
-            let checkout = Self::git(machine, &["checkout", branch]);
-            let create = Self::git(machine, &["checkout", "-b", branch, "--track", &tracking]);
-            let update = Self::update_words(machine, branch);
+            let fetch = Self::git(machine, &["fetch", self.remote, &refspec]);
+            let checkout = Self::git(machine, &["switch", branch]);
+            let create = Self::git(machine, &["switch", "-c", branch, "--track", &tracking]);
+            let update = self.update_words(machine, branch);
             if !yes {
                 writeln!(out, "{}:", machine.name)?;
                 writeln!(out, "  {}", self.display(machine, &fetch))?;
@@ -282,7 +316,7 @@ impl Fleet<'_> {
                 if let Err(first) = self.run(machine, &checkout) {
                     self.run(machine, &create).map_err(|second| anyhow!("{first:#}\n{second:#}"))?;
                 }
-                self.run(machine, &update)
+                self.run(machine, &update).with_context(|| format!("now on {branch}, but the update failed"))
             })();
             match result {
                 Ok(stdout) => writeln!(out, "{}: switched to {branch}\n{}", machine.name, indent(&stdout).trim_end())?,
@@ -316,7 +350,7 @@ fn indent(text: &str) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::exec::fake::{FakeExec, fail, ok};
+    use crate::exec::fake::{FakeExec, exit, fail, ok};
 
     const A: &str = "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa";
     const B: &str = "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb";
@@ -339,7 +373,7 @@ enabled = false
 "#;
 
     fn fleet(exec: &FakeExec) -> Fleet<'_> {
-        Fleet { exec, home: Path::new("/h"), local_stack: Path::new("/h/stack"), remote: "origin", machines: from_str(FLEET, "~/default").unwrap() }
+        Fleet { exec, home: Path::new("/h"), local_stack: Path::new("/h/stack"), remote: "origin", machines: from_str(FLEET, "~/default").unwrap(), self_bin: "/bin/self", local_flags: &[] }
     }
 
     fn run(f: impl FnOnce(&mut Vec<u8>) -> Result<i32>) -> (i32, String) {
@@ -363,7 +397,7 @@ enabled = false
     #[test]
     fn status_shows_each_branch_against_its_own_remote_tip() {
         let exec = FakeExec::new(|line| match line {
-            "ai-stack stray --json" => ok("{\"skills\":12,\"plugins\":3,\"skill_names\":[],\"plugin_ids\":[]}\n"),
+            "/bin/self stray --json" => ok("{\"skills\":12,\"plugins\":3,\"skill_names\":[],\"plugin_ids\":[]}\n"),
             l if l.contains("cachy") && l.contains("stray") => fail("error: unrecognized subcommand 'stray'\n\nUsage: ai-stack <COMMAND>"),
             l if l.starts_with("git -C /h/stack rev-parse") => ok(&format!("{A}\nmain\n")),
             l if l.contains("cachy") => ok(&format!("{B}\ntest\n")),
@@ -384,6 +418,40 @@ enabled = false
         let calls = exec.calls.borrow();
         assert!(calls.contains(&r#"ssh -o BatchMode=yes cachy -- 'git -C ~/'\''My Stack'\'' rev-parse HEAD --abbrev-ref HEAD'"#.to_string()), "{calls:?}");
         assert!(calls.contains(&"git -C /h/stack ls-remote origin refs/heads/test".to_string()), "{calls:?}");
+    }
+
+    #[test]
+    fn status_reports_ahead_different_unknown_and_unexpected_output() {
+        let fleet_file = ["current", "behind", "ahead", "different", "unknown", "garbled"]
+            .map(|name| format!("[machine.{name}]\nlocal = true\nstack = \"~/{name}\"\n"))
+            .concat();
+        let commit = |c: char| c.to_string().repeat(40);
+        let exec = FakeExec::new(move |line| {
+            let rev = |c: char| ok(&format!("{}\nmain\n", c.to_string().repeat(40)));
+            let ancestor = |a: char, b: char| format!("merge-base --is-ancestor {} {}", a.to_string().repeat(40), b.to_string().repeat(40));
+            match line {
+                l if l.contains("stray") => ok("{\"skills\":0,\"plugins\":0}"),
+                l if l.contains("ls-remote") => ok(&format!("{}\trefs/heads/main\n", "a".repeat(40))),
+                l if l.contains("/h/current rev-parse") => rev('a'),
+                l if l.contains("/h/behind rev-parse") => rev('b'),
+                l if l.contains("/h/ahead rev-parse") => rev('c'),
+                l if l.contains("/h/different rev-parse") => rev('d'),
+                l if l.contains("/h/unknown rev-parse") => rev('e'),
+                l if l.contains("/h/garbled rev-parse") => ok("fatal: not a git repository\n"),
+                l if l.ends_with(&ancestor('b', 'a')) || l.ends_with(&ancestor('a', 'c')) => ok(""),
+                l if l.ends_with(&ancestor('e', 'a')) => exit(128, "fatal: Not a valid commit name"),
+                l if l.contains("merge-base") => exit(1, ""),
+                other => panic!("unexpected {other}"),
+            }
+        });
+        let f = Fleet { machines: from_str(&fleet_file, "~").unwrap(), ..fleet(&exec) };
+        let (code, out) = run(|out| f.status(out));
+        assert_eq!(code, 1);
+        for (name, c, state) in [("current", 'a', "current"), ("behind", 'b', "behind"), ("ahead", 'c', "ahead"), ("different", 'd', "different"), ("unknown", 'e', "unknown (fetch first)")] {
+            assert!(out.contains(&format!("{name}  main  {}  {state}\n", &commit(c)[..7])), "{name}: {out}");
+        }
+        assert!(out.contains("garbled  ?  ?  unreachable: unexpected output\n"), "{out}");
+        assert_eq!(out.matches("stray:").count(), 5, "{out}");
     }
 
     #[test]
@@ -414,45 +482,51 @@ enabled = false
         assert!(exec.calls.borrow().is_empty());
         assert!(out.contains("Re-run with --yes"), "{out}");
 
-        let (code, out) = run(|out| fleet(&exec).update(None, true, out));
+        let flags = ["--home".to_string(), "/h".to_string()];
+        let (code, out) = run(|out| Fleet { local_flags: &flags, ..fleet(&exec) }.update(None, true, out));
         assert_eq!(code, 1);
         assert!(out.contains("box: skipped: detached HEAD"), "{out}");
         assert!(out.contains("cachy: failed:") && out.contains("boom"), "{out}");
         assert!(out.contains("mac: updated main"), "{out}");
         let calls = exec.calls.borrow();
-        assert!(calls.contains(&"ssh -o BatchMode=yes cachy -- 'ai-stack update --yes --plain --branch test'".to_string()), "{calls:?}");
-        assert!(calls.contains(&"ai-stack update --yes --plain --branch main".to_string()), "{calls:?}");
+        assert!(calls.contains(&r#"ssh -o BatchMode=yes cachy -- 'ai-stack --stack ~/'\''My Stack'\'' update --yes --plain --branch test'"#.to_string()), "{calls:?}");
+        assert!(calls.contains(&"/bin/self --home /h --stack /h/stack update --yes --plain --branch main".to_string()), "{calls:?}");
         assert!(!calls.iter().any(|call| call.contains("me@box") && call.contains("update")), "{calls:?}");
     }
 
     #[test]
-    fn switch_fetches_checks_out_with_tracking_fallback_then_updates() {
+    fn switch_fetches_switches_with_tracking_fallback_then_updates() {
         let exec = FakeExec::new(|line| match line {
-            l if l.contains("cachy") && l.contains("checkout feat") => fail("error: pathspec 'feat' did not match"),
+            l if l.contains("cachy") && l.contains("switch feat") => fail("fatal: invalid reference: feat"),
+            l if l.starts_with("/bin/self") => fail("install failed"),
             _ => ok(""),
         });
         let names = ["cachy".to_string(), "mac".to_string()];
         let (code, _) = run(|out| fleet(&exec).switch("feat", &names, false, out));
         assert_eq!(code, 1);
         assert!(exec.calls.borrow().is_empty());
-        assert!(fleet(&exec).switch("-feat", &names, true, &mut Vec::new()).is_err());
+        for bad in ["-feat", "HEAD", "refs/heads/feat", "+feat"] {
+            assert!(fleet(&exec).switch(bad, &names, true, &mut Vec::new()).is_err(), "{bad}");
+        }
 
         let (code, out) = run(|out| fleet(&exec).switch("feat", &names, true, out));
-        assert_eq!(code, 0, "{out}");
+        assert_eq!(code, 1, "{out}");
+        assert!(out.contains("cachy: switched to feat"), "{out}");
+        assert!(out.contains("mac: failed: now on feat, but the update failed: "), "{out}");
         let cachy = |inner: &str| format!("ssh -o BatchMode=yes cachy -- '{inner}'");
         let git = r#"git -C ~/'\''My Stack'\''"#;
         assert_eq!(
             *exec.calls.borrow(),
             [
                 cachy(&format!("{git} status --porcelain --untracked-files=no")),
-                cachy(&format!("{git} fetch origin feat")),
-                cachy(&format!("{git} checkout feat")),
-                cachy(&format!("{git} checkout -b feat --track origin/feat")),
-                cachy("ai-stack update --yes --plain --branch feat"),
+                cachy(&format!("{git} fetch origin +refs/heads/feat:refs/remotes/origin/feat")),
+                cachy(&format!("{git} switch feat")),
+                cachy(&format!("{git} switch -c feat --track origin/feat")),
+                cachy(r#"ai-stack --stack ~/'\''My Stack'\'' update --yes --plain --branch feat"#),
                 "git -C /h/stack status --porcelain --untracked-files=no".to_string(),
-                "git -C /h/stack fetch origin feat".to_string(),
-                "git -C /h/stack checkout feat".to_string(),
-                "ai-stack update --yes --plain --branch feat".to_string(),
+                "git -C /h/stack fetch origin +refs/heads/feat:refs/remotes/origin/feat".to_string(),
+                "git -C /h/stack switch feat".to_string(),
+                "/bin/self --stack /h/stack update --yes --plain --branch feat".to_string(),
             ]
         );
     }
