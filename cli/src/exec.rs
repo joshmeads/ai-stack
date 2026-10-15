@@ -16,6 +16,13 @@ pub struct Ran {
 }
 
 pub trait Exec {
+    fn available(&self, program: &str) -> bool {
+        use std::os::unix::fs::PermissionsExt;
+        std::env::var_os("PATH").is_some_and(|path| std::env::split_paths(&path).any(|dir| {
+            std::fs::metadata(dir.join(program)).is_ok_and(|meta| meta.is_file() && meta.permissions().mode() & 0o111 != 0)
+        }))
+    }
+
     /// Runs `program` to completion with stdin closed. An `Err` means it could not start.
     fn run(&self, program: &str, args: &[String], cwd: Option<&Path>) -> io::Result<Ran>;
 }
@@ -136,6 +143,8 @@ pub mod fake {
     }
 
     impl Exec for FakeExec {
+        fn available(&self, _program: &str) -> bool { true }
+
         fn run(&self, program: &str, args: &[String], cwd: Option<&Path>) -> io::Result<Ran> {
             let line = command_line(program, args);
             let recorded = match cwd {
