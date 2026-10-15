@@ -193,6 +193,8 @@ struct Context {
     home: PathBuf,
     config_path: PathBuf,
     stack_override: Option<PathBuf>,
+    /// The explicit `--config` / `--home` flags, for a local fleet machine.
+    explicit_flags: Vec<String>,
 }
 
 /// Model catalogs fetched once per run. Errors are kept as text for the reports.
@@ -229,7 +231,13 @@ fn resolve_context(cli: &Cli) -> Result<Context> {
         .config
         .clone()
         .unwrap_or_else(|| home.join(".config/ai-stack/config.toml"));
-    Ok(Context { home: paths::normalize(&std::path::absolute(home)?), config_path, stack_override: cli.stack.clone() })
+    let mut explicit_flags = Vec::new();
+    for (flag, value) in [("--config", &cli.config), ("--home", &cli.home)] {
+        if let Some(value) = value {
+            explicit_flags.extend([flag.to_string(), std::path::absolute(value)?.to_string_lossy().into_owned()]);
+        }
+    }
+    Ok(Context { home: paths::normalize(&std::path::absolute(home)?), config_path, stack_override: cli.stack.clone(), explicit_flags })
 }
 
 fn load_config(ctx: &Context) -> Result<Config> {
@@ -435,12 +443,15 @@ fn cmd_fleet(ctx: &Context, command: FleetCommand) -> Result<i32> {
         return Ok(0);
     }
     let cfg = load_config(ctx)?;
+    let self_bin = std::env::current_exe().context("cannot find this ai-stack binary")?.to_string_lossy().into_owned();
     let fleet = fleet::Fleet {
         exec: &exec::SystemExec,
         home: &ctx.home,
         local_stack: &cfg.stack.path,
         remote: &cfg.stack.remote,
         machines: fleet::load(&path, &cfg.stack.configured)?,
+        self_bin: &self_bin,
+        local_flags: &ctx.explicit_flags,
     };
     let mut out = io::stdout();
     match command {
