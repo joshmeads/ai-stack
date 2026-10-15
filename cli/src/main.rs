@@ -1,3 +1,4 @@
+mod auth;
 mod blocks;
 mod config;
 mod exec;
@@ -43,6 +44,11 @@ struct Cli {
 
 #[derive(Subcommand)]
 enum Commands {
+    /// Report local AI CLI login status.
+    Auth {
+        #[command(subcommand)]
+        command: AuthCommand,
+    },
     /// Write the default config file.
     Init {
         /// Overwrite an existing config file.
@@ -108,6 +114,15 @@ enum Commands {
     Fleet {
         #[command(subcommand)]
         command: FleetCommand,
+    },
+}
+
+#[derive(Subcommand)]
+enum AuthCommand {
+    /// Check installed AI CLIs without logging in or out.
+    Status {
+        #[arg(long)]
+        json: bool,
     },
 }
 
@@ -208,6 +223,11 @@ fn main() -> Result<()> {
     let cli = Cli::parse();
     let ctx = resolve_context(&cli)?;
     let code = match cli.command {
+        Commands::Auth { command: AuthCommand::Status { json } } => {
+            let status = auth::collect(&exec::SystemExec, &ctx.home, |name| std::env::var_os(name).map(PathBuf::from));
+            auth::write_status(&status, json, auth::now(), &mut io::stdout())?;
+            0
+        },
         Commands::Init { force } => cmd_init(&ctx, force)?,
         Commands::Diff { clean } => cmd_diff(&ctx, clean)?,
         Commands::Stray { json } => cmd_stray(&ctx, json)?,
