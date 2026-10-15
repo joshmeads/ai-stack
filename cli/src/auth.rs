@@ -236,7 +236,7 @@ impl Report {
     pub fn healthy(&self, now: i64) -> bool {
         match &self.state {
             State::NotInstalled => true,
-            State::LoggedIn { expires_at, .. } => expires_at.is_none_or(|expiry| expiry > now),
+            State::LoggedIn { expires_at, refresh_available, .. } => expires_at.is_none_or(|expiry| expiry > now) || *refresh_available == Some(true),
             _ => false,
         }
     }
@@ -251,7 +251,7 @@ impl Report {
                 if let Some(account) = account { detail.push_str(&format!("  {}", exec::one_line(account))); }
                 if let Some(expiry) = expires_at {
                     let date = time::OffsetDateTime::from_unix_timestamp(*expiry).map(|d| d.date().to_string()).unwrap_or_else(|_| "unknown date".into());
-                    let relative = if *expiry <= now { "expired".into() } else { format!("expires in {}d", expiry.saturating_sub(now) / 86400) };
+                    let relative = if *expiry <= now { "access token expired".into() } else { format!("access token expires in {}d", expiry.saturating_sub(now) / 86400) };
                     detail.push_str(&format!("  {relative} ({date})"));
                     if *refresh_available == Some(true) { detail.push_str(" (refresh available)"); }
                 }
@@ -329,7 +329,7 @@ mod tests {
         let mut text = Vec::new();
         write_status(&status, false, 1792540801, &mut text).unwrap();
         let text = String::from_utf8(text).unwrap();
-        assert!(text.contains("logged in  expired (2026-10-21) (refresh available)"), "{text}");
+        assert!(text.contains("logged in  access token expired (2026-10-21) (refresh available)"), "{text}");
         let json = serde_json::to_string(&status).unwrap();
         assert!(json.contains("\"expires_at\":1792540800"));
         assert!(json.contains("\"expiry_source\":\"auth.json\""));
@@ -389,6 +389,8 @@ mod tests {
         let mut report = Report { provider: "codex".into(), state: logged_in(None) };
         assert!(report.healthy(100));
         report.state = State::LoggedIn { account: None, expires_at: Some(100), expiry_source: None, refresh_available: Some(true) };
+        assert!(report.healthy(100));
+        report.state = State::LoggedIn { account: None, expires_at: Some(100), expiry_source: None, refresh_available: None };
         assert!(!report.healthy(100));
         assert!(report.healthy(99));
     }
