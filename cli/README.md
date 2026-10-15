@@ -8,7 +8,7 @@
 4. writes your own global instructions from `<stack>/instructions/` into the same file (see [Global instructions](#global-instructions));
 5. removes what older ai-stack installs left behind.
 
-It shows the plan before changing anything, backs up every file or link it replaces or removes, and is idempotent: a second run reports `No changes.` Cursor is not handled.
+It shows the plan before changing anything, backs up every file or link it replaces or removes, and is idempotent: a second run reports `No changes.` Installation for Cursor and OpenCode is not handled.
 
 ## Build and install
 
@@ -44,6 +44,8 @@ Restart Claude Code and Codex sessions after the first install.
 | `ai-stack skills add <SOURCE> <PATH> [--ref REF] [--dest DIR] [--move NAME] [--process-script PATH \| --process-prompt TEXT] [--name NAME]` | Vendor the skill directory `PATH` from the git repo `SOURCE` into the stack and add it to the [manifest](#skills-manifest). Refuses when the manifest already installs that name in that `dest`, or the directory exists. |
 | `ai-stack skills status` | Print `name  installed-name  <commit>  current \| behind: <latest> \| missing \| unknown: <reason>` per entry. `missing` means the installed directory is gone; `skills update` rebuilds it. Exit 0 when every entry is current, 1 otherwise. A network error is `unknown`. |
 | `ai-stack skills update [NAME...] [--ref REF] [--reprocess] [--force]` | Rebuild the named entries (default all) whose upstream ref moved. `--ref` retargets the named entries to another upstream branch or tag and records it. `--reprocess` rebuilds every selected entry even when upstream has not moved, from the commit its ref names now; when the ref cannot be resolved (offline, or the branch is gone) it rebuilds from the pinned `commit` and says so. A missing skill directory is always rebuilt. Refuses to replace a skill directory with uncommitted, untracked or ignored files unless `--force`. One failure does not stop the rest; exit 1 if any failed. |
+| `ai-stack auth status [--json]` | Report local Claude Code, Codex, Cursor Agent and OpenCode login status. Read-only; exit 0 even when a provider is unavailable. |
+| `ai-stack fleet auth [--json]` | Report those providers on every enabled fleet machine. Exit 0 when every machine reports successfully and every installed provider is logged in with no known expired access token; otherwise 1. |
 | `ai-stack fleet init [--force]` | Write a commented `fleet.toml` beside the config file. |
 | `ai-stack fleet status` | Print `machine  <branch>  <commit>  current \| behind \| ahead \| different \| unknown (fetch first) \| detached \| unreachable: <reason>`, comparing each machine's stack commit with the remote tip of its own branch, then, for each reachable machine, `  stray: N skills, M plugins` from `<bin> stray --json` on that machine, or `  stray: unavailable (<reason>)` when it fails (for example an older ai-stack there). Exit 0 when all are current; the stray line never changes it. |
 | `ai-stack fleet update [--yes] [--branch B]` | Run `<bin> --stack <stack> update --yes --plain --branch <B>` on every enabled machine, `B` being `--branch` or that machine's current branch. Without `--yes`, print the commands and exit 1. |
@@ -57,6 +59,18 @@ Global flags, valid on every command:
 - `--version`.
 
 Exit codes: 0 for success, 1 for pending changes that were not applied, conflicts, or a declined review, and a non-zero error exit for failures such as an unreadable config, a failed `git pull` or a failed plugin command.
+
+## Login status
+
+`ai-stack auth status` checks binaries on `PATH`, then runs `claude auth status --json`, `codex login status`, `cursor-agent status --format json` and `opencode auth list`. Each provider reports `logged in`, `logged out`, `not installed` or `unknown (<reason>)` independently. OpenCode reports whether provider credentials are configured; this does not validate them with a server. These commands never log in or out. They run without a timeout.
+
+Expiry is an access-token deadline, not the lifetime of the account or subscription. Codex can report the numeric `exp` claim from the access-token JWT in `$CODEX_HOME/auth.json` (default `~/.codex/auth.json`, following symlinks). Claude on Linux can report `claudeAiOauth.expiresAt` from `$CLAUDE_CONFIG_DIR/.credentials.json` (default `~/.claude/.credentials.json`). Claude on macOS uses the keychain, which ai-stack never queries. Cursor and OpenCode expiry is unknown; OpenCode may have several independent provider credentials. Missing, unreadable or unfamiliar credential files also leave expiry unknown, with no expiry text.
+
+Known expiry prints a UTC date and `expires in Nd`, or `expired` when the deadline has passed. A status command that says logged in remains logged in even when its access token has expired. `refresh available` appears alongside expiry only when the file or CLI explicitly indicates a refresh token exists; ai-stack does not refresh it or predict whether refresh will succeed.
+
+`--json` emits one line with `providers`, each containing `id`, `state` (`logged_in`, `logged_out`, `not_installed`, `unknown`) and optional `account`, `expires_at` (Unix seconds), `expiry_source`, `refresh_available`, or `reason`. Secrets are never read into output: credential readers extract only expiry and refresh presence, and provider diagnostics are reduced to fixed reasons rather than echoing raw command output or credential parsing errors.
+
+`ai-stack fleet auth` uses the same local binary selection and SSH quoting as `fleet status`, running `<bin> auth status --json` on each enabled machine. Older binaries report `unavailable`; SSH transport failures report `unreachable`. `--json` emits `{"machines":[{"machine":"name","providers":[...]},{"machine":"old","error":"unavailable (...)"}]}`. Missing providers do not fail the check; logged-out, unknown, expired, unavailable or unreachable results do. Unknown expiry alone does not fail it. Local auth status needs no ai-stack config file; fleet auth uses the normal fleet config.
 
 ## Config
 
@@ -178,7 +192,8 @@ cli/
     exec.rs     process seam for git, ssh, scripts and prompt runners; shell quoting
     manifest.rs skills manifest schema and validation
     skills.rs   skills add, status, update and the install pipeline
-    fleet.rs    fleet file, status, update and switch
+    fleet.rs    fleet file, status, auth, update and switch
+    auth.rs     provider descriptors, login status parsers, safe expiry readers
     render.rs   model sheet and routing block text
     blocks.rs   marker-bounded blocks in instruction files
     install.rs  the per-harness plan: sheet, blocks (including instructions), leftovers
