@@ -23,6 +23,8 @@ pub trait Exec {
         }))
     }
 
+    fn interactive(&self, program: &str, args: &[String]) -> io::Result<Option<i32>>;
+
     /// Runs `program` to completion with stdin closed. An `Err` means it could not start.
     fn run(&self, program: &str, args: &[String], cwd: Option<&Path>) -> io::Result<Ran>;
 }
@@ -30,6 +32,10 @@ pub trait Exec {
 pub struct SystemExec;
 
 impl Exec for SystemExec {
+    fn interactive(&self, program: &str, args: &[String]) -> io::Result<Option<i32>> {
+        Ok(Command::new(program).args(args).stdin(Stdio::inherit()).stdout(Stdio::inherit()).stderr(Stdio::inherit()).status()?.code())
+    }
+
     fn run(&self, program: &str, args: &[String], cwd: Option<&Path>) -> io::Result<Ran> {
         let mut command = Command::new(program);
         command.args(args).stdin(Stdio::null());
@@ -121,12 +127,13 @@ pub mod fake {
     /// answers with `respond(line)`.
     pub struct FakeExec {
         pub calls: RefCell<Vec<String>>,
+        pub interactive_calls: RefCell<Vec<String>>,
         respond: Respond,
     }
 
     impl FakeExec {
         pub fn new(respond: impl Fn(&str) -> io::Result<Ran> + 'static) -> Self {
-            FakeExec { calls: RefCell::default(), respond: Box::new(respond) }
+            FakeExec { calls: RefCell::default(), interactive_calls: RefCell::default(), respond: Box::new(respond) }
         }
     }
 
@@ -143,6 +150,13 @@ pub mod fake {
     }
 
     impl Exec for FakeExec {
+        fn interactive(&self, program: &str, args: &[String]) -> io::Result<Option<i32>> {
+            let line = command_line(program, args);
+            self.interactive_calls.borrow_mut().push(line.clone());
+            self.calls.borrow_mut().push(line.clone());
+            (self.respond)(&line).map(|ran| ran.code)
+        }
+
         fn available(&self, _program: &str) -> bool { true }
 
         fn run(&self, program: &str, args: &[String], cwd: Option<&Path>) -> io::Result<Ran> {

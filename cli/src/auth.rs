@@ -13,9 +13,15 @@ pub struct Provider {
     pub id: &'static str,
     pub name: &'static str,
     pub binary: &'static str,
+    pub login: Login,
     pub status: &'static [&'static str],
     parser: fn(&Ran) -> State,
     expiry: Option<ExpirySource>,
+}
+
+pub enum Login {
+    Supported(&'static [&'static str]),
+    Unsupported(&'static str),
 }
 
 struct ExpirySource {
@@ -26,10 +32,10 @@ struct ExpirySource {
 }
 
 pub const PROVIDERS: &[Provider] = &[
-    Provider { id: "claude", name: "Claude Code", binary: "claude", status: &["auth", "status", "--json"], parser: claude, expiry: if cfg!(target_os = "linux") { Some(ExpirySource { env: "CLAUDE_CONFIG_DIR", directory: ".claude", file: ".credentials.json", reader: claude_expiry }) } else { None } },
-    Provider { id: "codex", name: "Codex", binary: "codex", status: &["login", "status"], parser: codex, expiry: Some(ExpirySource { env: "CODEX_HOME", directory: ".codex", file: "auth.json", reader: codex_expiry }) },
-    Provider { id: "cursor", name: "Cursor Agent", binary: "cursor-agent", status: &["status", "--format", "json"], parser: cursor, expiry: None },
-    Provider { id: "opencode", name: "OpenCode", binary: "opencode", status: &["auth", "list"], parser: opencode, expiry: None },
+    Provider { id: "claude", name: "Claude Code", binary: "claude", login: Login::Unsupported("claude auth login requires a localhost callback and has no code-paste handler"), status: &["auth", "status", "--json"], parser: claude, expiry: if cfg!(target_os = "linux") { Some(ExpirySource { env: "CLAUDE_CONFIG_DIR", directory: ".claude", file: ".credentials.json", reader: claude_expiry }) } else { None } },
+    Provider { id: "codex", name: "Codex", binary: "codex", login: Login::Supported(&["codex", "login", "--device-auth"]), status: &["login", "status"], parser: codex, expiry: Some(ExpirySource { env: "CODEX_HOME", directory: ".codex", file: "auth.json", reader: codex_expiry }) },
+    Provider { id: "cursor", name: "Cursor Agent", binary: "cursor-agent", login: Login::Supported(&["env", "NO_OPEN_BROWSER=1", "cursor-agent", "login"]), status: &["status", "--format", "json"], parser: cursor, expiry: None },
+    Provider { id: "opencode", name: "OpenCode", binary: "opencode", login: Login::Supported(&["opencode", "auth", "login"]), status: &["auth", "list"], parser: opencode, expiry: None },
 ];
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize)]
@@ -278,6 +284,22 @@ mod tests {
     }
 
     #[test]
+    fn login_commands_are_static_safe_words_or_explicitly_unsupported() {
+        for provider in PROVIDERS {
+            match provider.login {
+                Login::Supported(argv) => {
+                    assert!(!argv.is_empty(), "{}", provider.id);
+                    assert!(argv.contains(&provider.binary));
+                    for word in argv {
+                        assert!(!word.is_empty() && word.chars().all(|c| c.is_ascii_alphanumeric() || "/._-=".contains(c)), "{word}");
+                    }
+                }
+                Login::Unsupported(reason) => assert!(!reason.is_empty()),
+            }
+        }
+    }
+
+    #[test]
     fn claude_status_samples() {
         assert_eq!(claude(&ran(r#"{"loggedIn":true,"authMethod":"claude.ai","email":"user@example.com","subscriptionType":"max"}"#, "", 0)), logged_in(Some("user@example.com")));
         assert_eq!(claude(&ran(r#"{"loggedIn":false,"authMethod":"none"}"#, "", 1)), State::LoggedOut);
@@ -376,6 +398,7 @@ mod tests {
     fn absent_binary_is_not_run_and_wire_states_are_validated() {
         struct Missing;
         impl Exec for Missing {
+            fn interactive(&self, _: &str, _: &[String]) -> std::io::Result<Option<i32>> { panic!("must not run") }
             fn available(&self, _: &str) -> bool { false }
             fn run(&self, _: &str, _: &[String], _: Option<&Path>) -> std::io::Result<Ran> { panic!("must not run") }
         }
