@@ -8,7 +8,7 @@ The CLI turns one config into a per-harness setup of the `jm` plugin marketplace
 - `diff [--clean]`: build the plan and print it. Exit 0 when empty, 1 otherwise. Runs only the read-only plugin `list --json` queries.
 - `stray [--json]`: build the plan with `clean: true` and report only its clean lines (`Plan::stray`, via `Plan::is_clean`): skill-root entries as home-relative paths and plugin ids. Same read-only queries as `diff`; exit 0.
 - `install [--yes] [--force] [--plain] [--clean]`: plan, review (TUI, or plain text plus a y/N prompt), apply. The TUI's `c` toggles clean and re-plans.
-- `update [--yes] [--plain] [--bump-models] [--branch B]`: `git pull --ff-only <remote> <branch>` in the stack (`--branch` overrides `stack.branch` for the run), print the rebuild note when `cli/` changed, report models, optionally bump, then install.
+- `update [--yes] [--plain] [--bump-models] [--branch B]`: `git pull --ff-only <remote> <branch>` in the stack (`--branch` overrides `stack.branch` for the run), after checking `git symbolic-ref --short HEAD` names that branch (a detached HEAD or another branch is refused), print the rebuild note when `cli/` changed, report models, optionally bump, then install.
 - `models [--bump]`: compare model IDs with the provider catalogs (`codex debug models`; the Anthropic Models API or docs page) and optionally rewrite newer IDs in place.
 - `skills add|status|update`: vendored skills in `<stack>/manifest.toml` (see Skills).
 - `fleet init|status|update|switch`: machines in `<config dir>/fleet.toml` (see Fleet).
@@ -42,15 +42,15 @@ The `Runner` trait is the seam for the CLIs. `SystemRunner` runs the binaries fr
 
 ## Skills
 
-`manifest.rs` holds the `[[skill]]` schema (`name`, `source`, `path`, `ref`, `commit`, `dest`, `move`, `process` as one-or-many `{type, input}`) and its validation: plain relative components only for `name`, `move`, `path`, `dest`; a valid git ref; one entry per installed directory. There is no stack-level stamp; the stack's own history is its git log.
+`manifest.rs` holds the `[[skill]]` schema (`name`, `source`, `path`, `ref`, `commit`, `dest`, `move`, `process` as one-or-many `{type, input}`) and its validation: `[A-Za-z0-9._-]+` not starting with `.` for `name` and `move`; plain relative components for `path` (or exactly `.`), `dest` (no `.git` component) and script inputs; no prompt starting with `-`; a valid git ref; one entry per installed directory and per name or installed name. The file is rewritten whole by `skills add` and `update`; hand edits to values survive, comments do not. There is no stack-level stamp; the stack's own history is its git log.
 
-`skills.rs` resolves a ref with `git ls-remote` (peeled tag, exact name, `refs/heads/`, `refs/tags/`; a 40-hex ref is used as is), fetches the commit into a throwaway repo, stages the copy beside the target, applies `move` to the directory name and the frontmatter `name:` line, runs the process steps in order with the staging directory as cwd, then renames the old target to a reserved temp name, renames the staging directory into place and drops the old one. `update` checks `git status --porcelain -- <target>` before replacing anything, keeps going after a failed entry, and writes the manifest once at the end. `--ref` changes the tracked ref of the named entries.
+`skills.rs` resolves a ref with `git ls-remote` (peeled tag, exact name, `refs/heads/`, `refs/tags/`; a 40-hex ref is used as is), fetches the commit into a throwaway repo, refuses the skill when its path or any ancestor is a symlink or any symlink exists in its tree (`.git` skipped), stages the copy in `<stack>/.ai-stack/stage/` (same filesystem as every target, git-ignored), applies `move` to the directory name and the frontmatter `name:` line, runs the process steps in order with the staging directory as cwd, then swaps with two renames: the old target into a reserved directory in the stage, the staged copy into place. The skill is absent for the moment between them; a crash there leaves the old tree in `.ai-stack/stage/`. If the second rename fails the old tree is renamed back; if that also fails it is kept and its path is in the error. Every `skills` subcommand clears `.ai-stack/stage/` first. `add` resolves the commit, then validates the entry once; a local source is stored canonicalized. `update` rebuilds a missing target without the guard, otherwise checks `git status --porcelain --untracked-files=all --ignored=matching -- <target>` before replacing anything, keeps going after a failed entry, and writes the manifest once at the end. `--ref` changes the tracked ref of the named entries; `--reprocess` falls back to the pinned commit when the unchanged ref cannot be resolved. `status` reports `missing` for an absent target.
 
 ## Fleet
 
-`fleet.rs` loads enabled machines (exactly one of `ssh` / `local = true`) and builds each command as words, where path words keep a leading `~/` unquoted for the remote shell and everything else goes through `exec::shell_quote`. `status` caches one `ls-remote` per distinct branch and checks ancestry with `git merge-base --is-ancestor` in the local checkout; for each reachable machine it also runs `<bin> stray --json` through the same path and prints its counts, or `unavailable (<reason>)` when that fails or does not parse, without affecting the exit code. `update` resolves each machine's branch unless `--branch` is given and skips a detached HEAD. `switch` runs a dirty check, fetch, checkout with a tracking-branch fallback, then update, per machine. Without `--yes`, `update` and `switch` print and run nothing.
+`fleet.rs` loads enabled machines (exactly one of `ssh` / `local = true`) and builds each command as words, where path words keep a leading `~/` unquoted for the remote shell and everything else goes through `exec::shell_quote`. `status` requires a 40-hex commit line (otherwise `unreachable: unexpected output`), caches one `ls-remote` per distinct branch and checks ancestry both ways with `git merge-base --is-ancestor` in the local checkout (`behind`, `ahead`, `different`; exit 128, a missing object, is `unknown (fetch first)`); for each reachable machine it also runs `<bin> stray --json` through the same path and prints its counts, or `unavailable (<reason>)` when that fails or does not parse, without affecting the exit code. `update` resolves each machine's branch unless `--branch` is given, skips a detached HEAD, and runs `<bin> --stack <machine stack> update ...` so it pulls the checkout `status` reads. A local machine without `bin` runs `current_exe()` with the parent's explicit `--config` / `--home`. `switch` runs a dirty check, `fetch <remote> +refs/heads/<B>:refs/remotes/<remote>/<B>`, `switch <B>` with a `switch -c <B> --track` fallback, then update, per machine; an update failure after the switch says the machine is now on `<B>`. Without `--yes`, `update` and `switch` print and run nothing.
 
-All git, ssh, script and prompt invocations go through `exec::Exec` (`SystemExec`, stdin closed); fleet tests use `exec::fake::FakeExec`, skills tests use real `git` on local repos.
+All git, ssh, script and prompt invocations, including `update`'s pull, go through `exec::Exec` (`SystemExec`, stdin closed); fleet and pull tests use `exec::fake::FakeExec`, skills tests use real `git` on local repos. The harness plugin CLIs keep their own `plugins::Runner`, because each command carries per-harness env (`CLAUDE_CONFIG_DIR`, `CODEX_HOME`). Branch arguments go through `exec::check_branch` (a `check_ref` that also rejects `HEAD`, `refs/` and a leading `+`); skill refs through `check_ref`.
 
 ## Adding a harness
 
@@ -68,8 +68,10 @@ OpenCode reads `~/.config/opencode/AGENTS.md`, so it can reuse the block writer 
 - **No escaping backups.** Harness homes are normalized at load; a target whose home-relative or absolute backup path has `..`, `.` or no file name is refused.
 - **Stale plans are refused.** `Write`/`Remove` compare text, `Unlink` compares the link target, `ReplaceWithFile` compares an lstat fingerprint of the whole tree.
 - **Skills stay inside the stack.** Manifest paths are validated at load and on every write, so no entry can address a directory outside the stack.
-- **Atomic skill replace.** A skill is built in a staging directory beside its target and swapped in by rename; a failed fetch, `move` or process step leaves the installed skill as it was.
-- **Dirty guard.** `skills update` refuses to replace a skill directory with uncommitted changes unless `--force`.
+- **No upstream symlinks.** A vendored skill that is, sits under or contains a symlink is refused, so nothing upstream can point a copy or a `move` rewrite outside the stack.
+- **Skill replace by rename.** A skill is built in `.ai-stack/stage/` and swapped in by two renames; a failed fetch, `move` or process step leaves the installed skill as it was.
+- **Dirty guard.** `skills update` refuses to replace a skill directory with uncommitted, untracked or ignored files unless `--force`.
+- **Branch guard.** `update` pulls only into a checkout already on the branch it pulls.
 - **Process steps run arbitrary code by design.** Scripts and prompt runners run with the user's permissions in the staging directory.
 - **Fleet never forces.** `switch` refuses a dirty checkout and never uses `-f` or `-B`; branch names are validated before they reach any command line.
 - **Exact ownership.** Links count as ai-stack's only when they resolve into the stack or a legacy root; hooks only when the command is one of the exact old forms for those roots; agent files only with the managed marker.
@@ -84,7 +86,7 @@ OpenCode reads `~/.config/opencode/AGENTS.md`, so it can reuse the block writer 
 - `plugins.rs`: plugin commands and the runner seam.
 - `plan.rs`: actions, diffs, backups, apply.
 - `models.rs`: catalogs and `--bump`.
-- `exec.rs`: process seam, `shell_quote`, `check_ref`.
+- `exec.rs`: process seam, `shell_quote`, `check_ref`, `check_branch`, commit text helpers.
 - `manifest.rs`, `skills.rs`: skills manifest and commands.
 - `fleet.rs`: fleet file and commands.
 - `tui.rs`: review screen.

@@ -78,7 +78,7 @@ enum Commands {
         #[arg(long)]
         clean: bool,
     },
-    /// Pull the stack checkout, check models, then install.
+    /// Pull the stack checkout (it must be on the branch pulled), check models, then install.
     Update {
         /// Apply without review.
         #[arg(long)]
@@ -146,9 +146,9 @@ enum FleetCommand {
 enum SkillsCommand {
     /// Vendor a skill directory from a git repo and record it in the manifest.
     Add {
-        /// Git URL or path of the upstream repo.
+        /// Git URL or path of the upstream repo. A local path is stored as its absolute path.
         source: String,
-        /// Directory of the skill inside the upstream repo.
+        /// Directory of the skill inside the upstream repo, or `.` for the repo root.
         path: String,
         /// Upstream branch or tag to track (or a 40-hex commit to pin). To test another
         /// upstream branch later, run `skills update --ref <branch> <name>`.
@@ -179,7 +179,8 @@ enum SkillsCommand {
         /// Retarget the named entries to this upstream branch or tag and record it as their `ref`.
         #[arg(long = "ref", value_name = "REF")]
         git_ref: Option<String>,
-        /// Rebuild even when upstream has not moved, e.g. after editing a process step.
+        /// Rebuild even when upstream has not moved, e.g. after editing a process step. Uses the
+        /// pinned commit when the ref cannot be resolved.
         #[arg(long)]
         reprocess: bool,
         /// Replace an installed skill that has uncommitted changes.
