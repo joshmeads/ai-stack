@@ -103,6 +103,8 @@ struct ConfigFile {
     /// Absent in configs from before `--clean` existed; the defaults fill it in.
     #[serde(default)]
     clean: CleanSection,
+    #[serde(default)]
+    skills: SkillsSection,
 }
 
 #[derive(Debug, Clone, Deserialize)]
@@ -189,6 +191,18 @@ impl Default for CleanSection {
     }
 }
 
+#[derive(Debug, Clone, Deserialize)]
+#[serde(deny_unknown_fields, default)]
+struct SkillsSection {
+    prompt_runner: Vec<String>,
+}
+
+impl Default for SkillsSection {
+    fn default() -> Self {
+        SkillsSection { prompt_runner: ["claude", "-p", "--permission-mode", "acceptEdits"].map(String::from).to_vec() }
+    }
+}
+
 const SKILL_ROOTS: [&str; 3] = ["~/.claude/skills", "~/.codex/skills", "~/.agents/skills"];
 const KEEP_SKILLS: [&str; 21] = [
     "better-*", "brandkit", "break", "variant", "explain-interface", "interface-review", "design-taste-frontend",
@@ -235,6 +249,8 @@ pub struct Route {
 #[derive(Debug, Clone, PartialEq, Eq, Serialize)]
 pub struct Stack {
     pub path: PathBuf,
+    /// `path` as written, unexpanded, so a fleet machine can expand `~` itself.
+    pub configured: String,
     pub remote: String,
     pub branch: String,
     pub legacy_paths: Vec<PathBuf>,
@@ -302,6 +318,8 @@ pub struct Config {
     /// Per harness, each sheet row label with its lanes joined by ", ", in `SHEET_ROWS` order.
     pub sheets: BTreeMap<Harness, Vec<(String, String)>>,
     pub clean: Clean,
+    /// `[skills] prompt_runner`: argv for `type = "prompt"` process steps; the prompt is appended.
+    pub prompt_runner: Vec<String>,
 }
 
 /// The reference config shipped with the CLI.
@@ -413,6 +431,7 @@ pub fn from_str(text: &str, home: &Path) -> Result<Config> {
 
     let stack = Stack {
         path: crate::paths::absolute(&file.stack.path, home)?,
+        configured: file.stack.path.clone(),
         remote: file.stack.remote,
         branch: file.stack.branch,
         legacy_paths: file.stack.legacy_paths.iter().map(|p| crate::paths::absolute(p, home)).collect::<std::io::Result<_>>()?,
@@ -442,7 +461,8 @@ pub fn from_str(text: &str, home: &Path) -> Result<Config> {
         keep_skills: file.clean.keep_skills,
         keep_plugins: file.clean.keep_plugins,
     };
-    Ok(Config { home: home.to_path_buf(), stack, harnesses, models, leads, review, sheets, clean })
+    ensure!(!file.skills.prompt_runner.is_empty(), "[skills] prompt_runner is empty");
+    Ok(Config { home: home.to_path_buf(), stack, harnesses, models, leads, review, sheets, clean, prompt_runner: file.skills.prompt_runner })
 }
 
 fn harness_entry(section: &HarnessSection, harness: Harness) -> &HarnessEntry {
@@ -483,6 +503,8 @@ mod tests {
         let text = default_config_text();
         let older = from_str(&text[..text.find("[clean]").unwrap()], Path::new("/h")).unwrap();
         assert_eq!(older.clean, cfg.clean);
+        assert_eq!(older.prompt_runner, cfg.prompt_runner);
+        assert_eq!(cfg.prompt_runner[0], "claude");
     }
 
     #[test]

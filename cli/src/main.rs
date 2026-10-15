@@ -2,11 +2,13 @@ mod blocks;
 mod config;
 mod exec;
 mod install;
+mod manifest;
 mod models;
 mod paths;
 mod plan;
 mod plugins;
 mod render;
+mod skills;
 mod tui;
 
 use std::fs;
@@ -81,12 +83,66 @@ enum Commands {
         /// Bump configured models to newer versions in the same family.
         #[arg(long)]
         bump_models: bool,
+        /// Pull this branch instead of `stack.branch` for this run. The config is not changed.
+        #[arg(long, value_name = "BRANCH")]
+        branch: Option<String>,
     },
     /// Report configured models against the provider catalogs.
     Models {
         /// Rewrite config model IDs to the newest version in the same family.
         #[arg(long)]
         bump: bool,
+    },
+    /// Skills vendored from external git repos, recorded in <stack>/manifest.toml.
+    Skills {
+        #[command(subcommand)]
+        command: SkillsCommand,
+    },
+}
+
+#[derive(Subcommand)]
+enum SkillsCommand {
+    /// Vendor a skill directory from a git repo and record it in the manifest.
+    Add {
+        /// Git URL or path of the upstream repo.
+        source: String,
+        /// Directory of the skill inside the upstream repo.
+        path: String,
+        /// Upstream branch or tag to track (or a 40-hex commit to pin). To test another
+        /// upstream branch later, run `skills update --ref <branch> <name>`.
+        #[arg(long = "ref", value_name = "REF", default_value = manifest::DEFAULT_REF)]
+        git_ref: String,
+        /// Parent directory inside the stack.
+        #[arg(long, value_name = "DIR", default_value = manifest::DEFAULT_DEST)]
+        dest: String,
+        /// Install under this directory name and rewrite SKILL.md's `name:` to it.
+        #[arg(long = "move", value_name = "NAME")]
+        rename: Option<String>,
+        /// Script run as `sh <script> <staged skill dir>` on every pull.
+        #[arg(long, value_name = "PATH", conflicts_with = "process_prompt")]
+        process_script: Option<String>,
+        /// Prompt run through [skills] prompt_runner in the staged skill dir on every pull.
+        #[arg(long, value_name = "TEXT")]
+        process_prompt: Option<String>,
+        /// Manifest name (default: the last component of PATH).
+        #[arg(long)]
+        name: Option<String>,
+    },
+    /// Compare each entry's commit with its upstream ref. Exit 0 when all are current.
+    Status,
+    /// Rebuild entries whose upstream moved. Exit 1 when any failed.
+    Update {
+        /// Entries to update, by name or installed name (default: all).
+        names: Vec<String>,
+        /// Retarget the named entries to this upstream branch or tag and record it as their `ref`.
+        #[arg(long = "ref", value_name = "REF")]
+        git_ref: Option<String>,
+        /// Rebuild even when upstream has not moved, e.g. after editing a process step.
+        #[arg(long)]
+        reprocess: bool,
+        /// Replace an installed skill that has uncommitted changes.
+        #[arg(long)]
+        force: bool,
     },
 }
 
@@ -110,8 +166,9 @@ fn main() -> Result<()> {
         Commands::Init { force } => cmd_init(&ctx, force)?,
         Commands::Diff { clean } => cmd_diff(&ctx, clean)?,
         Commands::Install { yes, force, plain, clean } => cmd_install(&ctx, yes, Options { force, clean }, plain)?,
-        Commands::Update { yes, plain, bump_models } => cmd_update(&ctx, yes, plain, bump_models)?,
+        Commands::Update { yes, plain, bump_models, branch } => cmd_update(&ctx, yes, plain, bump_models, branch)?,
         Commands::Models { bump } => cmd_models(&ctx, bump)?,
+        Commands::Skills { command } => cmd_skills(&ctx, command)?,
     };
     io::stdout().flush()?;
     std::process::exit(code);
@@ -134,7 +191,8 @@ fn resolve_context(cli: &Cli) -> Result<Context> {
 fn load_config(ctx: &Context) -> Result<Config> {
     let mut cfg = config::load(&ctx.config_path, &ctx.home)?;
     if let Some(stack) = &ctx.stack_override {
-        let configured = std::mem::replace(&mut cfg.stack.path, paths::absolute(&stack.to_string_lossy(), &ctx.home)?);
+        cfg.stack.configured = stack.to_string_lossy().into_owned();
+        let configured = std::mem::replace(&mut cfg.stack.path, paths::absolute(&cfg.stack.configured, &ctx.home)?);
         // Links and hooks into the configured checkout are still ours to remove.
         cfg.stack.legacy_paths.push(configured);
     }
@@ -233,9 +291,14 @@ fn apply_plan(ctx: &Context, plan: &Plan) -> Result<i32> {
     Ok(0)
 }
 
-fn cmd_update(ctx: &Context, yes: bool, plain: bool, bump: bool) -> Result<i32> {
+fn cmd_update(ctx: &Context, yes: bool, plain: bool, bump: bool, branch: Option<String>) -> Result<i32> {
     let mut cfg = load_config(ctx)?;
-    if git_pull(&cfg.stack)? {
+    let mut stack = cfg.stack.clone();
+    if let Some(branch) = branch {
+        exec::check_ref(&branch)?;
+        stack.branch = branch;
+    }
+    if git_pull(&stack)? {
         println!(
             "note: this pull changed files under cli/. The installed ai-stack binary is not rebuilt automatically; rebuild it with `cargo install --path {}`.",
             cfg.stack.path.join("cli").display()
@@ -298,6 +361,25 @@ fn git(stack: &Stack, args: &[&str]) -> Result<String> {
         bail!("git {} failed in {}: {}", args.join(" "), stack.path.display(), String::from_utf8_lossy(&output.stderr).trim());
     }
     Ok(String::from_utf8_lossy(&output.stdout).into_owned())
+}
+
+fn cmd_skills(ctx: &Context, command: SkillsCommand) -> Result<i32> {
+    let cfg = load_config(ctx)?;
+    let skills = skills::Skills { exec: &exec::SystemExec, stack: &cfg.stack.path, prompt_runner: &cfg.prompt_runner };
+    let mut out = io::stdout();
+    match command {
+        SkillsCommand::Add { source, path, git_ref, dest, rename, process_script, process_prompt, name } => {
+            let process = match (process_script, process_prompt) {
+                (Some(input), _) => vec![manifest::Step { kind: manifest::StepKind::Script, input }],
+                (_, Some(input)) => vec![manifest::Step { kind: manifest::StepKind::Prompt, input }],
+                _ => Vec::new(),
+            };
+            skills.add(skills::Add { source, path, git_ref, dest, rename, process, name }, &mut out)?;
+            Ok(0)
+        }
+        SkillsCommand::Status => skills.status(&mut out),
+        SkillsCommand::Update { names, git_ref, reprocess, force } => skills.update(skills::Update { names: &names, git_ref, reprocess, force }, &mut out),
+    }
 }
 
 fn cmd_models(ctx: &Context, bump: bool) -> Result<i32> {

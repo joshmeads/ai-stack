@@ -116,3 +116,10 @@ keep_plugins = [
   "jm-*@jm", "github@claude-plugins-official",
   "chrome-devtools-mcp@claude-plugins-official", "*@openai-*",
 ]
+
+# `ai-stack skills add` and `skills update` run a manifest entry's
+# `type = "prompt"` process steps with this argv, the prompt appended as the
+# last argument, in the staged skill directory. No shell is involved. The agent
+# edits files there by design, so pick a permission mode you trust.
+[skills]
+prompt_runner = ["claude", "-p", "--permission-mode", "acceptEdits"]

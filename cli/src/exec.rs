@@ -55,6 +55,20 @@ pub fn command_line(program: &str, args: &[String]) -> String {
     std::iter::once(program).chain(args.iter().map(String::as_str)).map(shell_quote).collect::<Vec<_>>().join(" ")
 }
 
+/// Rejects a branch or tag name that could be read as an option or is not a plain git ref.
+pub fn check_ref(name: &str) -> Result<()> {
+    let bad = name.is_empty()
+        || name.starts_with('-')
+        || name.starts_with('/')
+        || name.ends_with('/')
+        || name.ends_with(".lock")
+        || name.contains("..")
+        || name.contains("@{")
+        || name.chars().any(|c| c.is_whitespace() || c.is_control() || "~^:?*[\\".contains(c));
+    anyhow::ensure!(!bad, "{name:?} is not a valid git branch or tag name");
+    Ok(())
+}
+
 /// Quotes `arg` for a POSIX shell, leaving plainly safe words bare.
 pub fn shell_quote(arg: &str) -> String {
     if !arg.is_empty() && arg.chars().all(|c| c.is_ascii_alphanumeric() || "/._-@:+=,".contains(c)) {
@@ -117,5 +131,15 @@ mod tests {
         assert_eq!(shell_quote("it's"), "'it'\\''s'");
         assert_eq!(shell_quote(""), "''");
         assert_eq!(shell_quote("$HOME;rm"), "'$HOME;rm'");
+    }
+
+    #[test]
+    fn check_ref_rejects_option_like_and_malformed_names() {
+        for good in ["main", "feature/x-1", "v1.2.0", "HEAD"] {
+            assert!(check_ref(good).is_ok(), "{good}");
+        }
+        for bad in ["", "-x", "--upload-pack=sh", "a..b", "a b", "a\tb", "a\u{7}", "x~1", "a:b"] {
+            assert!(check_ref(bad).is_err(), "{bad:?}");
+        }
     }
 }
