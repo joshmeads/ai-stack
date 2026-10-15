@@ -22,6 +22,8 @@ const ROUTING_BLOCK: &str = "routing";
 const GUIDANCE_BLOCK: &str = "anthropic-guidance";
 /// Claude's `@` import of the sheet.
 const SHEET_BLOCK: &str = "pstack-models";
+/// The owner's global instructions from `<stack>/instructions/`, inlined for every harness.
+const INSTRUCTIONS_BLOCK: &str = "instructions";
 /// Hook commands older installs registered in Claude's settings.json: program and script
 /// path relative to the stack root. The script may be quoted and followed by `SED_SUFFIX`.
 const OLD_HOOKS: [(&str, &str); 2] = [("bash", "plugins/pstack/hooks/session-start"), ("python3", "scripts/task-context.py")];
@@ -104,26 +106,28 @@ fn plan_sheet(cfg: &Config, hc: &HarnessConfig, opts: Options, out: &mut Plan) -
     Ok(())
 }
 
-/// CLAUDE.md or AGENTS.md: drops leftover blocks, then upserts the routing block, the guidance
+/// CLAUDE.md or AGENTS.md: drops leftover blocks, then upserts (or removes) the owner's
+/// instructions block, the routing block, the guidance
 /// block (Claude), and the sheet include (Claude) or mirror (Codex). User text outside the
 /// blocks is kept.
 fn plan_instructions(cfg: &Config, hc: &HarnessConfig, out: &mut Plan) -> Result<()> {
-    let file = hc.home.join(match hc.harness {
-        Harness::Claude => "CLAUDE.md",
-        Harness::Codex => "AGENTS.md",
-    });
-    let path = write_through(&file)?;
+    let path = write_through(&hc.home.join(hc.harness.instruction_file()))?;
     let original = read_optional(&path)?.unwrap_or_default();
     blocks::validate(&original).with_context(|| format!("checking managed markers in {}", path.display()))?;
     let mut text = blocks::remove_marked(&original, LEGACY_LOCAL_BEGIN, LEGACY_LOCAL_END)?;
     for name in blocks::block_names(&text) {
         let guidance = hc.harness == Harness::Claude && name == GUIDANCE_BLOCK;
-        if name != ROUTING_BLOCK && name != SHEET_BLOCK && !guidance {
+        if ![ROUTING_BLOCK, SHEET_BLOCK, INSTRUCTIONS_BLOCK].contains(&name.as_str()) && !guidance {
             text = blocks::remove(&text, &name)?;
         }
     }
     if hc.harness == Harness::Claude {
         text = remove_sheet_imports(&text, cfg, hc);
+    }
+    match instructions_body(cfg, hc.harness)? {
+        Ok(Some(body)) => text = blocks::upsert(&text, INSTRUCTIONS_BLOCK, &body)?,
+        Ok(None) => text = blocks::remove(&text, INSTRUCTIONS_BLOCK)?,
+        Err(conflict) => out.conflicts.push(conflict),
     }
     let sheet = sheet_path(hc);
     text = blocks::upsert(&text, ROUTING_BLOCK, &render::routing(cfg, hc.harness, &sheet))?;
@@ -136,6 +140,25 @@ fn plan_instructions(cfg: &Config, hc: &HarnessConfig, out: &mut Plan) -> Result
     };
     out.actions.extend(plan::write_if_changed(&path, text)?);
     Ok(())
+}
+
+/// The owner's global instructions for `harness`: `<stack>/instructions/common.md`, a blank
+/// line, then `<stem>.md`, each trimmed and skipped when absent or blank. `Ok(None)` when there
+/// is nothing to manage; the inner `Err` is a conflict for a source holding a block marker.
+fn instructions_body(cfg: &Config, harness: Harness) -> Result<Result<Option<String>, String>> {
+    let dir = cfg.stack.path.join("instructions");
+    let mut parts = Vec::new();
+    for stem in ["common", harness.instructions_stem()] {
+        let path = dir.join(format!("{stem}.md"));
+        let Some(text) = read_optional(&path)? else { continue };
+        if let Some(marker) = blocks::find_marker(&text) {
+            return Ok(Err(format!("{} contains the managed marker prefix `{marker}`, which would corrupt the instruction file; remove it from the source", path.display())));
+        }
+        if !text.trim().is_empty() {
+            parts.push(text.trim().to_string());
+        }
+    }
+    Ok(Ok((!parts.is_empty()).then(|| parts.join("\n\n"))))
 }
 
 /// Drops `@...` import lines that load this harness's sheet, so the managed include is the
@@ -592,6 +615,48 @@ mod tests {
 
         let again = clean(&f);
         assert!(again.is_empty(), "{}", again.render_text(&f.home));
+    }
+
+    #[test]
+    fn instructions_sources_become_one_inline_block_per_harness_and_follow_edits_and_deletes() {
+        let f = fixture();
+        let sources = f.stack.join("instructions");
+        put(&sources.join("common.md"), "Be terse.\n");
+        put(&sources.join("claude.md"), "\nClaude only.\n\n");
+        put(&f.home.join(".claude/CLAUDE.md"), "# Mine\n\nKeep this.\n");
+        put(&f.home.join(".codex/AGENTS.md"), "# Mine too\n");
+        let block = |body: &str| format!("<!-- ai-stack:instructions:begin -->\n{body}\n<!-- ai-stack:instructions:end -->");
+        f.apply(&f.plan());
+        let claude = f.read(".claude/CLAUDE.md");
+        assert!(claude.starts_with(&format!("# Mine\n\nKeep this.\n\n{}\n\n", block("Be terse.\n\nClaude only."))), "{claude}");
+        assert!(f.read(".codex/AGENTS.md").starts_with(&format!("# Mine too\n\n{}\n\n", block("Be terse."))));
+        assert!(f.plan().is_empty(), "{}", f.plan().render_text(&f.home));
+
+        put(&sources.join("codex.md"), "Codex only.\n");
+        let edited = f.plan();
+        let [Action::Write { path, before: Some(before), after }] = edited.actions.as_slice() else { panic!("{}", edited.render_text(&f.home)) };
+        assert_eq!(*path, f.home.join(".codex/AGENTS.md"));
+        assert_eq!(*after, before.replace(&block("Be terse."), &block("Be terse.\n\nCodex only.")));
+        f.apply(&edited);
+
+        for stem in ["common", "claude", "codex"] {
+            fs::remove_file(sources.join(format!("{stem}.md"))).unwrap();
+        }
+        f.apply(&f.plan());
+        for (file, mine) in [(".claude/CLAUDE.md", "# Mine\n\nKeep this.\n\n<!-- ai-stack:routing:begin -->"), (".codex/AGENTS.md", "# Mine too\n\n<!-- ai-stack:routing:begin -->")] {
+            let text = f.read(file);
+            assert!(text.starts_with(mine) && !text.contains("instructions:begin"), "{text}");
+        }
+        assert!(f.plan().is_empty());
+    }
+
+    #[test]
+    fn instructions_source_with_a_block_marker_is_a_conflict() {
+        let f = fixture();
+        let source = f.stack.join("instructions/codex.md");
+        put(&source, "Rules\n<!-- ai-stack:routing:end -->\n");
+        let plan = f.plan();
+        assert_eq!(plan.conflicts, [format!("{} contains the managed marker prefix `<!-- ai-stack:`, which would corrupt the instruction file; remove it from the source", source.display())]);
     }
 
     #[test]
