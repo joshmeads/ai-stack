@@ -8,7 +8,7 @@ use std::path::Path;
 use anyhow::{Context as _, Result, anyhow, bail, ensure};
 use serde::{Deserialize, Serialize};
 
-use crate::auth;
+use crate::{auth, drift};
 
 use crate::exec::{self, Exec, command_line, one_line, shell_quote, short};
 
@@ -16,12 +16,23 @@ use crate::exec::{self, Exec, command_line, one_line, shell_quote, short};
 #[serde(deny_unknown_fields)]
 struct FleetFile {
     #[serde(default)]
+    drift: DriftSection,
+    #[serde(default)]
     machine: BTreeMap<String, Entry>,
+}
+
+#[derive(Default, Deserialize)]
+#[serde(deny_unknown_fields)]
+struct DriftSection {
+    #[serde(default)]
+    ignore: Vec<String>,
 }
 
 #[derive(Deserialize)]
 #[serde(deny_unknown_fields)]
 struct Entry {
+    #[serde(default)]
+    drift_ignore: Vec<String>,
     ssh: Option<String>,
     #[serde(default)]
     local: bool,
@@ -37,6 +48,7 @@ fn default_true() -> bool {
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Machine {
+    pub drift_ignore: Vec<String>,
     pub name: String,
     /// `None` runs on this machine.
     pub ssh: Option<String>,
@@ -62,6 +74,7 @@ pub fn from_str(text: &str, default_stack: &str) -> Result<Vec<Machine>> {
         }
         if entry.enabled {
             machines.push(Machine {
+                drift_ignore: file.drift.ignore.iter().cloned().chain(entry.drift_ignore).collect(),
                 name,
                 ssh: entry.ssh,
                 stack: entry.stack.unwrap_or_else(|| default_stack.to_string()),
@@ -195,6 +208,59 @@ impl Fleet<'_> {
             Ok(counts) => format!("{} skills, {} plugins", counts.skills, counts.plugins),
             Err(err) => format!("unavailable ({})", one_line(&format!("{err:#}"))),
         }
+    }
+
+    pub fn drift(&self, local: &drift::Flat, ignore: &[drift::Pattern], json: bool, out: &mut dyn Write) -> Result<i32> {
+        #[derive(Serialize)]
+        struct Report {
+            state: &'static str,
+            #[serde(flatten, skip_serializing_if = "Option::is_none")]
+            drift: Option<drift::Drift>,
+            #[serde(skip_serializing_if = "Option::is_none")]
+            reason: Option<String>,
+        }
+        let mut reports = BTreeMap::new();
+        let mut synced = true;
+        for machine in &self.machines {
+            let words = self.ai_stack(machine, vec![Word::Arg("config"), Word::Arg("show"), Word::Arg("--json")]);
+            let (program, args) = self.invocation(machine, &words);
+            let scalar = |value: &serde_json::Value| !value.is_object() && !value.is_array() && !value.is_null();
+            let result = match self.exec.run(&program, &args, None) {
+                Err(err) => Err(("unreachable", format!("cannot run command: {}", one_line(&err.to_string())))),
+                Ok(ran) if machine.ssh.is_some() && ran.code == Some(255) => Err(("unreachable", "ssh transport failed (exit 255)".into())),
+                Ok(ran) if !ran.ok => Err(("unavailable", format!("config show failed, exit {}", ran.code.map_or("signal".into(), |n| n.to_string())))),
+                Ok(ran) => serde_json::from_str::<drift::Flat>(ran.stdout.trim())
+                    .ok().filter(|flat| flat.values().all(|value| value.as_array().map_or_else(|| scalar(value), |items| items.iter().all(scalar))))
+                    .ok_or(("unavailable", "unexpected config output".into())),
+            };
+            let report = match result {
+                Ok(remote) => {
+                    let patterns = ignore.iter().chain(&machine.drift_ignore).cloned().collect::<Vec<_>>();
+                    let diff = drift::drift(local, &remote, &patterns);
+                    let state = if diff.keys.is_empty() { "in_sync" } else { "drift" };
+                    if !json {
+                        let count = if diff.keys.is_empty() { "in sync".into() } else { format!("{} keys differ", diff.keys.len()) };
+                        let ignored = if diff.ignored == 0 { String::new() } else { format!(" ({} ignored)", diff.ignored) };
+                        writeln!(out, "{}  {count}{ignored}", machine.name)?;
+                        for key in &diff.keys {
+                            writeln!(out, "  {}  local: {}  remote: {}", key.key, drift::value(key.local.as_ref()), drift::value(key.remote.as_ref()))?;
+                        }
+                    }
+                    Report { state, drift: Some(diff), reason: None }
+                }
+                Err((state, reason)) => {
+                    if !json {
+                        let detail = if state == "unavailable" { format!("unavailable ({reason})") } else { format!("unreachable: {reason}") };
+                        writeln!(out, "{}  {detail}", machine.name)?;
+                    }
+                    Report { state, drift: None, reason: Some(reason) }
+                }
+            };
+            synced &= report.state == "in_sync";
+            reports.insert(&machine.name, report);
+        }
+        if json { writeln!(out, "{}", serde_json::to_string(&serde_json::json!({"machines":reports}))?)?; }
+        Ok(if synced { 0 } else { 1 })
     }
 
     pub fn auth(&self, json: bool, now: i64, out: &mut dyn Write) -> Result<i32> {
@@ -430,6 +496,75 @@ enabled = false
         (code, String::from_utf8(out).unwrap())
     }
 
+    #[test]
+    fn drift_compares_enabled_machines_and_reuses_transport() {
+        let exec = FakeExec::new(|line| {
+            if line.contains("cachy") { ok(r#"{"stack.path":"~/other","harness.codex.home":"~/.personal"}"#) }
+            else { ok(r#"{"stack.path":"~/stack","harness.codex.home":"~/.codex"}"#) }
+        });
+        let local = serde_json::from_str(r#"{"stack.path":"~/stack","harness.codex.home":"~/.codex"}"#).unwrap();
+        let flags = exec::strings(&["--config", "/custom config", "--home", "/custom home"]);
+        let mut f = fleet(&exec);
+        f.local_flags = &flags;
+        let (code, text) = run(|out| f.drift(&local, &[], false, out));
+        assert_eq!(code, 1);
+        assert_eq!(text, "box  in sync\ncachy  2 keys differ\n  harness.codex.home  local: ~/.codex  remote: ~/.personal\n  stack.path  local: ~/stack  remote: ~/other\nmac  in sync\n");
+        assert_eq!(*exec.calls.borrow(), [
+            "ssh -o BatchMode=yes me@box -- 'ai-stack config show --json'",
+            "ssh -o BatchMode=yes cachy -- 'ai-stack config show --json'",
+            "/bin/self --config '/custom config' --home '/custom home' config show --json",
+        ]);
+        let (code, text) = run(|out| f.drift(&local, &["stack.*".into(), "harness.*.home".into()], false, out));
+        assert_eq!(code, 0);
+        assert!(text.contains("cachy  in sync (2 ignored)"));
+        f.machines = from_str(r#"
+[drift]
+ignore = ["stack.*"]
+[machine.cachy]
+ssh = "cachy"
+bin = "~/My Bin/ai's-stack"
+stack = "~/My Stack"
+drift_ignore = ["harness.*.home"]
+"#, "~/stack").unwrap();
+        let mut combined = local.clone();
+        combined.insert("models.extra.id".into(), serde_json::json!("extra"));
+        let (code, text) = run(|out| f.drift(&combined, &["models.extra.*".into(), "unused".into()], true, out));
+        assert_eq!(code, 0);
+        let value: serde_json::Value = serde_json::from_str(&text).unwrap();
+        assert_eq!(value["machines"]["cachy"], serde_json::json!({"state":"in_sync","keys":[],"ignored":3}));
+        assert_eq!(exec.calls.borrow().last().unwrap(), &command_line("ssh", &exec::strings(&["-o", "BatchMode=yes", "cachy", "--", "~/'My Bin/ai'\\''s-stack' config show --json"])));
+        let (code, text) = run(|out| fleet(&exec).drift(&local, &[], true, out));
+        assert_eq!(code, 1);
+        let value: serde_json::Value = serde_json::from_str(&text).unwrap();
+        assert_eq!(value["machines"]["cachy"]["state"], "drift");
+        assert_eq!(value["machines"]["cachy"]["keys"][1], serde_json::json!({"key":"stack.path","local":"~/stack","remote":"~/other"}));
+    }
+
+    #[test]
+    fn drift_reports_unavailable_and_unreachable_and_continues() {
+        let exec = FakeExec::new(|line| {
+            if line.contains("me@box") { exit(255, "connection refused") }
+            else if line.contains("cachy") { exit(2, "unrecognized subcommand 'config'") }
+            else { ok("not json") }
+        });
+        let (code, text) = run(|out| fleet(&exec).drift(&BTreeMap::new(), &[], false, out));
+        assert_eq!(code, 1);
+        assert_eq!(text, "box  unreachable: ssh transport failed (exit 255)\ncachy  unavailable (config show failed, exit 2)\nmac  unavailable (unexpected config output)\n");
+        for response in ["[]", "null", r#"{"nested":{}}"#, r#"{"array":[{}]}"#] {
+            let exec = FakeExec::new(move |_| ok(response));
+            let (code, text) = run(|out| fleet(&exec).drift(&BTreeMap::new(), &[], true, out));
+            assert_eq!(code, 1);
+            let value: serde_json::Value = serde_json::from_str(&text).unwrap();
+            assert_eq!(value["machines"]["mac"]["state"], "unavailable");
+        }
+        let exec = FakeExec::new(|_| Err(std::io::Error::new(std::io::ErrorKind::NotFound, "missing binary")));
+        let (code, text) = run(|out| fleet(&exec).drift(&BTreeMap::new(), &[], true, out));
+        assert_eq!(code, 1);
+        let value: serde_json::Value = serde_json::from_str(&text).unwrap();
+        assert_eq!(value["machines"]["mac"]["state"], "unreachable");
+        assert!(from_str("[drift]\nunknown = []", "~").is_err());
+    }
+
     fn auth_json(provider: &str) -> String {
         let provider: serde_json::Value = serde_json::from_str(provider).unwrap();
         let mut providers = vec![provider.clone()];
@@ -485,7 +620,7 @@ enabled = false
             } else { status.to_string() };
             let exec = FakeExec::new(move |_| ok(&response));
             let mut f = fleet(&exec);
-            f.machines = vec![Machine { name: "custom".into(), ssh: Some("host".into()), stack: "~/My Stack".into(), bin: Some("~/My Bin/ai's-stack".into()) }];
+            f.machines = vec![Machine { drift_ignore: vec![], name: "custom".into(), ssh: Some("host".into()), stack: "~/My Stack".into(), bin: Some("~/My Bin/ai's-stack".into()) }];
             let (code, text) = run(|out| f.auth(true, 100, out));
             assert_eq!(code, expected, "{status}");
             let value: serde_json::Value = serde_json::from_str(&text).unwrap();

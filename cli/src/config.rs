@@ -106,7 +106,7 @@ const MATRIX: [(&str, &str, &[&str]); 5] = [
 
 // ---- File schema (what config.toml contains) ----
 
-#[derive(Debug, Clone, Deserialize)]
+#[derive(Debug, Clone, Deserialize, Serialize)]
 #[serde(deny_unknown_fields)]
 struct ConfigFile {
     stack: StackSection,
@@ -123,7 +123,7 @@ struct ConfigFile {
     skills: SkillsSection,
 }
 
-#[derive(Debug, Clone, Deserialize)]
+#[derive(Debug, Clone, Deserialize, Serialize)]
 #[serde(deny_unknown_fields)]
 struct PerHarness<T> {
     claude: T,
@@ -139,14 +139,14 @@ impl<T> PerHarness<T> {
     }
 }
 
-#[derive(Debug, Clone, Deserialize)]
+#[derive(Debug, Clone, Deserialize, Serialize)]
 #[serde(untagged)]
 enum Lanes {
     Single(String),
     Panel(Vec<String>),
 }
 
-#[derive(Debug, Clone, Deserialize)]
+#[derive(Debug, Clone, Deserialize, Serialize)]
 #[serde(deny_unknown_fields)]
 struct StackSection {
     path: String,
@@ -158,7 +158,7 @@ struct StackSection {
     legacy_paths: Vec<String>,
 }
 
-#[derive(Debug, Clone, Deserialize)]
+#[derive(Debug, Clone, Deserialize, Serialize)]
 #[serde(deny_unknown_fields)]
 struct HarnessSection {
     #[serde(default = "default_claude")]
@@ -173,7 +173,7 @@ impl Default for HarnessSection {
     }
 }
 
-#[derive(Debug, Clone, Deserialize)]
+#[derive(Debug, Clone, Deserialize, Serialize)]
 #[serde(deny_unknown_fields)]
 struct HarnessEntry {
     home: String,
@@ -181,18 +181,20 @@ struct HarnessEntry {
     enabled: bool,
 }
 
-#[derive(Debug, Clone, Deserialize)]
+#[derive(Debug, Clone, Deserialize, Serialize)]
 #[serde(deny_unknown_fields)]
 struct ModelEntry {
     provider: Provider,
     id: String,
     #[serde(default)]
+    #[serde(skip_serializing_if = "Option::is_none")]
     efforts: Option<Vec<Effort>>,
     #[serde(default)]
+    #[serde(skip_serializing_if = "Option::is_none")]
     context: Option<u64>,
 }
 
-#[derive(Debug, Clone, Deserialize)]
+#[derive(Debug, Clone, Deserialize, Serialize)]
 #[serde(deny_unknown_fields, default)]
 struct CleanSection {
     skill_roots: Vec<String>,
@@ -207,7 +209,7 @@ impl Default for CleanSection {
     }
 }
 
-#[derive(Debug, Clone, Deserialize)]
+#[derive(Debug, Clone, Deserialize, Serialize)]
 #[serde(deny_unknown_fields, default)]
 struct SkillsSection {
     prompt_runner: Vec<String>,
@@ -300,7 +302,7 @@ impl Clean {
 }
 
 /// `*` matches any run of characters and `?` one character; everything else is literal.
-fn glob(pattern: &str, text: &str) -> bool {
+pub(crate) fn glob(pattern: &str, text: &str) -> bool {
     let (pattern, text): (Vec<char>, Vec<char>) = (pattern.chars().collect(), text.chars().collect());
     let (mut p, mut t) = (0, 0);
     let mut star: Option<(usize, usize)> = None;
@@ -479,6 +481,24 @@ pub fn from_str(text: &str, home: &Path) -> Result<Config> {
     };
     ensure!(!file.skills.prompt_runner.is_empty(), "[skills] prompt_runner is empty");
     Ok(Config { home: home.to_path_buf(), stack, harnesses, models, leads, review, sheets, clean, prompt_runner: file.skills.prompt_runner })
+}
+
+pub fn flat(text: &str, home: &Path) -> Result<crate::drift::Flat> {
+    from_str(text, home)?;
+    let file: ConfigFile = toml::from_str(text)?;
+    fn flatten(prefix: &str, value: serde_json::Value, flat: &mut crate::drift::Flat) {
+        if let serde_json::Value::Object(table) = value {
+            for (key, value) in table {
+                let key = if prefix.is_empty() { key } else { format!("{prefix}.{key}") };
+                flatten(&key, value, flat);
+            }
+        } else {
+            flat.insert(prefix.to_string(), value);
+        }
+    }
+    let mut flat = crate::drift::Flat::new();
+    flatten("", serde_json::to_value(file)?, &mut flat);
+    Ok(flat)
 }
 
 fn harness_entry(section: &HarnessSection, harness: Harness) -> &HarnessEntry {
