@@ -57,6 +57,12 @@ enum Commands {
         #[arg(long)]
         clean: bool,
     },
+    /// Count the skills and plugins that `--clean` would move or remove. Read-only, like `diff`.
+    Stray {
+        /// Print `{"skills":N,"plugins":M,"skill_names":[...],"plugin_ids":[...]}` on one line.
+        #[arg(long)]
+        json: bool,
+    },
     /// Review the install plan and apply it.
     Install {
         /// Apply without review.
@@ -202,6 +208,7 @@ fn main() -> Result<()> {
     let code = match cli.command {
         Commands::Init { force } => cmd_init(&ctx, force)?,
         Commands::Diff { clean } => cmd_diff(&ctx, clean)?,
+        Commands::Stray { json } => cmd_stray(&ctx, json)?,
         Commands::Install { yes, force, plain, clean } => cmd_install(&ctx, yes, Options { force, clean }, plain)?,
         Commands::Update { yes, plain, bump_models, branch } => cmd_update(&ctx, yes, plain, bump_models, branch)?,
         Commands::Models { bump } => cmd_models(&ctx, bump)?,
@@ -259,6 +266,17 @@ fn cmd_diff(ctx: &Context, clean: bool) -> Result<i32> {
     let plan = install::plan(&cfg, Options { clean, ..Options::default() }, &SystemRunner)?;
     print!("{}", plan.render_text(&ctx.home));
     Ok(if plan.is_empty() { 0 } else { 1 })
+}
+
+fn cmd_stray(ctx: &Context, json: bool) -> Result<i32> {
+    let cfg = load_config(ctx)?;
+    let stray = install::plan(&cfg, Options { clean: true, ..Options::default() }, &SystemRunner)?.stray(&ctx.home);
+    if json {
+        println!("{}", serde_json::to_string(&stray)?);
+    } else {
+        print!("{}", stray.text());
+    }
+    Ok(0)
 }
 
 fn cmd_install(ctx: &Context, yes: bool, opts: Options, plain: bool) -> Result<i32> {

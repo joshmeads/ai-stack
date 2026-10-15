@@ -537,6 +537,7 @@ mod tests {
         let off = f.plan();
         assert_eq!(off.clean_count(), 0);
         assert!(!off.actions.iter().any(|a| matches!(a, Action::MoveToBackup { .. })));
+        assert_eq!(off.stray(&f.home), crate::plan::Stray::default());
 
         let clean = |f: &Fixture| super::plan(&f.cfg, Options { clean: true, ..Options::default() }, &f.runner).unwrap();
         let plan = clean(&f);
@@ -553,6 +554,14 @@ mod tests {
             format!("{claude_env} claude plugin marketplace add {}", f.stack.display()),
         ]);
         assert!(plan.warnings.iter().any(|w| w.contains("pdf-viewer@synced") && w.contains("may sync it back")), "{:?}", plan.warnings);
+        let stray = plan.stray(&f.home);
+        assert_eq!(serde_json::to_string(&stray).unwrap(), json!({
+            "skills": 5,
+            "plugins": 3,
+            "skill_names": ["~/.claude/skills/gone", "~/.claude/skills/linked", "~/.claude/skills/old-skill", "~/.codex/skills/codex-only", "~/.agents/skills/notes.txt"],
+            "plugin_ids": ["expo@claude-plugins-official", "pdf-viewer@synced", "old@market"],
+        }).to_string());
+        assert!(stray.text().starts_with("skills: 5  plugins: 3\n  ~/.claude/skills/gone\n"), "{}", stray.text());
 
         let report = crate::plan::apply(&plan, &f.root.join("backups"), &f.runner).unwrap();
         let backup = report.backup_dir.unwrap().join("home");
