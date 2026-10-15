@@ -278,8 +278,7 @@ impl Skills<'_> {
     fn run_step(&self, step: &Step, dir: &Path) -> Result<()> {
         let (program, args) = match step.kind {
             StepKind::Script => {
-                let script = Path::new(&step.input);
-                let script = if script.is_absolute() { script.to_path_buf() } else { self.stack.join(script) };
+                let script = self.stack.join(&step.input);
                 ("sh".to_string(), vec![script.to_string_lossy().into_owned(), dir.to_string_lossy().into_owned()])
             }
             StepKind::Prompt => {
