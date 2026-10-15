@@ -63,6 +63,26 @@ pub struct ApplyReport {
 
 pub const MANIFEST: &str = "removed-plugins.json";
 
+/// `ai-stack stray`: skills and plugins this stack does not track. `--json` prints it as is.
+#[derive(Debug, Clone, Default, PartialEq, Eq, serde::Serialize)]
+pub struct Stray {
+    pub skills: usize,
+    pub plugins: usize,
+    /// Home-relative paths (`~/.claude/skills/x`), since one name can sit in several roots.
+    pub skill_names: Vec<String>,
+    pub plugin_ids: Vec<String>,
+}
+
+impl Stray {
+    pub fn text(&self) -> String {
+        let mut out = format!("skills: {}  plugins: {}\n", self.skills, self.plugins);
+        for name in self.skill_names.iter().chain(&self.plugin_ids) {
+            out.push_str(&format!("  {name}\n"));
+        }
+        out
+    }
+}
+
 /// Returns a `Write` action when `path` does not already contain exactly `after`.
 pub fn write_if_changed(path: &Path, after: String) -> Result<Option<Action>> {
     let before = current_text(path)?;
@@ -93,6 +113,21 @@ impl Plan {
 
     pub fn clean_count(&self) -> usize {
         (0..self.len()).filter(|&index| self.is_clean(index)).count()
+    }
+
+    /// What the `--clean` lines alone would affect: skill-root entries moved into the backup
+    /// and plugins removed or disabled.
+    pub fn stray(&self, home: &Path) -> Stray {
+        let mut stray = Stray::default();
+        for index in (0..self.len()).filter(|&index| self.is_clean(index)) {
+            match self.actions.get(index) {
+                Some(action) => stray.skill_names.push(tilde(action.path(), home)),
+                None => stray.plugin_ids.extend(self.commands[index - self.actions.len()].args.last().cloned()),
+            }
+        }
+        stray.skills = stray.skill_names.len();
+        stray.plugins = stray.plugin_ids.len();
+        stray
     }
 
     /// One line per action, then one per command, e.g. `write   ~/.claude/CLAUDE.md`.

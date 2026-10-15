@@ -137,20 +137,41 @@ impl Fleet<'_> {
         let mut tips: BTreeMap<String, Result<Option<String>, String>> = BTreeMap::new();
         let mut current = true;
         for machine in &self.machines {
-            let (branch, commit, state) = match self.run(machine, &Self::git(machine, &["rev-parse", "HEAD", "--abbrev-ref", "HEAD"])) {
-                Err(err) => ("?".to_string(), "?".to_string(), format!("unreachable: {}", one_line(&format!("{err:#}")))),
+            let (branch, commit, state, reachable) = match self.run(machine, &Self::git(machine, &["rev-parse", "HEAD", "--abbrev-ref", "HEAD"])) {
+                Err(err) => ("?".to_string(), "?".to_string(), format!("unreachable: {}", one_line(&format!("{err:#}"))), false),
                 Ok(text) => {
                     let mut lines = text.lines().map(str::trim);
                     let commit = lines.next().unwrap_or_default().to_string();
                     let branch = lines.next().unwrap_or_default().to_string();
                     let state = self.compare(&branch, &commit, &mut tips);
-                    (branch, commit, state)
+                    (branch, commit, state, true)
                 }
             };
             current &= state == "current";
             writeln!(out, "{}  {branch}  {}  {state}", machine.name, &commit[..commit.len().min(7)])?;
+            if reachable {
+                writeln!(out, "  stray: {}", self.stray(machine))?;
+            }
         }
         Ok(if current { 0 } else { 1 })
+    }
+
+    /// `<bin> stray --json` on the machine, as `N skills, M plugins`. Informational only: a
+    /// failure (for example an ai-stack that predates `stray`) never changes the status.
+    fn stray(&self, machine: &Machine) -> String {
+        #[derive(Deserialize)]
+        struct Counts {
+            skills: usize,
+            plugins: usize,
+        }
+        let words = [Word::Path(&machine.bin), Word::Arg("stray"), Word::Arg("--json")];
+        let counts = self.run(machine, &words).and_then(|text| {
+            serde_json::from_str::<Counts>(text.trim()).with_context(|| format!("unexpected output {:?}", text.trim()))
+        });
+        match counts {
+            Ok(counts) => format!("{} skills, {} plugins", counts.skills, counts.plugins),
+            Err(err) => format!("unavailable ({})", one_line(&format!("{err:#}"))),
+        }
     }
 
     fn compare(&self, branch: &str, commit: &str, tips: &mut BTreeMap<String, Result<Option<String>, String>>) -> String {
@@ -346,6 +367,8 @@ enabled = false
     #[test]
     fn status_shows_each_branch_against_its_own_remote_tip() {
         let exec = FakeExec::new(|line| match line {
+            "ai-stack stray --json" => ok("{\"skills\":12,\"plugins\":3,\"skill_names\":[],\"plugin_ids\":[]}\n"),
+            l if l.contains("cachy") && l.contains("stray") => fail("error: unrecognized subcommand 'stray'\n\nUsage: ai-stack <COMMAND>"),
             l if l.starts_with("git -C /h/stack rev-parse") => ok(&format!("{A}\nmain\n")),
             l if l.contains("cachy") => ok(&format!("{B}\ntest\n")),
             l if l.contains("me@box") => fail("ssh: connect to host box: Connection refused"),
@@ -359,9 +382,26 @@ enabled = false
         assert!(out.contains("mac  main  aaaaaaa  current"), "{out}");
         assert!(out.contains("cachy  test  bbbbbbb  behind"), "{out}");
         assert!(out.contains("box  ?  ?  unreachable: `ssh -o BatchMode=yes me@box"), "{out}");
+        assert!(out.contains("mac  main  aaaaaaa  current\n  stray: 12 skills, 3 plugins\n"), "{out}");
+        assert!(out.contains("cachy  test  bbbbbbb  behind\n  stray: unavailable (`ssh -o BatchMode=yes cachy -- 'ai-stack stray --json'` failed: error: unrecognized subcommand 'stray' Usage: ai-stack <COMMAND>)\n"), "{out}");
+        assert_eq!(out.matches("stray:").count(), 2, "an unreachable machine gets no stray query: {out}");
         let calls = exec.calls.borrow();
         assert!(calls.contains(&r#"ssh -o BatchMode=yes cachy -- 'git -C ~/'\''My Stack'\'' rev-parse HEAD --abbrev-ref HEAD'"#.to_string()), "{calls:?}");
         assert!(calls.contains(&"git -C /h/stack ls-remote origin refs/heads/test".to_string()), "{calls:?}");
+    }
+
+    #[test]
+    fn unparsable_stray_output_is_unavailable_and_leaves_the_exit_code_alone() {
+        let exec = FakeExec::new(|line| match line {
+            l if l.contains("stray") => ok("skills: 1  plugins: 0\n"),
+            l if l.contains("rev-parse") => ok(&format!("{A}\nmain\n")),
+            _ => ok(&format!("{A}\trefs/heads/main\n")),
+        });
+        let mut f = fleet(&exec);
+        f.machines.retain(|machine| machine.name == "mac");
+        let (code, out) = run(|out| f.status(out));
+        assert_eq!(code, 0, "{out}");
+        assert!(out.contains("  stray: unavailable (unexpected output \"skills: 1 plugins: 0\": expected value"), "{out}");
     }
 
     #[test]
