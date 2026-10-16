@@ -4,14 +4,15 @@ mod config;
 mod drift;
 mod exec;
 mod fleet;
+mod groups;
 mod install;
-mod manifest;
 mod models;
 mod paths;
 mod plan;
 mod plugins;
 mod render;
 mod skills;
+mod stackfile;
 mod tui;
 
 use std::fs;
@@ -111,10 +112,17 @@ enum Commands {
         #[arg(long)]
         bump: bool,
     },
-    /// Skills vendored from external git repos, recorded in <stack>/manifest.toml.
+    /// Skills vendored from external git repos, recorded in <stack>/stack.toml.
     Skills {
         #[command(subcommand)]
         command: SkillsCommand,
+    },
+    /// Each skill group in <stack>/stack.toml: global or not, its skills after includes, and
+    /// an estimated token cost of their names and descriptions.
+    Groups {
+        /// Print the report as JSON.
+        #[arg(long)]
+        json: bool,
     },
     /// Machines in <config dir>/fleet.toml that stack updates are pushed to.
     Fleet {
@@ -187,7 +195,7 @@ enum FleetCommand {
 
 #[derive(Subcommand)]
 enum SkillsCommand {
-    /// Vendor a skill directory from a git repo and record it in the manifest.
+    /// Vendor a skill directory from a git repo into a group and record it in stack.toml.
     Add {
         /// Git URL or path of the upstream repo. A local path is stored as its absolute path.
         source: String,
@@ -195,10 +203,13 @@ enum SkillsCommand {
         path: String,
         /// Upstream branch or tag to track (or a 40-hex commit to pin). To test another
         /// upstream branch later, run `skills update --ref <branch> <name>`.
-        #[arg(long = "ref", value_name = "REF", default_value = manifest::DEFAULT_REF)]
+        #[arg(long = "ref", value_name = "REF", default_value = stackfile::DEFAULT_REF)]
         git_ref: String,
-        /// Parent directory inside the stack.
-        #[arg(long, value_name = "DIR", default_value = manifest::DEFAULT_DEST)]
+        /// Existing group in stack.toml that the skill joins.
+        #[arg(long, value_name = "GROUP")]
+        group: String,
+        /// Parent directory inside the stack. A skill in a group must use the default.
+        #[arg(long, value_name = "DIR", default_value = stackfile::DEFAULT_DEST)]
         dest: String,
         /// Install under this directory name and rewrite SKILL.md's `name:` to it.
         #[arg(long = "move", value_name = "NAME")]
@@ -209,7 +220,7 @@ enum SkillsCommand {
         /// Prompt run through [skills] prompt_runner in the staged skill dir on every pull.
         #[arg(long, value_name = "TEXT")]
         process_prompt: Option<String>,
-        /// Manifest name (default: the last component of PATH).
+        /// Entry name in stack.toml (default: the last component of PATH).
         #[arg(long)]
         name: Option<String>,
     },
@@ -267,6 +278,7 @@ fn main() -> Result<()> {
         Commands::Update { yes, plain, bump_models, branch } => cmd_update(&ctx, yes, plain, bump_models, branch)?,
         Commands::Models { bump } => cmd_models(&ctx, bump)?,
         Commands::Skills { command } => cmd_skills(&ctx, command)?,
+        Commands::Groups { json } => cmd_groups(&ctx, json)?,
         Commands::Fleet { command } => cmd_fleet(&ctx, command)?,
     };
     io::stdout().flush()?;
@@ -487,18 +499,29 @@ fn cmd_skills(ctx: &Context, command: SkillsCommand) -> Result<i32> {
     let skills = skills::Skills { exec: &exec::SystemExec, stack: &cfg.stack.path, prompt_runner: &cfg.prompt_runner };
     let mut out = io::stdout();
     match command {
-        SkillsCommand::Add { source, path, git_ref, dest, rename, process_script, process_prompt, name } => {
+        SkillsCommand::Add { source, path, git_ref, group, dest, rename, process_script, process_prompt, name } => {
             let process = match (process_script, process_prompt) {
-                (Some(input), _) => vec![manifest::Step { kind: manifest::StepKind::Script, input }],
-                (_, Some(input)) => vec![manifest::Step { kind: manifest::StepKind::Prompt, input }],
+                (Some(input), _) => vec![stackfile::Step { kind: stackfile::StepKind::Script, input }],
+                (_, Some(input)) => vec![stackfile::Step { kind: stackfile::StepKind::Prompt, input }],
                 _ => Vec::new(),
             };
-            skills.add(skills::Add { source, path, git_ref, dest, rename, process, name }, &mut out)?;
+            skills.add(skills::Add { source, path, git_ref, dest, rename, process, name, group }, &mut out)?;
             Ok(0)
         }
         SkillsCommand::Status => skills.status(&mut out),
         SkillsCommand::Update { names, git_ref, reprocess, force } => skills.update(skills::Update { names: &names, git_ref, reprocess, force }, &mut out),
     }
+}
+
+fn cmd_groups(ctx: &Context, json: bool) -> Result<i32> {
+    let cfg = load_config(ctx)?;
+    let report = groups::report(&cfg.stack.path, &stackfile::load(&cfg.stack.path)?)?;
+    if json {
+        println!("{}", serde_json::to_string(&report)?);
+    } else {
+        print!("{}", report.text());
+    }
+    Ok(0)
 }
 
 fn cmd_fleet(ctx: &Context, command: FleetCommand) -> Result<i32> {
