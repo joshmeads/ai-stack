@@ -13,15 +13,11 @@ pub struct Provider {
     pub id: &'static str,
     pub name: &'static str,
     pub binary: &'static str,
-    pub login: Login,
+    /// The headless login argv, run as is.
+    pub login: &'static [&'static str],
     pub status: &'static [&'static str],
     parser: fn(&Ran) -> State,
     expiry: Option<ExpirySource>,
-}
-
-pub enum Login {
-    Supported(&'static [&'static str]),
-    Unsupported(&'static str),
 }
 
 struct ExpirySource {
@@ -32,10 +28,10 @@ struct ExpirySource {
 }
 
 pub const PROVIDERS: &[Provider] = &[
-    Provider { id: "claude", name: "Claude Code", binary: "claude", login: Login::Supported(&["claude", "auth", "login"]), status: &["auth", "status", "--json"], parser: claude, expiry: if cfg!(target_os = "linux") { Some(ExpirySource { env: "CLAUDE_CONFIG_DIR", directory: ".claude", file: ".credentials.json", reader: claude_expiry }) } else { None } },
-    Provider { id: "codex", name: "Codex", binary: "codex", login: Login::Supported(&["codex", "login", "--device-auth"]), status: &["login", "status"], parser: codex, expiry: Some(ExpirySource { env: "CODEX_HOME", directory: ".codex", file: "auth.json", reader: codex_expiry }) },
-    Provider { id: "cursor", name: "Cursor Agent", binary: "cursor-agent", login: Login::Supported(&["env", "NO_OPEN_BROWSER=1", "cursor-agent", "login"]), status: &["status", "--format", "json"], parser: cursor, expiry: None },
-    Provider { id: "opencode", name: "OpenCode", binary: "opencode", login: Login::Supported(&["opencode", "auth", "login"]), status: &["auth", "list"], parser: opencode, expiry: None },
+    Provider { id: "claude", name: "Claude Code", binary: "claude", login: &["claude", "auth", "login"], status: &["auth", "status", "--json"], parser: claude, expiry: if cfg!(target_os = "linux") { Some(ExpirySource { env: "CLAUDE_CONFIG_DIR", directory: ".claude", file: ".credentials.json", reader: claude_expiry }) } else { None } },
+    Provider { id: "codex", name: "Codex", binary: "codex", login: &["codex", "login", "--device-auth"], status: &["login", "status"], parser: codex, expiry: Some(ExpirySource { env: "CODEX_HOME", directory: ".codex", file: "auth.json", reader: codex_expiry }) },
+    Provider { id: "cursor", name: "Cursor Agent", binary: "cursor-agent", login: &["env", "NO_OPEN_BROWSER=1", "cursor-agent", "login"], status: &["status", "--format", "json"], parser: cursor, expiry: None },
+    Provider { id: "opencode", name: "OpenCode", binary: "opencode", login: &["opencode", "auth", "login"], status: &["auth", "list"], parser: opencode, expiry: None },
 ];
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize)]
@@ -284,17 +280,13 @@ mod tests {
     }
 
     #[test]
-    fn login_commands_are_static_safe_words_or_explicitly_unsupported() {
+    fn login_commands_are_static_safe_words() {
         for provider in PROVIDERS {
-            match provider.login {
-                Login::Supported(argv) => {
-                    assert!(!argv.is_empty(), "{}", provider.id);
-                    assert!(argv.contains(&provider.binary));
-                    for word in argv {
-                        assert!(!word.is_empty() && word.chars().all(|c| c.is_ascii_alphanumeric() || "/._-=".contains(c)), "{word}");
-                    }
-                }
-                Login::Unsupported(reason) => assert!(!reason.is_empty()),
+            let argv = provider.login;
+            assert!(!argv.is_empty(), "{}", provider.id);
+            assert!(argv.contains(&provider.binary));
+            for word in argv {
+                assert!(!word.is_empty() && word.chars().all(|c| c.is_ascii_alphanumeric() || "/._-=".contains(c)), "{word}");
             }
         }
     }

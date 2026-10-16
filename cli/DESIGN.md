@@ -61,7 +61,7 @@ All git, ssh, script and prompt invocations, including `update`'s pull, go throu
 
 ## Login status
 
-`auth.rs` owns the const `PROVIDERS` descriptor table: id, display name, binary, login argv or an explicit unsupported reason (`Login`), read-only status argv, parser and optional expiry source (home environment variable, default directory, filename and reader). Add a provider with one table row and its parser, plus parser fixtures. The login column is the sole source of executable login argv; machine and provider inputs only select table entries. No logout command is implemented.
+`auth.rs` owns the const `PROVIDERS` descriptor table: id, display name, binary, headless login argv, read-only status argv, parser and optional expiry source (home environment variable, default directory, filename and reader). Add a provider with one table row and its parser, plus parser fixtures. The login column is the sole source of executable login argv; machine and provider inputs only select table entries. No logout command is implemented.
 
 `Report` holds a provider id and `State`. `LoggedIn` alone carries account, expiry, source and optional refresh presence, so logged-out and absent providers cannot carry an expiry. The wire schema flattens these into `id`, `state`, and optional fields inside `{"providers":[...]}`; deserialization rejects unknown fields and invalid state combinations. Provider CLI output is parsed selectively because their schemas may grow. The `Exec` seam includes PATH availability, so tests use fakes without executing provider commands.
 
@@ -75,7 +75,7 @@ This uses the existing SSH transport: BatchMode, the owner's key authentication 
 
 ## Fleet login
 
-`fleet login <MACHINE> <PROVIDER>` resolves a named fleet entry, including disabled entries with a warning, and a provider id from `auth::PROVIDERS`. Unknown names list valid choices. stdin and stdout must both be terminals; the terminal check is injected into `Fleet::login` for fake-only tests. An unsupported login returns its table reason before executing anything.
+`fleet login <MACHINE> <PROVIDER>` resolves a named fleet entry, including disabled entries with a warning, and a provider id from `auth::PROVIDERS`. Unknown names list valid choices. stdin and stdout must both be terminals; the terminal check is injected into `Fleet::login` for fake-only tests.
 
 The provider login column was checked against each installed Mac CLI's `--help`. Installed code was also inspected where help did not establish a headless flow:
 
