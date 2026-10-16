@@ -11,7 +11,6 @@ import {
   writeFileSync,
   writeSync,
 } from "node:fs";
-import { homedir } from "node:os";
 import { dirname, isAbsolute, join, relative, resolve, sep } from "node:path";
 import type { Lane, LaunchFacts, ParseResult } from "./registry/index.ts";
 import {
@@ -430,34 +429,6 @@ function within(parent: string, child: string): boolean {
 // what the writer's own git will use. Returns null for a non-repository or a directory the cwd
 // contains, and refuses whatever cannot be denied literally: denyWrite entries are globs that
 // cannot be escaped, and Claude Code 2.1.288 on Linux drops entries containing * ? [ ].
-// Why a provider's project config would load in the cwd, or null. A CLI that loads repository-controlled config from
-// the cwd or a parent up to the git root, or up to / outside a repository, does not run: the runner bypasses its
-// workspace trust. A path ending in "/" matches only a directory; one starting with "./" matches only a file in the
-// cwd itself. When that walk would reach the home directory, the lane is refused outright: the CLI's own walk would
-// load the home directory's config, such as ~/.agents hooks or ~/.env.
-export function projectConfigRefusal(id: string, cwd: string, names: Lane["adapter"]["launch"]["projectConfig"]): string | null {
-  if (names.length === 0) return null;
-  const home = existsSync(homedir()) ? realpathSync(homedir()) : null;
-  const start = realpathSync(cwd);
-  let boundary = start;
-  while (!existsSync(join(boundary, ".git")) && dirname(boundary) !== boundary) boundary = dirname(boundary);
-  if (home !== null && within(home, start) && within(boundary, home)) {
-    return `${id} lanes under the home directory run only inside a git repository rooted below it: the CLI's project-config walk would reach ${home}`;
-  }
-  for (let dir = start; ; dir = dirname(dir)) {
-    for (const name of names) {
-      const cwdOnly = name.startsWith("./");
-      if (cwdOnly && dir !== start) continue;
-      const candidate = join(dir, name).replace(/\/$/, "");
-      const found = statSync(candidate, { throwIfNoEntry: false });
-      if (cwdOnly ? found?.isFile() : found?.isDirectory()) {
-        return `${id} lanes do not run in a workspace with ${candidate}: the CLI would load that repository-controlled config`;
-      }
-    }
-    if (dir === boundary) return null;
-  }
-}
-
 export async function discoverSharedGitDir(
   cwd: string,
   env: NodeJS.ProcessEnv,
@@ -745,35 +716,6 @@ async function executeLane(
       costUsd: null,
       error: {
         message: `${adapter.executable} executable not found`,
-        evidence: "",
-      },
-    });
-    removeIfExists(lane.outputPath);
-    writeReceipt(lane.receiptPath, receipt);
-    return { exitCode: statusExitCode(receipt.status), receipt };
-  }
-
-  const projectConfigMessage = projectConfigRefusal(adapter.id, lane.cwd, adapter.launch.projectConfig);
-  if (projectConfigMessage !== null) {
-    const completed = Date.now();
-    receipt = completeReceipt(lane, {
-      status: "child-failed",
-      startedAt,
-      completedAt: new Date(completed).toISOString(),
-      elapsedMs: completed - started,
-      executable,
-      preflight: preflightState,
-      argv: [executable, ...launchArgs],
-      exitCode: null,
-      signal: null,
-      reportedModel: null,
-      modelVerified: false,
-      modelEvidence: null,
-      sessionId: null,
-      usage: null,
-      costUsd: null,
-      error: {
-        message: projectConfigMessage,
         evidence: "",
       },
     });

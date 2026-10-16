@@ -1,4 +1,4 @@
-import { afterEach, beforeEach, describe, expect, it, mock, spyOn } from "bun:test";
+import { afterEach, beforeEach, describe, expect, it, spyOn } from "bun:test";
 import * as fs from "node:fs";
 import {
   chmodSync,
@@ -14,15 +14,12 @@ import {
   writeFileSync,
 } from "node:fs";
 import { dirname, join, resolve } from "node:path";
-import * as os from "node:os";
 import { tmpdir } from "node:os";
-import { childEnvironment, discoverSharedGitDir, projectConfigRefusal, runLane } from "./run.ts";
+import { childEnvironment, discoverSharedGitDir, runLane } from "./run.ts";
 import { main } from "./cli.ts";
 import { type LaneRequest, resolveLane } from "./registry/index.ts";
 import type { Lane, ProviderAdapter } from "./registry/contract.ts";
-import { agy } from "./providers/agy.ts";
 import { devin } from "./providers/devin.ts";
-import { dsh } from "./providers/dsh.ts";
 import { opencode } from "./providers/opencode.ts";
 import { BASE_ALLOWLIST, BASE_PREFIXES } from "./providers/shared.ts";
 import type { ProviderId } from "./registry/family.ts";
@@ -1846,29 +1843,13 @@ await Bun.sleep(5_000);`);
     }
   });
 
-  it("refuses a Devin lane whose workspace holds .devin/ project config, up to the git root", async () => {
-    fakeDevin(LOGGED_IN, "writeFileSync(exportPath, '{}'); process.exit(0);");
-    const repo = join(scratch, "repo"), nested = join(repo, "src");
-    fs.mkdirSync(join(repo, ".devin"), { recursive: true });
-    fs.mkdirSync(nested);
-    const input = devinOptions("devin-project-config", { cwd: nested });
-    expect((await runLane(laneOf(input))).exitCode).toBe(70);
-    expect(receipt(input.receiptPath)).toMatchObject({ status: "child-failed", error: { message: expect.stringContaining(`${join(fs.realpathSync(repo), ".devin")}: the CLI would load that repository-controlled config`) } });
-
-    // A plain .devin file holds no project config.
-    fs.rmSync(join(repo, ".devin"), { recursive: true });
-    fs.writeFileSync(join(repo, ".devin"), "not a directory\n");
+  it("runs a Devin lane in a repository that holds .devin/", async () => {
     fakeDevin(LOGGED_IN, OBSERVE);
-    const plain = devinOptions("devin-plain-file", { cwd: nested });
-    expect((await runLane(laneOf(plain))).exitCode).toBe(0);
-    fs.rmSync(join(repo, ".devin"));
+    const repo = join(scratch, "repo");
+    fs.mkdirSync(join(repo, ".git"), { recursive: true });
     fs.mkdirSync(join(repo, ".devin"));
-
-    // The walk stops at the git root: a .devin/ above it belongs to another project.
-    fs.mkdirSync(join(nested, ".git"));
-    fakeDevin(LOGGED_IN, OBSERVE);
-    const inside = devinOptions("devin-below-git-root", { cwd: nested });
-    expect((await runLane(laneOf(inside))).exitCode).toBe(0);
+    const input = devinOptions("devin-repo-config", { cwd: repo });
+    expect((await runLane(laneOf(input))).receipt).toMatchObject({ status: "complete", exitCode: 0 });
   });
 
   it("refuses an isolated-write Devin lane before launch", () => {
@@ -1879,7 +1860,7 @@ await Bun.sleep(5_000);`);
 });
 
 // A provider that uses every optional part of the contract: run-owned environment values, a nested sidecar config
-// with no output file, a project config directory, and a stdin envelope.
+// with no output file and a stdin envelope.
 const STAND_IN_CONFIG = ".agents/agents/lane.md";
 const STAND_IN: ProviderAdapter = {
   ...devin,
@@ -1894,7 +1875,6 @@ const STAND_IN: ProviderAdapter = {
     prompt: "stdin",
     sidecar: { output: null, config: { name: STAND_IN_CONFIG, content: (lane) => `effort: ${lane.effort}\n` } },
     supports: ["read-only"],
-    projectConfig: [".agents/"],
     stdinEnvelope: (prompt) => `${JSON.stringify({ event: "user", message: { role: "user", content: prompt } })}\n`,
     needsSharedGitDir: () => false,
     argv: () => ["run"],
@@ -1967,89 +1947,6 @@ process.stdout.write(await Bun.stdin.text());
     });
     expect(readFileSync(lane.outputPath, "utf8"))
       .toBe(`${JSON.stringify({ event: "user", message: { role: "user", content: "Return \"the\" marker.\n" } })}\n`);
-  });
-
-  it("refuses a lane whose cwd's parent holds a listed project config directory", async () => {
-    const repo = join(scratch, "repo"), nested = join(repo, "src");
-    mkdirSync(join(repo, ".agents"), { recursive: true });
-    mkdirSync(nested);
-    const lane = standInLane("stand-in-project-dir", { cwd: nested });
-    const result = await runLane(lane);
-    expect(result.exitCode).toBe(70);
-    expect(result.receipt).toMatchObject({
-      status: "child-failed",
-      preflight: { status: "not-run" },
-      error: { message: expect.stringContaining(`${join(realpathSync(repo), ".agents")}: the CLI would load`) },
-    });
-  });
-});
-
-describe("projectConfigRefusal", () => {
-  // Bun reads HOME once at startup, so the test replaces homedir() instead of setting HOME.
-  beforeEach(() => {
-    spyOn(os, "homedir").mockReturnValue(join(scratch, "home"));
-    mkdirSync(join(scratch, "home", ".agents"), { recursive: true });
-  });
-  afterEach(() => {
-    mock.restore();
-  });
-  const refuse = (cwd: string, adapter: ProviderAdapter = agy) => projectConfigRefusal(adapter.id, cwd, adapter.launch.projectConfig);
-  const homeMessage = () =>
-    `agy lanes under the home directory run only inside a git repository rooted below it: the CLI's project-config walk would reach ${realpathSync(join(scratch, "home"))}`;
-  const found = (path: string, id = "agy") =>
-    `${id} lanes do not run in a workspace with ${path}: the CLI would load that repository-controlled config`;
-
-  it("refuses the home directory, a cwd under it outside a repository, and a repository rooted at it", () => {
-    const cwd = join(scratch, "home/notes");
-    mkdirSync(cwd, { recursive: true });
-    expect(refuse(cwd)).toBe(homeMessage());
-    expect(refuse(join(scratch, "home"))).toBe(homeMessage());
-    mkdirSync(join(scratch, "home/.git"));
-    expect(refuse(cwd)).toBe(homeMessage());
-    expect(refuse(cwd, dsh)).toStartWith("dsh lanes under the home directory");
-  });
-
-  it("runs in a repository below the home that holds no listed entry, whatever the home holds", () => {
-    const repo = join(scratch, "home/repo");
-    mkdirSync(join(repo, ".git"), { recursive: true });
-    mkdirSync(join(repo, "src"));
-    for (const adapter of [agy, dsh]) expect(refuse(join(repo, "src"), adapter)).toBeNull();
-    expect(projectConfigRefusal("claude", join(scratch, "home"), [])).toBeNull();
-  });
-
-  it("finds config in the cwd or a parent up to the git root", () => {
-    const repo = join(scratch, "home/repo");
-    mkdirSync(join(repo, ".git"), { recursive: true });
-    mkdirSync(join(repo, ".agents"));
-    mkdirSync(join(repo, "src"));
-    expect(refuse(join(repo, "src"))).toBe(found(join(realpathSync(repo), ".agents")));
-    expect(refuse(repo)).toBe(found(join(realpathSync(repo), ".agents")));
-  });
-
-  it("walks to / outside the home and a repository", () => {
-    const cwd = join(scratch, "outside/src");
-    mkdirSync(cwd, { recursive: true });
-    expect(refuse(cwd)).toBeNull();
-    mkdirSync(join(scratch, "outside/.agents"));
-    expect(refuse(cwd)).toBe(found(join(realpathSync(scratch), "outside/.agents")));
-  });
-
-  it("reads a file named like a config directory as absent", () => {
-    const cwd = join(scratch, "plain");
-    mkdirSync(cwd);
-    for (const name of [".agents", ".agent", "_agents", "_agent"]) writeFileSync(join(cwd, name), "");
-    expect(refuse(cwd)).toBeNull();
-  });
-
-  it("checks a ./ path as a file in the cwd only", () => {
-    const repo = join(scratch, "home/env-repo"), sub = join(repo, "sub"), venv = join(repo, "venv");
-    mkdirSync(join(repo, ".git"), { recursive: true });
-    mkdirSync(sub);
-    mkdirSync(join(venv, ".env"), { recursive: true });
-    writeFileSync(join(repo, ".env"), "A=1\n");
-    expect(refuse(repo, dsh)).toBe(found(join(realpathSync(repo), ".env"), "dsh"));
-    expect(refuse(sub, dsh)).toBeNull();
-    expect(refuse(venv, dsh)).toBeNull();
   });
 });
 
@@ -2582,6 +2479,15 @@ process.exit(130);`);
     expect(readFileSync(join(bin, "dsh.calls"), "utf8")).toBe("version\npreflight\nmodel\n");
   });
 
+  it("runs a dsh lane whose cwd holds .env", async () => {
+    fakeDsh(TRANSPORT, OBSERVE);
+    const cwd = join(scratch, "env-repo");
+    fs.mkdirSync(join(cwd, ".git"), { recursive: true });
+    writeFileSync(join(cwd, ".env"), "PSTACK_FIXTURE=1\n");
+    const input = dshOptions("dsh-cwd-env", { cwd });
+    expect((await runLane(laneOf(input))).receipt).toMatchObject({ status: "complete", exitCode: 0 });
+  });
+
   it("refuses an isolated-write dsh lane before launch", () => {
     const input = dshOptions("dsh-writer", { mode: "isolated-write" });
     expect(() => laneOf(input)).toThrow("provider dsh does not support isolated-write");
@@ -2891,30 +2797,13 @@ ${OBSERVE}`);
     expect(existsSync(missing.outputPath)).toBe(false);
   });
 
-  it("refuses an agy lane whose workspace holds any of the four project directories, up to the git root", async () => {
-    const repo = join(scratch, "repo"), nested = join(repo, "src");
-    fs.mkdirSync(nested, { recursive: true });
-    for (const name of [".agents", ".agent", "_agents", "_agent"]) {
-      const started = join(scratch, `agy-${name}.started`);
-      fakeAgy(`writeFileSync(${JSON.stringify(started)}, "started");`);
-      fs.mkdirSync(join(repo, name));
-      const input = agyOptions(`agy-project-config${name}`, { cwd: nested });
-      expect((await runLane(laneOf(input))).exitCode).toBe(70);
-      expect(receipt(input.receiptPath)).toMatchObject({
-        status: "child-failed",
-        preflight: { status: "not-run" },
-        error: { message: expect.stringContaining(`${join(fs.realpathSync(repo), name)}: the CLI would load`) },
-      });
-      expect(existsSync(started)).toBe(false);
-      fs.rmSync(join(repo, name), { recursive: true });
-    }
-
-    // The walk stops at the git root: an .agents/ above it belongs to another project.
-    fs.mkdirSync(join(repo, ".agents"));
-    fs.mkdirSync(join(nested, ".git"));
+  it("runs an agy lane in a repository that holds .agents/", async () => {
     fakeAgy(OBSERVE);
-    const inside = agyOptions("agy-below-git-root", { cwd: nested });
-    expect((await runLane(laneOf(inside))).exitCode).toBe(0);
+    const repo = join(scratch, "repo");
+    fs.mkdirSync(join(repo, ".git"), { recursive: true });
+    fs.mkdirSync(join(repo, ".agents"));
+    const input = agyOptions("agy-repo-config", { cwd: repo });
+    expect((await runLane(laneOf(input))).receipt).toMatchObject({ status: "complete", exitCode: 0 });
   });
 
   it("refuses an isolated-write agy lane before launch", () => {

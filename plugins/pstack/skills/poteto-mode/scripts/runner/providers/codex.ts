@@ -72,7 +72,6 @@ export const codex = adapter({
     prompt: "stdin",
     sidecar: null,
     supports: ["read-only", "isolated-write", "isolated-write-full-access"],
-    projectConfig: [],
     needsSharedGitDir: () => false,
     argv: (lane) => [
       "exec",

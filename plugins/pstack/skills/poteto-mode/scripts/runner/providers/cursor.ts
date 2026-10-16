@@ -94,9 +94,6 @@ export const cursor = adapter({
     sidecar: { output: null, config: { name: "cli-config.json", content: () => `${JSON.stringify(LOCKDOWN, null, 2)}\n` } },
     // In agent mode the edit tool wrote outside the cwd under every flag combination, so no mode is a bounded writer.
     supports: ["read-only"],
-    // Under #203 the repository's `.cursor/` and `.claude/` config applies as the operator set it up; the notes say
-    // what it loads.
-    projectConfig: [],
     needsSharedGitDir: () => false,
     argv: (lane) => [
       "-p",

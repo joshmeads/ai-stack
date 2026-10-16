@@ -105,7 +105,6 @@ export const claude = adapter({
     prompt: "stdin",
     sidecar: null,
     supports: ["read-only", "isolated-write"],
-    projectConfig: [],
     needsSharedGitDir: (access) => access.mode === "isolated-write",
     argv: (lane, facts) => [
       "-p",

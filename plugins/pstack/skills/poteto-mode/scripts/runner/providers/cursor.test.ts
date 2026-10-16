@@ -66,7 +66,6 @@ describe("cursor launch", () => {
     if (policy.kind !== "allowlist") throw new Error("expected an allowlist");
     expect(policy.names.filter((name) => name.startsWith("CURSOR_"))).toEqual(["CURSOR_API_KEY", "CURSOR_AUTH_TOKEN"]);
     expect(policy.prefixes.some((prefix) => "CURSOR_API_ENDPOINT".startsWith(prefix))).toBe(false);
-    expect(cursor.launch.projectConfig).toEqual([]);
   });
 });
 
