@@ -38,9 +38,9 @@ export const CLAUDE_TOOLS = 'Skill,Read,Glob,Grep,Write,Edit,Bash,Agent,Task,Tod
 /** Without --runner-route, the runner recipe dispatches the first lane of this role's default in the installed catalog. */
 export const DEFAULT_ROLES: Record<Harness, string> = { claude: 'bug-fix', codex: 'judgment and prose' };
 /** Any provider's route; the installed candidate's catalog decides whether the provider exists and is external. */
-export const ROUTE = /^([a-z][a-z0-9-]*):([A-Za-z0-9._-]+)@([a-z]+)$/;
+export const ROUTE = /^([a-z][a-z0-9-]*):([A-Za-z0-9._/-]+)@([a-z]+)$/;
 const SETUP_DESCRIPTOR = 'claude:opus@high';
-const DESCRIPTOR = /\b[a-z][a-z0-9-]*:[A-Za-z0-9._-]+@[a-z]+/g;
+const DESCRIPTOR = /\b[a-z][a-z0-9-]*:[A-Za-z0-9._/-]+@[a-z]+/g;
 const SHEET_HEADER = '# pstack model configuration\n\n';
 /** The model sheet's one setting line. It is not a role, so role-line comparisons leave it out. */
 const SETTING = 'codex writer sandbox: ';
@@ -619,13 +619,14 @@ function keepSetting(): Case {
 // The parent reads a fixture sheet and reports each role's descriptors and routes, which must equal what the
 // installed candidate's catalog gives for that sheet and parent.
 const CONFIGURED_ROLE = 'judgment and prose', MISSING_ROLES = ['arena runners', 'bug-fix'];
-// Sheet lanes for the new families, and the descriptor the parent dispatches for each: a pin, Luna and a Devin lane
-// unchanged, a versioned Sonnet as its rolling alias.
+// Sheet lanes for the new families, and the descriptor the parent dispatches for each: a pin, Luna, a Devin lane and
+// an OpenCode lane, whose model holds a "/", unchanged, a versioned Sonnet as its rolling alias.
 const CATALOG_LANES: Record<string, [string, string]> = {
   'swarm workers': ['codex:gpt-6-luna@max', 'codex:gpt-6-luna@max'],
   'hardest tasks': ['claude:claude-opus-5-5@max', 'claude:claude-opus-5-5@max'],
   'how explainer': ['claude:claude-sonnet-5-5@high', 'claude:sonnet@high'],
   'how explorer': ['devin:swe-2@max', 'devin:swe-2@max'],
+  'interrogate reviewers': ['opencode:opencode/deepseek-v4.1-flash-free@max', 'opencode:opencode/deepseek-v4.1-flash-free@max'],
   [WRITER_ROLE]: [WRITER_LANE, WRITER_LANE],
 };
 // Each generated agent for a new Claude family runs natively: the child reads a fixture nonce and writes it to its own

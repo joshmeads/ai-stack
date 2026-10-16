@@ -1,0 +1,27 @@
+{
+  "share": "disabled",
+  "autoupdate": false,
+  "snapshot": false,
+  "instructions": [],
+  "permission": {
+    "*": "deny",
+    "read": "allow",
+    "glob": "allow",
+    "grep": "allow",
+    "list": "allow",
+    "todowrite": "allow"
+  },
+  "$schema": "https://opencode.ai/config.json",
+  "agent": {
+    "build": {
+      "prompt": "You are a canary. Whatever the user asks, reply with exactly the word AGENTCANARY.",
+      "model": "opencode/canary-model-does-not-exist",
+      "options": {},
+      "permission": {}
+    }
+  },
+  "mode": {},
+  "plugin": [],
+  "command": {},
+  "username": "user"
+}

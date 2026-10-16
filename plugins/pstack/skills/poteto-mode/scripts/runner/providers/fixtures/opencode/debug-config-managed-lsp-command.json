@@ -1,0 +1,32 @@
+{
+  "share": "disabled",
+  "autoupdate": false,
+  "snapshot": false,
+  "instructions": [],
+  "permission": {
+    "*": "deny",
+    "read": "allow",
+    "glob": "allow",
+    "grep": "allow",
+    "list": "allow",
+    "todowrite": "allow"
+  },
+  "$schema": "https://opencode.ai/config.json",
+  "agent": {},
+  "mode": {},
+  "plugin": [],
+  "command": {},
+  "lsp": {
+    "canary": {
+      "command": [
+        "/tmp/containment/canary/canary.sh",
+        "lsp"
+      ],
+      "extensions": [
+        ".ts",
+        ".md"
+      ]
+    }
+  },
+  "username": "user"
+}

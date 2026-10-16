@@ -1,0 +1,29 @@
+{
+  "share": "disabled",
+  "autoupdate": false,
+  "snapshot": false,
+  "instructions": [],
+  "permission": {
+    "*": "deny",
+    "read": "allow",
+    "glob": "allow",
+    "grep": "allow",
+    "list": "allow",
+    "todowrite": "allow"
+  },
+  "$schema": "https://opencode.ai/config.json",
+  "agent": {},
+  "mode": {},
+  "plugin": [],
+  "command": {},
+  "mcp": {
+    "canary": {
+      "type": "local",
+      "command": [
+        "/tmp/containment/canary/canary.sh",
+        "mcp"
+      ]
+    }
+  },
+  "username": "user"
+}

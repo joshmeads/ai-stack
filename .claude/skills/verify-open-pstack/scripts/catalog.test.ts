@@ -67,16 +67,17 @@ for (const harness of ['claude', 'codex'] as const) {
     expect(report.roles[0]!.descriptors).not.toEqual(installed.defaults.get(report.roles[0]!.role));
     expect(roles.slice(1, 3)).toEqual(['arena runners', 'bug-fix']);
     for (const role of roles.slice(1, 3)) expect(lines.has(role)).toBe(false);
-    expect(roles.slice(3)).toEqual(['swarm workers', 'hardest tasks', 'how explainer', 'how explorer', 'feature, refactoring']);
+    expect(roles.slice(3)).toEqual(['swarm workers', 'hardest tasks', 'how explainer', 'how explorer', 'interrogate reviewers', 'feature, refactoring']);
     expect(roles.slice(3).map(role => lines.get(role))).toEqual([
       ['codex:gpt-6-luna@max'], ['claude:claude-opus-5-5@max'], ['claude:claude-sonnet-5-5@high'], ['devin:swe-2@max'],
-      ['codex:gpt-6.1-sol@max'],
+      ['opencode:opencode/deepseek-v4.1-flash-free@max'], ['codex:gpt-6.1-sol@max'],
     ]);
     expect(report.roles.slice(3).map(r => [r.descriptors, r.routes])).toEqual([
       [['codex:gpt-6-luna@max'], [harness === 'codex' ? 'native' : 'external']],
       [['claude:claude-opus-5-5@max'], [harness === 'claude' ? 'native' : 'external']],
       [['claude:sonnet@high'], [harness === 'claude' ? 'native' : 'external']],
       [['devin:swe-2@max'], ['external']],
+      [['opencode:opencode/deepseek-v4.1-flash-free@max'], ['external']],
       [['codex:gpt-6.1-sol@max'], [harness === 'codex' ? 'native' : 'external']],
     ]);
     await writeFile(join(f.dir, 'routes.json'), JSON.stringify(report));

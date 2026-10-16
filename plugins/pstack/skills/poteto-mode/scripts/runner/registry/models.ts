@@ -92,6 +92,15 @@ export const FAMILIES = [
     upstream: null,
   }),
   family({
+    name: "deepseek-v4.1-flash-free",
+    label: "DeepSeek V4.1 Flash (OpenCode Zen)",
+    provider: "opencode",
+    model: "opencode/deepseek-v4.1-flash-free",
+    efforts: ["low", "high", "max"], // `opencode models --verbose` variants, OpenCode 1.19.1
+    defaultEffort: "max",
+    upstream: null,
+  }),
+  family({
     name: "deepseek-flash",
     label: "DeepSeek Flash (dsh)",
     provider: "dsh",
@@ -156,6 +165,7 @@ export const RELEASED_PAIRS = [
   { pair: "claude:claude-opus-5-5", family: "opus-5-5" },
   { pair: "devin:swe-2", family: "swe-2" },
   { pair: "devin:swe-1.6", family: "swe-1.6" },
+  { pair: "opencode:opencode/deepseek-v4.1-flash-free", family: "deepseek-v4.1-flash-free" },
   { pair: "dsh:deepseek-flash", family: "deepseek-flash" },
   { pair: "dsh:deepseek-v4-pro", family: "deepseek-v4-pro" },
   { pair: "agy:gemini-3.8-flash", family: "gemini-3.8-flash" },
