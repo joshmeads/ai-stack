@@ -28,7 +28,11 @@ describe("dsh launch", () => {
   });
 
   it("pins read-only mode, the stored login in place, the model and effort, and turns off the lockdown rows", () => {
+    const saved = process.env.DSH_HOME;
+    process.env.DSH_HOME = "/srv/dsh";
     const patch = dsh.launch.sidecar!.config!.content(lane({ model: "deepseek-v4-pro", effort: "low", cwd: "/tmp/a dir: #x" }));
+    if (saved === undefined) delete process.env.DSH_HOME;
+    else process.env.DSH_HOME = saved;
     expect(patch).toStartWith([
       "- id: sandbox-policy",
       "  config:",
@@ -39,7 +43,7 @@ describe("dsh launch", () => {
       "    policy: ask",
       "- id: credentials",
       "  config:",
-      `    path: ${JSON.stringify(join(process.env.DSH_HOME || join(homedir(), ".dsh"), ".credentials.yaml"))}`,
+      "    path: \"/srv/dsh/.credentials.yaml\"",
       "- id: agent-default-model",
       "  config:",
       "    provider: deepseek-official",

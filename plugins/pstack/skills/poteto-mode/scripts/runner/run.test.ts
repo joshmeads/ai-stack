@@ -16,7 +16,7 @@ import {
 import { dirname, join, resolve } from "node:path";
 import * as os from "node:os";
 import { tmpdir } from "node:os";
-import { childEnvironment, discoverSharedGitDir, projectConfigIn, runLane } from "./run.ts";
+import { childEnvironment, discoverSharedGitDir, projectConfigRefusal, runLane } from "./run.ts";
 import { main } from "./cli.ts";
 import { type LaneRequest, resolveLane } from "./registry/index.ts";
 import type { Lane, ProviderAdapter } from "./registry/contract.ts";
@@ -25,6 +25,7 @@ import { amp } from "./providers/amp.ts";
 import { cursor } from "./providers/cursor.ts";
 import { devin } from "./providers/devin.ts";
 import { dsh } from "./providers/dsh.ts";
+import { opencode } from "./providers/opencode.ts";
 import { BASE_ALLOWLIST, BASE_PREFIXES } from "./providers/shared.ts";
 import type { ProviderId } from "./registry/family.ts";
 import type { RunnerReceipt } from "./types.ts";
@@ -1986,42 +1987,64 @@ process.stdout.write(await Bun.stdin.text());
   });
 });
 
-describe("projectConfigIn", () => {
+describe("projectConfigRefusal", () => {
   // Bun reads HOME once at startup, so the test replaces homedir() instead of setting HOME.
   beforeEach(() => {
     spyOn(os, "homedir").mockReturnValue(join(scratch, "home"));
-    mkdirSync(join(scratch, "home/.cursor"), { recursive: true });
+    for (const name of [".cursor", ".agents", ".opencode"]) mkdirSync(join(scratch, "home", name), { recursive: true });
   });
   afterEach(() => {
     mock.restore();
   });
-  const names = cursor.launch.projectConfig;
+  const refuse = (cwd: string, adapter: ProviderAdapter = cursor) => projectConfigRefusal(adapter.id, cwd, adapter.launch.projectConfig);
+  const homeMessage = () =>
+    `cursor lanes under the home directory run only inside a git repository rooted below it: the CLI's project-config walk would reach ${realpathSync(join(scratch, "home"))}`;
+  const found = (path: string, id = "cursor") =>
+    `${id} lanes do not run in a workspace with ${path}: the CLI would load that repository-controlled config`;
 
-  it("stops below the home directory, whose config is the user's own", () => {
-    const cwd = join(scratch, "home/work/src");
+  it("refuses the home directory, a cwd under it outside a repository, and a repository rooted at it", () => {
+    const cwd = join(scratch, "home/notes");
     mkdirSync(cwd, { recursive: true });
-    expect(projectConfigIn(cwd, names)).toBeNull();
-    expect(projectConfigIn(join(scratch, "home"), names)).toBeNull();
+    expect(refuse(cwd)).toBe(homeMessage());
+    expect(refuse(join(scratch, "home"))).toBe(homeMessage());
+    mkdirSync(join(scratch, "home/.git"));
+    expect(refuse(cwd)).toBe(homeMessage());
+    expect(refuse(cwd, opencode)).toStartWith("opencode lanes under the home directory");
   });
 
-  it("still finds config in a parent below the home and in a git repository's root", () => {
-    const work = join(scratch, "home/work"), repo = join(scratch, "home/repo");
-    mkdirSync(join(work, ".cursor"), { recursive: true });
-    mkdirSync(join(work, "src"));
-    expect(projectConfigIn(join(work, "src"), names)).toBe(join(realpathSync(work), ".cursor"));
+  it("runs in a repository below the home that holds no listed entry, whatever the home holds", () => {
+    const repo = join(scratch, "home/repo");
+    mkdirSync(join(repo, ".git"), { recursive: true });
+    mkdirSync(join(repo, "src"));
+    for (const adapter of [cursor, agy, opencode]) expect(refuse(join(repo, "src"), adapter)).toBeNull();
+    expect(projectConfigRefusal("claude", join(scratch, "home"), [])).toBeNull();
+  });
+
+  it("finds config in the cwd or a parent up to the git root", () => {
+    const repo = join(scratch, "home/repo");
     mkdirSync(join(repo, ".git"), { recursive: true });
     mkdirSync(join(repo, ".cursor"));
-    expect(projectConfigIn(repo, names)).toBe(join(realpathSync(repo), ".cursor"));
+    mkdirSync(join(repo, "src"));
+    expect(refuse(join(repo, "src"))).toBe(found(join(realpathSync(repo), ".cursor")));
+    expect(refuse(repo)).toBe(found(join(realpathSync(repo), ".cursor")));
+  });
+
+  it("walks to / outside the home and a repository", () => {
+    const cwd = join(scratch, "outside/src");
+    mkdirSync(cwd, { recursive: true });
+    expect(refuse(cwd)).toBeNull();
+    mkdirSync(join(scratch, "outside/.cursor"));
+    expect(refuse(cwd)).toBe(found(join(realpathSync(scratch), "outside/.cursor")));
   });
 
   it("reads a file named like a config directory as absent", () => {
-    const cwd = join(scratch, "home/plain");
+    const cwd = join(scratch, "plain");
     mkdirSync(cwd);
     writeFileSync(join(cwd, ".claude"), "");
-    expect(projectConfigIn(cwd, names)).toBeNull();
+    expect(refuse(cwd)).toBeNull();
     for (const name of [".agents", ".agent", "_agents", "_agent", ".amp"]) writeFileSync(join(cwd, name), "");
-    expect(projectConfigIn(cwd, agy.launch.projectConfig)).toBeNull();
-    expect(projectConfigIn(cwd, amp.launch.projectConfig)).toBeNull();
+    expect(refuse(cwd, agy)).toBeNull();
+    expect(refuse(cwd, amp)).toBeNull();
   });
 
   it("checks a ./ path as a file in the cwd only", () => {
@@ -2030,9 +2053,9 @@ describe("projectConfigIn", () => {
     mkdirSync(sub);
     mkdirSync(join(venv, ".env"), { recursive: true });
     writeFileSync(join(repo, ".env"), "A=1\n");
-    expect(projectConfigIn(repo, dsh.launch.projectConfig)).toBe(join(realpathSync(repo), ".env"));
-    expect(projectConfigIn(sub, dsh.launch.projectConfig)).toBeNull();
-    expect(projectConfigIn(venv, dsh.launch.projectConfig)).toBeNull();
+    expect(refuse(repo, dsh)).toBe(found(join(realpathSync(repo), ".env"), "dsh"));
+    expect(refuse(sub, dsh)).toBeNull();
+    expect(refuse(venv, dsh)).toBeNull();
   });
 });
 

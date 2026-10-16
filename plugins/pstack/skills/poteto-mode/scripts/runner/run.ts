@@ -431,26 +431,32 @@ function within(parent: string, child: string): boolean {
 // what the writer's own git will use. Returns null for a non-repository or a directory the cwd
 // contains, and refuses whatever cannot be denied literally: denyWrite entries are globs that
 // cannot be escaped, and Claude Code 2.1.288 on Linux drops entries containing * ? [ ].
-// The first of the provider's project config paths in the cwd or a parent up to the git root, or null. A CLI that
-// loads repository-controlled config from there does not run: the runner bypasses its workspace trust. A path
-// ending in "/" matches only a directory; one starting with "./" matches only a file in the cwd itself; any other
-// path matches a directory or a file. The walk stops below the home directory, whose CLI config is the user's own
-// host configuration.
-export function projectConfigIn(cwd: string, names: readonly string[]): string | null {
+// Why a provider's project config would load in the cwd, or null. A CLI that loads repository-controlled config from
+// the cwd or a parent up to the git root, or up to / outside a repository, does not run: the runner bypasses its
+// workspace trust. A path ending in "/" matches only a directory; one starting with "./" matches only a file in the
+// cwd itself; any other path matches a directory or a file. When that walk would reach the home directory, the lane is
+// refused outright: the CLI's own walk would load the home directory's config, such as ~/.opencode plugins or ~/.env.
+export function projectConfigRefusal(id: string, cwd: string, names: readonly string[]): string | null {
   if (names.length === 0) return null;
   const home = existsSync(homedir()) ? realpathSync(homedir()) : null;
   const start = realpathSync(cwd);
-  for (let dir = start; dir !== home; dir = dirname(dir)) {
+  let boundary = start;
+  while (!existsSync(join(boundary, ".git")) && dirname(boundary) !== boundary) boundary = dirname(boundary);
+  if (home !== null && within(home, start) && within(boundary, home)) {
+    return `${id} lanes under the home directory run only inside a git repository rooted below it: the CLI's project-config walk would reach ${home}`;
+  }
+  for (let dir = start; ; dir = dirname(dir)) {
     for (const name of names) {
       const cwdOnly = name.startsWith("./");
       if (cwdOnly && dir !== start) continue;
       const candidate = join(dir, name).replace(/\/$/, "");
       const found = entryAt(candidate);
-      if (cwdOnly ? found?.isFile() : found?.isDirectory() || (!name.endsWith("/") && found?.isFile())) return candidate;
+      if (cwdOnly ? found?.isFile() : found?.isDirectory() || (!name.endsWith("/") && found?.isFile())) {
+        return `${id} lanes do not run in a workspace with ${candidate}: the CLI would load that repository-controlled config`;
+      }
     }
-    if (existsSync(join(dir, ".git")) || dirname(dir) === dir) return null;
+    if (dir === boundary) return null;
   }
-  return null;
 }
 
 // A file where a parent directory should be, such as a file named .claude, means the path is absent.
@@ -758,8 +764,8 @@ async function executeLane(
     return { exitCode: statusExitCode(receipt.status), receipt };
   }
 
-  const projectConfig = projectConfigIn(lane.cwd, adapter.launch.projectConfig);
-  if (projectConfig !== null) {
+  const projectConfigMessage = projectConfigRefusal(adapter.id, lane.cwd, adapter.launch.projectConfig);
+  if (projectConfigMessage !== null) {
     const completed = Date.now();
     receipt = completeReceipt(lane, {
       status: "child-failed",
@@ -778,7 +784,7 @@ async function executeLane(
       usage: null,
       costUsd: null,
       error: {
-        message: `${adapter.id} lanes do not run in a workspace with ${projectConfig}: the CLI would load that repository-controlled config`,
+        message: projectConfigMessage,
         evidence: "",
       },
     });
