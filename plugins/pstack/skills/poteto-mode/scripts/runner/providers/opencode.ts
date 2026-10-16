@@ -78,12 +78,13 @@ function parse(run: ModelRun): ParseResult {
   if (reason !== "stop") {
     return { kind: "provider-failure", status: "child-failed", message: `opencode ended its last step with reason ${JSON.stringify(reason ?? null)}`, metadata: found };
   }
-  const texts = stream.slice(lastStart + 1)
+  const text = stream.slice(lastStart + 1)
     .filter((event) => event.type === "text")
     .map((event) => object(event.part)?.text)
-    .filter((text): text is string => typeof text === "string");
-  if (texts.length === 0) return { kind: "malformed", message: "opencode's last step has no text" };
-  return { kind: "complete", text: texts.join(""), metadata: found };
+    .filter((part): part is string => typeof part === "string")
+    .join("");
+  if (text.length === 0) return { kind: "malformed", message: "opencode's last step has no text" };
+  return { kind: "complete", text, metadata: found };
 }
 
 export const opencode = adapter({
@@ -132,14 +133,18 @@ export const opencode = adapter({
   },
   parse: (run) => parse(run),
   proof: { report: "absent", matches: () => false },
-  // No OPENCODE_ prefix: OPENCODE_PERMISSION turned bash and edit back on over the lockdown, and others replace the
-  // config or the model catalog. No provider key names: a lane uses OpenCode's stored logins or a free Zen model.
+  // OpenCode 1.19.1 reads the home .opencode/ (an opencode.json merged after OPENCODE_CONFIG, and plugins) under
+  // OPENCODE_TEST_HOME when set, so the sidecar keeps the host's ~/.opencode/ out; stored logins still come from the
+  // real home. No other OPENCODE_ prefix: OPENCODE_PERMISSION turned bash and edit back on over the lockdown, and
+  // others replace the config or the model catalog. No provider key names: a lane uses OpenCode's stored logins or
+  // a free Zen model.
   environment: (_access, sidecarDir) => ({
     kind: "allowlist",
     names: BASE_ALLOWLIST,
     prefixes: BASE_PREFIXES,
     set: {
       XDG_CONFIG_HOME: `${sidecarDir}`,
+      OPENCODE_TEST_HOME: `${sidecarDir}`,
       OPENCODE_CONFIG: `${sidecarDir}/${CONFIG_NAME}`,
       OPENCODE_DISABLE_PROJECT_CONFIG: "1",
       OPENCODE_DISABLE_CLAUDE_CODE: "1",
@@ -157,8 +162,8 @@ export const opencode = adapter({
     notes: [
       "The model is `provider/model`, such as `opencode/deepseek-v4.1-flash-free`. The effort is `--variant <effort>`, omitted for `default`. OpenCode accepts an unknown variant silently, so only a registered family's efforts are checked.",
       "Read-only only. Each lane uses the default `build` agent with a run-owned config whose `\"*\": \"deny\"` permission removes every tool except `read`, `glob`, `grep`, `list` and `todowrite` from the model's tool list. OpenCode's permission policy enforces this, not an OS sandbox. With `external_directory` denied, a shell write still escaped the cwd, so no OpenCode mode is a bounded writer, and the runner refuses an `isolated-write` lane before launch.",
-      "The runner writes that config to `<receipt>.provider/opencode.json` (0600, in a 0700 directory), points `OPENCODE_CONFIG` at it and sets `XDG_CONFIG_HOME` to the directory, so the host's global OpenCode config, plugins and MCP servers do not load. `OPENCODE_DISABLE_PROJECT_CONFIG=1` stops the repository's `opencode.json`, `opencode.jsonc`, `.opencode/` agents and commands, and `AGENTS.md` from loading. `OPENCODE_DISABLE_CLAUDE_CODE=1` stops `~/.claude/CLAUDE.md` and `~/.claude/skills`, and `OPENCODE_DISABLE_EXTERNAL_SKILLS=1` stops `~/.agents/skills`. `OPENCODE_DISABLE_AUTOUPDATE=1` and `--pure` turn off updates and external plugins. The built-in `customize-opencode` skill remains, but the `skill` tool is denied.",
-      "The runner refuses an OpenCode lane whose cwd, or any parent up to the git root, holds `.opencode/`. Even with `--pure` and `OPENCODE_DISABLE_PROJECT_CONFIG=1`, OpenCode 1.19.1 imports `.opencode/plugins/*.js`, which runs each module's top-level code; only the plugin's initialization is skipped.",
+      "The runner writes that config to `<receipt>.provider/opencode.json` (0600, in a 0700 directory), points `OPENCODE_CONFIG` at it, and sets `XDG_CONFIG_HOME` and `OPENCODE_TEST_HOME` to the directory, so the host's global OpenCode config, plugins and MCP servers do not load. OpenCode 1.19.1 merges `~/.opencode/opencode.json` after `OPENCODE_CONFIG` and imports `~/.opencode/plugins/*.js` even with `--pure`, and it finds that home `.opencode/` through `OPENCODE_TEST_HOME` when set. Measured with a fresh `HOME` whose `.opencode/opencode.json` allowed `bash`, `edit` and `write` and whose `.opencode/plugins/` held a canary plugin: without `OPENCODE_TEST_HOME`, `opencode debug agent build` listed those tools and the canary ran, and neither `OPENCODE_CONFIG_CONTENT` nor `OPENCODE_CONFIG_DIR` changed that; with it, `debug agent build` and `debug config` showed only the lockdown, the canary did not run, and a lane asked to write and edit files changed nothing. Stored logins still come from the real home. `OPENCODE_DISABLE_PROJECT_CONFIG=1` stops the repository's `opencode.json`, `opencode.jsonc`, `.opencode/` agents and commands, and `AGENTS.md` from loading. `OPENCODE_DISABLE_CLAUDE_CODE=1` stops `~/.claude/CLAUDE.md` and `~/.claude/skills`, and `OPENCODE_DISABLE_EXTERNAL_SKILLS=1` stops `~/.agents/skills`. `OPENCODE_DISABLE_AUTOUPDATE=1` and `--pure` turn off updates and external plugins. The built-in `customize-opencode` skill remains, but the `skill` tool is denied.",
+      "The runner refuses an OpenCode lane whose cwd, or any parent up to the git root and below the home directory, holds `.opencode/`. Even with `--pure` and `OPENCODE_DISABLE_PROJECT_CONFIG=1`, OpenCode 1.19.1 imports `.opencode/plugins/*.js`, which runs each module's top-level code; only the plugin's initialization is skipped.",
       "The child environment drops every other `OPENCODE_*` variable, because `OPENCODE_PERMISSION` turns `bash` and `edit` back on and others replace the config or the model catalog. It also drops provider keys such as `OPENROUTER_API_KEY`. A lane authenticates only through OpenCode's stored logins (`opencode auth login`, kept in `~/.local/share/opencode/auth.json`), or uses a free OpenCode Zen model, which needs no login.",
       "The preflight runs `opencode models <provider>`, where `<provider>` is the model's part before the first `/`. It passes when it exits 0 and one line equals the model. `Error: Provider not found:` with a nonzero exit is `unauthenticated`/77. Exit 0 without the model line is `unavailable-model`/69, and so is a model with no `/`. Any other output is `child-failed`/70.",
       "The lane passes `--title pstack-lane`, because without a title OpenCode calls a second model to name the session. The prompt goes on stdin.",

@@ -101,7 +101,7 @@ export const agy = adapter({
     supports: ["read-only"],
     // Hooks and MCP servers in any of these, from the cwd up to the git root, run with no trust check, and no flag
     // stops them. A repository agent with the run-owned agent's name would also replace it.
-    projectConfig: [".agents", ".agent", "_agents", "_agent"],
+    projectConfig: [".agents/", ".agent/", "_agents/", "_agent/"],
     needsSharedGitDir: () => false,
     argv: (lane, facts) => [
       "--input-format",
@@ -131,7 +131,7 @@ export const agy = adapter({
       "Read-only only. A lane runs agy's default mode, whose approval policy, not an OS sandbox, denies the write tool and every shell command. `--mode accept-edits` writes only through the edit tool and denies shell, and `--sandbox` blocks shell writes even in the cwd, so no agy mode is a bounded writer. The runner refuses an `isolated-write` lane before launch.",
       "Headless agy cannot ask for approval. The first tool that needs it is denied, and the turn ends with exit 0, `status: \"SUCCESS\"`, an empty `response` and a `denied_actions` list. The runner records that as `child-failed`/70.",
       "Each lane writes a run-owned agent file, `.agents/agents/pstack-read-only.md`, in its private `<receipt>.provider/` directory (0700, the file 0600), and runs `--add-dir <that directory> --agent pstack-read-only`. The agent declares only `view_file`, no MCP servers and no skills. The lane keeps `view_file` and `manage_task` and loses web search, `read_url_content`, subagents, `schedule`, `send_message` and the browser. If the file is missing, agy exits 1 with `unknown agent`.",
-      "The runner refuses an agy lane whose cwd, or any parent up to the git root, holds `.agents`, `.agent`, `_agents` or `_agent`. agy runs the hooks and MCP servers there with no trust check and loads their rules and skills, and a repository agent named `pstack-read-only` would replace the run-owned one.",
+      "The runner refuses an agy lane whose cwd, or any parent up to the git root and below the home directory, holds a `.agents/`, `.agent/`, `_agents/` or `_agent/` directory. agy runs the hooks and MCP servers there with no trust check and loads their rules and skills, and a repository agent named `pstack-read-only` would replace the run-owned one.",
       "No flag turns off the operator's own configuration. `~/.gemini/GEMINI.md` loads as a global rule, and host skills and agy plugin hooks under `~/.gemini/` still load in every lane. The run-owned agent limits only the lane's tools.",
       "The lane passes the base allowlist and nothing else. The login is in the macOS keychain, found through `HOME`, so a run-owned `HOME` would be logged out. `GEMINI_API_KEY` did not authenticate and is not passed.",
       "The preflight runs `agy models` and passes when it exits 0 and a line's first tab-separated field is the lane's CLI model ID. Exit 0 without that line is `unavailable-model`/69. Exit 1 with `Please sign in` is `unauthenticated`/77. Any other output is `child-failed`/70.",

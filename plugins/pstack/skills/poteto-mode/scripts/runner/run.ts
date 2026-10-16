@@ -10,7 +10,9 @@ import {
   unlinkSync,
   writeFileSync,
   writeSync,
+  type Stats,
 } from "node:fs";
+import { homedir } from "node:os";
 import { dirname, isAbsolute, join, relative, resolve, sep } from "node:path";
 import type { Lane, LaunchFacts, ParseResult } from "./registry/index.ts";
 import {
@@ -431,16 +433,29 @@ function within(parent: string, child: string): boolean {
 // cannot be escaped, and Claude Code 2.1.288 on Linux drops entries containing * ? [ ].
 // The first of the provider's project config paths in the cwd or a parent up to the git root, or null. A CLI that
 // loads repository-controlled config from there does not run: the runner bypasses its workspace trust. A path
-// ending in "/" matches only a directory; any other path matches a directory or a file.
+// ending in "/" matches only a directory; any other path matches a directory or a file. The walk stops below the
+// home directory, whose CLI config is the user's own host configuration.
 export function projectConfigIn(cwd: string, names: readonly string[]): string | null {
   if (names.length === 0) return null;
-  for (let dir = realpathSync(cwd); ; dir = dirname(dir)) {
+  const home = existsSync(homedir()) ? realpathSync(homedir()) : null;
+  for (let dir = realpathSync(cwd); dir !== home; dir = dirname(dir)) {
     for (const name of names) {
       const candidate = join(dir, name).replace(/\/$/, "");
-      const found = statSync(candidate, { throwIfNoEntry: false });
+      const found = entryAt(candidate);
       if (found?.isDirectory() || (!name.endsWith("/") && found?.isFile())) return candidate;
     }
     if (existsSync(join(dir, ".git")) || dirname(dir) === dir) return null;
+  }
+  return null;
+}
+
+// A file where a parent directory should be, such as a file named .claude, means the path is absent.
+function entryAt(path: string): Stats | undefined {
+  try {
+    return statSync(path, { throwIfNoEntry: false });
+  } catch (error) {
+    if ((error as NodeJS.ErrnoException).code === "ENOTDIR") return undefined;
+    throw error;
   }
 }
 

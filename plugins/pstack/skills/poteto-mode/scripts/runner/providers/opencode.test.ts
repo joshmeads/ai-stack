@@ -47,12 +47,13 @@ describe("opencode launch", () => {
     });
   });
 
-  it("points OpenCode at the run-owned config and passes no OPENCODE_ prefix or provider key", () => {
+  it("points OpenCode at the run-owned config and home, and passes no OPENCODE_ prefix or provider key", () => {
     expect(opencode.environment(lane().access, "/tmp/r.provider")).toMatchObject({
       kind: "allowlist",
       prefixes: ["LC_", "XDG_"],
       set: {
         XDG_CONFIG_HOME: "/tmp/r.provider",
+        OPENCODE_TEST_HOME: "/tmp/r.provider",
         OPENCODE_CONFIG: "/tmp/r.provider/opencode.json",
         OPENCODE_DISABLE_PROJECT_CONFIG: "1",
         OPENCODE_DISABLE_CLAUDE_CODE: "1",
@@ -154,12 +155,14 @@ describe("opencode parse", () => {
     }
   });
 
-  it("never completes a stream that ends inside a step, on another reason or without text", () => {
+  it("never completes a stream that ends inside a step, on another reason or with no or empty text", () => {
     expect(opencode.parse(run({ stdout: fixture("cancel-sigterm.stdout.jsonl") }), lane()))
       .toEqual({ kind: "malformed", message: "opencode stream did not end with step_finish" });
     expect(opencode.parse(run({ stdout: "" }), lane())).toEqual({ kind: "malformed", message: "opencode stream did not end with step_finish" });
     expect(opencode.parse(run({ stdout: "not json\n" }), lane())).toEqual({ kind: "malformed", message: "opencode emitted a non-JSON event" });
     expect(opencode.parse(run({ stdout: [event("step_start"), event("step_finish", { reason: "stop" })].join("\n") }), lane()))
+      .toEqual({ kind: "malformed", message: "opencode's last step has no text" });
+    expect(opencode.parse(run({ stdout: [event("step_start"), event("text", { text: "" }), event("step_finish", { reason: "stop" })].join("\n") }), lane()))
       .toEqual({ kind: "malformed", message: "opencode's last step has no text" });
     expect(opencode.parse(run({ stdout: [event("step_start"), event("text", { text: "partial" }), event("step_finish", { reason: "length" })].join("\n") }), lane()))
       .toMatchObject({ kind: "provider-failure", status: "child-failed", message: "opencode ended its last step with reason \"length\"" });

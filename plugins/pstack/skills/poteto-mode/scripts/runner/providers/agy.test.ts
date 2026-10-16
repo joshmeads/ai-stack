@@ -66,7 +66,7 @@ describe("agy launch", () => {
       "skills: []",
       "",
     ].join("\n"));
-    expect(agy.launch.projectConfig).toEqual([".agents", ".agent", "_agents", "_agent"]);
+    expect(agy.launch.projectConfig).toEqual([".agents/", ".agent/", "_agents/", "_agent/"]);
   });
 });
 

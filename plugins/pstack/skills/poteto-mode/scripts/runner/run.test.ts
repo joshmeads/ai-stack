@@ -1,4 +1,4 @@
-import { afterEach, beforeEach, describe, expect, it, spyOn } from "bun:test";
+import { afterEach, beforeEach, describe, expect, it, mock, spyOn } from "bun:test";
 import * as fs from "node:fs";
 import {
   chmodSync,
@@ -14,11 +14,15 @@ import {
   writeFileSync,
 } from "node:fs";
 import { dirname, join } from "node:path";
+import * as os from "node:os";
 import { tmpdir } from "node:os";
-import { childEnvironment, discoverSharedGitDir, runLane } from "./run.ts";
+import { childEnvironment, discoverSharedGitDir, projectConfigIn, runLane } from "./run.ts";
 import { main } from "./cli.ts";
 import { type LaneRequest, resolveLane } from "./registry/index.ts";
 import type { Lane, ProviderAdapter } from "./registry/contract.ts";
+import { agy } from "./providers/agy.ts";
+import { amp } from "./providers/amp.ts";
+import { cursor } from "./providers/cursor.ts";
 import { devin } from "./providers/devin.ts";
 import { BASE_ALLOWLIST, BASE_PREFIXES } from "./providers/shared.ts";
 import type { ProviderId } from "./registry/family.ts";
@@ -1981,6 +1985,45 @@ process.stdout.write(await Bun.stdin.text());
   });
 });
 
+describe("projectConfigIn", () => {
+  // Bun reads HOME once at startup, so the test replaces homedir() instead of setting HOME.
+  beforeEach(() => {
+    spyOn(os, "homedir").mockReturnValue(join(scratch, "home"));
+    mkdirSync(join(scratch, "home/.cursor"), { recursive: true });
+  });
+  afterEach(() => {
+    mock.restore();
+  });
+  const names = cursor.launch.projectConfig;
+
+  it("stops below the home directory, whose config is the user's own", () => {
+    const cwd = join(scratch, "home/work/src");
+    mkdirSync(cwd, { recursive: true });
+    expect(projectConfigIn(cwd, names)).toBeNull();
+    expect(projectConfigIn(join(scratch, "home"), names)).toBeNull();
+  });
+
+  it("still finds config in a parent below the home and in a git repository's root", () => {
+    const work = join(scratch, "home/work"), repo = join(scratch, "home/repo");
+    mkdirSync(join(work, ".cursor"), { recursive: true });
+    mkdirSync(join(work, "src"));
+    expect(projectConfigIn(join(work, "src"), names)).toBe(join(realpathSync(work), ".cursor"));
+    mkdirSync(join(repo, ".git"), { recursive: true });
+    mkdirSync(join(repo, ".cursor"));
+    expect(projectConfigIn(repo, names)).toBe(join(realpathSync(repo), ".cursor"));
+  });
+
+  it("reads a file named like a config directory as absent", () => {
+    const cwd = join(scratch, "home/plain");
+    mkdirSync(cwd);
+    writeFileSync(join(cwd, ".claude"), "");
+    expect(projectConfigIn(cwd, names)).toBeNull();
+    for (const name of [".agents", ".agent", "_agents", "_agent", ".amp"]) writeFileSync(join(cwd, name), "");
+    expect(projectConfigIn(cwd, agy.launch.projectConfig)).toBeNull();
+    expect(projectConfigIn(cwd, amp.launch.projectConfig)).toBeNull();
+  });
+});
+
 describe("childEnvironment", () => {
   it("applies an adapter's set values after filtering and drops the parent identity markers last", () => {
     const lane = standInLane("stand-in-env");
@@ -2230,6 +2273,7 @@ emit(${JSON.stringify(event("step_finish", { reason: "stop", tokens: { total: 5,
         "OPENCODE_DISABLE_CLAUDE_CODE",
         "OPENCODE_DISABLE_EXTERNAL_SKILLS",
         "OPENCODE_DISABLE_PROJECT_CONFIG",
+        "OPENCODE_TEST_HOME",
       ],
     });
   });

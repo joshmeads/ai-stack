@@ -43,7 +43,7 @@ describe("amp launch", () => {
     expect(() => lane({ mode: "isolated-write" }))
       .toThrow("provider amp does not support isolated-write; it supports only: read-only");
     expect(() => lane({ effort: "max" })).toThrow("effort max is not offered for amp:deepseek-v4.1-flash; choose one of: default");
-    expect(amp.launch.projectConfig).toEqual([".amp"]);
+    expect(amp.launch.projectConfig).toEqual([".amp/"]);
   });
 
   it("writes the captured lockdown settings", () => {
