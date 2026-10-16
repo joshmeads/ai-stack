@@ -8,7 +8,6 @@
 //! classification, so no two passes can disagree about an entry.
 
 use std::collections::{BTreeMap, BTreeSet};
-use std::ffi::OsStr;
 use std::fs;
 use std::io;
 use std::os::unix::fs::MetadataExt as _;
@@ -18,44 +17,67 @@ use anyhow::{Context as _, Result};
 
 use crate::config::Config;
 use crate::install::Options;
+use crate::ledger;
 use crate::paths;
-use crate::plan::{self, Action, Displaced, Plan};
+use crate::plan::{self, Action, Anchor, Displaced, Plan};
 use crate::render;
 use crate::stackfile::{self, SkillName, StackFile};
 
-/// What counts as ai-stack's own: the stack and the legacy roots, resolved once.
+/// What counts as ai-stack's own: the stack and the legacy roots, resolved once, and the links
+/// the ledger records.
 pub struct Owner {
     stack: PathBuf,
     legacy: Vec<PathBuf>,
+    recorded: BTreeMap<String, String>,
 }
 
 impl Owner {
     pub fn new(cfg: &Config) -> Owner {
-        Owner { stack: paths::resolve(&cfg.stack.path), legacy: cfg.stack.legacy_paths.iter().map(|root| paths::resolve(root)).collect() }
+        Owner {
+            stack: paths::resolve(&cfg.stack.path),
+            legacy: cfg.stack.legacy_paths.iter().map(|root| paths::resolve(root)).collect(),
+            recorded: ledger::load(&ledger::path(&cfg.home)),
+        }
     }
 
     /// Whether the symlink at `link` resolves into the stack or a legacy root.
     pub fn owns(&self, link: &Path) -> Result<bool> {
-        Ok(self.inside(&target_of(link)?))
+        let folder = paths::resolve(link.parent().unwrap_or(Path::new("/")));
+        Ok(self.inside(&target_of(&folder, &read_link(link)?)))
+    }
+
+    /// The stack and every legacy root: ai-stack never links, unlinks or moves anything in them.
+    fn roots(&self) -> impl Iterator<Item = &PathBuf> {
+        std::iter::once(&self.stack).chain(&self.legacy)
     }
 
     fn inside(&self, real: &Path) -> bool {
-        real.starts_with(&self.stack) || self.legacy.iter().any(|root| real.starts_with(root))
+        self.roots().any(|root| real.starts_with(root))
     }
 
-    /// In a skill folder a link to `<dir>/skills/<name>` is also ai-stack's when `<dir>` holds a
-    /// `stack.toml`: an install with `--stack <dir>` made it.
-    fn owns_skill_link(&self, real: &Path) -> bool {
-        let checkout = real.parent().filter(|skills| skills.file_name() == Some(OsStr::new(stackfile::SKILLS_DIR))).and_then(Path::parent);
-        self.inside(real) || checkout.is_some_and(|dir| dir.join(stackfile::FILE).is_file())
+    /// A link in a skill folder is ai-stack's when the ledger records it with this target, or
+    /// when its target resolves into the stack or a legacy root.
+    fn owns_skill_link(&self, folder: &Path, name: &str, target: &Path, real: &Path) -> bool {
+        let recorded = self.recorded.get(&*folder.join(name).to_string_lossy());
+        recorded.is_some_and(|recorded| *recorded == *target.to_string_lossy()) || self.inside(real)
     }
 }
 
-/// Where the symlink at `link` points, resolved through the filesystem as far as the target
-/// exists. A `..` after a symlinked directory leaves through that directory's target.
-pub fn target_of(link: &Path) -> Result<PathBuf> {
-    let target = fs::read_link(link).with_context(|| format!("reading link {}", link.display()))?;
-    Ok(paths::resolve(&link.parent().unwrap_or(Path::new("/")).join(target)))
+fn read_link(link: &Path) -> Result<PathBuf> {
+    fs::read_link(link).with_context(|| format!("reading link {}", link.display()))
+}
+
+/// Where a link in the resolved `folder` with this target text points: the target's parent
+/// resolved through the filesystem, its last component kept as written. A link to
+/// `<stack>/skills/<name>` stays a link into the stack when that skill directory is itself a
+/// symlink elsewhere, and `..` after a symlinked directory leaves through that directory's
+/// target, dangling or not.
+pub fn target_of(folder: &Path, target: &Path) -> PathBuf {
+    let joined = folder.join(target);
+    match (joined.parent(), joined.file_name()) {
+        (Some(parent), Some(name)) if !target.ends_with("..") => paths::resolve(parent).join(name),
+        _ => paths::resolve(&joined),
+    }
 }
 
 /// One physical folder and every role it plays.
@@ -102,10 +124,12 @@ fn index(cfg: &Config) -> Vec<Folder> {
 
 /// What one folder entry is, decided once.
 enum Kind {
-    /// A symlink ai-stack made, with its target as written.
-    Ours { target: PathBuf },
+    /// A symlink ai-stack made: its target as written and as `target_of` resolves it.
+    Ours { target: PathBuf, real: PathBuf },
     /// A role agent file an older ai-stack wrote.
     ManagedAgent { text: String },
+    /// A directory or file that holds the stack or a legacy root.
+    Protected { root: PathBuf },
     /// Anything else: a stray skill.
     Stray,
 }
@@ -130,30 +154,47 @@ pub fn plan(cfg: &Config, owner: &Owner, file: &StackFile, opts: Options, out: &
             out.warnings.push(format!("note: {name} is in a global group but {} is missing; run `ai-stack skills update {name}` to rebuild it", skills_dir.join(name.as_str()).display()));
         }
     }
-    if let Some((a, b)) = case_collision(&wanted) {
-        out.conflicts.push(format!("the global skills {a:?} and {b:?} differ only by case, so a case-insensitive skill folder holds one entry for both; rename one in {}", cfg.stack.path.join(stackfile::FILE).display()));
-        return Ok(());
-    }
+    out.ledger = Some(ledger::path(&cfg.home));
+    let skills = Skills { dir: &skills_dir, real: paths::resolve(&skills_dir) };
     let none = BTreeSet::new();
     for folder in index(cfg) {
-        if folder.real.starts_with(&owner.stack) {
-            out.conflicts.push(format!("{} resolves to {}, inside the stack; ai-stack never links, unlinks or moves anything there. Make it a directory outside the stack", folder.path.display(), folder.real.display()));
+        if let Some(root) = owner.roots().find(|root| folder.real.starts_with(root)) {
+            out.conflicts.push(format!("{} resolves to {}, inside the stack checkout {}; ai-stack never links, unlinks or moves anything there. Make it a directory outside the stack", folder.path.display(), folder.real.display(), root.display()));
             continue;
         }
         let wanted = if folder.links { &wanted } else { &none };
-        plan_folder(cfg, owner, &folder, wanted, &skills_dir, opts, out)?;
+        if !wanted.is_empty() {
+            if let Some((link, target)) = dangling(&folder.path) {
+                out.conflicts.push(format!("{} is a symlink to {}, which does not exist; mount or create it, or remove the link, then run again", link.display(), target.display()));
+                continue;
+            }
+        }
+        plan_folder(cfg, owner, &folder, wanted, &skills, opts, out)?;
     }
     Ok(())
 }
 
-/// Two names that differ only by ASCII case.
-fn case_collision(names: &BTreeSet<SkillName>) -> Option<(&SkillName, &SkillName)> {
-    let mut seen: BTreeMap<String, &SkillName> = BTreeMap::new();
-    names.iter().find_map(|name| seen.insert(name.as_str().to_ascii_lowercase(), name).map(|earlier| (earlier, name)))
+/// The stack's skills directory as configured and resolved.
+struct Skills<'a> {
+    dir: &'a Path,
+    real: PathBuf,
 }
 
-fn plan_folder(cfg: &Config, owner: &Owner, folder: &Folder, wanted: &BTreeSet<SkillName>, skills_dir: &Path, opts: Options, out: &mut Plan) -> Result<()> {
+/// The first symlink among `path` and its ancestors whose target does not exist, when `path`
+/// itself does not exist.
+fn dangling(path: &Path) -> Option<(PathBuf, PathBuf)> {
+    if fs::metadata(path).is_ok() {
+        return None;
+    }
+    path.ancestors().find_map(|ancestor| {
+        let link = fs::symlink_metadata(ancestor).ok()?.file_type().is_symlink();
+        (link && fs::metadata(ancestor).is_err()).then(|| (ancestor.to_path_buf(), fs::read_link(ancestor).unwrap_or_default()))
+    })
+}
+
+fn plan_folder(cfg: &Config, owner: &Owner, folder: &Folder, wanted: &BTreeSet<SkillName>, skills: &Skills, opts: Options, out: &mut Plan) -> Result<()> {
     let entries = read(owner, folder)?;
+    let anchor = Anchor::of(&folder.real);
     let mut at: BTreeMap<&SkillName, usize> = BTreeMap::new();
     for name in wanted {
         if let Some(meta) = lstat(&folder.path.join(name.as_str()))? {
@@ -166,31 +207,36 @@ fn plan_folder(cfg: &Config, owner: &Owner, folder: &Folder, wanted: &BTreeSet<S
     }
     let occupied: BTreeSet<usize> = at.values().copied().collect();
     for (index, entry) in entries.iter().enumerate() {
+        if let Kind::Protected { root } = &entry.kind {
+            out.conflicts.push(format!("{} holds the stack checkout {}; ai-stack never moves it. Move the checkout out of {}", entry.path.display(), root.display(), folder.path.display()));
+            continue;
+        }
         if occupied.contains(&index) {
             continue;
         }
         match &entry.kind {
-            Kind::Ours { target } if folder.links || folder.leftover => out.actions.push(Action::Unlink { path: entry.path.clone(), target: target.clone() }),
-            Kind::Ours { .. } => {}
-            Kind::ManagedAgent { text } => out.actions.push(Action::Remove { path: entry.path.clone(), before: text.clone() }),
+            Kind::Ours { target, .. } if folder.links || folder.leftover => out.actions.push(Action::Unlink { path: entry.path.clone(), target: target.clone(), anchor: anchor.clone() }),
+            Kind::Ours { .. } | Kind::Protected { .. } => {}
+            Kind::ManagedAgent { text } => out.actions.push(Action::Remove { path: entry.path.clone(), before: text.clone(), anchor: anchor.clone() }),
             Kind::Stray if folder.clean && !cfg.clean.keeps_skill(&entry.name) => {
                 out.stray.push(entry.path.clone());
-                if opts.clean {
-                    out.actions.push(Action::MoveToBackup { fingerprint: plan::fingerprint(&entry.path)?, path: entry.path.clone(), clean: true });
+                if opts.clean && !opts.report {
+                    out.actions.push(Action::MoveToBackup { fingerprint: plan::fingerprint(&entry.path)?, path: entry.path.clone(), clean: true, anchor: anchor.clone() });
                 }
             }
             Kind::Stray => {}
         }
     }
     for name in wanted {
-        let (path, target) = (folder.path.join(name.as_str()), skills_dir.join(name.as_str()));
+        let (path, target) = (folder.path.join(name.as_str()), skills.dir.join(name.as_str()));
         let displaces = match at.get(name).map(|&index| &entries[index]) {
             None => Displaced::Nothing,
-            Some(Entry { path: current, kind: Kind::Ours { target: was }, .. }) => {
-                if target_of(current)? == paths::resolve(&target) {
+            Some(Entry { kind: Kind::Protected { .. }, .. }) => continue,
+            Some(Entry { path: entry, kind: Kind::Ours { target: was, real }, .. }) => {
+                if *real == skills.real.join(name.as_str()) && *entry == path {
                     continue;
                 }
-                Displaced::OwnLink(was.clone())
+                Displaced::OwnLink { entry: entry.clone(), target: was.clone() }
             }
             Some(entry) => {
                 out.stray.push(entry.path.clone());
@@ -199,10 +245,13 @@ fn plan_folder(cfg: &Config, owner: &Owner, folder: &Folder, wanted: &BTreeSet<S
                     out.conflicts.push(format!("{} is a stray skill in the way of a skill the stack links there; move it, or run with --force to move it into the backup", entry.path.display()));
                     continue;
                 }
-                Displaced::Stray { fingerprint: plan::fingerprint(&path)?, clean }
+                if opts.report {
+                    continue;
+                }
+                Displaced::Stray { fingerprint: plan::fingerprint(&entry.path)?, entry: entry.path.clone(), clean }
             }
         };
-        out.actions.push(Action::Link { path, target, displaces });
+        out.actions.push(Action::Link { path, target, displaces, anchor: anchor.clone() });
     }
     Ok(())
 }
@@ -224,11 +273,16 @@ fn read(owner: &Owner, folder: &Folder) -> Result<Vec<Entry>> {
         }
         let path = item.path();
         let meta = fs::symlink_metadata(&path).with_context(|| format!("inspecting {}", path.display()))?;
+        let protected = || owner.roots().find(|root| root.starts_with(folder.real.join(&name))).cloned();
         let kind = if meta.file_type().is_symlink() {
-            match owner.owns_skill_link(&target_of(&path)?) {
-                true => Kind::Ours { target: fs::read_link(&path)? },
+            let target = read_link(&path)?;
+            let real = target_of(&folder.real, &target);
+            match owner.owns_skill_link(&folder.real, &name, &target, &real) {
+                true => Kind::Ours { target, real },
                 false => Kind::Stray,
             }
+        } else if let Some(root) = protected() {
+            Kind::Protected { root }
         } else if folder.agents && meta.is_file() {
             match fs::read_to_string(&path) {
                 Ok(text) if text.contains(render::MANAGED_MD) || text.lines().next() == Some(render::MANAGED_TOML) => Kind::ManagedAgent { text },
@@ -275,7 +329,7 @@ mod tests {
     fn summary(plan: &Plan, home: &Path) -> Vec<String> {
         plan.actions.iter().map(|action| match action {
             Action::Link { path, displaces: Displaced::Nothing, .. } => format!("link {}", tilde(path, home)),
-            Action::Link { path, displaces: Displaced::OwnLink(_), .. } => format!("repoint {}", tilde(path, home)),
+            Action::Link { path, displaces: Displaced::OwnLink { .. }, .. } => format!("repoint {}", tilde(path, home)),
             Action::Link { path, displaces: Displaced::Stray { clean, .. }, .. } => format!("move+link {} clean={clean}", tilde(path, home)),
             Action::Unlink { path, .. } => format!("unlink {}", tilde(path, home)),
             Action::MoveToBackup { path, clean, .. } => format!("move {} clean={clean}", tilde(path, home)),
@@ -318,7 +372,12 @@ mod tests {
         fs::remove_file(agents.join("game-mvp")).unwrap();
         symlink(f.root.join("legacy/skills/game-mvp"), agents.join("game-mvp")).unwrap();
         let repoint = f.plan();
-        assert_eq!(repoint.actions, [Action::Link { path: agents.join("game-mvp"), target: target("game-mvp"), displaces: Displaced::OwnLink(f.root.join("legacy/skills/game-mvp")) }]);
+        assert_eq!(repoint.actions, [Action::Link {
+            path: agents.join("game-mvp"),
+            target: target("game-mvp"),
+            displaces: Displaced::OwnLink { entry: agents.join("game-mvp"), target: f.root.join("legacy/skills/game-mvp") },
+            anchor: Anchor::of(&agents),
+        }]);
         f.apply(&repoint);
         assert!(f.plan().is_empty());
     }
@@ -370,7 +429,7 @@ mod tests {
         let plan = f.plan_with(clean());
         assert_eq!(plan.conflicts, [format!("{} is a stray skill in the way of a skill the stack links there; move it, or run with --force to move it into the backup", agents.join("handoff").display())]);
         assert_eq!(plan.stray(&f.home).skill_names, ["~/.agents/skills/handoff"]);
-        let forced = f.plan_with(Options { force: true, clean: true });
+        let forced = f.plan_with(Options { force: true, clean: true, ..Options::default() });
         assert!(link_actions(&forced, &f.home).contains(&"move+link ~/.agents/skills/handoff clean=false".to_string()));
     }
 
@@ -380,7 +439,7 @@ mod tests {
         let f = fixture();
         f.apply(&f.plan());
         symlink("../.agents/skills", f.home.join(".codex/skills")).unwrap();
-        for opts in [Options::default(), clean(), Options { force: true, clean: true }] {
+        for opts in [Options::default(), clean(), Options { force: true, clean: true, ..Options::default() }] {
             let plan = f.plan_with(opts);
             assert!(plan.is_empty(), "{opts:?}: {}", plan.render_text(&f.home));
             assert!(plan.stray.is_empty());
@@ -413,7 +472,7 @@ mod tests {
         assert_eq!(refused.conflicts.len(), 1, "{:?}", refused.conflicts);
         assert_eq!(refused.stray(&f.home).skill_names, ["~/.claude/skills/demo", "~/.claude/skills/handoff"]);
 
-        let plan = f.plan_with(Options { force: true, clean: true });
+        let plan = f.plan_with(Options { force: true, clean: true, ..Options::default() });
         assert!(plan.conflicts.is_empty(), "{:?}", plan.conflicts);
         assert_eq!(link_actions(&plan, &f.home), ["move ~/.claude/skills/demo clean=true", "link ~/.claude/skills/feedback", "move+link ~/.claude/skills/handoff clean=true"]);
         let report = crate::plan::apply(&plan, &f.root.join("backups"), &f.runner).unwrap();
@@ -469,15 +528,101 @@ mod tests {
         put(&f.root.join("outside/handoff/SKILL.md"), "theirs\n");
         fs::create_dir_all(f.root.join("outside/nested")).unwrap();
         symlink(f.root.join("outside/nested"), f.stack.join("escape")).unwrap();
+        // `dangling` points at a directory that does not exist.
+        symlink(f.root.join("outside/missing/deeper"), f.stack.join("dangling")).unwrap();
         let agents = f.home.join(".agents/skills");
         fs::create_dir_all(&agents).unwrap();
-        // Lexically both point into the stack; through `escape` both point outside it.
+        // Lexically these point into the stack; through `escape` and `dangling` they point outside it.
         symlink(f.stack.join("escape/../handoff"), agents.join("handoff")).unwrap();
         symlink(f.stack.join("escape/../gone"), agents.join("gone")).unwrap();
+        symlink(f.stack.join("dangling/../mine"), agents.join("mine")).unwrap();
+        // Through an outside alias of the stack, a link to a missing skill is still ours.
+        symlink(&f.stack, f.root.join("alias")).unwrap();
+        symlink(f.root.join("alias/skills/retired"), agents.join("retired")).unwrap();
         let plan = f.plan();
         assert_eq!(plan.conflicts.len(), 1, "{:?}", plan.conflicts);
         assert!(plan.conflicts[0].starts_with(&format!("{} is a stray skill", agents.join("handoff").display())));
-        assert_eq!(plan.stray(&f.home).skill_names, ["~/.agents/skills/gone", "~/.agents/skills/handoff"]);
+        assert_eq!(plan.stray(&f.home).skill_names, ["~/.agents/skills/gone", "~/.agents/skills/handoff", "~/.agents/skills/mine"]);
+        assert!(link_actions(&plan, &f.home).contains(&"unlink ~/.agents/skills/retired".to_string()), "{}", plan.render_text(&f.home));
+        assert!(!link_actions(&plan, &f.home).iter().any(|action| action.contains("mine")));
+    }
+
+    #[test]
+    fn a_link_into_an_unrelated_repo_with_a_stack_toml_is_stray() {
+        let f = fixture();
+        f.apply(&f.plan());
+        let unrelated = f.root.join("code/unrelated");
+        put(&unrelated.join("stack.toml"), "[run-image]\nimage = \"example/run\"\n");
+        put(&unrelated.join("skills/my-skill/SKILL.md"), "mine\n");
+        put(&unrelated.join("skills/handoff/SKILL.md"), "my fork\n");
+        let (claude, agents) = (f.home.join(".claude/skills"), f.home.join(".agents/skills"));
+        symlink(unrelated.join("skills/my-skill"), claude.join("my-skill")).unwrap();
+        fs::remove_file(agents.join("handoff")).unwrap();
+        symlink(unrelated.join("skills/handoff"), agents.join("handoff")).unwrap();
+        let plan = f.plan();
+        assert_eq!(plan.conflicts, [format!("{} is a stray skill in the way of a skill the stack links there; move it, or run with --force to move it into the backup", agents.join("handoff").display())]);
+        assert!(plan.actions.iter().all(|action| !matches!(action, Action::Unlink { .. } | Action::Link { .. })), "{}", plan.render_text(&f.home));
+        assert_eq!(plan.stray(&f.home).skill_names, ["~/.agents/skills/handoff", "~/.claude/skills/my-skill"]);
+    }
+
+    #[test]
+    fn the_ledger_keeps_links_into_a_deleted_checkout_ours() {
+        let mut f = fixture();
+        let other = f.root.join("wt");
+        for file in ["stack.toml", ".claude-plugin/marketplace.json", ".agents/plugins/marketplace.json", "plugins/pstack/.codex-plugin/plugin.json"] {
+            put(&other.join(file), &fs::read_to_string(f.stack.join(file)).unwrap());
+        }
+        for skill in ["handoff", "feedback", "game-mvp"] {
+            put(&other.join("skills").join(skill).join("SKILL.md"), &format!("---\nname: {skill}\n---\n"));
+        }
+        let plain = (f.cfg.stack.path.clone(), f.cfg.stack.legacy_paths.clone());
+        f.cfg.stack.legacy_paths.push(f.stack.clone());
+        f.cfg.stack.path = other.clone();
+        for state in [&f.runner.claude, &f.runner.codex] {
+            state.borrow_mut().marketplaces.insert("jm".into(), other.display().to_string());
+        }
+        f.apply(&f.plan());
+        let agents = f.home.join(".agents/skills");
+        let recorded = ledger::load(&ledger::path(&f.home));
+        assert_eq!(recorded.get(&*agents.join("handoff").to_string_lossy()), Some(&other.join("skills/handoff").display().to_string()));
+        assert_eq!(recorded.len(), 4, "{recorded:?}");
+
+        fs::remove_dir_all(&other).unwrap();
+        (f.cfg.stack.path, f.cfg.stack.legacy_paths) = plain;
+        for state in [&f.runner.claude, &f.runner.codex] {
+            state.borrow_mut().marketplaces.insert("jm".into(), f.stack.display().to_string());
+        }
+        let back = f.plan_with(clean());
+        assert!(back.conflicts.is_empty() && back.stray.is_empty(), "{}", back.render_text(&f.home));
+        assert_eq!(link_actions(&back, &f.home), ["repoint ~/.claude/skills/feedback", "repoint ~/.claude/skills/handoff", "repoint ~/.agents/skills/feedback", "repoint ~/.agents/skills/handoff"]);
+        f.apply(&back);
+        assert!(f.plan().is_empty(), "{}", f.plan().render_text(&f.home));
+        let recorded = ledger::load(&ledger::path(&f.home));
+        assert_eq!(recorded.get(&*agents.join("handoff").to_string_lossy()), Some(&f.stack.join("skills/handoff").display().to_string()));
+
+        // A link the ledger records with another target is not ours.
+        fs::remove_file(agents.join("handoff")).unwrap();
+        symlink(f.root.join("mine/handoff"), agents.join("handoff")).unwrap();
+        assert_eq!(f.plan().stray(&f.home).skill_names, ["~/.agents/skills/handoff"]);
+        // An unlink drops its entry.
+        fs::remove_file(agents.join("handoff")).unwrap();
+        symlink(f.stack.join("skills/handoff"), agents.join("handoff")).unwrap();
+        put(&f.stack.join("stack.toml"), &STACK_TOML.replace("global = true", "global = false"));
+        f.apply(&f.plan());
+        assert!(ledger::load(&ledger::path(&f.home)).is_empty());
+    }
+
+    #[test]
+    fn a_stack_skill_that_is_itself_a_symlink_settles() {
+        let f = fixture();
+        let dev = f.root.join("code/handoff-dev");
+        put(&dev.join("SKILL.md"), "---\nname: handoff\n---\n");
+        fs::remove_dir_all(f.stack.join("skills/handoff")).unwrap();
+        symlink(&dev, f.stack.join("skills/handoff")).unwrap();
+        f.apply(&f.plan());
+        assert_eq!(fs::read_link(f.home.join(".agents/skills/handoff")).unwrap(), f.stack.join("skills/handoff"));
+        let again = f.plan_with(clean());
+        assert!(again.is_empty() && again.stray.is_empty(), "{}", again.render_text(&f.home));
     }
 
     #[test]
@@ -485,11 +630,12 @@ mod tests {
         let f = fixture();
         fs::create_dir_all(f.home.join(".claude")).unwrap();
         symlink(f.stack.join("skills"), f.home.join(".claude/skills")).unwrap();
-        let plan = f.plan_with(Options { force: true, clean: true });
+        let plan = f.plan_with(Options { force: true, clean: true, ..Options::default() });
         assert_eq!(plan.conflicts, [format!(
-            "{} resolves to {}, inside the stack; ai-stack never links, unlinks or moves anything there. Make it a directory outside the stack",
+            "{} resolves to {}, inside the stack checkout {}; ai-stack never links, unlinks or moves anything there. Make it a directory outside the stack",
             f.home.join(".claude/skills").display(),
-            f.stack.join("skills").display()
+            f.stack.join("skills").display(),
+            f.stack.display()
         )]);
         assert!(plan.actions.iter().all(|action| !action.path().starts_with(f.home.join(".claude/skills"))), "{}", plan.render_text(&f.home));
         assert!(crate::plan::apply(&plan, &f.root.join("backups"), &f.runner).is_err());
@@ -497,16 +643,100 @@ mod tests {
     }
 
     #[test]
-    fn wanted_names_that_differ_only_by_case_conflict_before_any_link() {
+    fn folders_holding_or_inside_a_checkout_are_conflicts() {
+        // The configured checkout is a legacy root during `--stack <other>`.
+        let mut f = fixture();
+        let configured = f.stack.clone();
+        fs::create_dir_all(f.home.join(".claude")).unwrap();
+        symlink(configured.join("skills"), f.home.join(".claude/skills")).unwrap();
+        let other = f.root.join("other");
+        for file in ["stack.toml", ".claude-plugin/marketplace.json", ".agents/plugins/marketplace.json", "plugins/pstack/.codex-plugin/plugin.json"] {
+            put(&other.join(file), &fs::read_to_string(configured.join(file)).unwrap());
+        }
+        for skill in ["handoff", "feedback", "game-mvp"] {
+            put(&other.join("skills").join(skill).join("SKILL.md"), "x\n");
+        }
+        f.cfg.stack.path = other;
+        f.cfg.stack.legacy_paths.push(configured.clone());
+        let plan = f.plan_with(Options { force: true, clean: true, ..Options::default() });
+        assert!(plan.conflicts.iter().any(|c| c.starts_with(&format!("{} resolves to {}, inside the stack checkout {}", f.home.join(".claude/skills").display(), configured.join("skills").display(), configured.display()))), "{:?}", plan.conflicts);
+        assert!(plan.actions.iter().all(|action| !action.path().starts_with(f.home.join(".claude/skills"))), "{}", plan.render_text(&f.home));
+
+        // A checkout sitting in a skill folder, and a clean root that holds the checkout.
+        let mut g = fixture();
+        let checkout = g.home.join(".claude/skills/source");
+        fs::create_dir_all(checkout.parent().unwrap()).unwrap();
+        fs::rename(&g.stack, &checkout).unwrap();
+        g.cfg.stack.path = checkout.clone();
+        g.cfg.clean.skill_roots.push(g.root.clone());
+        let plan = g.plan_with(Options { force: true, clean: true, ..Options::default() });
+        for (entry, folder) in [(&checkout, g.home.join(".claude/skills")), (&g.home, g.root.clone())] {
+            let message = format!("{} holds the stack checkout {}; ai-stack never moves it. Move the checkout out of {}", entry.display(), checkout.display(), folder.display());
+            assert!(plan.conflicts.contains(&message), "{message}\n{:?}", plan.conflicts);
+        }
+        assert!(!plan.stray.contains(&checkout));
+        assert!(crate::plan::apply(&plan, &g.root.join("backups"), &g.runner).is_err());
+        assert!(checkout.join("stack.toml").is_file());
+    }
+
+    #[test]
+    fn a_user_skill_folder_that_is_a_dangling_symlink_is_a_conflict() {
         let f = fixture();
-        put(&f.stack.join("skills/HANDOFF/SKILL.md"), "---\nname: HANDOFF\n---\n");
-        let name = |text: &str| SkillName::try_from(text).unwrap();
-        let group = stackfile::Group { global: true, includes: Vec::new(), skills: vec![name("handoff"), name("HANDOFF")] };
-        let file = StackFile { groups: [(name("tools"), group)].into(), skills: Vec::new() };
-        let mut out = Plan::default();
-        plan(&f.cfg, &Owner::new(&f.cfg), &file, Options::default(), &mut out).unwrap();
-        assert!(out.actions.is_empty(), "{:?}", out.actions);
-        assert_eq!(out.conflicts.len(), 1);
-        assert!(out.conflicts[0].contains("\"HANDOFF\" and \"handoff\" differ only by case"), "{:?}", out.conflicts);
+        fs::create_dir_all(f.home.join(".claude")).unwrap();
+        symlink("/Volumes/ai-stack-not-mounted/skills", f.home.join(".claude/skills")).unwrap();
+        let plan = f.plan();
+        assert_eq!(plan.conflicts, [format!("{} is a symlink to /Volumes/ai-stack-not-mounted/skills, which does not exist; mount or create it, or remove the link, then run again", f.home.join(".claude/skills").display())]);
+        assert!(plan.actions.iter().all(|action| !action.path().starts_with(f.home.join(".claude/skills"))));
+    }
+
+    #[test]
+    fn apply_refuses_when_the_folder_was_swapped_after_planning() {
+        let f = fixture();
+        let agents = f.home.join(".agents/skills");
+        let (first, second) = (f.root.join("ext1"), f.root.join("ext2"));
+        put(&first.join("handoff/SKILL.md"), "mine\n");
+        fs::create_dir_all(&second).unwrap();
+        fs::create_dir_all(agents.parent().unwrap()).unwrap();
+        symlink(&first, &agents).unwrap();
+        let plan = f.plan_with(Options { force: true, ..Options::default() });
+        assert!(link_actions(&plan, &f.home).contains(&"move+link ~/.agents/skills/handoff clean=false".to_string()));
+        // The same entry (same fingerprint) in another folder, reached through the same spelling.
+        fs::rename(first.join("handoff"), second.join("handoff")).unwrap();
+        fs::remove_file(&agents).unwrap();
+        symlink(&second, &agents).unwrap();
+        let err = crate::plan::apply(&plan, &f.root.join("backups"), &f.runner).unwrap_err();
+        assert!(err.to_string().contains("is no longer the folder the plan was made for"), "{err}");
+        assert!(second.join("handoff/SKILL.md").is_file());
+
+        // The same path, but another directory.
+        fs::remove_file(&agents).unwrap();
+        fs::create_dir_all(&agents).unwrap();
+        put(&agents.join("handoff/SKILL.md"), "mine\n");
+        let plan = f.plan_with(Options { force: true, ..Options::default() });
+        fs::rename(&agents, f.root.join("moved")).unwrap();
+        fs::create_dir_all(&agents).unwrap();
+        fs::rename(f.root.join("moved/handoff"), agents.join("handoff")).unwrap();
+        let err = crate::plan::apply(&plan, &f.root.join("backups"), &f.runner).unwrap_err();
+        assert!(err.to_string().contains("is no longer the folder the plan was made for"), "{err}");
+    }
+
+    #[test]
+    fn a_stray_found_by_inode_keeps_its_on_disk_name() {
+        let f = fixture();
+        let agents = f.home.join(".agents/skills");
+        put(&agents.join("HANDOFF/SKILL.md"), "mine\n");
+        if fs::symlink_metadata(agents.join("handoff")).is_err() {
+            return; // A case-sensitive disk: the names are two entries.
+        }
+        let plan = f.plan_with(Options { force: true, ..Options::default() });
+        let index = plan.actions.iter().position(|action| matches!(action, Action::Link { displaces: Displaced::Stray { .. }, .. })).unwrap();
+        assert!(plan.diff(index).starts_with(&format!("Move the stray skill {} (directory)", agents.join("HANDOFF").display())), "{}", plan.diff(index));
+        let report = crate::plan::apply(&plan, &f.root.join("backups"), &f.runner).unwrap();
+        let backup = report.backup_dir.unwrap().join("home/.agents/skills");
+        let names: Vec<_> = fs::read_dir(&backup).unwrap().map(|entry| entry.unwrap().file_name()).collect();
+        assert_eq!(names, ["HANDOFF"]);
+        let names: Vec<_> = fs::read_dir(&agents).unwrap().map(|entry| entry.unwrap().file_name().to_string_lossy().into_owned()).collect::<BTreeSet<_>>().into_iter().collect();
+        assert_eq!(names, ["feedback", "handoff"]);
+        assert!(f.plan().is_empty(), "{}", f.plan().render_text(&f.home));
     }
 }

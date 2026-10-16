@@ -38,13 +38,15 @@ pub struct Options {
     pub force: bool,
     /// Move every skill-root entry and remove every plugin that `[clean]` does not keep.
     pub clean: bool,
+    /// A read-only report (`stray`): nothing is fingerprinted and the plan cannot be applied.
+    pub report: bool,
 }
 
 pub fn plan(cfg: &Config, opts: Options, runner: &dyn Runner) -> Result<Plan> {
     ensure!(cfg.stack.path.is_dir(), "stack path {} does not exist; set [stack] path in the config or pass --stack", cfg.stack.path.display());
     let stack_file = stackfile::load(&cfg.stack.path)?;
     let owner = links::Owner::new(cfg);
-    let mut out = Plan { home: Some(cfg.home.clone()), ..Plan::default() };
+    let mut out = Plan { home: Some(cfg.home.clone()), report: opts.report, ..Plan::default() };
     for hc in &cfg.harnesses {
         plan_sheet(cfg, &owner, hc, opts, &mut out)?;
         plan_instructions(cfg, hc, &mut out)?;
