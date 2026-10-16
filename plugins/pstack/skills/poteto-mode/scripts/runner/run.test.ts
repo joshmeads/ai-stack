@@ -2309,20 +2309,29 @@ describe("dsh lanes", () => {
   const TRANSPORT = `{"type":"status","phase":"turn_end","turn":1,"reason":{"kind":"error","error":{"message":"DeepSeek Messages transport failed","code":"TRANSPORT"}}}`;
   const MISSING = `{"type":"status","phase":"turn_end","turn":1,"reason":{"kind":"error","error":{"message":"llm-deepseek: no API key","code":"MISSING_CREDENTIAL"}}}`;
 
-  // A dsh stand-in: the preflight (a positional `preflight` task) prints `status`; the model call reads
-  // stdin and runs `turn`, which sees `args`, `patch`, `prompt` and `emit`. The child environment keeps
-  // no test variable, so each case bakes its own.
-  function fakeDsh(status: string, turn: string): void {
+  // A dsh stand-in: `--version` prints `version`; the preflight (a positional `preflight` task) prints
+  // `status`; the model call reads stdin and runs `turn`, which sees `args`, `patch`, `prompt` and `emit`.
+  // Each call appends its kind to `dsh.calls` next to the stand-in. The child environment keeps no test
+  // variable, so each case bakes its own.
+  function fakeDsh(status: string, turn: string, version = "0.2.0-rc.2"): void {
     writeFileSync(join(bin, "dsh"), `#!/usr/bin/env bun
-import { readFileSync, statSync, writeFileSync } from "node:fs";
-import { dirname } from "node:path";
+import { appendFileSync, readFileSync, statSync, writeFileSync } from "node:fs";
+import { dirname, join } from "node:path";
 const args = process.argv.slice(2);
+const call = (kind) => appendFileSync(join(dirname(process.argv[1]), "dsh.calls"), kind + "\\n");
+if (args[0] === "--version") {
+  call("version");
+  console.log(${JSON.stringify(version)});
+  process.exit(0);
+}
 const patch = args[args.indexOf("--patch") + 1];
 const emit = (event) => console.log(JSON.stringify(event));
 if (args.at(-1) === "preflight") {
+  call("preflight");
   console.log(${JSON.stringify(status)});
   process.exit(1);
 }
+call("model");
 const prompt = await Bun.stdin.text();
 emit({ type: "session", sessionId: "session-fixture", cwd: process.cwd() });
 ${turn}
@@ -2454,6 +2463,30 @@ process.exit(130);`);
     const interrupted = dshOptions("dsh-sigint");
     expect((await runLane(laneOf(interrupted))).receipt).toMatchObject({ status: "cancelled", exitCode: 130, signal: null });
     expect(existsSync(interrupted.outputPath)).toBe(false);
+  });
+
+  it("refuses a dsh other than the measured version before the preflight", async () => {
+    fakeDsh(TRANSPORT, OBSERVE, "0.3.0");
+    const input = dshOptions("dsh-version");
+    const result = await runLane(laneOf(input));
+    expect(result.exitCode).toBe(69);
+    expect(result.receipt).toMatchObject({
+      status: "unavailable-cli",
+      preflight: { status: "not-run" },
+      error: {
+        message: "dsh 0.3.0 is not the measured 0.2.0-rc.2; the adapter must be re-measured before it runs this version",
+        evidence: "0.3.0",
+      },
+    });
+    expect(readFileSync(join(bin, "dsh.calls"), "utf8")).toBe("version\n");
+    expect(existsSync(input.outputPath)).toBe(false);
+  });
+
+  it("checks the measured version, then runs the preflight and the model", async () => {
+    fakeDsh(TRANSPORT, OBSERVE);
+    const input = dshOptions("dsh-version-match");
+    expect((await runLane(laneOf(input))).receipt.status).toBe("complete");
+    expect(readFileSync(join(bin, "dsh.calls"), "utf8")).toBe("version\npreflight\nmodel\n");
   });
 
   it("refuses an isolated-write dsh lane before launch", () => {

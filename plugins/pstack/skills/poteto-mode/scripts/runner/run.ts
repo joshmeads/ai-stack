@@ -802,6 +802,40 @@ async function executeLane(
   }
 
   const preflight = adapter.preflight;
+  if (preflight.version !== undefined) {
+    const { argv, expected } = preflight.version;
+    const run = await runProcess(executable, argv, lane.cwd, env, null, deadlineAt, cancellation);
+    if (run.cancelledBy !== null) return finishWithoutChild("cancelled", "during the CLI version check");
+    if (run.timedOut) return finishWithoutChild("timed-out", "during the CLI version check");
+    const installed = run.stdout.trim();
+    if (installed !== expected) {
+      const completed = Date.now();
+      receipt = completeReceipt(lane, {
+        status: "unavailable-cli",
+        startedAt,
+        completedAt: new Date(completed).toISOString(),
+        elapsedMs: completed - started,
+        executable,
+        preflight: preflightState,
+        argv: [executable, ...launchArgs],
+        exitCode: run.exitCode,
+        signal: run.signal,
+        reportedModel: null,
+        modelVerified: false,
+        modelEvidence: null,
+        sessionId: null,
+        usage: null,
+        costUsd: null,
+        error: {
+          message: `${adapter.executable} ${installed} is not the measured ${expected}; the adapter must be re-measured before it runs this version`,
+          evidence: evidence(`${run.stdout}\n${run.stderr}`),
+        },
+      });
+      removeIfExists(lane.outputPath);
+      writeReceipt(lane.receiptPath, receipt);
+      return { exitCode: statusExitCode(receipt.status), receipt };
+    }
+  }
   const preflightArgs = preflight.argv(lane);
   const runPreflight = async () => {
     const run = await runProcess(executable, preflightArgs, lane.cwd, env, null, deadlineAt, cancellation);

@@ -143,6 +143,9 @@ export interface ProviderAdapter {
     /** One more preflight after an "unauthenticated" verdict, after this delay. null means none. */
     readonly retryAfterUnauthenticatedMs: number | null;
     classify(run: ChildRun, lane: Lane): PreflightVerdict;
+    /** The exact CLI version the adapter was measured against. run.ts runs `<executable> <argv>` before the
+     *  authentication preflight and refuses the lane as unavailable-cli unless the trimmed stdout equals `expected`. */
+    readonly version?: { readonly argv: readonly string[]; readonly expected: string };
   };
   readonly launch: {
     /** "stdin": run.ts writes the prompt to stdin. "file": argv carries lane.promptPath. */

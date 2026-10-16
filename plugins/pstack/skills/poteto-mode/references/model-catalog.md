@@ -62,7 +62,7 @@ Rolling aliases:
 | grok | external runner | external runner | `read-only`, `isolated-write` | file | provider report | allowlist | Linux: Landlock and `bwrap` |
 | devin | external runner | external runner | `read-only` | file | provider report | allowlist | - |
 | opencode | external runner | external runner | `read-only` | stdin | pinned argv | allowlist | - |
-| dsh | external runner | external runner | `read-only` | stdin | pinned argv | allowlist | - |
+| dsh | external runner | external runner | `read-only` | stdin | pinned argv | allowlist | dsh 0.2.0-rc.2 exactly |
 | amp | external runner | external runner | `read-only` | stdin | pinned argv | allowlist | - |
 | agy | external runner | external runner | `read-only` | stdin | pinned argv | allowlist | - |
 
@@ -127,10 +127,10 @@ The runner refuses an access mode outside a provider's Access modes cell before 
 ### dsh: DeepSeek Harness
 
 - Executable: `dsh`.
-- Host prerequisites: none.
+- Host prerequisites: dsh 0.2.0-rc.2 exactly.
 - State paths: `~/.dsh/`: the stored key `~/.dsh/.credentials.yaml`, which the CLI reads, and the sessions (`sessions/<cwd-slug>/<session-id>/`), projection cache (`storages/session_projcache/`), `profiles/headless/` and `.anonymous-user-id` it writes on every run.
 - Child environment: only `PATH` `HOME` `USER` `LOGNAME` `SHELL` `TMPDIR` `LANG` `TERM` `COLORTERM` `TZ` `HTTP_PROXY` `HTTPS_PROXY` `NO_PROXY` `ALL_PROXY` `http_proxy` `https_proxy` `no_proxy` `all_proxy` `SSL_CERT_FILE` `SSL_CERT_DIR` `NODE_EXTRA_CA_CERTS` `DEEPSEEK_API_KEY`, and variables starting with `LC_`, `XDG_`.
-- Pinned to the tested dsh 0.2.0-rc.2, a developer preview. Recheck on an upgrade: the config row IDs the patch names (dsh silently ignores a patch row it does not have, so a renamed row would drop that part of the lockdown), the SIGTERM exit 0 with a partial `final`, the hardcoded `/tmp` writable root, the session-log upload being on by default, the `.env` bootstrap-name refusal, and the transport retry row.
+- Measured with dsh 0.2.0-rc.2, a developer preview. The runner checks `dsh --version` before the preflight and refuses any other version as `unavailable-cli`/69. Recheck on an upgrade: the config row IDs the patch names (dsh silently ignores a patch row it does not have, so a renamed row would drop that part of the lockdown), the SIGTERM exit 0 with a partial `final`, the hardcoded `/tmp` writable root, the session-log upload being on by default, the `.env` bootstrap-name refusal, and the transport retry row.
 - Model and effort are config, not flags. Each lane gets a run-owned `--patch` file at `<receipt>.provider/patch.yml` (directory 0700, file 0600) that pins `agent-default-model` to provider `deepseek-official`, the lane's model and, unless the effort is `default`, its `reasoningEffort`. dsh offers efforts `off`, `low`, `high` and `max`, and fails `medium` locally.
 - Read-only only. The patch pins `sandbox-policy` to `read-only` with the lane's cwd as the workspace root and `approval` to `ask`, which overrides `DSH_PERMISSION_MODE`. Seatbelt enforces it on macOS for bash and the file tools. Headless has no approval channel, so an escalation request fails closed. Bash keeps network access, and the `read` tool is not confined to the cwd. The runner refuses an `isolated-write` lane before launch.
 - The patch turns off host and project rules (`AGENTS.md`, `CLAUDE.md` and their local variants), every skill root, the web, subagent and workflow tools, the session-title model call, the plugin inventory and the `dsh_session_log` upload. The goal, job, todo, plan-mode and `read_image` tools still load. dsh loads no project patch, hook or MCP file, so no project path is refused.
