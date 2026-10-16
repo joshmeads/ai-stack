@@ -95,7 +95,7 @@ fn plan_sheet(cfg: &Config, owner: &links::Owner, hc: &HarnessConfig, opts: Opti
 /// block (Claude), and the sheet include (Claude) or mirror (Codex). User text outside the
 /// blocks is kept.
 fn plan_instructions(cfg: &Config, hc: &HarnessConfig, out: &mut Plan) -> Result<()> {
-    let path = write_through(&hc.home.join(hc.harness.instruction_file()))?;
+    let path = paths::write_through(&hc.home.join(hc.harness.instruction_file()))?;
     let original = read_optional(&path)?.unwrap_or_default();
     blocks::validate(&original).with_context(|| format!("checking managed markers in {}", path.display()))?;
     let mut text = blocks::remove_marked(&original, LEGACY_LOCAL_BEGIN, LEGACY_LOCAL_END)?;
@@ -148,12 +148,12 @@ fn instructions_body(cfg: &Config, harness: Harness) -> Result<Result<Option<Str
 /// Drops `@...` import lines that load this harness's sheet, so the managed include is the
 /// only one (setup-stack refuses a file with more than one).
 fn remove_sheet_imports(text: &str, cfg: &Config, hc: &HarnessConfig) -> String {
-    let sheet = sheet_path(hc);
+    let sheet = paths::resolve(&sheet_path(hc));
     let imports_sheet = |line: &str| {
         let Some(target) = line.trim().strip_prefix('@') else { return false };
         let target = paths::expand(target, &cfg.home);
         let target = if target.is_absolute() { target } else { hc.home.join(target) };
-        paths::normalize(&target) == sheet
+        paths::resolve(&target) == sheet
     };
     let kept: String = text.split_inclusive('\n').filter(|line| !imports_sheet(line)).collect();
     if kept.len() == text.len() { kept } else { format!("{}\n", kept.trim_end()) }
@@ -162,7 +162,7 @@ fn remove_sheet_imports(text: &str, cfg: &Config, hc: &HarnessConfig) -> String 
 /// Removes hook commands older installs added to settings.json. Other commands in the same
 /// group stay; a group or event list is dropped only when ai-stack's commands were all it held.
 fn plan_settings(cfg: &Config, hc: &HarnessConfig, out: &mut Plan) -> Result<()> {
-    let path = write_through(&hc.home.join("settings.json"))?;
+    let path = paths::write_through(&hc.home.join("settings.json"))?;
     let Some(text) = read_optional(&path)? else { return Ok(()) };
     let mut root: Value = match serde_json::from_str(&text) {
         Ok(root) => root,
@@ -212,21 +212,11 @@ fn owned_hook(command: &str, roots: &[&Path]) -> bool {
     let Some((program, arg)) = command.split_once(' ') else { return false };
     let arg = arg.trim();
     let script = arg.strip_prefix('\'').and_then(|arg| arg.strip_suffix('\'')).unwrap_or(arg);
-    OLD_HOOKS.iter().any(|(owner, relative)| *owner == program && roots.iter().any(|root| Path::new(script) == root.join(relative)))
-}
-
-/// The file a shared path writes to: the link's target when `path` is a symlink, so the link stays.
-fn write_through(path: &Path) -> Result<PathBuf> {
-    match metadata(path)? {
-        Some(meta) if meta.file_type().is_symlink() => Ok(match fs::canonicalize(path) {
-            Ok(target) => target,
-            Err(_) => {
-                let target = fs::read_link(path)?;
-                paths::normalize(&path.parent().expect("link has a parent").join(target))
-            }
-        }),
-        _ => Ok(path.to_path_buf()),
+    if !Path::new(script).is_absolute() {
+        return false;
     }
+    let script = paths::resolve(Path::new(script));
+    OLD_HOOKS.iter().any(|(owner, relative)| *owner == program && roots.iter().any(|root| script == paths::resolve(&root.join(relative))))
 }
 
 fn read_optional(path: &Path) -> Result<Option<String>> {
@@ -693,5 +683,21 @@ pub(crate) mod tests {
         let report = crate::plan::apply(&forced, &f.root.join("backups"), &f.runner).unwrap();
         assert!(fs::read_to_string(&sheet).unwrap().starts_with(render::MANAGED_MD));
         assert_eq!(fs::read_to_string(report.backup_dir.unwrap().join("home/.claude/pstack-models.md")).unwrap(), "# pstack model configuration\n");
+    }
+
+    #[test]
+    fn sheet_imports_and_old_hooks_match_through_another_spelling_of_the_same_path() {
+        let f = fixture();
+        // `alias` is to the home and the stack what `/tmp` is to `/private/tmp`.
+        symlink(&f.root, f.root.join("alias")).unwrap();
+        let alias = f.root.join("alias");
+        put(&f.home.join(".claude/CLAUDE.md"), &format!("# Mine\n@{}/home/.claude/pstack-models.md\n", alias.display()));
+        let hook = format!("bash {}/stack/plugins/pstack/hooks/session-start", alias.display());
+        put(&f.home.join(".claude/settings.json"), &json!({"hooks": {"SessionStart": [{"hooks": [{"type": "command", "command": hook}]}]}}).to_string());
+        f.apply(&f.plan());
+        let claude = f.read(".claude/CLAUDE.md");
+        assert!(!claude.contains(&alias.display().to_string()), "{claude}");
+        let settings: Value = serde_json::from_str(&f.read(".claude/settings.json")).unwrap();
+        assert_eq!(settings, json!({"hooks": {}}));
     }
 }
