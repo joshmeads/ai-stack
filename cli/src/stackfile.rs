@@ -199,8 +199,10 @@ impl StackFile {
                 inside(&skill.path).with_context(|| format!("{what}: path"))?;
             }
             inside(&skill.dest).with_context(|| format!("{what}: dest"))?;
-            ensure!(!Path::new(&skill.dest).components().any(|part| part.as_os_str() == ".git"), "{what}: dest {:?} must not be inside a .git directory", skill.dest);
-            let under_skills = Path::new(&skill.dest).components().next().is_some_and(|part| part.as_os_str() == SKILLS_DIR);
+            // Compared without case, because a case-insensitive disk opens `.GIT` as `.git`.
+            let is = |part: Component, name: &str| part.as_os_str().to_string_lossy().eq_ignore_ascii_case(name);
+            ensure!(!Path::new(&skill.dest).components().any(|part| is(part, ".git")), "{what}: dest {:?} must not be inside a .git directory", skill.dest);
+            let under_skills = Path::new(&skill.dest).components().next().is_some_and(|part| is(part, SKILLS_DIR));
             ensure!(!under_skills || skill.is_standalone(), "{what}: dest {:?} is inside {SKILLS_DIR}/, where every directory is a standalone skill; use {SKILLS_DIR:?} itself or a directory outside it", skill.dest);
             crate::exec::check_ref(&skill.git_ref).with_context(|| format!("{what}: ref"))?;
             ensure!(!skill.source.trim().is_empty() && !skill.source.starts_with('-'), "{what}: invalid source {:?}", skill.source);
@@ -267,6 +269,22 @@ impl StackFile {
         }
         let mut done = BTreeSet::new();
         self.groups.keys().find_map(|name| visit(name, &self.groups, &mut Vec::new(), &mut done))
+    }
+
+    /// Checks every vendored entry's `dest` against the stack as it is on disk: resolved, it must
+    /// stay inside the stack, outside `.git`, and outside `skills/` unless it is exactly `skills`.
+    /// This catches a symlink or another spelling that the checks on the text cannot see.
+    pub fn check_dests(&self, stack: &Path) -> Result<()> {
+        let root = crate::paths::resolve(stack);
+        let (git, skills) = (crate::paths::resolve(&stack.join(".git")), crate::paths::resolve(&stack.join(SKILLS_DIR)));
+        for skill in &self.skills {
+            let dest = crate::paths::resolve(&stack.join(&skill.dest));
+            let what = format!("[[skill]] {:?}: dest {:?} resolves to {}", skill.name, skill.dest, dest.display());
+            ensure!(dest.starts_with(&root), "{what}, outside the stack");
+            ensure!(!dest.starts_with(&git), "{what}, inside the stack's .git directory");
+            ensure!(skill.dest == SKILLS_DIR || !dest.starts_with(&skills), "{what}, inside {SKILLS_DIR}/, where every directory is a standalone skill; use {SKILLS_DIR:?} itself or a directory outside it");
+        }
+        Ok(())
     }
 
     /// Checks the file against the stack's `skills/` directory: every group member is a
@@ -347,7 +365,7 @@ pub fn load(stack: &Path) -> Result<StackFile> {
         Err(err) if err.kind() == std::io::ErrorKind::NotFound => StackFile::default(),
         Err(err) => return Err(anyhow!("cannot read {}: {err}", path.display())),
     };
-    file.check_skills_dir(stack).with_context(|| format!("invalid {}", path.display()))?;
+    file.check_skills_dir(stack).and_then(|()| file.check_dests(stack)).with_context(|| format!("invalid {}", path.display()))?;
     Ok(file)
 }
 
@@ -597,6 +615,9 @@ mod tests {
             (format!("{}\n{}", entry(""), entry("").replace("name = \"grill\"", "name = \"GRILL\"").replace("dest = \"vendor\"", "dest = \"other\"")), "already uses the name \"grill\", which differs only by case"),
             (format!("{}\n{}", entry(""), entry("").replace("name = \"grill\"", "name = \"x\"\nmove = \"GRILL\"").replace("skills/grill", "skills/x")), "also installs vendor/grill, which differs only by case"),
             (entry("").replace("dest = \"vendor\"", "dest = \"skills/nested\""), "dest \"skills/nested\" is inside skills/"),
+            (entry("").replace("dest = \"vendor\"", "dest = \"Skills/vendor\""), "dest \"Skills/vendor\" is inside skills/"),
+            (entry("").replace("dest = \"vendor\"", "dest = \"SKILLS\""), "dest \"SKILLS\" is inside skills/"),
+            (entry("").replace("dest = \"vendor\"", "dest = \".GIT/refs\""), "must not be inside a .git directory"),
         ] {
             let err = format!("{:#}", from_str(&text).unwrap_err());
             assert!(err.contains(message), "{message}: {err}");
@@ -781,5 +802,23 @@ mod tests {
         // A vendored member that is not built yet is allowed; `skills update` rebuilds it.
         write(&format!("[groups.tools]\nskills = [\"handoff\", \"feedback\", \"grill\"]\n\n{}", entry("").replace("dest = \"vendor\"\n", "")));
         assert!(load(stack).is_ok());
+    }
+
+    #[test]
+    fn a_dest_that_resolves_into_git_skills_or_outside_the_stack_is_refused() {
+        let dir = tempfile::tempdir().unwrap();
+        let stack = dir.path().join("stack");
+        std::fs::create_dir_all(stack.join(".git/refs")).unwrap();
+        std::fs::create_dir_all(stack.join("skills")).unwrap();
+        std::fs::create_dir_all(dir.path().join("outside")).unwrap();
+        std::os::unix::fs::symlink(".git", stack.join("hooks-dir")).unwrap();
+        std::os::unix::fs::symlink("skills", stack.join("aliased")).unwrap();
+        std::os::unix::fs::symlink("../outside", stack.join("away")).unwrap();
+        for (dest, message) in [("hooks-dir/refs", "inside the stack's .git directory"), ("aliased/vendor", "inside skills/"), ("aliased", "inside skills/"), ("away/x", "outside the stack")] {
+            let file = from_str(&entry("").replace("dest = \"vendor\"", &format!("dest = {dest:?}"))).unwrap();
+            let err = format!("{:#}", file.check_dests(&stack).unwrap_err());
+            assert!(err.contains(message), "{dest}: {err}");
+        }
+        assert!(from_str(&entry("")).unwrap().check_dests(&stack).is_ok());
     }
 }
