@@ -6,6 +6,7 @@ mod exec;
 mod fleet;
 mod groups;
 mod install;
+mod ledger;
 mod links;
 mod models;
 mod paths;
@@ -278,7 +279,7 @@ fn main() -> Result<()> {
         Commands::Init { force } => cmd_init(&ctx, force)?,
         Commands::Diff { clean } => cmd_diff(&ctx, clean)?,
         Commands::Stray { json } => cmd_stray(&ctx, json)?,
-        Commands::Install { yes, force, plain, clean } => cmd_install(&ctx, yes, Options { force, clean }, plain)?,
+        Commands::Install { yes, force, plain, clean } => cmd_install(&ctx, yes, Options { force, clean, report: false }, plain)?,
         Commands::Update { yes, plain, bump_models, branch } => cmd_update(&ctx, yes, plain, bump_models, branch)?,
         Commands::Models { bump } => cmd_models(&ctx, bump)?,
         Commands::Skills { command } => cmd_skills(&ctx, command)?,
@@ -359,7 +360,7 @@ fn cmd_diff(ctx: &Context, clean: bool) -> Result<i32> {
 
 fn cmd_stray(ctx: &Context, json: bool) -> Result<i32> {
     let cfg = load_config(ctx)?;
-    let stray = install::plan(&cfg, Options { clean: true, ..Options::default() }, &SystemRunner)?.stray(&ctx.home);
+    let stray = install::plan(&cfg, Options { clean: true, report: true, ..Options::default() }, &SystemRunner)?.stray(&ctx.home);
     if json {
         println!("{}", serde_json::to_string(&stray)?);
     } else {
