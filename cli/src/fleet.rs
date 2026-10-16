@@ -328,10 +328,7 @@ impl Fleet<'_> {
         ))?;
         ensure!(terminal, "fleet login requires stdin and stdout to be terminals");
         if !machine.enabled { writeln!(out, "warning: machine {} is disabled in fleet.toml", machine.name)?; }
-        let argv = match provider.login {
-            auth::Login::Supported(argv) => argv,
-            auth::Login::Unsupported(reason) => bail!("{}: headless login unsupported: {reason}", provider.name),
-        };
+        let argv = provider.login;
         let before = match self.auth_status(machine) {
             Ok(status) => status,
             Err(reason) => { writeln!(out, "{}  {reason}", machine.name)?; return Ok(1); }
