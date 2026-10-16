@@ -58,7 +58,8 @@ describe("dsh launch", () => {
       expect(patch).toContain(`- id: ${id}\n  disabled: true\n`);
     }
     expect(patch).toEndWith("- id: session-log-deepseek\n  config:\n    enabled: false\n");
-    expect(dsh.launch.sidecar!.config!.content(lane({ model: "deepseek-next", effort: "default" }))).not.toContain("reasoningEffort");
+    // The setting's own line, so a credentials path that contains the word does not count.
+    expect(dsh.launch.sidecar!.config!.content(lane({ model: "deepseek-next", effort: "default" }))).not.toMatch(/^ {4}reasoningEffort:/m);
   });
 
   it("reads the stored login from the parent's DSH_HOME, resolved as dsh resolves it, else ~/.dsh", () => {
