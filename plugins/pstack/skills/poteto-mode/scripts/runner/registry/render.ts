@@ -5,7 +5,6 @@ import { access, type EnvPolicy, type ProviderAdapter } from "./contract.ts";
 import { defaultDescriptor, effortsOf, modelIds, REGISTRY, type Registry } from "./index.ts";
 
 export interface GeneratedFile {
-  /** Relative to the plugin root. */
   readonly path: string;
   readonly content: string;
 }
@@ -54,7 +53,6 @@ function environment(adapter: ProviderAdapter, long: boolean): string {
 
 const list = (items: readonly string[]): string => items.length === 0 ? "none" : items.join("; ");
 
-/** The whole model catalog. Its first line names the source and the write command. */
 export function renderCatalog(registry: Registry): GeneratedFile {
   const named = new Set<string>(registry.roleDefaults.flatMap((entry) => entry.lanes));
   const parents = Object.keys(PARENTS) as Parent[];
@@ -164,7 +162,6 @@ export function renderCatalog(registry: Registry): GeneratedFile {
   return { path: CATALOG_PATH, content: lines.join("\n") };
 }
 
-/** pstack-<family>-<effort>.md for each Claude family and each selectable effort. */
 export function renderNativeAgents(registry: Registry): readonly GeneratedFile[] {
   return registry.families.filter((family) => family.provider === "claude").flatMap((family) =>
     effortsOf(family).map((effort) => {
@@ -213,7 +210,6 @@ function strays(registry: Registry, pluginRoot: string): string[] {
     .sort();
 }
 
-/** A stale or missing catalog or agent file, and every stray pstack-*.md. Empty means in sync. */
 export function driftReport(registry: Registry, pluginRoot: string): readonly string[] {
   const report = generated(registry).flatMap((file) => {
     const actual = read(join(pluginRoot, file.path));
@@ -223,12 +219,10 @@ export function driftReport(registry: Registry, pluginRoot: string): readonly st
   return [...report, ...strays(registry, pluginRoot).map((path) => `stray ${path}`)];
 }
 
-/** The report followed by the write command, or "" when in sync. */
 export function driftMessage(report: readonly string[]): string {
   return report.length === 0 ? "" : [...report, WRITE_HINT].join("\n");
 }
 
-/** Writes every changed file and deletes stray pstack-*.md files. */
 export function writeGenerated(registry: Registry, pluginRoot: string): void {
   for (const file of generated(registry)) {
     const path = join(pluginRoot, file.path);

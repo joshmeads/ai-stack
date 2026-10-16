@@ -1,4 +1,3 @@
-// Test-only: the properties every adapter keeps. Each providers/<id>.test.ts runs it once.
 import { describe, expect, it } from "bun:test";
 import type { LaunchFacts, ProviderAdapter } from "../registry/contract.ts";
 import { effortsOf, type Lane, type LaneRequest, modelIds, REGISTRY, resolveLane } from "../registry/index.ts";
@@ -12,14 +11,12 @@ const BYPASS_TOKENS = [
   "dangerous",
 ];
 
-/** The request fields that ask for one access kind. */
 export function accessRequest(kind: AccessKind): Pick<LaneRequest, "mode" | "writerSandbox"> {
   return kind === "isolated-write-full-access"
     ? { mode: "isolated-write", writerSandbox: "full-access" }
     : { mode: kind, writerSandbox: "bounded" };
 }
 
-/** A lane from raw request fields, with a parent that differs from the provider. */
 export function testLane(request: Partial<LaneRequest> & { readonly provider: string }): Lane {
   const parent = (Object.keys(PARENTS) as Parent[]).find((name) => name !== request.provider)!;
   return resolveLane({
@@ -36,7 +33,6 @@ export function testLane(request: Partial<LaneRequest> & { readonly provider: st
   });
 }
 
-/** The facts run.ts passes before argv, with the provider sidecar paths it reserves next to the receipt. */
 export function testFacts(adapter: ProviderAdapter, sharedGitDir: string | null = null): LaunchFacts {
   const sidecar = adapter.launch.sidecar;
   const directory = "/tmp/receipt.json.provider";
@@ -52,12 +48,10 @@ export function testFacts(adapter: ProviderAdapter, sharedGitDir: string | null 
 
 export function adapterSuite(adapter: ProviderAdapter): void {
   describe(`${adapter.id} adapter contract`, () => {
-    // An unregistered model-ID pair is already the CLI model ID, so it takes only the default effort.
     const unregistered = adapter.effortIn === "model-id" ? "default" : "max";
     const lane = (request: Partial<LaneRequest> = {}) =>
       testLane({ provider: adapter.id, effort: unregistered, ...request });
     const argv = (request: Partial<LaneRequest> = {}) => adapter.launch.argv(lane(request), testFacts(adapter));
-    // What the adapter launches is its argv plus the config it has run.ts write.
     const config = (request: Partial<LaneRequest> = {}) => adapter.launch.sidecar?.config?.content(lane(request)) ?? "";
 
     it("passes the requested model to the CLI unchanged", () => {
@@ -66,7 +60,6 @@ export function adapterSuite(adapter: ProviderAdapter): void {
 
     if (adapter.effortIn === "config") {
       it("carries the effort in the config only, and omits it for the default effort", () => {
-        // Line by line, so a path in the config that happens to contain "high" does not count.
         const high = config({ effort: "high" }).split("\n");
         const base = config({ effort: "default" }).split("\n");
         expect(high.filter((line) => !base.includes(line))).toEqual([expect.stringContaining("high")]);
@@ -102,7 +95,6 @@ export function adapterSuite(adapter: ProviderAdapter): void {
       }
     });
 
-    // The opted-in full-access writer is the one kind allowed a bypass; each adapter's own test pins its argv.
     it("uses bounded modes without bypass tokens", () => {
       for (const kind of adapter.launch.supports.filter((entry) => entry !== "isolated-write-full-access")) {
         for (const token of argv(accessRequest(kind))) {

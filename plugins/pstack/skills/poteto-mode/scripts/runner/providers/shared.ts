@@ -1,8 +1,6 @@
 import type { ChildRun, Lane, PreflightVerdict } from "../registry/contract.ts";
 import { evidence, modelFailureStatus, type NormalizedUsage } from "../types.ts";
 
-/** What an allowlisted CLI needs to start, authenticate and reach the network. A lane's shell can
- *  read every variable it inherits, so an allowlist adapter adds only its own prefixes (#141). */
 export const BASE_ALLOWLIST = [
   "PATH",
   "HOME",
@@ -66,7 +64,6 @@ export function normalizedUsage(value: unknown): NormalizedUsage | null {
     : null;
 }
 
-/** The usage key that matches the requested model, else the first one. */
 export function modelFromUsage(
   value: unknown,
   lane: Lane,
@@ -78,27 +75,21 @@ export function modelFromUsage(
   return models.find((model) => matches(lane, model)) ?? models[0] ?? null;
 }
 
-/** The requested ID, or the same ID followed by a build suffix. */
 export function exactOrSuffixed(lane: Lane, reported: string): boolean {
   return reported === lane.model || reported.startsWith(`${lane.model}-`);
 }
 
-/** The flag and value for the lane's effort; nothing for `default`. */
 export function effortArgs(lane: Lane, args: readonly string[]): readonly string[] {
   return lane.effort === "default" ? [] : args;
 }
 
-// Only preflight output is read for authentication; a failed model call's output can quote
-// the child's own work.
 const AUTH_FAILURE = /not logged in|not authenticated|unauthenticated|authentication|sign in|login required/i;
 
-/** The failure that preflight text names, or null when it names none. */
 export function namedPreflightFailure(value: string): "unauthenticated" | "unavailable-model" | null {
   if (AUTH_FAILURE.test(value)) return "unauthenticated";
   return modelFailureStatus(value) === "unavailable-model" ? "unavailable-model" : null;
 }
 
-/** Classifies a failed preflight from its bounded output, with `fallback` when the output names no failure. */
 export function failedPreflight(
   run: ChildRun,
   fallback: "unauthenticated" | "unavailable-model"

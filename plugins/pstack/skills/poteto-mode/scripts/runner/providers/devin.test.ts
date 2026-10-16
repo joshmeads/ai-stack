@@ -8,7 +8,6 @@ import { devin } from "./devin.ts";
 
 adapterSuite(devin);
 
-// Sanitized from Devin CLI 3000.10.21 captures: structure kept, identity and host text removed.
 const fixture = (name: string): string => readFileSync(join(import.meta.dir, "fixtures/devin", name), "utf8");
 
 const lane = (request: Partial<LaneRequest> = {}) => testLane({ provider: "devin", model: "swe-2", effort: "medium", ...request });

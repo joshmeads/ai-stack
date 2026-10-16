@@ -2,8 +2,6 @@ import { adapter, type LaunchFacts, type ParseResult } from "../registry/contrac
 import type { NormalizedUsage } from "../types.ts";
 import { BASE_ALLOWLIST, BASE_PREFIXES, normalizedUsage, nullableString, object, type JsonObject } from "./shared.ts";
 
-// Read is the only enabled tool, and every other tool is rejected. The file also turns off MCP servers, both skill
-// sources, updates and notifications.
 const LOCKDOWN = {
   "amp.mcpServers": {},
   "amp.skills.disableClaudeCodeSkills": true,
@@ -105,7 +103,6 @@ export const amp = adapter({
       lane.cliModel,
       "--settings-file",
       settingsPath(facts),
-      // Every captured thread was private; a repository's visibility mapping was not tested.
       "--visibility",
       "private",
       "--no-ide",
@@ -115,7 +112,6 @@ export const amp = adapter({
     ],
   },
   parse: (run) => parse(run.stdout),
-  // The stream never names the model. The pinned official mode is the evidence.
   proof: { report: "absent", matches: () => false },
   // No AMP_ prefix: AMP_SETTINGS_FILE, AMP_EXECUTOR (`orb` runs the turn remotely), AMP_INITIAL_AGENT_MODE_KEY and
   // AMP_URL would change the settings, where the turn runs, the mode or the service.

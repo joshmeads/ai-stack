@@ -8,7 +8,6 @@ import { opencode } from "./opencode.ts";
 
 adapterSuite(opencode);
 
-// Sanitized from OpenCode 1.19.1 captures: structure kept, paths replaced by placeholders.
 const fixture = (name: string): string => readFileSync(join(import.meta.dir, "fixtures/opencode", name), "utf8");
 
 const MODEL = "opencode/deepseek-v4.1-flash-free";

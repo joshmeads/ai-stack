@@ -10,6 +10,7 @@ import {
   realpathSync,
   renameSync,
   rmSync,
+  statSync,
   symlinkSync,
   unlinkSync,
   writeFileSync,
@@ -76,11 +77,7 @@ function snapshot(): Record<string, string> {
   const files: Record<string, string> = {};
   for (const name of readdirSync(home, { recursive: true }) as string[]) {
     const path = join(home, name);
-    try {
-      files[relative(home, path)] = readFileSync(path).toString("base64");
-    } catch {
-      // Directories have no bytes to compare.
-    }
+    if (statSync(path).isFile()) files[relative(home, path)] = readFileSync(path).toString("base64");
   }
   return files;
 }

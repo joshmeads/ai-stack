@@ -83,7 +83,6 @@ export const cursor = adapter({
         const listed = run.stdout.split("\n").some((line) => line.startsWith(`${lane.cliModel} - `));
         return listed ? { kind: "passed", evidence: `model ${lane.cliModel} listed` } : { kind: "unavailable-model" };
       }
-      // Empty output is never unauthenticated (#94).
       return run.exitCode === 1 && /^Error: Authentication required/m.test(boundedOutput(run))
         ? { kind: "unauthenticated" }
         : { kind: "inconclusive" };
