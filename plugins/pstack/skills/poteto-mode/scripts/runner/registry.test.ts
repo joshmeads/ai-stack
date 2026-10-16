@@ -231,7 +231,8 @@ describe("hand-written dispatch and setup rules", () => {
     expect(normalization).toContain("without writing user files");
     expect(normalization).toContain("`/setup-pstack` will rewrite it");
     expect(normalization).toContain("runner rejects a missed rolling-alias version pin");
-    expect(normalization).toContain("A kept predecessor in the catalog matches its family. Dispatch it unchanged");
+    expect(normalization).toContain("A kept predecessor in the catalog matches its family. Dispatch it with the sheet's model");
+    expect(normalization).toContain("Do not rewrite its model in memory.");
   });
 
   it("keeps setup's fail-closed reconfiguration order", () => {
