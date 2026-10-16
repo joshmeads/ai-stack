@@ -3,6 +3,14 @@
 Mergify auto-queue is live: ready PRs to main require passing verify, Unfret and exact-head live-gate, and no unresolved review thread; workflow changes require operator queueing.
 This port applies the Cursor → Claude Code substitutions in skill bodies. Earlier drafts left them flagged; this revision resolves them. A later pass added a Codex build that shares the same skills; see [Codex port](#codex-port) below.
 
+## 1.12.0 adds a read-only OpenCode provider
+
+Open Pstack 1.12.0 keeps the Cursor pstack 0.15.25 sync. It ships PR #202, merged after 1.11.0. Default roles and panels are unchanged. No role uses the new provider by default, and setup refuses it for every role that writes files.
+
+**Read-only OpenCode provider.** The runner dispatches `opencode:opencode/deepseek-v4.1-flash-free`, OpenCode Zen's free DeepSeek V4.1 Flash, which needs no key, at `low`, `high` or `max` through the OpenCode CLI from either parent. `max` is the default. Other OpenCode models run unchanged as unregistered pairs and authenticate through OpenCode's stored logins. Each lane runs OpenCode's `build` agent with a run-owned config whose permissions allow only `read`, `glob`, `grep`, `list` and `todowrite`, with `--pure`, a fixed session title, and OpenCode's switches that turn off project config, Claude Code files and external skills. A turn that ends on a rejected tool call is `child-failed`. Neither the event stream nor any other OpenCode output names the served model, so receipts record `pinned-argv` evidence (#68).
+
+**Read-only means pstack's own settings.** The runner refuses no repository and adds no pre-launch check because of the operator's own OpenCode configuration (#203). A managed config, the macOS managed-preferences profile, remote config from a stored well-known login or console organization, and a repository's `.opencode/plugins/` still load in every lane, and they can add MCP servers, language servers, plugins, provider routing or agent changes. The catalog's OpenCode notes say what each was measured to do with OpenCode 1.19.1.
+
 ## 1.11.0 adds read-only DeepSeek Harness and Antigravity providers
 
 Open Pstack 1.11.0 keeps the Cursor pstack 0.15.25 sync. It ships PR #196, merged after 1.10.0. Default roles and panels are unchanged. No role uses the new providers by default, and setup refuses both for every role that writes files.
