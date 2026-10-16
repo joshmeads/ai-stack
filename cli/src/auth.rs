@@ -32,7 +32,7 @@ struct ExpirySource {
 }
 
 pub const PROVIDERS: &[Provider] = &[
-    Provider { id: "claude", name: "Claude Code", binary: "claude", login: Login::Unsupported("claude auth login requires a localhost callback and has no code-paste handler"), status: &["auth", "status", "--json"], parser: claude, expiry: if cfg!(target_os = "linux") { Some(ExpirySource { env: "CLAUDE_CONFIG_DIR", directory: ".claude", file: ".credentials.json", reader: claude_expiry }) } else { None } },
+    Provider { id: "claude", name: "Claude Code", binary: "claude", login: Login::Supported(&["claude", "auth", "login"]), status: &["auth", "status", "--json"], parser: claude, expiry: if cfg!(target_os = "linux") { Some(ExpirySource { env: "CLAUDE_CONFIG_DIR", directory: ".claude", file: ".credentials.json", reader: claude_expiry }) } else { None } },
     Provider { id: "codex", name: "Codex", binary: "codex", login: Login::Supported(&["codex", "login", "--device-auth"]), status: &["login", "status"], parser: codex, expiry: Some(ExpirySource { env: "CODEX_HOME", directory: ".codex", file: "auth.json", reader: codex_expiry }) },
     Provider { id: "cursor", name: "Cursor Agent", binary: "cursor-agent", login: Login::Supported(&["env", "NO_OPEN_BROWSER=1", "cursor-agent", "login"]), status: &["status", "--format", "json"], parser: cursor, expiry: None },
     Provider { id: "opencode", name: "OpenCode", binary: "opencode", login: Login::Supported(&["opencode", "auth", "login"]), status: &["auth", "list"], parser: opencode, expiry: None },
