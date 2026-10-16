@@ -9,14 +9,12 @@ import type { SessionRecord } from './types.ts';
 const roots: string[] = [];
 afterEach(async () => { for (const root of roots.splice(0)) await rm(root, { recursive: true, force: true }); });
 
-// Stands in for the Claude CLI: logged in, and the model call writes the requested file in its cwd.
 const FAKE_CLAUDE = `#!/usr/bin/env bun
 if (process.argv[2] === 'auth') { console.log(JSON.stringify({ loggedIn: true })); process.exit(0); }
 await Bun.write('WRITTEN.md', 'PONG\\n');
 console.log(JSON.stringify({ result: 'DONE', modelUsage: { 'claude-opus-9': {} } }));
 `;
 
-/** Runs the candidate launcher the way the prompt asks a Codex parent to, with a fake Claude on PATH. */
 async function launch(f: Fixture, prompt: string): Promise<string> {
   const args = /wait for it to exit: (--parent .*?)\. Work only inside/.exec(prompt)![1]!.split(' ');
   const bin = join(f.dir, 'bin');

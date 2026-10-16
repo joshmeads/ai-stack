@@ -13,17 +13,14 @@ export function validateRegistry(value: unknown): Registry {
   return r;
 }
 
-// Only a terminal /** is supported: unknown paths cannot match an accidental broad glob.
 export function matches(path: string, pattern: string): boolean {
   return pattern.endsWith('/**') ? path.startsWith(pattern.slice(0, -2)) : path === pattern;
 }
 
-/** Manifests whose version-only change reaches only the startup hook of the harness that reads them. */
 export const VERSION_MANIFESTS: Readonly<Record<string, Harness>> = {
   'plugins/pstack/.claude-plugin/plugin.json': 'claude', '.claude-plugin/marketplace.json': 'claude', 'plugins/pstack/.codex-plugin/plugin.json': 'codex',
 };
 
-/** Return every `<harness>:<feature>` the changed paths can reach. */
 export function classify(files: ChangedFile[], registry: Registry): Selection {
   const paths = [...new Set(files.flatMap(f => [f.filename, ...(f.previous_filename ? [f.previous_filename] : [])]))].sort();
   const versionOnly = new Set(files.filter(f => f.versionOnly && !f.previous_filename).map(f => f.filename));
@@ -37,7 +34,6 @@ export function classify(files: ChangedFile[], registry: Registry): Selection {
       if (path !== 'plugins/pstack/assets/logo.png') throw new Error(`Unmapped asset consumer: ${path}`);
       features.add('codex:assets:codex'); covered = true;
     }
-    // Catalog paths change only model and provider facts, so they skip shared expansion and the skill match.
     const catalog = registry.catalog.some(p => matches(path, p));
     if (catalog) { both('catalog', 'setup', 'runner'); covered = true; }
     if (!catalog && registry.shared.some(p => matches(path, p))) {
@@ -49,7 +45,6 @@ export function classify(files: ChangedFile[], registry: Registry): Selection {
     for (const [key, feature] of [['setup', 'setup'], ['runner', 'runner'], ['tools', 'shipped-tools'], ['project', 'project-skill']] as const) {
       if (registry[key].some(p => matches(path, p))) { both(feature); covered = true; }
     }
-    // Reflect's Codex transcript lookup runs this launcher and script; no other skill consumes them.
     if (/^plugins\/pstack\/skills\/poteto-mode\/scripts\/resolve-codex-transcript(?:\.ts)?$/.test(path)) { skills.add('reflect'); covered = true; }
     const skill = /^plugins\/pstack\/skills\/([^/]+)\/(.+)$/.exec(path);
     if (!catalog && skill && registry.skills.includes(skill[1]!)) {
@@ -57,10 +52,8 @@ export function classify(files: ChangedFile[], registry: Registry): Selection {
       if (leaf === 'SKILL.md' || leaf.startsWith('references/') || leaf.startsWith('playbooks/')) {
         skills.add(skill[1]!); covered = true;
       }
-      // poteto-agent preloads poteto-mode's SKILL.md.
       if (skill[1] === 'poteto-mode' && leaf === 'SKILL.md') features.add('claude:agent-preload:poteto-agent');
     }
-    // Runtime ownership always takes precedence over documentation exemptions.
     if (!covered && !registry.nonRuntime.some(p => matches(path, p))) throw new Error(`Unmapped path: ${path}`);
   }
   skills.forEach(s => both(`skill-invocation:${s}`));

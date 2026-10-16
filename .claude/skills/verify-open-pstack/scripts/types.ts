@@ -8,13 +8,11 @@ export interface Pull {
 }
 export interface ChangedFile {
   filename: string; previous_filename?: string;
-  /** Set by the publisher when a manifest change only bumps its version strings. */
   versionOnly?: boolean;
 }
 export interface Registry {
   skills: string[];
   shared: string[];
-  /** The generated model catalog and native agents, and the registry sources they come from. */
   catalog: string[];
   assets: string[];
   setup: string[];
@@ -35,11 +33,8 @@ export interface Installation {
 }
 export interface Receipt {
   schema: 1; repo: string; pr: number; sha: string; base: string; phase: Phase;
-  /** `features` holds every `<harness>:<feature>` the changed paths reach. */
   selection: Selection;
-  /** The features this run exercises: the named ones plus automatic project proof. */
   runFeatures: string[];
-  /** Headless sessions the run plans, and the operator's reason for exceeding the limit. */
   sessions: number; wide?: string;
   installations: Installation[]; observations: Observation[];
   selfTest: boolean; artifactRoot: string; publisherRevision?: string; failure?: string;
@@ -51,16 +46,11 @@ export interface GitHub {
   comment(pr: number, body: string): Promise<string>;
   status(sha: string, state: 'success' | 'failure', target: string, description: string): Promise<void>;
 }
-/** One headless native session, normalized by the trusted parent from the harness's own stream. */
 export interface SessionRecord {
   harness: Harness; exitCode: number; started: number;
-  /** Claude: `pstack:<name>` or a project command name. Codex: `pstack:<name>` for installed SKILL.md reads, else the path read. */
   skills: string[];
-  /** Shell commands the harness completed successfully. */
   commands: string[];
-  /** Claude: every tool call, with `parent` set to the Agent call's id for a subagent's own calls. Codex: every completed shell command, with its captured output. */
   tools: { name: string; id: string; input: Record<string, any>; parent: string | null; result?: string; failed: boolean }[];
-  /** Claude: stdout of each successful SessionStart hook, which Claude adds to context. Codex: each developer message in the rollout. */
   context: string[];
 }
 export interface Driver {

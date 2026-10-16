@@ -25,7 +25,6 @@ export async function doctor(root: string, run: Command = command, platform = pr
       if (args.includes('marketplace') && !/local path|local or Git|local marketplace/i.test(help)) throw new Error('Codex local marketplace interface unavailable');
       checks[args.join(' ')] = help;
     }
-    // Login state comes only from what each CLI prints; credential files and Keychain items are never read.
     if (!candidate && harnesses.includes('claude')) {
       let loggedIn: unknown;
       try { loggedIn = JSON.parse(await run(['claude', 'auth', 'status'], { env })).loggedIn; } catch {}

@@ -121,13 +121,11 @@ describe('registry and ownership', () => {
     for (const filename of ['plugins/pstack/.claude-plugin/plugin.json', 'plugins/pstack/.codex-plugin/plugin.json', '.claude-plugin/marketplace.json', '.agents/plugins/marketplace.json']) {
       expect(classify([{ filename }], registry).features).toContain('claude:setup');
     }
-    // The Codex marketplace carries no version, so the flag never narrows it.
     expect(classify([{ filename: '.agents/plugins/marketplace.json', versionOnly: true }], registry).features).toContain('codex:setup');
     expect(classify([{ filename: 'plugins/pstack/.claude-plugin/plugin.json', versionOnly: true }], registry).features).toEqual(['claude:hook:startup']);
     expect(classify([{ filename: '.claude-plugin/marketplace.json', versionOnly: true }], registry).features).toEqual(['claude:hook:startup']);
     expect(classify([{ filename: 'plugins/pstack/.codex-plugin/plugin.json', versionOnly: true }], registry).features).toEqual(['codex:hook:startup']);
   });
-  // The changed files of #199's release commit, e99abd7.
   const RELEASE = [{ filename: '.claude-plugin/marketplace.json', versionOnly: true }, { filename: 'CHANGES.md' }, { filename: 'README.md' }, { filename: 'UPSTREAM.md' },
     { filename: 'docs/reference.md' }, { filename: 'plugins/pstack/.claude-plugin/plugin.json', versionOnly: true }, { filename: 'plugins/pstack/.codex-plugin/plugin.json', versionOnly: true }];
   test('a version-only release reaches only the startup hook in both harnesses', () => {

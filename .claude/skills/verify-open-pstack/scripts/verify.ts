@@ -4,16 +4,12 @@ import { retainedFile, sha256 } from './io.ts';
 import { REPO, type Driver, type GitHub, type Pull, type Receipt, type Registry } from './types.ts';
 
 class HeadMoved extends Error {}
-/** An operator choice the verifier refuses before any install or GitHub write; its message is safe to print. */
 export class Refused extends Error {}
-/** Headless sessions one run may start without `--wide "<reason>"`. */
 export const SESSION_LIMIT = 12;
-// Omit unsafe or oversized values whole rather than rewriting recorded evidence.
 export const EVIDENCE_LIMIT = 160;
 export const publishable = (text: string, limit = EVIDENCE_LIMIT): boolean => text.length <= limit && /^[\x20-\x7e]*$/.test(text) && !/[`<>]/.test(text);
 const safe = (text: string, limit = EVIDENCE_LIMIT): string => publishable(text, limit) ? text : '[value omitted]';
 
-/** Build the single structured public record for this run. Failure details remain private in receipt.json. */
 export function evidence(receipt: Receipt): string {
   const failed = Boolean(receipt.failure);
   const lines = [
@@ -57,11 +53,8 @@ export async function revalidateEvidence(receipt: Receipt): Promise<void> {
 type VerifyOptions = {
   pr: number;
   selfTest: boolean;
-  /** `<harness>:<feature>` checks the agent named for the PR's changed behavior. */
   features: string[];
-  /** Runner routes, which decide the runner recipe's session count. */
   routes?: string[];
-  /** The operator's reason for planning more than SESSION_LIMIT sessions. */
   wide?: string;
   root: string;
   registry: Registry;
@@ -111,7 +104,6 @@ export async function verify(options: VerifyOptions): Promise<Receipt> {
   if (!receipt.selection.noRuntime && !options.features.length) throw new Refused('A runtime change requires at least one --feature <harness>:<feature>');
   const refused = options.features.filter(feature => !receipt.selection.features.includes(feature));
   if (refused.length) throw new Refused(`Outside this PR's classified reach: ${refused.join(', ')}. Reachable: ${receipt.selection.features.join(', ') || 'none'}`);
-  // Verifier and instruction changes keep their native project-skill proof whatever is named.
   const project = receipt.selection.features.includes('claude:project-skill') ? ['claude:project-skill', 'codex:project-skill'] : [];
   receipt.runFeatures = [...new Set([...options.features, ...project])];
   for (const harness of requiredHarnesses(receipt)) {
@@ -147,7 +139,6 @@ export async function verify(options: VerifyOptions): Promise<Receipt> {
     try { await persist(receipt); }
     catch (persistError) { appendFailure('persist failure receipt', persistError); }
 
-    // Failed setup restoration or Codex auth-link cleanup forbids all publication.
     if (cleanupComplete && !cleanupFailed) {
       if (!commentAttempted) {
         try { await current(); await publishComment(); }

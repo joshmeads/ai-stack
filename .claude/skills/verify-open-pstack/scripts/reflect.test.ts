@@ -14,19 +14,16 @@ const chat = '00000000-1111-2222-3333-444444444444';
 async function fixture(harness: Harness): Promise<Fixture> {
   const dir = await realpath(await mkdtemp(join(tmpdir(), 'pstack-reflect-recipe-'))); roots.push(dir);
   const workspace = resolve(import.meta.dir, '../../../..'), location = join(dir, 'installed-pstack');
-  // A symlinked install gives the launcher an installed path that differs from its realpath.
   await symlink(join(workspace, 'plugins/pstack'), location);
   return { harness, dir, workspace, location, configHome: dir, run: command };
 }
 
 const home = (f: Fixture) => join(f.dir, 'transcript-home');
 const claudeTranscript = (f: Fixture) => join(home(f), 'projects/fixture/known.jsonl');
-/** The Claude fixture's opening user record, whose uuid is the per-run nonce. */
 const opener = async (f: Fixture): Promise<{ uuid: string; text: string }> => {
   const record = JSON.parse((await readFile(claudeTranscript(f), 'utf8')).split('\n')[1]!);
   return { uuid: record.uuid, text: record.message.content[0].text };
 };
-/** The report a Claude session writes after reading the opening user record. */
 async function claudeReport(f: Fixture, available: boolean): Promise<Record<string, unknown>> {
   const { uuid, text } = await opener(f);
   return available
@@ -39,7 +36,6 @@ const lookup = (f: Fixture) => `CODEX_HOME=${home(f)} ${launcher(f)} ${chat}`;
 const tool = (name: string, input: Record<string, any>, result: string | undefined, failed = false): SessionRecord['tools'][number] =>
   ({ name, id: 'item_1', input, result, parent: null, failed });
 
-/** Runs the installed launcher as a session would, returning the stdout the harness captures. */
 async function launch(f: Fixture): Promise<string> {
   const child = Bun.spawn([launcher(f), chat], { env: { ...process.env, CODEX_HOME: home(f) }, stdout: 'pipe', stderr: 'pipe' });
   const [code, stdout, stderr] = await Promise.all([child.exited, new Response(child.stdout).text(), new Response(child.stderr).text()]);
@@ -47,7 +43,6 @@ async function launch(f: Fixture): Promise<string> {
   return stdout;
 }
 
-/** Does what a passing session does: Codex runs the launcher, Claude reads the transcript and writes its report. */
 async function simulatedRecord(f: Fixture, available: boolean): Promise<SessionRecord> {
   let tools: SessionRecord['tools'];
   if (f.harness === 'codex') {
@@ -140,7 +135,6 @@ test('Codex rejects output from another fixture, another run, or a command that 
   ]) {
     await expect(c.assert({ ...record, tools: [changed] }, f)).rejects.toThrow('reflect-resolver-not-run');
   }
-  // The rerun's own output still passes, so only the stale nonce path failed above.
   const fresh = await launch(f);
   await c.assert({ ...record, tools: [tool('command', good!.input, fresh)] }, f);
   await c.assert({ ...record, tools: [tool('command', good!.input, JSON.stringify(Object.fromEntries(Object.entries(JSON.parse(fresh)).reverse())))] }, f);
@@ -158,7 +152,6 @@ test('Claude accepts the exact report naming the opener record\'s uuid in both c
   }
 });
 
-/** Sets the uuid where a Claude report carries it: under opening_user_message when resolved, beside the status otherwise. */
 const withUuid = (report: any, uuid: string | undefined) =>
   report.opening_user_message ? { ...report, opening_user_message: { ...report.opening_user_message, uuid } } : { ...report, uuid };
 
@@ -173,7 +166,6 @@ test('Claude rejects a report without the opener record\'s uuid, with another ru
     }
     await writeFile(join(f.dir, 'result.json'), JSON.stringify(good));
     await c.assert(record, f);
-    // A rerun writes a new uuid, so the earlier run's report no longer passes.
     await c.prepare!(f);
     await expect(c.assert(record, f)).rejects.toThrow(mismatch);
   }
@@ -193,7 +185,6 @@ test('Claude judges a report written in the native stream by its uuid, not by wh
       return c.assert(parseSession('claude', events(report), 0, record.started), f);
     };
     await write(good);
-    // A report echoed from the prompt has every disclosed value but not the uuid.
     await expect(write(withUuid(good, undefined))).rejects.toThrow(index === 0 ? 'reflect-opening-mismatch' : 'reflect-fallback-mismatch');
   }
 });

@@ -28,7 +28,6 @@ function resultText(blocks: Event[], id: string): string | undefined {
   const content = blocks.find(b => b.type === 'tool_result' && b.tool_use_id === id)?.content;
   return typeof content === 'string' ? content : Array.isArray(content) ? content.map((c: Event) => String(c.text ?? '')).join('') : undefined;
 }
-/** Normalize a recorded native stream into the skills it loaded and the commands it completed. */
 export function parseSession(harness: Harness, text: string, exitCode: number, started: number, rollout = ''): SessionRecord {
   if (exitCode !== 0) throw new Error(`exit:${exitCode}`);
   const stream: Event[] = text.split('\n').filter(line => line.trim()).map(line => JSON.parse(line));
@@ -95,7 +94,6 @@ export class MacDriver implements Driver {
   }
   async prepare(receipt: Receipt): Promise<Installation[]> {
     const root = receipt.artifactRoot;
-    // Fetch a separate immutable reference for pinned-source comparisons.
     const referenceHome = join(root, 'source-home'), reference = join(referenceHome, 'workspace');
     await mkdir(join(referenceHome, 'tmp'), { recursive: true, mode: 0o700 });
     const trustedRun: Command = (args, options = {}) => this.run(args, { ...options, env: isolatedEnv(referenceHome) });
@@ -137,7 +135,6 @@ export class MacDriver implements Driver {
     }
     return installs;
   }
-  /** Copy this session's Codex rollout into the evidence root before the run-owned home is removed. */
   private async rollout(codexHome: string, stream: string, copy: string): Promise<string> {
     const thread = JSON.parse(stream.split('\n')[0] || '{}').thread_id;
     if (typeof thread !== 'string') return '';
@@ -148,9 +145,7 @@ export class MacDriver implements Driver {
     return readFile(copy, 'utf8');
   }
   async exercise(receipt: Receipt): Promise<Observation[]> {
-    // Every selected feature needs a recipe in every harness before the first session starts.
     const plans = receipt.installations.map(installation => ({ installation,
-      // Setup rewrites the harness's model sheet, so it runs last and later checks see the default configuration.
       features: requiredFeatures(receipt, installation.harness).sort((a, b) => Number(setupFeature(a)) - Number(setupFeature(b)))
         .map(feature => ({ feature, cases: recipe(feature, installation.harness, this.routes) })) }));
     const observations: Observation[] = [];
