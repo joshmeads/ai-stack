@@ -209,9 +209,6 @@ enum SkillsCommand {
         /// Existing group in stack.toml that the skill joins.
         #[arg(long, value_name = "GROUP")]
         group: String,
-        /// Parent directory inside the stack. A skill in a group must use the default.
-        #[arg(long, value_name = "DIR", default_value = stackfile::DEFAULT_DEST)]
-        dest: String,
         /// Install under this directory name and rewrite SKILL.md's `name:` to it.
         #[arg(long = "move", value_name = "NAME", value_parser = skill_name)]
         rename: Option<stackfile::SkillName>,
@@ -504,13 +501,13 @@ fn cmd_skills(ctx: &Context, command: SkillsCommand) -> Result<i32> {
     let skills = skills::Skills { exec: &exec::SystemExec, stack: &cfg.stack.path, prompt_runner: &cfg.prompt_runner };
     let mut out = io::stdout();
     match command {
-        SkillsCommand::Add { source, path, git_ref, group, dest, rename, process_script, process_prompt, name } => {
+        SkillsCommand::Add { source, path, git_ref, group, rename, process_script, process_prompt, name } => {
             let process = match (process_script, process_prompt) {
                 (Some(input), _) => vec![stackfile::Step { kind: stackfile::StepKind::Script, input }],
                 (_, Some(input)) => vec![stackfile::Step { kind: stackfile::StepKind::Prompt, input }],
                 _ => Vec::new(),
             };
-            skills.add(skills::Add { source, path, git_ref, dest, rename, process, name, group }, &mut out)?;
+            skills.add(skills::Add { source, path, git_ref, rename, process, name, group }, &mut out)?;
             Ok(0)
         }
         SkillsCommand::Status => skills.status(&mut out),
