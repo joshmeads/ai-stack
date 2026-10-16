@@ -745,8 +745,6 @@ drift_ignore = ["harness.*.home"]
         }
         let err = f.login("box", "codex", false, 100, &mut Vec::new()).unwrap_err();
         assert_eq!(err.to_string(), "fleet login requires stdin and stdout to be terminals");
-        let err = f.login("box", "claude", true, 100, &mut Vec::new()).unwrap_err();
-        assert!(err.to_string().contains("headless login unsupported"));
         assert!(exec.calls.borrow().is_empty());
     }
 

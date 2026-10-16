@@ -92,7 +92,7 @@ The initial deployment uses LAN machines. Remote login requires SSH key authenti
 | `codex` | `codex login --device-auth` | Device authorization; avoids the default localhost callback. |
 | `cursor` | `env NO_OPEN_BROWSER=1 cursor-agent login` | Prints the login URL without opening a browser on the target. |
 | `opencode` | `opencode auth login` | In its menus, choose OpenAI, then **ChatGPT Pro/Plus (headless)** for device authorization. Choose a headless method when using another provider; browser callback methods require a browser on the target. |
-| `claude` | Unsupported | The inspected `claude auth login` requires a localhost callback and has no code-paste handler. No headless flag is exposed by its help. |
+| `claude` | `claude auth login` | Prints a login URL and asks for the code to be pasted back. Taken from the owner's experience of the flow, not exercised by ai-stack's tests; if a machine's Claude version instead waits on a localhost callback, the login fails and the status check says so. |
 
 The provider owns credential storage. Login codes and tokens never pass through ai-stack's application code: inherited terminal streams go directly to the provider (through SSH for remote machines). ai-stack does not capture login output, parse URLs, read codes, forward tokens, or store credentials. The read-only status checks retain the expiry handling described above. There is no new daemon, port, timeout or retry added by ai-stack.
 
