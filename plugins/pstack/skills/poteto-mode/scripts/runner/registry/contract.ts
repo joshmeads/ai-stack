@@ -158,12 +158,12 @@ export interface ProviderAdapter {
     readonly sidecar: ProviderSidecar | null;
     /** resolveLane refuses any other access kind before launch. */
     readonly supports: readonly AccessKind[];
-    /** Relative paths that hold the provider's project config, such as hooks; one ending in "/" names a directory
-     *  only, one starting with "./" a file in the cwd only, any other a directory or a file. run.ts refuses the lane
-     *  when the cwd or any parent up to the git root, or up to / outside a repository, holds one, because the CLI would
-     *  load that repository-controlled config. Under the home directory, a lane with project config runs only inside a
-     *  git repository rooted below it, because the CLI's own walk would otherwise reach the home directory. */
-    readonly projectConfig: readonly string[];
+    /** Relative paths that hold the provider's project config, such as hooks: a directory ending in "/", found in the
+     *  cwd or any parent up to the git root, or up to / outside a repository, or a file starting with "./", found in
+     *  the cwd only. run.ts refuses the lane when one is present, because the CLI would load that repository-controlled
+     *  config. Under the home directory, a lane with project config runs only inside a git repository rooted below it,
+     *  because the CLI's own walk would otherwise reach the home directory. */
+    readonly projectConfig: readonly (`${string}/` | `./${string}`)[];
     /** With "stdin" prompts, what run.ts writes instead of the bare prompt. */
     stdinEnvelope?(prompt: string): string;
     needsSharedGitDir(access: Access): boolean;

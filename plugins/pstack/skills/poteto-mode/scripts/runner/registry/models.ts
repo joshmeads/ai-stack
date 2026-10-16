@@ -92,15 +92,6 @@ export const FAMILIES = [
     upstream: null,
   }),
   family({
-    name: "deepseek-v4.1-flash-free",
-    label: "DeepSeek V4.1 Flash (OpenCode Zen)",
-    provider: "opencode",
-    model: "opencode/deepseek-v4.1-flash-free",
-    efforts: ["low", "high", "max"], // `opencode models --verbose` variants, OpenCode 1.19.1
-    defaultEffort: "max",
-    upstream: null,
-  }),
-  family({
     name: "deepseek-flash",
     label: "DeepSeek Flash (dsh)",
     provider: "dsh",
@@ -119,39 +110,12 @@ export const FAMILIES = [
     upstream: null,
   }),
   family({
-    name: "amp-deepseek-v4.1-flash",
-    label: "DeepSeek V4.1 Flash (Amp)",
-    provider: "amp",
-    model: "deepseek-v4.1-flash",
-    efforts: { default: "deepseek-v4.1-flash" }, // an official Amp mode with no effort variants
-    defaultEffort: "default",
-    upstream: null,
-  }),
-  family({
     name: "gemini-3.8-flash",
     label: "Gemini 3.8 Flash (Antigravity)",
     provider: "agy",
     model: "gemini-3.8-flash",
     // `agy models`, Antigravity CLI 1.3.6. Gemini 3.7 Flash is not listed. The bare slug runs gemini-3.8-flash-high.
     efforts: { low: "gemini-3.8-flash-low", medium: "gemini-3.8-flash-medium", high: "gemini-3.8-flash-high" },
-    defaultEffort: "high",
-    upstream: null,
-  }),
-  family({
-    name: "composer-2.5",
-    label: "Composer 2.5 (Cursor)",
-    provider: "cursor",
-    model: "composer-2.5",
-    efforts: { default: "composer-2.5" }, // `cursor-agent models`, Cursor CLI 2026.10.14-0f9edde
-    defaultEffort: "default",
-    upstream: null,
-  }),
-  family({
-    name: "gemini-3.7-flash",
-    label: "Gemini 3.7 Flash (Cursor)",
-    provider: "cursor",
-    model: "gemini-3.7-flash",
-    efforts: { high: "gemini-3.7-flash-high" }, // the only variant `cursor-agent models` lists
     defaultEffort: "high",
     upstream: null,
   }),
@@ -192,11 +156,7 @@ export const RELEASED_PAIRS = [
   { pair: "claude:claude-opus-5-5", family: "opus-5-5" },
   { pair: "devin:swe-2", family: "swe-2" },
   { pair: "devin:swe-1.6", family: "swe-1.6" },
-  { pair: "opencode:opencode/deepseek-v4.1-flash-free", family: "deepseek-v4.1-flash-free" },
   { pair: "dsh:deepseek-flash", family: "deepseek-flash" },
   { pair: "dsh:deepseek-v4-pro", family: "deepseek-v4-pro" },
-  { pair: "amp:deepseek-v4.1-flash", family: "amp-deepseek-v4.1-flash" },
   { pair: "agy:gemini-3.8-flash", family: "gemini-3.8-flash" },
-  { pair: "cursor:composer-2.5", family: "composer-2.5" },
-  { pair: "cursor:gemini-3.7-flash", family: "gemini-3.7-flash" },
 ] as const satisfies readonly ReleasedPair<FamilyName>[];

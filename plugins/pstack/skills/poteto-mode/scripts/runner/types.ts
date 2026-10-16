@@ -107,7 +107,6 @@ export function evidence(value: string): string {
 export function modelFailureStatus(value: string): "unavailable-model" | "child-failed" {
   return /model.{0,40}(not found|unknown|unavailable|unsupported|not supported|invalid)|invalid.{0,20}model/i.test(value)
       || /^Error: Unknown model: /m.test(value) // Devin CLI 3000.10.21
-      || /^Cannot use this model: /m.test(value) // Cursor CLI 2026.10.14-0f9edde
       || /^dsh: INVALID_REQUEST: The supported API model names are .+, but you passed /m.test(value) // dsh 0.2.0-rc.2
     ? "unavailable-model"
     : "child-failed";

@@ -10,7 +10,6 @@ import {
   unlinkSync,
   writeFileSync,
   writeSync,
-  type Stats,
 } from "node:fs";
 import { homedir } from "node:os";
 import { dirname, isAbsolute, join, relative, resolve, sep } from "node:path";
@@ -434,9 +433,9 @@ function within(parent: string, child: string): boolean {
 // Why a provider's project config would load in the cwd, or null. A CLI that loads repository-controlled config from
 // the cwd or a parent up to the git root, or up to / outside a repository, does not run: the runner bypasses its
 // workspace trust. A path ending in "/" matches only a directory; one starting with "./" matches only a file in the
-// cwd itself; any other path matches a directory or a file. When that walk would reach the home directory, the lane is
-// refused outright: the CLI's own walk would load the home directory's config, such as ~/.opencode plugins or ~/.env.
-export function projectConfigRefusal(id: string, cwd: string, names: readonly string[]): string | null {
+// cwd itself. When that walk would reach the home directory, the lane is refused outright: the CLI's own walk would
+// load the home directory's config, such as ~/.agents hooks or ~/.env.
+export function projectConfigRefusal(id: string, cwd: string, names: Lane["adapter"]["launch"]["projectConfig"]): string | null {
   if (names.length === 0) return null;
   const home = existsSync(homedir()) ? realpathSync(homedir()) : null;
   const start = realpathSync(cwd);
@@ -450,22 +449,12 @@ export function projectConfigRefusal(id: string, cwd: string, names: readonly st
       const cwdOnly = name.startsWith("./");
       if (cwdOnly && dir !== start) continue;
       const candidate = join(dir, name).replace(/\/$/, "");
-      const found = entryAt(candidate);
-      if (cwdOnly ? found?.isFile() : found?.isDirectory() || (!name.endsWith("/") && found?.isFile())) {
+      const found = statSync(candidate, { throwIfNoEntry: false });
+      if (cwdOnly ? found?.isFile() : found?.isDirectory()) {
         return `${id} lanes do not run in a workspace with ${candidate}: the CLI would load that repository-controlled config`;
       }
     }
     if (dir === boundary) return null;
-  }
-}
-
-// A file where a parent directory should be, such as a file named .claude, means the path is absent.
-function entryAt(path: string): Stats | undefined {
-  try {
-    return statSync(path, { throwIfNoEntry: false });
-  } catch (error) {
-    if ((error as NodeJS.ErrnoException).code === "ENOTDIR") return undefined;
-    throw error;
   }
 }
 

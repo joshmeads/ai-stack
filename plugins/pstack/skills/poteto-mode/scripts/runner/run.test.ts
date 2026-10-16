@@ -21,11 +21,8 @@ import { main } from "./cli.ts";
 import { type LaneRequest, resolveLane } from "./registry/index.ts";
 import type { Lane, ProviderAdapter } from "./registry/contract.ts";
 import { agy } from "./providers/agy.ts";
-import { amp } from "./providers/amp.ts";
-import { cursor } from "./providers/cursor.ts";
 import { devin } from "./providers/devin.ts";
 import { dsh } from "./providers/dsh.ts";
-import { opencode } from "./providers/opencode.ts";
 import { BASE_ALLOWLIST, BASE_PREFIXES } from "./providers/shared.ts";
 import type { ProviderId } from "./registry/family.ts";
 import type { RunnerReceipt } from "./types.ts";
@@ -1881,7 +1878,7 @@ await Bun.sleep(5_000);`);
 });
 
 // A provider that uses every optional part of the contract: run-owned environment values, a nested sidecar config
-// with no output file, project config paths that include a file, and a stdin envelope.
+// with no output file, a project config directory, and a stdin envelope.
 const STAND_IN_CONFIG = ".agents/agents/lane.md";
 const STAND_IN: ProviderAdapter = {
   ...devin,
@@ -1896,7 +1893,7 @@ const STAND_IN: ProviderAdapter = {
     prompt: "stdin",
     sidecar: { output: null, config: { name: STAND_IN_CONFIG, content: (lane) => `effort: ${lane.effort}\n` } },
     supports: ["read-only"],
-    projectConfig: [".agents/", ".claude/settings.json"],
+    projectConfig: [".agents/"],
     stdinEnvelope: (prompt) => `${JSON.stringify({ event: "user", message: { role: "user", content: prompt } })}\n`,
     needsSharedGitDir: () => false,
     argv: () => ["run"],
@@ -1971,18 +1968,17 @@ process.stdout.write(await Bun.stdin.text());
       .toBe(`${JSON.stringify({ event: "user", message: { role: "user", content: "Return \"the\" marker.\n" } })}\n`);
   });
 
-  it("refuses a lane whose cwd's parent holds a listed project config file", async () => {
+  it("refuses a lane whose cwd's parent holds a listed project config directory", async () => {
     const repo = join(scratch, "repo"), nested = join(repo, "src");
-    mkdirSync(join(repo, ".claude"), { recursive: true });
+    mkdirSync(join(repo, ".agents"), { recursive: true });
     mkdirSync(nested);
-    writeFileSync(join(repo, ".claude/settings.json"), "{}\n");
-    const lane = standInLane("stand-in-project-file", { cwd: nested });
+    const lane = standInLane("stand-in-project-dir", { cwd: nested });
     const result = await runLane(lane);
     expect(result.exitCode).toBe(70);
     expect(result.receipt).toMatchObject({
       status: "child-failed",
       preflight: { status: "not-run" },
-      error: { message: expect.stringContaining(`${join(realpathSync(repo), ".claude/settings.json")}: the CLI would load`) },
+      error: { message: expect.stringContaining(`${join(realpathSync(repo), ".agents")}: the CLI would load`) },
     });
   });
 });
@@ -1991,15 +1987,15 @@ describe("projectConfigRefusal", () => {
   // Bun reads HOME once at startup, so the test replaces homedir() instead of setting HOME.
   beforeEach(() => {
     spyOn(os, "homedir").mockReturnValue(join(scratch, "home"));
-    for (const name of [".cursor", ".agents", ".opencode"]) mkdirSync(join(scratch, "home", name), { recursive: true });
+    mkdirSync(join(scratch, "home", ".agents"), { recursive: true });
   });
   afterEach(() => {
     mock.restore();
   });
-  const refuse = (cwd: string, adapter: ProviderAdapter = cursor) => projectConfigRefusal(adapter.id, cwd, adapter.launch.projectConfig);
+  const refuse = (cwd: string, adapter: ProviderAdapter = agy) => projectConfigRefusal(adapter.id, cwd, adapter.launch.projectConfig);
   const homeMessage = () =>
-    `cursor lanes under the home directory run only inside a git repository rooted below it: the CLI's project-config walk would reach ${realpathSync(join(scratch, "home"))}`;
-  const found = (path: string, id = "cursor") =>
+    `agy lanes under the home directory run only inside a git repository rooted below it: the CLI's project-config walk would reach ${realpathSync(join(scratch, "home"))}`;
+  const found = (path: string, id = "agy") =>
     `${id} lanes do not run in a workspace with ${path}: the CLI would load that repository-controlled config`;
 
   it("refuses the home directory, a cwd under it outside a repository, and a repository rooted at it", () => {
@@ -2009,42 +2005,39 @@ describe("projectConfigRefusal", () => {
     expect(refuse(join(scratch, "home"))).toBe(homeMessage());
     mkdirSync(join(scratch, "home/.git"));
     expect(refuse(cwd)).toBe(homeMessage());
-    expect(refuse(cwd, opencode)).toStartWith("opencode lanes under the home directory");
+    expect(refuse(cwd, dsh)).toStartWith("dsh lanes under the home directory");
   });
 
   it("runs in a repository below the home that holds no listed entry, whatever the home holds", () => {
     const repo = join(scratch, "home/repo");
     mkdirSync(join(repo, ".git"), { recursive: true });
     mkdirSync(join(repo, "src"));
-    for (const adapter of [cursor, agy, opencode]) expect(refuse(join(repo, "src"), adapter)).toBeNull();
+    for (const adapter of [agy, dsh]) expect(refuse(join(repo, "src"), adapter)).toBeNull();
     expect(projectConfigRefusal("claude", join(scratch, "home"), [])).toBeNull();
   });
 
   it("finds config in the cwd or a parent up to the git root", () => {
     const repo = join(scratch, "home/repo");
     mkdirSync(join(repo, ".git"), { recursive: true });
-    mkdirSync(join(repo, ".cursor"));
+    mkdirSync(join(repo, ".agents"));
     mkdirSync(join(repo, "src"));
-    expect(refuse(join(repo, "src"))).toBe(found(join(realpathSync(repo), ".cursor")));
-    expect(refuse(repo)).toBe(found(join(realpathSync(repo), ".cursor")));
+    expect(refuse(join(repo, "src"))).toBe(found(join(realpathSync(repo), ".agents")));
+    expect(refuse(repo)).toBe(found(join(realpathSync(repo), ".agents")));
   });
 
   it("walks to / outside the home and a repository", () => {
     const cwd = join(scratch, "outside/src");
     mkdirSync(cwd, { recursive: true });
     expect(refuse(cwd)).toBeNull();
-    mkdirSync(join(scratch, "outside/.cursor"));
-    expect(refuse(cwd)).toBe(found(join(realpathSync(scratch), "outside/.cursor")));
+    mkdirSync(join(scratch, "outside/.agents"));
+    expect(refuse(cwd)).toBe(found(join(realpathSync(scratch), "outside/.agents")));
   });
 
   it("reads a file named like a config directory as absent", () => {
     const cwd = join(scratch, "plain");
     mkdirSync(cwd);
-    writeFileSync(join(cwd, ".claude"), "");
+    for (const name of [".agents", ".agent", "_agents", "_agent"]) writeFileSync(join(cwd, name), "");
     expect(refuse(cwd)).toBeNull();
-    for (const name of [".agents", ".agent", "_agents", "_agent", ".amp"]) writeFileSync(join(cwd, name), "");
-    expect(refuse(cwd, agy)).toBeNull();
-    expect(refuse(cwd, amp)).toBeNull();
   });
 
   it("checks a ./ path as a file in the cwd only", () => {
@@ -2220,219 +2213,6 @@ describe("discoverSharedGitDir", () => {
     } finally {
       rmSync(root, { recursive: true, force: true });
     }
-  });
-});
-
-describe("opencode lanes", () => {
-  const MODEL = "opencode/deepseek-v4.1-flash-free";
-  const LISTED = `opencode/big-pickle\n${MODEL}\nopencode/nemotron-3-ultra-free`;
-  const INHERITED = ["OPENCODE_PERMISSION", "OPENCODE_CONFIG_CONTENT", "OPENROUTER_API_KEY"];
-  const event = (type: string, part: Record<string, unknown> = {}) => ({ type, timestamp: 1, sessionID: "ses_fixture", part });
-
-  const AGENT = JSON.parse(readFileSync(join(import.meta.dir, "providers/fixtures/opencode/debug-agent-build-lockdown.json"), "utf8"));
-  const agentWith = (...rules: readonly Record<string, string>[]) => JSON.stringify({ ...AGENT, permission: [...AGENT.permission, ...rules] });
-
-  // An OpenCode stand-in: `debug agent build` prints `agent`; `models` runs `models`; the model call runs `turn`, which
-  // sees `args` and `prompt`. Each call appends its kind to `opencode.calls` next to the stand-in. The child
-  // environment keeps no test variable, so each case bakes its own.
-  function fakeOpencode(models: string, turn: string, agent = JSON.stringify(AGENT)): void {
-    writeFileSync(join(bin, "opencode"), `#!/usr/bin/env bun
-import { appendFileSync, readFileSync, statSync, writeFileSync } from "node:fs";
-import { dirname, join } from "node:path";
-const args = process.argv.slice(2);
-const call = (kind) => appendFileSync(join(dirname(process.argv[1]), "opencode.calls"), kind + "\\n");
-if (args[0] === "debug") {
-  call("guard");
-  console.log(${JSON.stringify(agent)});
-  process.exit(0);
-}
-if (args[0] === "models") {
-call("preflight");
-${models}
-}
-call("model");
-const prompt = await Bun.stdin.text();
-const emit = (value) => console.log(JSON.stringify(value));
-${turn}
-`);
-    chmodSync(join(bin, "opencode"), 0o755);
-  }
-
-  const LIST = `console.log(${JSON.stringify(LISTED)}); process.exit(0);`;
-  // Reports what the child saw as the reply, over two steps, the first ending on an allowed tool call.
-  const OBSERVE = `const config = process.env.OPENCODE_CONFIG;
-const observed = {
-  args,
-  prompt,
-  xdg: process.env.XDG_CONFIG_HOME === dirname(config),
-  modes: [(statSync(dirname(config)).mode & 0o777).toString(8), (statSync(config).mode & 0o777).toString(8)],
-  permission: JSON.parse(readFileSync(config, "utf8")).permission["*"],
-  opencode: Object.keys(process.env).filter((key) => key.startsWith("OPENCODE_") || key.endsWith("_API_KEY")).sort(),
-};
-emit(${JSON.stringify(event("step_start"))});
-emit(${JSON.stringify(event("step_finish", { reason: "tool-calls", tokens: { total: 10, input: 6, output: 3, reasoning: 1, cache: { read: 2, write: 0 } }, cost: 0.5 }))});
-emit(${JSON.stringify(event("step_start"))});
-emit({ type: "text", timestamp: 2, sessionID: "ses_fixture", part: { type: "text", text: JSON.stringify(observed) } });
-emit(${JSON.stringify(event("step_finish", { reason: "stop", tokens: { total: 5, input: 4, output: 1, reasoning: 0, cache: { read: 0, write: 0 } }, cost: 0.25 }))});`;
-
-  function opencodeOptions(suffix: string, overrides: Partial<LaneRequest> = {}): LaneRequest {
-    return { ...options("grok", suffix), provider: "opencode", model: MODEL, effort: "max", ...overrides };
-  }
-
-  beforeEach(() => {
-    for (const name of INHERITED) process.env[name] = `${name}-value`;
-  });
-  afterEach(() => {
-    for (const name of INHERITED) delete process.env[name];
-  });
-
-  it("runs a read-only lane with the run-owned config, the prompt on stdin and the reply from the last step", async () => {
-    fakeOpencode(LIST, OBSERVE);
-    const input = opencodeOptions("opencode-complete");
-    const result = await runLane(laneOf(input));
-    expect(result.exitCode).toBe(0);
-    const saved = receipt(input.receiptPath);
-    expect(saved).toMatchObject({
-      status: "complete",
-      provider: "opencode",
-      model: MODEL,
-      effort: "max",
-      reportedModel: null,
-      modelVerified: false,
-      modelEvidence: "pinned-argv",
-      sessionId: "ses_fixture",
-      usage: { inputTokens: 10, cachedInputTokens: 2, cacheCreationInputTokens: 0, outputTokens: 4, reasoningTokens: 1, totalTokens: 15 },
-      costUsd: 0.75,
-      preflight: { status: "passed", evidence: `model ${MODEL} listed` },
-    });
-    const args = ["run", "--pure", "--agent", "build", "--format", "json", "--title", "pstack-lane", "--print-logs", "--log-level", "ERROR", "-m", MODEL, "--variant", "max"];
-    expect(saved.argv.slice(1)).toEqual(args);
-    expect(saved.preflight.argv.slice(1)).toEqual(["models", "opencode"]);
-    expect(JSON.parse(readFileSync(input.outputPath, "utf8"))).toEqual({
-      args,
-      prompt: "Return the marker.",
-      xdg: true,
-      modes: ["700", "600"],
-      permission: "deny",
-      opencode: [
-        "OPENCODE_CONFIG",
-        "OPENCODE_DISABLE_AUTOUPDATE",
-        "OPENCODE_DISABLE_CLAUDE_CODE",
-        "OPENCODE_DISABLE_EXTERNAL_SKILLS",
-        "OPENCODE_DISABLE_PROJECT_CONFIG",
-        "OPENCODE_TEST_HOME",
-      ],
-    });
-  });
-
-  for (const [name, agent, wider] of [
-    ["a permissive bash", agentWith({ permission: "bash", pattern: "*", action: "allow" }), 'bash "*" allow'],
-    ["a bash pattern rule", agentWith({ permission: "bash", pattern: "git *", action: "allow" }), 'bash "git *" allow'],
-    ["an allowed default", agentWith({ permission: "*", pattern: "*", action: "allow" }), '"*" allow'],
-  ] as const) {
-    it(`refuses ${name} in the effective permissions before the preflight`, async () => {
-      fakeOpencode(LIST, OBSERVE, agent);
-      const input = opencodeOptions(`opencode-guard-${name.replaceAll(" ", "-")}`);
-      const result = await runLane(laneOf(input));
-      expect(result.exitCode).toBe(70);
-      expect(result.receipt).toMatchObject({
-        status: "child-failed",
-        preflight: { status: "not-run" },
-        exitCode: 0,
-        error: {
-          message: `OpenCode's effective permissions are wider than the read-only lockdown (${wider}); a managed, home, project or account config overrides the lane's lockdown`,
-          evidence: expect.stringContaining('"name":"build"'),
-        },
-      });
-      expect(readFileSync(join(bin, "opencode.calls"), "utf8")).toBe("guard\n");
-      expect(existsSync(input.outputPath)).toBe(false);
-    });
-  }
-
-  it("refuses unreadable guard output, and runs the guard, the preflight and the model under the lockdown", async () => {
-    fakeOpencode(LIST, OBSERVE, "not json");
-    const refused = opencodeOptions("opencode-guard-unreadable");
-    expect((await runLane(laneOf(refused))).receipt).toMatchObject({
-      status: "child-failed",
-      preflight: { status: "not-run" },
-      error: { message: "`opencode debug agent build` did not print a readable permission ruleset", evidence: "not json" },
-    });
-    expect(readFileSync(join(bin, "opencode.calls"), "utf8")).toBe("guard\n");
-
-    rmSync(join(bin, "opencode.calls"));
-    fakeOpencode(LIST, OBSERVE);
-    const input = opencodeOptions("opencode-guard-lockdown");
-    expect((await runLane(laneOf(input))).receipt.status).toBe("complete");
-    expect(readFileSync(join(bin, "opencode.calls"), "utf8")).toBe("guard\npreflight\nmodel\n");
-  });
-
-  for (const [name, model, models, status, exitCode] of [
-    ["a provider with no login", "openrouter/deepseek/deepseek-v4-pro", `console.error("\\u001b[91m\\u001b[1mError: \\u001b[0mProvider not found: openrouter"); process.exit(1);`, "unauthenticated", 77],
-    ["an unlisted model", "opencode/deepseek-v4.1-flash", LIST, "unavailable-model", 69],
-  ] as const) {
-    it(`classifies ${name} before any model call`, async () => {
-      const started = join(scratch, "opencode-model.started");
-      fakeOpencode(models, `writeFileSync(${JSON.stringify(started)}, "started");`);
-      const input = opencodeOptions(`opencode-preflight-${exitCode}`, { model, effort: "default" });
-      const result = await runLane(laneOf(input));
-      expect(result.exitCode).toBe(exitCode);
-      expect(result.receipt).toMatchObject({ status, preflight: { status: "failed" }, error: { message: "authentication or model preflight failed" } });
-      expect(existsSync(started)).toBe(false);
-    });
-  }
-
-  it("classifies a rejected tool call, an error event and SIGTERM from the captured shapes", async () => {
-    fakeOpencode(LIST, `console.error("! permission requested: edit (created.txt); auto-rejecting");
-emit(${JSON.stringify(event("step_start"))});
-emit(${JSON.stringify(event("step_finish", { reason: "tool-calls" }))});`);
-    const rejected = opencodeOptions("opencode-rejected");
-    const rejectedResult = await runLane(laneOf(rejected));
-    expect(rejectedResult.exitCode).toBe(70);
-    expect(rejectedResult.receipt).toMatchObject({ status: "child-failed", exitCode: 0, error: { message: "opencode ended on a rejected tool call" } });
-    expect(rejectedResult.receipt.error?.evidence).toContain("auto-rejecting");
-    expect(existsSync(rejected.outputPath)).toBe(false);
-
-    fakeOpencode(LIST, `console.error('level=ERROR message=failed error="ProviderModelNotFoundError: Model not found"');
-emit({ type: "error", timestamp: 1, sessionID: "ses_fixture", error: { name: "UnknownError", data: { message: "Unexpected server error. Check server logs for details." } } });
-process.exit(1);`);
-    const failed = opencodeOptions("opencode-error");
-    const failedResult = await runLane(laneOf(failed));
-    expect(failedResult.exitCode).toBe(70);
-    expect(failedResult.receipt).toMatchObject({ status: "child-failed", exitCode: 1, error: { message: "opencode reported UnknownError: Unexpected server error. Check server logs for details." } });
-    expect(failedResult.receipt.error?.evidence).toContain("ProviderModelNotFoundError");
-
-    fakeOpencode(LIST, `emit(${JSON.stringify(event("step_start"))});
-process.kill(process.pid, "SIGTERM");
-await Bun.sleep(5_000);`);
-    const terminated = opencodeOptions("opencode-sigterm");
-    const terminatedResult = await runLane(laneOf(terminated));
-    expect(terminatedResult.exitCode).toBe(130);
-    expect(terminatedResult.receipt).toMatchObject({ status: "cancelled", exitCode: 143, signal: null });
-    expect(existsSync(terminated.outputPath)).toBe(false);
-  });
-
-  it("refuses .opencode/ up to the git root and runs beside an opencode.json, which the environment turns off", async () => {
-    fakeOpencode(LIST, OBSERVE);
-    const repo = join(scratch, "repo"), nested = join(repo, "src");
-    mkdirSync(join(repo, ".opencode", "plugins"), { recursive: true });
-    mkdirSync(nested);
-    writeFileSync(join(repo, "opencode.json"), "{\"permission\":{\"bash\":\"allow\"}}\n");
-    const refused = opencodeOptions("opencode-project-plugins", { cwd: nested });
-    expect((await runLane(laneOf(refused))).receipt).toMatchObject({
-      status: "child-failed",
-      preflight: { status: "not-run" },
-      error: { message: expect.stringContaining(`${join(realpathSync(repo), ".opencode")}: the CLI would load`) },
-    });
-
-    rmSync(join(repo, ".opencode"), { recursive: true });
-    const input = opencodeOptions("opencode-project-json", { cwd: nested });
-    expect((await runLane(laneOf(input))).exitCode).toBe(0);
-  });
-
-  it("refuses an isolated-write OpenCode lane before launch", () => {
-    const input = opencodeOptions("opencode-writer", { mode: "isolated-write" });
-    expect(() => laneOf(input)).toThrow("provider opencode does not support isolated-write");
-    expect(existsSync(input.receiptPath)).toBe(false);
   });
 });
 
@@ -2633,165 +2413,6 @@ process.exit(130);`);
   });
 });
 
-describe("amp lanes", () => {
-  const SIGNED_IN = "Signed in as <EMAIL>\n**Individual credits:** $<CREDITS> remaining";
-  const MISSING_KEY = "Error: Invalid or missing API key. Run 'amp login' to authenticate.";
-  const AMP_VARIABLES = ["AMP_API_KEY", "AMP_SETTINGS_FILE", "AMP_EXECUTOR", "AMP_INITIAL_AGENT_MODE_KEY", "AMP_URL"];
-
-  // An Amp stand-in: `usage` exits `usageExit` and prints `usage` (to stderr when it fails); the model call runs
-  // `turn`, which sees `args`, `at`, `settings` and the stdin `prompt`. The child environment keeps no test
-  // variable, so each case bakes its own.
-  function fakeAmp(usage: string, turn: string, usageExit = 0): void {
-    writeFileSync(join(bin, "amp"), `#!/usr/bin/env bun
-import { existsSync, readFileSync, statSync, writeFileSync } from "node:fs";
-import { dirname } from "node:path";
-const args = process.argv.slice(2);
-if (args[0] === "usage") {
-  (${usageExit} === 0 ? console.log : console.error)(${JSON.stringify(usage)});
-  process.exit(${usageExit});
-}
-const at = (flag) => args[args.indexOf(flag) + 1];
-const settings = at("--settings-file");
-const prompt = await Bun.stdin.text();
-const emit = (event) => console.log(JSON.stringify({ ...event, session_id: "T-fixture" }));
-${turn}
-`);
-    chmodSync(join(bin, "amp"), 0o755);
-  }
-
-  // Reports what the child saw as the result text.
-  const OBSERVE = `const observed = {
-  prompt,
-  mode: at("-m"),
-  dirMode: (statSync(dirname(settings)).mode & 0o777).toString(8),
-  settingsMode: (statSync(settings).mode & 0o777).toString(8),
-  tools: JSON.parse(readFileSync(settings, "utf8"))["amp.tools.enable"],
-  ampVariables: Object.fromEntries(Object.entries(process.env).filter(([key]) => key.startsWith("AMP_"))),
-};
-emit({ type: "system", subtype: "init", tools: ["Read"], agent_mode: "medium" });
-emit({ type: "assistant", message: { role: "assistant", content: [{ type: "text", text: "x" }], usage: { input_tokens: 3, cache_read_input_tokens: 4, output_tokens: 1 } } });
-emit({ type: "assistant", message: { role: "assistant", content: [{ type: "text", text: "y" }], usage: { input_tokens: 2, output_tokens: 5 } } });
-emit({ type: "result", subtype: "success", is_error: false, num_turns: 2, result: JSON.stringify(observed) });`;
-
-  function ampOptions(suffix: string, overrides: Partial<LaneRequest> = {}): LaneRequest {
-    return { ...options("grok", suffix), provider: "amp", model: "deepseek-v4.1-flash", effort: "default", ...overrides };
-  }
-
-  beforeEach(() => {
-    for (const name of AMP_VARIABLES) process.env[name] = `${name}-value`;
-  });
-  afterEach(() => {
-    for (const name of AMP_VARIABLES) delete process.env[name];
-  });
-
-  for (const parent of ["claude", "codex"] as const) {
-    it(`runs amp:deepseek-v4.1-flash from a ${parent} parent with the pinned mode, lockdown settings and prompt on stdin`, async () => {
-      fakeAmp(SIGNED_IN, OBSERVE);
-      const input = ampOptions(`amp-${parent}`, { parent });
-      const result = await runLane(laneOf(input));
-      expect(result.exitCode).toBe(0);
-      const saved = receipt(input.receiptPath);
-      expect(saved).toMatchObject({
-        status: "complete",
-        parent,
-        provider: "amp",
-        model: "deepseek-v4.1-flash",
-        effort: "default",
-        mode: "read-only",
-        reportedModel: null,
-        modelVerified: false,
-        modelEvidence: "pinned-argv",
-        sessionId: "T-fixture",
-        usage: { inputTokens: 5, cachedInputTokens: 4, outputTokens: 6 },
-        costUsd: null,
-        preflight: { status: "passed", evidence: "authenticated" },
-      });
-      const dir = `${input.receiptPath}.provider`;
-      expect(saved.argv.slice(1)).toEqual([
-        "-x", "--stream-json", "-m", "deepseek-v4.1-flash", "--settings-file", join(dir, "settings.json"),
-        "--visibility", "private", "--no-ide", "--no-notifications", "-l", "pstack-runner",
-      ]);
-      expect(saved.preflight.argv.slice(1)).toEqual(["usage"]);
-      expect(JSON.parse(readFileSync(input.outputPath, "utf8"))).toEqual({
-        prompt: "Return the marker.",
-        mode: "deepseek-v4.1-flash",
-        dirMode: "700",
-        settingsMode: "600",
-        tools: ["Read"],
-        ampVariables: { AMP_API_KEY: "AMP_API_KEY-value", AMP_IGNORE_GUIDANCE_FILES: "*" },
-      });
-      expect(statSync(dir).mode & 0o777).toBe(0o700);
-    });
-  }
-
-  for (const [name, usage, usageExit, exitCode, message] of [
-    ["a missing key", MISSING_KEY, 1, 77, "authentication or model preflight failed"],
-    ["a login prompt", "Would you like to log in to Amp? [(y)es, (n)o]", 0, 70, "authentication preflight output was inconclusive"],
-  ] as const) {
-    it(`classifies ${name} before any model call`, async () => {
-      const started = join(scratch, "amp-model.started");
-      fakeAmp(usage, `writeFileSync(${JSON.stringify(started)}, "started");`, usageExit);
-      const input = ampOptions(`amp-preflight-${exitCode}`);
-      const result = await runLane(laneOf(input));
-      expect(result.exitCode).toBe(exitCode);
-      expect(result.receipt).toMatchObject({
-        status: exitCode === 77 ? "unauthenticated" : "child-failed",
-        preflight: { status: "failed" },
-        error: { message },
-      });
-      expect(existsSync(started)).toBe(false);
-    });
-  }
-
-  it("reads exit-0 error and cancellation results, and an unknown mode's exit 1, as failures", async () => {
-    fakeAmp(SIGNED_IN, `emit({ type: "result", subtype: "error_during_execution", is_error: true, num_turns: 0, error: "Claude Usage is set to Subscription Only." });`);
-    const subscription = ampOptions("amp-subscription");
-    const subscriptionResult = await runLane(laneOf(subscription));
-    expect(subscriptionResult.exitCode).toBe(70);
-    expect(subscriptionResult.receipt).toMatchObject({
-      status: "child-failed",
-      exitCode: 0,
-      sessionId: "T-fixture",
-      error: { message: "Claude Usage is set to Subscription Only." },
-    });
-    expect(existsSync(subscription.outputPath)).toBe(false);
-
-    fakeAmp(SIGNED_IN, `emit({ type: "result", subtype: "error_during_execution", is_error: true, num_turns: 0, error: "User cancelled (SIGINT/SIGTERM)" });`);
-    const cancelled = ampOptions("amp-cancelled");
-    const cancelledResult = await runLane(laneOf(cancelled));
-    expect(cancelledResult.exitCode).toBe(130);
-    expect(cancelledResult.receipt).toMatchObject({ status: "cancelled", exitCode: 0, signal: null });
-    expect(existsSync(cancelled.outputPath)).toBe(false);
-
-    fakeAmp(SIGNED_IN, `console.error("Error: Unexpected error inside Amp CLI. Run with AMP_DEBUG=1 to see detailed logs.");
-process.exit(1);`);
-    const unknown = ampOptions("amp-unknown-mode", { model: "nonexistent-mode-xyz" });
-    expect((await runLane(laneOf(unknown))).receipt).toMatchObject({ status: "child-failed", exitCode: 1 });
-  });
-
-  it("refuses an Amp lane whose workspace holds .amp, up to the git root", async () => {
-    const started = join(scratch, "amp-model.started");
-    fakeAmp(SIGNED_IN, `writeFileSync(${JSON.stringify(started)}, "started");`);
-    const repo = join(scratch, "repo"), nested = join(repo, "src");
-    fs.mkdirSync(join(repo, ".amp"), { recursive: true });
-    fs.mkdirSync(nested);
-    const input = ampOptions("amp-project-config", { cwd: nested });
-    expect((await runLane(laneOf(input))).exitCode).toBe(70);
-    expect(receipt(input.receiptPath)).toMatchObject({
-      status: "child-failed",
-      preflight: { status: "not-run" },
-      error: { message: expect.stringContaining(`${join(fs.realpathSync(repo), ".amp")}: the CLI would load`) },
-    });
-    expect(existsSync(started)).toBe(false);
-  });
-
-  it("refuses an isolated-write Amp lane before launch", () => {
-    const input = ampOptions("amp-writer", { mode: "isolated-write" });
-    expect(() => laneOf(input)).toThrow("provider amp does not support isolated-write");
-    expect(existsSync(input.receiptPath)).toBe(false);
-  });
-});
-
 describe("agy lanes", () => {
   const MODELS = "gemini-3.8-flash-high\tGemini 3.8 Flash (High)\ngemini-3.8-flash-medium\tGemini 3.8 Flash (Medium)\ngemini-3.8-flash-low\tGemini 3.8 Flash (Low)\n";
   const SIGN_IN = "Fetching available models...\nError: Please sign in to view available models. Launch the CLI without arguments to sign in.";
@@ -2968,179 +2589,6 @@ ${OBSERVE}`);
   it("refuses an isolated-write agy lane before launch", () => {
     const input = agyOptions("agy-writer", { mode: "isolated-write" });
     expect(() => laneOf(input)).toThrow("provider agy does not support isolated-write");
-    expect(existsSync(input.receiptPath)).toBe(false);
-  });
-});
-
-describe("cursor lanes", () => {
-  const MODELS = "Available models\n\nauto - Auto (current, default)\ncomposer-2.5 - Composer 2.5\ngemini-3.7-flash-high - Gemini 3.7 Flash\n";
-  const AUTH_REQUIRED = "Error: Authentication required. Run 'agent login', pass --api-key/--auth-token, or set CURSOR_API_KEY/CURSOR_AUTH_TOKEN.";
-  const CURSOR_VARIABLES = ["CURSOR_API_KEY", "CURSOR_AUTH_TOKEN", "CURSOR_API_ENDPOINT", "CURSOR_SANDBOX_POLICY_DIR", "CURSOR_CONFIG_DIR"];
-
-  // A cursor-agent stand-in: `models` prints `models` to stdout, or the authentication error to stderr with exit 1;
-  // the model call runs `turn`, which sees `args`, `at`, the stdin `prompt` and `emit(event)`. The child environment
-  // keeps no test variable, so each case bakes its own.
-  function fakeCursor(turn: string, models = MODELS, loggedOut = false): void {
-    writeFileSync(join(bin, "cursor-agent"), `#!/usr/bin/env bun
-import { readFileSync, statSync, writeFileSync } from "node:fs";
-import { join } from "node:path";
-const args = process.argv.slice(2);
-if (args[0] === "models") {
-  if (${loggedOut}) {
-    console.error(${JSON.stringify(AUTH_REQUIRED)});
-    process.exit(1);
-  }
-  process.stdout.write(${JSON.stringify(models)});
-  process.exit(0);
-}
-const at = (flag) => args[args.indexOf(flag) + 1];
-const prompt = await Bun.stdin.text();
-const emit = (event) => console.log(JSON.stringify({ ...event, session_id: "c1" }));
-${turn}
-`);
-    chmodSync(join(bin, "cursor-agent"), 0o755);
-  }
-
-  // Reports what the child saw as the last assistant text, after an earlier segment the result joins.
-  const OBSERVE = `const dir = process.env.CURSOR_CONFIG_DIR;
-const config = join(dir, "cli-config.json");
-const observed = {
-  prompt,
-  model: at("--model"),
-  modes: [(statSync(dir).mode & 0o777).toString(8), (statSync(config).mode & 0o777).toString(8)],
-  deny: JSON.parse(readFileSync(config, "utf8")).permissions.deny,
-  cursorVariables: Object.keys(process.env).filter((key) => key.startsWith("CURSOR_")).sort(),
-};
-emit({ type: "system", subtype: "init", model: "Composer 2.5" });
-emit({ type: "assistant", message: { role: "assistant", content: [{ type: "text", text: "Reading the file.\\n" }] } });
-emit({ type: "assistant", message: { role: "assistant", content: [{ type: "text", text: JSON.stringify(observed) }] } });
-emit({ type: "result", subtype: "success", is_error: false, result: "Reading the file.\\n" + JSON.stringify(observed), usage: { inputTokens: 6, outputTokens: 2, cacheReadTokens: 4, cacheWriteTokens: 3 } });`;
-
-  function cursorOptions(suffix: string, overrides: Partial<LaneRequest> = {}): LaneRequest {
-    return { ...options("grok", suffix), provider: "cursor", model: "composer-2.5", effort: "default", ...overrides };
-  }
-
-  beforeEach(() => {
-    for (const name of CURSOR_VARIABLES) process.env[name] = `${name}-value`;
-  });
-  afterEach(() => {
-    for (const name of CURSOR_VARIABLES) delete process.env[name];
-  });
-
-  for (const [parent, model, effort, cliModel] of [
-    ["claude", "composer-2.5", "default", "composer-2.5"],
-    ["codex", "gemini-3.7-flash", "high", "gemini-3.7-flash-high"],
-  ] as const) {
-    it(`runs cursor:${model}@${effort} from a ${parent} parent in the run-owned config directory, on pinned argv`, async () => {
-      fakeCursor(OBSERVE);
-      const input = cursorOptions(`cursor-${parent}`, { parent, model, effort });
-      const result = await runLane(laneOf(input));
-      expect(result.exitCode).toBe(0);
-      const saved = receipt(input.receiptPath);
-      expect(saved).toMatchObject({
-        status: "complete",
-        parent,
-        provider: "cursor",
-        model,
-        effort,
-        mode: "read-only",
-        reportedModel: null,
-        modelVerified: false,
-        modelEvidence: "pinned-argv",
-        sessionId: "c1",
-        usage: { inputTokens: 6, cachedInputTokens: 4, cacheCreationInputTokens: 3, outputTokens: 2 },
-        costUsd: null,
-        preflight: { argv: [saved.executable, "models"], status: "passed", evidence: `model ${cliModel} listed` },
-      });
-      expect(saved.argv.slice(1)).toEqual([
-        "-p", "--output-format", "stream-json", "--model", cliModel, "--mode", "ask", "--sandbox", "enabled", "--trust",
-      ]);
-      expect(JSON.parse(readFileSync(input.outputPath, "utf8"))).toEqual({
-        prompt: "Return the marker.",
-        model: cliModel,
-        modes: ["700", "600"],
-        deny: ["Write(**)", "Shell(*)", "Mcp(*:*)"],
-        cursorVariables: ["CURSOR_API_KEY", "CURSOR_AUTH_TOKEN", "CURSOR_CONFIG_DIR"],
-      });
-    });
-  }
-
-  it("points CURSOR_CONFIG_DIR at the lane's provider directory, replacing an inherited value", async () => {
-    fakeCursor(`emit({ type: "assistant", message: { content: [{ type: "text", text: process.env.CURSOR_CONFIG_DIR }] } });
-emit({ type: "result", subtype: "success", is_error: false });`);
-    const input = cursorOptions("cursor-config-dir");
-    await runLane(laneOf(input));
-    expect(readFileSync(input.outputPath, "utf8")).toBe(`${input.receiptPath}.provider`);
-  });
-
-  for (const [name, loggedOut, models, status, exitCode] of [
-    ["an authentication failure", true, MODELS, "unauthenticated", 77],
-    ["an unlisted model", false, "Available models\n\ncomposer-2.5-fast - Composer 2.5 Fast\n", "unavailable-model", 69],
-    ["empty model-list output", false, "", "child-failed", 70],
-  ] as const) {
-    it(`classifies ${name} before any model call`, async () => {
-      const started = join(scratch, "cursor-model.started");
-      fakeCursor(`writeFileSync(${JSON.stringify(started)}, "started");`, models, loggedOut);
-      const input = cursorOptions(`cursor-preflight-${exitCode}`);
-      const result = await runLane(laneOf(input));
-      expect(result.exitCode).toBe(exitCode);
-      expect(result.receipt).toMatchObject({ status, preflight: { status: "failed" } });
-      expect(existsSync(started)).toBe(false);
-    });
-  }
-
-  it("reads an exit-0 error result, an unknown model and a signal exit as failures", async () => {
-    fakeCursor(`emit({ type: "result", subtype: "error", is_error: true, result: "Usage limit reached." });`);
-    const failed = cursorOptions("cursor-error-result");
-    const failedResult = await runLane(laneOf(failed));
-    expect(failedResult.exitCode).toBe(70);
-    expect(failedResult.receipt).toMatchObject({ status: "child-failed", exitCode: 0, sessionId: "c1", error: { message: "Usage limit reached." } });
-    expect(existsSync(failed.outputPath)).toBe(false);
-
-    fakeCursor(`console.error("Cannot use this model: " + at("--model") + ". Available models: auto, composer-2.5");
-process.exit(1);`, `${MODELS}claude-opus-9-9-max - Listed, then refused by the turn\n`);
-    const unknown = cursorOptions("cursor-unknown-model", { model: "claude-opus-9-9-max" });
-    expect((await runLane(laneOf(unknown))).receipt).toMatchObject({ status: "unavailable-model", exitCode: 1 });
-
-    fakeCursor(`emit({ type: "system", subtype: "init", model: "Composer 2.5" });
-console.error("\\nAborting operation...");
-process.exit(130);`);
-    const interrupted = cursorOptions("cursor-sigint");
-    expect((await runLane(laneOf(interrupted))).receipt).toMatchObject({ status: "child-failed", exitCode: 130 });
-    expect(existsSync(interrupted.outputPath)).toBe(false);
-  });
-
-  it("refuses a Cursor lane whose workspace holds .cursor/ or a .claude settings file, up to the git root", async () => {
-    const repo = join(scratch, "repo"), nested = join(repo, "src");
-    fs.mkdirSync(join(repo, ".claude"), { recursive: true });
-    fs.mkdirSync(nested);
-    for (const [name, make] of [
-      [".cursor", () => fs.mkdirSync(join(repo, ".cursor"))],
-      [".claude/settings.json", () => writeFileSync(join(repo, ".claude/settings.json"), "{}")],
-      [".claude/settings.local.json", () => writeFileSync(join(repo, ".claude/settings.local.json"), "{}")],
-    ] as const) {
-      const started = join(scratch, "cursor-project.started");
-      fakeCursor(`writeFileSync(${JSON.stringify(started)}, "started");`);
-      make();
-      const input = cursorOptions(`cursor-project-config-${name.replaceAll("/", "-")}`, { cwd: nested });
-      expect((await runLane(laneOf(input))).exitCode).toBe(70);
-      expect(receipt(input.receiptPath)).toMatchObject({
-        status: "child-failed",
-        preflight: { status: "not-run" },
-        error: { message: expect.stringContaining(`${join(fs.realpathSync(repo), name)}: the CLI would load`) },
-      });
-      expect(existsSync(started)).toBe(false);
-      fs.rmSync(join(repo, name), { recursive: true });
-    }
-
-    // A .claude/ directory without either settings file does not refuse the lane.
-    fakeCursor(OBSERVE);
-    expect((await runLane(laneOf(cursorOptions("cursor-claude-dir-only", { cwd: nested })))).exitCode).toBe(0);
-  });
-
-  it("refuses an isolated-write Cursor lane before launch", () => {
-    const input = cursorOptions("cursor-writer", { mode: "isolated-write" });
-    expect(() => laneOf(input)).toThrow("provider cursor does not support isolated-write");
     expect(existsSync(input.receiptPath)).toBe(false);
   });
 });

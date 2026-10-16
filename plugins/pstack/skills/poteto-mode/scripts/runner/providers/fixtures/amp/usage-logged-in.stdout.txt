@@ -1,4 +1,0 @@
-Signed in as <EMAIL>
-**Individual credits:** $<CREDITS> remaining (set up auto-reload to avoid running out) - https://ampcode.com/settings
-
-# Run `amp usage --details` for more detailed information.
