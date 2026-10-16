@@ -48,7 +48,7 @@ describe("devin launch", () => {
   it("writes a lockdown config that turns off subagents, every rule source, MCP, web search and fetch", () => {
     const config = devin.launch.sidecar!.config!;
     expect(config.name).toBe("lockdown.json");
-    expect(JSON.parse(config.content)).toEqual({
+    expect(JSON.parse(config.content(lane()))).toEqual({
       version: 1,
       subagents_enabled: false,
       read_config_from: {

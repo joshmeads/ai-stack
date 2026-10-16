@@ -135,7 +135,7 @@ describe("codex preflight", () => {
     expect(classify(0, "", "Logged in using an API key")).toEqual({ kind: "passed", evidence: "authenticated" });
     expect(classify(1, "Logged in using ChatGPT")).toEqual({ kind: "unauthenticated" });
     expect(classify(0, "status unknown")).toEqual({ kind: "unauthenticated" });
-    expect(codex.preflight.argv(lane())).toEqual(["login", "status"]);
+    expect(codex.preflight.argv(lane(), null)).toEqual(["login", "status"]);
     expect(codex.preflight.retryAfterUnauthenticatedMs).toBeNull();
   });
 });

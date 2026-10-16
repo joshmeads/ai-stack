@@ -1,4 +1,4 @@
-import { afterEach, beforeEach, describe, expect, it, spyOn } from "bun:test";
+import { afterEach, beforeEach, describe, expect, it, mock, spyOn } from "bun:test";
 import * as fs from "node:fs";
 import {
   chmodSync,
@@ -13,11 +13,17 @@ import {
   symlinkSync,
   writeFileSync,
 } from "node:fs";
-import { dirname, join } from "node:path";
+import { dirname, join, resolve } from "node:path";
+import * as os from "node:os";
 import { tmpdir } from "node:os";
-import { childEnvironment, discoverSharedGitDir, runLane } from "./run.ts";
+import { childEnvironment, discoverSharedGitDir, projectConfigRefusal, runLane } from "./run.ts";
 import { main } from "./cli.ts";
 import { type LaneRequest, resolveLane } from "./registry/index.ts";
+import type { Lane, ProviderAdapter } from "./registry/contract.ts";
+import { agy } from "./providers/agy.ts";
+import { devin } from "./providers/devin.ts";
+import { dsh } from "./providers/dsh.ts";
+import { BASE_ALLOWLIST, BASE_PREFIXES } from "./providers/shared.ts";
 import type { ProviderId } from "./registry/family.ts";
 import type { RunnerReceipt } from "./types.ts";
 
@@ -1846,7 +1852,7 @@ await Bun.sleep(5_000);`);
     fs.mkdirSync(nested);
     const input = devinOptions("devin-project-config", { cwd: nested });
     expect((await runLane(laneOf(input))).exitCode).toBe(70);
-    expect(receipt(input.receiptPath)).toMatchObject({ status: "child-failed", error: { message: expect.stringContaining(`${join(fs.realpathSync(repo), ".devin")}: the CLI would load its repository-controlled hooks, permissions and MCP servers`) } });
+    expect(receipt(input.receiptPath)).toMatchObject({ status: "child-failed", error: { message: expect.stringContaining(`${join(fs.realpathSync(repo), ".devin")}: the CLI would load that repository-controlled config`) } });
 
     // A plain .devin file holds no project config.
     fs.rmSync(join(repo, ".devin"), { recursive: true });
@@ -1871,7 +1877,194 @@ await Bun.sleep(5_000);`);
   });
 });
 
+// A provider that uses every optional part of the contract: run-owned environment values, a nested sidecar config
+// with no output file, a project config directory, and a stdin envelope.
+const STAND_IN_CONFIG = ".agents/agents/lane.md";
+const STAND_IN: ProviderAdapter = {
+  ...devin,
+  executable: "standin",
+  effortIn: "config",
+  preflight: {
+    argv: () => ["preflight"],
+    retryAfterUnauthenticatedMs: null,
+    classify: (run) => run.exitCode === 0 ? { kind: "passed", evidence: run.stdout.trim() } : { kind: "inconclusive" },
+  },
+  launch: {
+    prompt: "stdin",
+    sidecar: { output: null, config: { name: STAND_IN_CONFIG, content: (lane) => `effort: ${lane.effort}\n` } },
+    supports: ["read-only"],
+    projectConfig: [".agents/"],
+    stdinEnvelope: (prompt) => `${JSON.stringify({ event: "user", message: { role: "user", content: prompt } })}\n`,
+    needsSharedGitDir: () => false,
+    argv: () => ["run"],
+  },
+  parse: (run) => ({
+    kind: "complete",
+    text: run.stdout,
+    metadata: { reportedModel: null, sessionId: null, usage: null, costUsd: null },
+  }),
+  proof: { report: "absent", matches: () => false },
+  environment: (_access, sidecarDir) => ({
+    kind: "allowlist",
+    names: BASE_ALLOWLIST,
+    prefixes: BASE_PREFIXES,
+    set: { XDG_CONFIG_HOME: `${sidecarDir}`, STAND_IN_CONFIG: `${sidecarDir}/${STAND_IN_CONFIG}`, CODEX_THREAD_ID: "restored" },
+  }),
+};
+
+function standInLane(suffix: string, overrides: Partial<LaneRequest> = {}): Lane {
+  return { ...laneOf({ ...options("grok", suffix), provider: "devin", model: "swe-2", effort: "max", ...overrides }), adapter: STAND_IN };
+}
+
+describe("stand-in provider contract", () => {
+  let inherited: string | undefined;
+  beforeEach(() => {
+    // The preflight reports what it sees; the model call echoes stdin.
+    writeFileSync(join(bin, "standin"), `#!/usr/bin/env bun
+import { readFileSync, statSync } from "node:fs";
+import { dirname } from "node:path";
+const mode = (path) => (statSync(path).mode & 0o777).toString(8);
+if (process.argv[2] === "preflight") {
+  const config = process.env.STAND_IN_CONFIG;
+  console.log(JSON.stringify({
+    xdg: process.env.XDG_CONFIG_HOME,
+    codexThread: process.env.CODEX_THREAD_ID ?? null,
+    config: readFileSync(config, "utf8"),
+    modes: [mode(dirname(dirname(config))), mode(dirname(config)), mode(config)],
+  }));
+  process.exit(0);
+}
+process.stdout.write(await Bun.stdin.text());
+`);
+    chmodSync(join(bin, "standin"), 0o755);
+    inherited = process.env.XDG_CONFIG_HOME;
+    process.env.XDG_CONFIG_HOME = "/inherited/config";
+  });
+  afterEach(() => {
+    if (inherited === undefined) delete process.env.XDG_CONFIG_HOME;
+    else process.env.XDG_CONFIG_HOME = inherited;
+  });
+
+  it("creates the nested config before the preflight, which sees the set environment, and sends the envelope", async () => {
+    const lane = standInLane("stand-in");
+    writeFileSync(lane.promptPath, "Return \"the\" marker.\n");
+    const result = await runLane(lane);
+    expect(result.exitCode).toBe(0);
+    const dir = `${lane.receiptPath}.provider`;
+    expect(result.receipt).toMatchObject({
+      status: "complete",
+      reportedModel: null,
+      modelVerified: false,
+      modelEvidence: "pinned-argv",
+      preflight: { status: "passed" },
+    });
+    expect(JSON.parse(result.receipt.preflight.evidence)).toEqual({
+      xdg: dir,
+      codexThread: null,
+      config: "effort: max\n",
+      modes: ["700", "700", "600"],
+    });
+    expect(readFileSync(lane.outputPath, "utf8"))
+      .toBe(`${JSON.stringify({ event: "user", message: { role: "user", content: "Return \"the\" marker.\n" } })}\n`);
+  });
+
+  it("refuses a lane whose cwd's parent holds a listed project config directory", async () => {
+    const repo = join(scratch, "repo"), nested = join(repo, "src");
+    mkdirSync(join(repo, ".agents"), { recursive: true });
+    mkdirSync(nested);
+    const lane = standInLane("stand-in-project-dir", { cwd: nested });
+    const result = await runLane(lane);
+    expect(result.exitCode).toBe(70);
+    expect(result.receipt).toMatchObject({
+      status: "child-failed",
+      preflight: { status: "not-run" },
+      error: { message: expect.stringContaining(`${join(realpathSync(repo), ".agents")}: the CLI would load`) },
+    });
+  });
+});
+
+describe("projectConfigRefusal", () => {
+  // Bun reads HOME once at startup, so the test replaces homedir() instead of setting HOME.
+  beforeEach(() => {
+    spyOn(os, "homedir").mockReturnValue(join(scratch, "home"));
+    mkdirSync(join(scratch, "home", ".agents"), { recursive: true });
+  });
+  afterEach(() => {
+    mock.restore();
+  });
+  const refuse = (cwd: string, adapter: ProviderAdapter = agy) => projectConfigRefusal(adapter.id, cwd, adapter.launch.projectConfig);
+  const homeMessage = () =>
+    `agy lanes under the home directory run only inside a git repository rooted below it: the CLI's project-config walk would reach ${realpathSync(join(scratch, "home"))}`;
+  const found = (path: string, id = "agy") =>
+    `${id} lanes do not run in a workspace with ${path}: the CLI would load that repository-controlled config`;
+
+  it("refuses the home directory, a cwd under it outside a repository, and a repository rooted at it", () => {
+    const cwd = join(scratch, "home/notes");
+    mkdirSync(cwd, { recursive: true });
+    expect(refuse(cwd)).toBe(homeMessage());
+    expect(refuse(join(scratch, "home"))).toBe(homeMessage());
+    mkdirSync(join(scratch, "home/.git"));
+    expect(refuse(cwd)).toBe(homeMessage());
+    expect(refuse(cwd, dsh)).toStartWith("dsh lanes under the home directory");
+  });
+
+  it("runs in a repository below the home that holds no listed entry, whatever the home holds", () => {
+    const repo = join(scratch, "home/repo");
+    mkdirSync(join(repo, ".git"), { recursive: true });
+    mkdirSync(join(repo, "src"));
+    for (const adapter of [agy, dsh]) expect(refuse(join(repo, "src"), adapter)).toBeNull();
+    expect(projectConfigRefusal("claude", join(scratch, "home"), [])).toBeNull();
+  });
+
+  it("finds config in the cwd or a parent up to the git root", () => {
+    const repo = join(scratch, "home/repo");
+    mkdirSync(join(repo, ".git"), { recursive: true });
+    mkdirSync(join(repo, ".agents"));
+    mkdirSync(join(repo, "src"));
+    expect(refuse(join(repo, "src"))).toBe(found(join(realpathSync(repo), ".agents")));
+    expect(refuse(repo)).toBe(found(join(realpathSync(repo), ".agents")));
+  });
+
+  it("walks to / outside the home and a repository", () => {
+    const cwd = join(scratch, "outside/src");
+    mkdirSync(cwd, { recursive: true });
+    expect(refuse(cwd)).toBeNull();
+    mkdirSync(join(scratch, "outside/.agents"));
+    expect(refuse(cwd)).toBe(found(join(realpathSync(scratch), "outside/.agents")));
+  });
+
+  it("reads a file named like a config directory as absent", () => {
+    const cwd = join(scratch, "plain");
+    mkdirSync(cwd);
+    for (const name of [".agents", ".agent", "_agents", "_agent"]) writeFileSync(join(cwd, name), "");
+    expect(refuse(cwd)).toBeNull();
+  });
+
+  it("checks a ./ path as a file in the cwd only", () => {
+    const repo = join(scratch, "home/env-repo"), sub = join(repo, "sub"), venv = join(repo, "venv");
+    mkdirSync(join(repo, ".git"), { recursive: true });
+    mkdirSync(sub);
+    mkdirSync(join(venv, ".env"), { recursive: true });
+    writeFileSync(join(repo, ".env"), "A=1\n");
+    expect(refuse(repo, dsh)).toBe(found(join(realpathSync(repo), ".env"), "dsh"));
+    expect(refuse(sub, dsh)).toBeNull();
+    expect(refuse(venv, dsh)).toBeNull();
+  });
+});
+
 describe("childEnvironment", () => {
+  it("applies an adapter's set values after filtering and drops the parent identity markers last", () => {
+    const lane = standInLane("stand-in-env");
+    const source = { PATH: "/bin", XDG_CONFIG_HOME: "/inherited", XDG_DATA_HOME: "/data", CODEX_THREAD_ID: "parent", GITHUB_TOKEN: "t" };
+    const dir = `${lane.receiptPath}.provider`;
+    expect(childEnvironment(lane, source)).toEqual({
+      PATH: "/bin",
+      XDG_CONFIG_HOME: dir,
+      XDG_DATA_HOME: "/data",
+      STAND_IN_CONFIG: `${dir}/${STAND_IN_CONFIG}`,
+    });
+  });
+
   it("removes only inherited runtime identity needed to avoid nested detection", () => {
     const source = {
       PATH: "/bin",
@@ -2020,5 +2213,382 @@ describe("discoverSharedGitDir", () => {
     } finally {
       rmSync(root, { recursive: true, force: true });
     }
+  });
+});
+
+describe("dsh lanes", () => {
+  const DSH_VARIABLES = ["DSH_PERMISSION_MODE", "DSH_HOME", "DEEPSEEK_BASE_URL", "DEEPSEEK_API_KEY"];
+  const TRANSPORT = `{"type":"status","phase":"turn_end","turn":1,"reason":{"kind":"error","error":{"message":"DeepSeek Messages transport failed","code":"TRANSPORT"}}}`;
+  const MISSING = `{"type":"status","phase":"turn_end","turn":1,"reason":{"kind":"error","error":{"message":"llm-deepseek: no API key","code":"MISSING_CREDENTIAL"}}}`;
+
+  // A dsh stand-in: `--version` prints `version`; the preflight (a positional `preflight` task) prints
+  // `status`; the model call reads stdin and runs `turn`, which sees `args`, `patch`, `prompt` and `emit`.
+  // Each call appends its kind to `dsh.calls` next to the stand-in. The child environment keeps no test
+  // variable, so each case bakes its own.
+  function fakeDsh(status: string, turn: string, version = "0.2.0-rc.2"): void {
+    writeFileSync(join(bin, "dsh"), `#!/usr/bin/env bun
+import { appendFileSync, readFileSync, statSync, writeFileSync } from "node:fs";
+import { dirname, join } from "node:path";
+const args = process.argv.slice(2);
+const call = (kind) => appendFileSync(join(dirname(process.argv[1]), "dsh.calls"), kind + "\\n");
+if (args[0] === "--version") {
+  call("version");
+  console.log(${JSON.stringify(version)});
+  process.exit(0);
+}
+const patch = args[args.indexOf("--patch") + 1];
+const emit = (event) => console.log(JSON.stringify(event));
+if (args.at(-1) === "preflight") {
+  call("preflight");
+  console.log(${JSON.stringify(status)});
+  process.exit(1);
+}
+call("model");
+const prompt = await Bun.stdin.text();
+emit({ type: "session", sessionId: "session-fixture", cwd: process.cwd() });
+${turn}
+`);
+    chmodSync(join(bin, "dsh"), 0o755);
+  }
+
+  // Reports what the child saw as the final text.
+  const OBSERVE = `const observed = {
+  prompt,
+  patch: [["- id: sandbox-policy", 4], ["- id: credentials", 3], ["- id: agent-default-model", 5]].flatMap(([row, count]) => {
+    const lines = readFileSync(patch, "utf8").split("\\n");
+    return lines.slice(lines.indexOf(row), lines.indexOf(row) + count);
+  }),
+  home: process.env.DSH_HOME,
+  dirMode: (statSync(dirname(patch)).mode & 0o777).toString(8),
+  patchMode: (statSync(patch).mode & 0o777).toString(8),
+  variables: Object.keys(process.env).filter((key) => /^(DSH_|DEEPSEEK_)/.test(key)).sort(),
+};
+emit({ type: "status", phase: "step_end", turn: 1, step: 1, usage: { inputTokens: 5, outputTokens: 2, cacheReadTokens: 3, totalTokens: 10 } });
+emit({ type: "status", phase: "turn_end", turn: 1, reason: { kind: "completed" } });
+emit({ type: "final", text: JSON.stringify(observed) });`;
+
+  function dshOptions(suffix: string, overrides: Partial<LaneRequest> = {}): LaneRequest {
+    return { ...options("grok", suffix), provider: "dsh", model: "deepseek-flash", effort: "high", ...overrides };
+  }
+
+  beforeEach(() => {
+    for (const name of DSH_VARIABLES) process.env[name] = `${name}-value`;
+  });
+  afterEach(() => {
+    for (const name of DSH_VARIABLES) delete process.env[name];
+  });
+
+  it("runs a read-only lane with the run-owned patch, the prompt on stdin and the pinned-argv proof", async () => {
+    fakeDsh(TRANSPORT, OBSERVE);
+    const input = dshOptions("dsh-complete");
+    const result = await runLane(laneOf(input));
+    expect(result.exitCode).toBe(0);
+    const saved = receipt(input.receiptPath);
+    expect(saved).toMatchObject({
+      status: "complete",
+      provider: "dsh",
+      model: "deepseek-flash",
+      effort: "high",
+      mode: "read-only",
+      reportedModel: null,
+      modelVerified: false,
+      modelEvidence: "pinned-argv",
+      sessionId: "session-fixture",
+      usage: { inputTokens: 5, outputTokens: 2, cachedInputTokens: 3, totalTokens: 10 },
+      preflight: { status: "passed", evidence: "credential present; not validated" },
+    });
+    const dir = `${input.receiptPath}.provider`;
+    expect(saved.argv.slice(1)).toEqual(["--profile", "headless", "--patch", join(dir, "patch.yml"), "--json", "-"]);
+    expect(saved.preflight.argv.slice(1, 5)).toEqual(["--profile", "headless", "--patch", join(dir, "patch.yml")]);
+    expect(saved.preflight.argv.at(-1)).toBe("preflight");
+    expect(JSON.parse(readFileSync(input.outputPath, "utf8"))).toEqual({
+      prompt: "Return the marker.",
+      patch: [
+        "- id: sandbox-policy",
+        "  config:",
+        "    mode: read-only",
+        `    workspaceRoot: ${JSON.stringify(scratch)}`,
+        "- id: credentials",
+        "  config:",
+        `    path: ${JSON.stringify(join(resolve("DSH_HOME-value"), ".credentials.yaml"))}`,
+        "- id: agent-default-model",
+        "  config:",
+        "    provider: deepseek-official",
+        "    model: \"deepseek-flash\"",
+        "    reasoningEffort: \"high\"",
+      ],
+      dirMode: "700",
+      patchMode: "600",
+      home: dir,
+      variables: ["DEEPSEEK_API_KEY", "DSH_HOME"],
+    });
+    expect(statSync(dir).mode & 0o777).toBe(0o700);
+  });
+
+  for (const [name, status, exitCode, message] of [
+    ["a missing credential", MISSING, 77, "authentication or model preflight failed"],
+    ["an unknown status", "Welcome to dsh", 70, "authentication preflight output was inconclusive"],
+  ] as const) {
+    it(`classifies ${name} before any model call`, async () => {
+      const started = join(scratch, "dsh-model.started");
+      fakeDsh(status, `writeFileSync(${JSON.stringify(started)}, "started");`);
+      const input = dshOptions(`dsh-preflight-${exitCode}`);
+      const result = await runLane(laneOf(input));
+      expect(result.exitCode).toBe(exitCode);
+      expect(result.receipt).toMatchObject({
+        status: exitCode === 77 ? "unauthenticated" : "child-failed",
+        preflight: { status: "failed" },
+        error: { message },
+      });
+      expect(existsSync(started)).toBe(false);
+    });
+  }
+
+  it("never completes SIGTERM's exit 0 with a partial final", async () => {
+    fakeDsh(TRANSPORT, `emit({ type: "status", phase: "turn_start", turn: 1 });
+emit({ type: "final", text: "partial reply" });`);
+    const input = dshOptions("dsh-sigterm-shape");
+    const result = await runLane(laneOf(input));
+    expect(result.exitCode).toBe(65);
+    expect(result.receipt).toMatchObject({ status: "malformed-output", exitCode: 0, error: { message: "dsh ended without a completed turn" } });
+    expect(existsSync(input.outputPath)).toBe(false);
+  });
+
+  it("classifies a turn error, an unknown model and exit 130 from the captured shapes", async () => {
+    fakeDsh(TRANSPORT, `emit({ type: "status", phase: "turn_end", turn: 1, reason: { kind: "error", error: { message: "rate limited", code: "RATE_LIMIT" } } });
+emit({ type: "final", text: "" });
+console.error("dsh: RATE_LIMIT: rate limited");
+process.exit(1);`);
+    const failed = dshOptions("dsh-turn-error");
+    expect((await runLane(laneOf(failed))).receipt).toMatchObject({
+      status: "child-failed",
+      exitCode: 1,
+      sessionId: "session-fixture",
+      error: { message: "dsh turn failed: RATE_LIMIT: rate limited" },
+    });
+
+    fakeDsh(TRANSPORT, `emit({ type: "status", phase: "turn_end", turn: 1, reason: { kind: "error", error: { message: "The supported API model names are deepseek-flash, deepseek-v4-pro, but you passed deepseek-next.", code: "INVALID_REQUEST", status: 400 } } });
+console.error("dsh: INVALID_REQUEST: The supported API model names are deepseek-flash, deepseek-v4-pro, but you passed deepseek-next.");
+process.exit(1);`);
+    const unknown = dshOptions("dsh-unknown-model", { model: "deepseek-next" });
+    const unknownResult = await runLane(laneOf(unknown));
+    expect(unknownResult.exitCode).toBe(69);
+    expect(unknownResult.receipt).toMatchObject({ status: "unavailable-model", exitCode: 1 });
+
+    fakeDsh(TRANSPORT, `emit({ type: "final", text: "partial reply" });
+process.exit(130);`);
+    const interrupted = dshOptions("dsh-sigint");
+    expect((await runLane(laneOf(interrupted))).receipt).toMatchObject({ status: "cancelled", exitCode: 130, signal: null });
+    expect(existsSync(interrupted.outputPath)).toBe(false);
+  });
+
+  it("refuses a dsh other than the measured version before the preflight", async () => {
+    fakeDsh(TRANSPORT, OBSERVE, "0.3.0");
+    const input = dshOptions("dsh-version");
+    const result = await runLane(laneOf(input));
+    expect(result.exitCode).toBe(69);
+    expect(result.receipt).toMatchObject({
+      status: "unavailable-cli",
+      preflight: { status: "not-run" },
+      error: {
+        message: "dsh 0.3.0 is not the measured 0.2.0-rc.2; the adapter must be re-measured before it runs this version",
+        evidence: "0.3.0",
+      },
+    });
+    expect(readFileSync(join(bin, "dsh.calls"), "utf8")).toBe("version\n");
+    expect(existsSync(input.outputPath)).toBe(false);
+  });
+
+  it("checks the measured version, then runs the preflight and the model", async () => {
+    fakeDsh(TRANSPORT, OBSERVE);
+    const input = dshOptions("dsh-version-match");
+    expect((await runLane(laneOf(input))).receipt.status).toBe("complete");
+    expect(readFileSync(join(bin, "dsh.calls"), "utf8")).toBe("version\npreflight\nmodel\n");
+  });
+
+  it("refuses an isolated-write dsh lane before launch", () => {
+    const input = dshOptions("dsh-writer", { mode: "isolated-write" });
+    expect(() => laneOf(input)).toThrow("provider dsh does not support isolated-write");
+    expect(existsSync(input.receiptPath)).toBe(false);
+  });
+});
+
+describe("agy lanes", () => {
+  const MODELS = "gemini-3.8-flash-high\tGemini 3.8 Flash (High)\ngemini-3.8-flash-medium\tGemini 3.8 Flash (Medium)\ngemini-3.8-flash-low\tGemini 3.8 Flash (Low)\n";
+  const SIGN_IN = "Fetching available models...\nError: Please sign in to view available models. Launch the CLI without arguments to sign in.";
+
+  // An agy stand-in: `models` prints `models` to stdout, or `signIn` to stderr with exit 1; the model call runs
+  // `turn`, which sees `args`, `at`, `stdin` and `result(body)`. The child environment keeps no test variable.
+  function fakeAgy(turn: string, models = MODELS, signIn = false): void {
+    writeFileSync(join(bin, "agy"), `#!/usr/bin/env bun
+import { existsSync, readFileSync, statSync, writeFileSync } from "node:fs";
+import { join } from "node:path";
+const args = process.argv.slice(2);
+if (args[0] === "models") {
+  if (${signIn}) {
+    console.error(${JSON.stringify(SIGN_IN)});
+    process.exit(1);
+  }
+  process.stdout.write(${JSON.stringify(models)});
+  process.exit(0);
+}
+const at = (flag) => args[args.indexOf(flag) + 1];
+const stdin = await Bun.stdin.text();
+const result = (body) => console.log(JSON.stringify({ event: "result", result: { conversation_id: "a1", status: "SUCCESS", response: "", usage: { input_tokens: 5, output_tokens: 2, thinking_tokens: 1, cache_read_tokens: 0, total_tokens: 7 }, ...body } }));
+${turn}
+`);
+    chmodSync(join(bin, "agy"), 0o755);
+  }
+
+  // Reports what the child saw: the agent file in --add-dir, its modes, the stdin line and the environment.
+  const OBSERVE = `const agent = join(at("--add-dir"), ".agents/agents", at("--agent") + ".md");
+if (!existsSync(agent)) {
+  console.error('error: unknown agent "' + at("--agent") + '"');
+  process.exit(1);
+}
+const mode = (path) => (statSync(path).mode & 0o777).toString(8);
+const observed = {
+  model: at("--model"),
+  stdin: JSON.parse(stdin),
+  stdinLines: stdin.split("\\n").length - 1,
+  tools: readFileSync(agent, "utf8").split("tools:\\n")[1].split("\\n")[0],
+  modes: [mode(at("--add-dir")), mode(agent)],
+  geminiVariables: Object.keys(process.env).filter((key) => key.startsWith("GEMINI_")),
+};
+console.log(JSON.stringify({ event: "init", init: { model: at("--model") } }));
+result({ response: JSON.stringify(observed) + "\\n" });`;
+
+  function agyOptions(suffix: string, overrides: Partial<LaneRequest> = {}): LaneRequest {
+    return { ...options("grok", suffix), provider: "agy", model: "gemini-3.8-flash", effort: "high", ...overrides };
+  }
+
+  beforeEach(() => {
+    process.env.GEMINI_API_KEY = "GEMINI_API_KEY-value";
+  });
+  afterEach(() => {
+    delete process.env.GEMINI_API_KEY;
+  });
+
+  for (const effort of ["low", "medium", "high"] as const) {
+    it(`runs agy:gemini-3.8-flash@${effort} with the envelope on stdin and the run-owned agent, on pinned argv`, async () => {
+      fakeAgy(OBSERVE);
+      const input = agyOptions(`agy-${effort}`, { effort });
+      writeFileSync(input.promptPath, "Read \"marker.txt\".\nReply with its contents.\n");
+      const result = await runLane(laneOf(input));
+      expect(result.exitCode).toBe(0);
+      const saved = receipt(input.receiptPath);
+      const cliModel = `gemini-3.8-flash-${effort}`;
+      expect(saved).toMatchObject({
+        status: "complete",
+        provider: "agy",
+        model: "gemini-3.8-flash",
+        effort,
+        mode: "read-only",
+        reportedModel: null,
+        modelVerified: false,
+        modelEvidence: "pinned-argv",
+        sessionId: "a1",
+        usage: { inputTokens: 5, cachedInputTokens: 0, outputTokens: 2, reasoningTokens: 1, totalTokens: 7 },
+        preflight: { argv: [saved.executable, "models"], status: "passed", evidence: `model ${cliModel} listed` },
+      });
+      const dir = `${input.receiptPath}.provider`;
+      expect(saved.argv.slice(1)).toEqual([
+        "--input-format", "stream-json", "--output-format", "stream-json", "--model", cliModel,
+        "--add-dir", dir, "--agent", "pstack-read-only",
+      ]);
+      expect(JSON.parse(readFileSync(input.outputPath, "utf8"))).toEqual({
+        model: cliModel,
+        stdin: { event: "user", message: { role: "user", content: "Read \"marker.txt\".\nReply with its contents.\n" } },
+        stdinLines: 1,
+        tools: "  - view_file",
+        modes: ["700", "600"],
+        geminiVariables: [],
+      });
+    });
+  }
+
+  for (const [name, signIn, models, status, exitCode] of [
+    ["a sign-in failure", true, MODELS, "unauthenticated", 77],
+    ["an unlisted variant", false, "gemini-3.8-flash-low\tGemini 3.8 Flash (Low)\n", "unavailable-model", 69],
+  ] as const) {
+    it(`classifies ${name} before any model call`, async () => {
+      const started = join(scratch, "agy-model.started");
+      fakeAgy(`writeFileSync(${JSON.stringify(started)}, "started");`, models, signIn);
+      const input = agyOptions(`agy-preflight-${exitCode}`);
+      const result = await runLane(laneOf(input));
+      expect(result.exitCode).toBe(exitCode);
+      expect(result.receipt).toMatchObject({ status, preflight: { status: "failed" } });
+      expect(existsSync(started)).toBe(false);
+    });
+  }
+
+  it("classifies an exit-0 denial, an unknown model, an interruption and a missing agent from the captured shapes", async () => {
+    fakeAgy(`console.error('jetski: no output produced — a tool required the "command" permission that headless mode cannot prompt for, so it was auto-denied.');
+result({ denied_actions: [{ action: "command", display_name: "RunCommand" }] });`);
+    const denied = agyOptions("agy-denied");
+    const deniedResult = await runLane(laneOf(denied));
+    expect(deniedResult.exitCode).toBe(70);
+    expect(deniedResult.receipt).toMatchObject({
+      status: "child-failed",
+      exitCode: 0,
+      sessionId: "a1",
+      error: { message: "agy denied a tool that needed approval" },
+    });
+    expect(deniedResult.receipt.error?.evidence).toContain("auto-denied");
+    expect(existsSync(denied.outputPath)).toBe(false);
+
+    fakeAgy(`console.error('error: invalid model selection (--model "' + at("--model") + '" --effort ""): model is not recognized as a known model');
+result({ conversation_id: "", status: "ERROR", error: 'invalid model selection (--model "' + at("--model") + '")' });
+process.exit(1);`);
+    const unknown = agyOptions("agy-unknown-model");
+    expect((await runLane(laneOf(unknown))).receipt).toMatchObject({ status: "unavailable-model", exitCode: 1, sessionId: null });
+
+    fakeAgy(`console.error("error: interrupted");
+result({ status: "ERROR", error: "interrupted" });
+process.exit(1);`);
+    const interrupted = agyOptions("agy-interrupted");
+    const interruptedResult = await runLane(laneOf(interrupted));
+    expect(interruptedResult.exitCode).toBe(130);
+    expect(interruptedResult.receipt).toMatchObject({ status: "cancelled", exitCode: 1, error: { message: "agy reported the turn was interrupted" } });
+
+    // The stand-in fails closed like agy when the run-owned agent file is gone.
+    fakeAgy(`import { rmSync } from "node:fs";
+rmSync(join(at("--add-dir"), ".agents"), { recursive: true });
+${OBSERVE}`);
+    const missing = agyOptions("agy-missing-agent");
+    expect((await runLane(laneOf(missing))).receipt).toMatchObject({ status: "child-failed", exitCode: 1 });
+    expect(existsSync(missing.outputPath)).toBe(false);
+  });
+
+  it("refuses an agy lane whose workspace holds any of the four project directories, up to the git root", async () => {
+    const repo = join(scratch, "repo"), nested = join(repo, "src");
+    fs.mkdirSync(nested, { recursive: true });
+    for (const name of [".agents", ".agent", "_agents", "_agent"]) {
+      const started = join(scratch, `agy-${name}.started`);
+      fakeAgy(`writeFileSync(${JSON.stringify(started)}, "started");`);
+      fs.mkdirSync(join(repo, name));
+      const input = agyOptions(`agy-project-config${name}`, { cwd: nested });
+      expect((await runLane(laneOf(input))).exitCode).toBe(70);
+      expect(receipt(input.receiptPath)).toMatchObject({
+        status: "child-failed",
+        preflight: { status: "not-run" },
+        error: { message: expect.stringContaining(`${join(fs.realpathSync(repo), name)}: the CLI would load`) },
+      });
+      expect(existsSync(started)).toBe(false);
+      fs.rmSync(join(repo, name), { recursive: true });
+    }
+
+    // The walk stops at the git root: an .agents/ above it belongs to another project.
+    fs.mkdirSync(join(repo, ".agents"));
+    fs.mkdirSync(join(nested, ".git"));
+    fakeAgy(OBSERVE);
+    const inside = agyOptions("agy-below-git-root", { cwd: nested });
+    expect((await runLane(laneOf(inside))).exitCode).toBe(0);
+  });
+
+  it("refuses an isolated-write agy lane before launch", () => {
+    const input = agyOptions("agy-writer", { mode: "isolated-write" });
+    expect(() => laneOf(input)).toThrow("provider agy does not support isolated-write");
+    expect(existsSync(input.receiptPath)).toBe(false);
   });
 });

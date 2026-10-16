@@ -41,11 +41,14 @@ function policy(value: EnvPolicy, long: boolean): string {
       : `inherited without ${value.dropPrefixes.map((prefix) => code(`${prefix}*`)).join(", ")}`;
   }
   if (!long) return "allowlist";
-  return `only ${value.names.map(code).join(" ")}, and variables starting with ${value.prefixes.map(code).join(", ")}`;
+  const set = Object.entries(value.set ?? {}).map(([name, setting]) => code(`${name}=${setting}`));
+  return `only ${value.names.map(code).join(" ")}, and variables starting with ${value.prefixes.map(code).join(", ")}`
+    + (set.length === 0 ? "" : `; sets ${set.join(", ")}`);
 }
 
 function environment(adapter: ProviderAdapter, long: boolean): string {
-  const [read, write] = ACCESS_MODES.map((mode) => policy(adapter.environment(access(mode)), long));
+  const sidecarDir = adapter.launch.sidecar === null ? null : "<receipt>.provider";
+  const [read, write] = ACCESS_MODES.map((mode) => policy(adapter.environment(access(mode), sidecarDir), long));
   return read === write ? read! : `read-only: ${read}; isolated-write: ${write}`;
 }
 

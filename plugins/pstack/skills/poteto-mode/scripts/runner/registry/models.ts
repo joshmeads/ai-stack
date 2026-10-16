@@ -91,6 +91,34 @@ export const FAMILIES = [
     defaultEffort: "default",
     upstream: null,
   }),
+  family({
+    name: "deepseek-flash",
+    label: "DeepSeek Flash (dsh)",
+    provider: "dsh",
+    model: "deepseek-flash",
+    efforts: ["low", "high", "max"], // dsh 0.2.0-rc.2 fails `medium` locally
+    defaultEffort: "max",
+    upstream: null,
+  }),
+  family({
+    name: "deepseek-v4-pro",
+    label: "DeepSeek V4 Pro (dsh)",
+    provider: "dsh",
+    model: "deepseek-v4-pro",
+    efforts: ["low", "high", "max"],
+    defaultEffort: "max",
+    upstream: null,
+  }),
+  family({
+    name: "gemini-3.8-flash",
+    label: "Gemini 3.8 Flash (Antigravity)",
+    provider: "agy",
+    model: "gemini-3.8-flash",
+    // `agy models`, Antigravity CLI 1.3.6. Gemini 3.7 Flash is not listed. The bare slug runs gemini-3.8-flash-high.
+    efforts: { low: "gemini-3.8-flash-low", medium: "gemini-3.8-flash-medium", high: "gemini-3.8-flash-high" },
+    defaultEffort: "high",
+    upstream: null,
+  }),
 ] as const;
 export type FamilyName = (typeof FAMILIES)[number]["name"];
 
@@ -128,4 +156,7 @@ export const RELEASED_PAIRS = [
   { pair: "claude:claude-opus-5-5", family: "opus-5-5" },
   { pair: "devin:swe-2", family: "swe-2" },
   { pair: "devin:swe-1.6", family: "swe-1.6" },
+  { pair: "dsh:deepseek-flash", family: "deepseek-flash" },
+  { pair: "dsh:deepseek-v4-pro", family: "deepseek-v4-pro" },
+  { pair: "agy:gemini-3.8-flash", family: "gemini-3.8-flash" },
 ] as const satisfies readonly ReleasedPair<FamilyName>[];

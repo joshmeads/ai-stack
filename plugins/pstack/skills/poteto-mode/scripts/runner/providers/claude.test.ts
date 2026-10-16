@@ -216,7 +216,7 @@ describe("claude preflight", () => {
     expect(classify(0, JSON.stringify({ loggedIn: false }))).toEqual({ kind: "unauthenticated" });
     expect(classify(0, "[]")).toEqual({ kind: "unauthenticated" });
     expect(classify(0, "model claude-x is not supported")).toEqual({ kind: "unavailable-model" });
-    expect(claude.preflight.argv(lane())).toEqual(["auth", "status", "--json"]);
+    expect(claude.preflight.argv(lane(), null)).toEqual(["auth", "status", "--json"]);
     expect(claude.preflight.retryAfterUnauthenticatedMs).toBeNull();
   });
 });

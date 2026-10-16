@@ -4,6 +4,7 @@ import {
   type Effort,
   type NormalizedUsage,
   type Parent,
+  type ReceiptStatus,
   UsageError,
   type WriterSandbox,
 } from "../types.ts";
@@ -101,21 +102,32 @@ export type ParseResult =
   | { readonly kind: "malformed"; readonly message: string };
 
 export type EnvPolicy =
-  | { readonly kind: "allowlist"; readonly names: readonly string[]; readonly prefixes: readonly string[] }
+  | {
+    readonly kind: "allowlist";
+    readonly names: readonly string[];
+    readonly prefixes: readonly string[];
+    /** Run-owned values, applied after filtering. One replaces an inherited value of the same name. */
+    readonly set?: Readonly<Record<string, string>>;
+  }
   | { readonly kind: "inherit"; readonly dropPrefixes: readonly string[] };
 
 /** Facts run.ts establishes before argv. Each is null unless the adapter asked for it. */
 export interface LaunchFacts {
   readonly sharedGitDir: string | null;
-  /** Paths in the lane's private provider directory: the absent output path and the written config. */
-  readonly providerSidecar: { readonly output: string; readonly config: string | null } | null;
+  /** The lane's private provider directory, the absent output path in it and the written config. */
+  readonly providerSidecar: {
+    readonly directory: string;
+    readonly output: string | null;
+    readonly config: string | null;
+  } | null;
 }
 
-/** A private directory run.ts creates next to the receipt (0700). It writes `config` there (0600)
- *  before launch, passes the absent `output` path, and reads that file after the child exits. */
+/** A private directory run.ts creates next to the receipt (0700). It writes `config` there (0600), creating any
+ *  subdirectories in `name` (0700), before the preflight. It passes the absent `output` path and reads that file
+ *  after the child exits; a null `output` means the CLI writes no file there. */
 export interface ProviderSidecar {
-  readonly output: string;
-  readonly config: { readonly name: string; readonly content: string } | null;
+  readonly output: string | null;
+  readonly config: { readonly name: string; content(lane: Lane): string } | null;
 }
 
 export interface ProviderAdapter {
@@ -124,13 +136,21 @@ export interface ProviderAdapter {
   /** Looked up on the child's PATH. Missing → unavailable-cli. */
   readonly executable: string;
   /** "flag": argv carries the effort, and omits the flag for `default`.
-   *  "model-id": this provider's family entries map each effort to a CLI model ID. */
-  readonly effortIn: "flag" | "model-id";
+   *  "model-id": this provider's family entries map each effort to a CLI model ID.
+   *  "config": the sidecar config carries the effort, and omits it for `default`. */
+  readonly effortIn: "flag" | "model-id" | "config";
   readonly preflight: {
-    argv(lane: Lane): readonly string[];
+    /** sidecar is the lane's provider sidecar, already written, or null when the adapter declares none. */
+    argv(lane: Lane, sidecar: LaunchFacts["providerSidecar"]): readonly string[];
     /** One more preflight after an "unauthenticated" verdict, after this delay. null means none. */
     readonly retryAfterUnauthenticatedMs: number | null;
     classify(run: ChildRun, lane: Lane): PreflightVerdict;
+    /** run.ts runs `<executable> <argv>` with the preflight's environment and cwd before the authentication preflight,
+     *  and refuses the lane when `check` returns a refusal. The preflight then stays not-run. */
+    readonly guard?: {
+      readonly argv: readonly string[];
+      check(run: ChildRun): { readonly status: ReceiptStatus; readonly message: string } | null;
+    };
   };
   readonly launch: {
     /** "stdin": run.ts writes the prompt to stdin. "file": argv carries lane.promptPath. */
@@ -138,9 +158,14 @@ export interface ProviderAdapter {
     readonly sidecar: ProviderSidecar | null;
     /** resolveLane refuses any other access kind before launch. */
     readonly supports: readonly AccessKind[];
-    /** A directory name that holds the provider's project config, such as hooks. run.ts refuses the lane when the cwd
-     *  or any parent up to the git root holds it, because the CLI would load that repository-controlled config. */
-    readonly projectConfigDir: string | null;
+    /** Relative paths that hold the provider's project config, such as hooks: a directory ending in "/", found in the
+     *  cwd or any parent up to the git root, or up to / outside a repository, or a file starting with "./", found in
+     *  the cwd only. run.ts refuses the lane when one is present, because the CLI would load that repository-controlled
+     *  config. Under the home directory, a lane with project config runs only inside a git repository rooted below it,
+     *  because the CLI's own walk would otherwise reach the home directory. */
+    readonly projectConfig: readonly (`${string}/` | `./${string}`)[];
+    /** With "stdin" prompts, what run.ts writes instead of the bare prompt. */
+    stdinEnvelope?(prompt: string): string;
     needsSharedGitDir(access: Access): boolean;
     /** Omits the effort flag for the `default` effort. */
     argv(lane: Lane, facts: LaunchFacts): readonly string[];
@@ -152,7 +177,8 @@ export interface ProviderAdapter {
     readonly report: "required" | "absent";
     matches(lane: Lane, reported: string): boolean;
   };
-  environment(access: Access): EnvPolicy;
+  /** sidecarDir is the lane's provider directory, or null when the adapter declares no sidecar. */
+  environment(access: Access, sidecarDir: string | null): EnvPolicy;
   /** Markdown that render.ts puts into the model catalog's routes and provider notes. */
   readonly docs: {
     readonly name: string;

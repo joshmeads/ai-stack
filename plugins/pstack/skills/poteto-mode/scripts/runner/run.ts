@@ -11,6 +11,7 @@ import {
   writeFileSync,
   writeSync,
 } from "node:fs";
+import { homedir } from "node:os";
 import { dirname, isAbsolute, join, relative, resolve, sep } from "node:path";
 import type { Lane, LaunchFacts, ParseResult } from "./registry/index.ts";
 import {
@@ -74,7 +75,6 @@ function modelStreamPaths(receiptPath: string): { stdoutPath: string; stderrPath
 }
 
 interface ReservedSidecar {
-  readonly dir: string;
   readonly facts: NonNullable<LaunchFacts["providerSidecar"]>;
   readonly configContent: string | null;
 }
@@ -83,18 +83,21 @@ interface ReservedSidecar {
 function providerSidecar(lane: Lane): ReservedSidecar | null {
   const declared = lane.adapter.launch.sidecar;
   if (declared === null) return null;
-  const dir = `${lane.receiptPath}.provider`;
+  const directory = `${lane.receiptPath}.provider`;
   return {
-    dir,
-    facts: { output: join(dir, declared.output), config: declared.config === null ? null : join(dir, declared.config.name) },
-    configContent: declared.config?.content ?? null,
+    facts: {
+      directory,
+      output: declared.output === null ? null : join(directory, declared.output),
+      config: declared.config === null ? null : join(directory, declared.config.name),
+    },
+    configContent: declared.config?.content(lane) ?? null,
   };
 }
 
 function reserveOutputs(lane: Lane): ModelStreams {
   const { stdoutPath, stderrPath } = modelStreamPaths(lane.receiptPath);
   const sidecar = providerSidecar(lane);
-  const paths = [lane.outputPath, lane.receiptPath, stdoutPath, stderrPath, ...(sidecar === null ? [] : [sidecar.dir])];
+  const paths = [lane.outputPath, lane.receiptPath, stdoutPath, stderrPath, ...(sidecar === null ? [] : [sidecar.facts.directory])];
   const resolved = paths.map((path) => resolve(path));
   if (new Set(resolved).size !== paths.length || resolved.includes(resolve(lane.promptPath))) {
     throw new UsageError("prompt, output, receipt, and stream paths must be distinct");
@@ -113,9 +116,10 @@ function reserveOutputs(lane: Lane): ModelStreams {
     created.push(stderrPath);
     if (sidecar !== null) {
       // Not recursive, so an existing directory refuses the lane like any other reserved path.
-      mkdirSync(sidecar.dir, { mode: 0o700 });
-      created.push(sidecar.dir);
+      mkdirSync(sidecar.facts.directory, { mode: 0o700 });
+      created.push(sidecar.facts.directory);
       if (sidecar.facts.config !== null && sidecar.configContent !== null) {
+        mkdirSync(dirname(sidecar.facts.config), { recursive: true, mode: 0o700 });
         writeFileSync(sidecar.facts.config, sidecar.configContent, { encoding: "utf8", mode: 0o600, flag: "wx" });
       }
     }
@@ -128,8 +132,8 @@ function reserveOutputs(lane: Lane): ModelStreams {
   }
 }
 
-function readIfPresent(path: string | undefined): string | null {
-  return path !== undefined && existsSync(path) ? readFileSync(path, "utf8") : null;
+function readIfPresent(path: string | null | undefined): string | null {
+  return path != null && existsSync(path) ? readFileSync(path, "utf8") : null;
 }
 
 function writeReceipt(path: string, receipt: RunnerReceipt): void {
@@ -169,17 +173,20 @@ function installRunCancellation(): RunCancellation {
   };
 }
 
-// The adapter's policy applies first; the parent's identity markers are always dropped, so the
-// child cannot detect a nested harness.
+// The adapter's policy applies first, then its run-owned values; the parent's identity markers are
+// always dropped last, so the child cannot detect a nested harness.
 export function childEnvironment(
   lane: Lane,
   source: NodeJS.ProcessEnv = process.env
 ): NodeJS.ProcessEnv {
-  const policy = lane.adapter.environment(lane.access);
+  const policy = lane.adapter.environment(lane.access, providerSidecar(lane)?.facts.directory ?? null);
   const keep = policy.kind === "allowlist"
     ? (key: string) => policy.names.includes(key) || policy.prefixes.some((prefix) => key.startsWith(prefix))
     : (key: string) => !policy.dropPrefixes.some((prefix) => key.startsWith(prefix));
-  const result = Object.fromEntries(Object.entries(source).filter(([key]) => keep(key)));
+  const result = {
+    ...Object.fromEntries(Object.entries(source).filter(([key]) => keep(key))),
+    ...(policy.kind === "allowlist" ? policy.set : undefined),
+  };
   for (const key of PARENTS[lane.parent].identity) delete result[key];
   return result;
 }
@@ -423,13 +430,31 @@ function within(parent: string, child: string): boolean {
 // what the writer's own git will use. Returns null for a non-repository or a directory the cwd
 // contains, and refuses whatever cannot be denied literally: denyWrite entries are globs that
 // cannot be escaped, and Claude Code 2.1.288 on Linux drops entries containing * ? [ ].
-// The provider's project config directory in the cwd or a parent up to the git root, or null. A CLI that loads
-// repository-controlled config from there does not run: the runner bypasses its workspace trust.
-export function projectConfigIn(cwd: string, name: string): string | null {
-  for (let dir = realpathSync(cwd); ; dir = dirname(dir)) {
-    const candidate = join(dir, name);
-    if (statSync(candidate, { throwIfNoEntry: false })?.isDirectory()) return candidate;
-    if (existsSync(join(dir, ".git")) || dirname(dir) === dir) return null;
+// Why a provider's project config would load in the cwd, or null. A CLI that loads repository-controlled config from
+// the cwd or a parent up to the git root, or up to / outside a repository, does not run: the runner bypasses its
+// workspace trust. A path ending in "/" matches only a directory; one starting with "./" matches only a file in the
+// cwd itself. When that walk would reach the home directory, the lane is refused outright: the CLI's own walk would
+// load the home directory's config, such as ~/.agents hooks or ~/.env.
+export function projectConfigRefusal(id: string, cwd: string, names: Lane["adapter"]["launch"]["projectConfig"]): string | null {
+  if (names.length === 0) return null;
+  const home = existsSync(homedir()) ? realpathSync(homedir()) : null;
+  const start = realpathSync(cwd);
+  let boundary = start;
+  while (!existsSync(join(boundary, ".git")) && dirname(boundary) !== boundary) boundary = dirname(boundary);
+  if (home !== null && within(home, start) && within(boundary, home)) {
+    return `${id} lanes under the home directory run only inside a git repository rooted below it: the CLI's project-config walk would reach ${home}`;
+  }
+  for (let dir = start; ; dir = dirname(dir)) {
+    for (const name of names) {
+      const cwdOnly = name.startsWith("./");
+      if (cwdOnly && dir !== start) continue;
+      const candidate = join(dir, name).replace(/\/$/, "");
+      const found = statSync(candidate, { throwIfNoEntry: false });
+      if (cwdOnly ? found?.isFile() : found?.isDirectory()) {
+        return `${id} lanes do not run in a workspace with ${candidate}: the CLI would load that repository-controlled config`;
+      }
+    }
+    if (dir === boundary) return null;
   }
 }
 
@@ -728,8 +753,8 @@ async function executeLane(
     return { exitCode: statusExitCode(receipt.status), receipt };
   }
 
-  const projectConfig = adapter.launch.projectConfigDir === null ? null : projectConfigIn(lane.cwd, adapter.launch.projectConfigDir);
-  if (projectConfig !== null) {
+  const projectConfigMessage = projectConfigRefusal(adapter.id, lane.cwd, adapter.launch.projectConfig);
+  if (projectConfigMessage !== null) {
     const completed = Date.now();
     receipt = completeReceipt(lane, {
       status: "child-failed",
@@ -748,7 +773,7 @@ async function executeLane(
       usage: null,
       costUsd: null,
       error: {
-        message: `${adapter.id} lanes do not run in a workspace with ${projectConfig}: the CLI would load its repository-controlled hooks, permissions and MCP servers`,
+        message: projectConfigMessage,
         evidence: "",
       },
     });
@@ -791,7 +816,40 @@ async function executeLane(
   }
 
   const preflight = adapter.preflight;
-  const preflightArgs = preflight.argv(lane);
+  if (preflight.guard !== undefined) {
+    const run = await runProcess(executable, preflight.guard.argv, lane.cwd, env, null, deadlineAt, cancellation);
+    if (run.cancelledBy !== null) return finishWithoutChild("cancelled", "during the pre-launch guard");
+    if (run.timedOut) return finishWithoutChild("timed-out", "during the pre-launch guard");
+    const refusal = preflight.guard.check(run);
+    if (refusal !== null) {
+      const completed = Date.now();
+      receipt = completeReceipt(lane, {
+        status: refusal.status,
+        startedAt,
+        completedAt: new Date(completed).toISOString(),
+        elapsedMs: completed - started,
+        executable,
+        preflight: preflightState,
+        argv: [executable, ...launchArgs],
+        exitCode: run.exitCode,
+        signal: run.signal,
+        reportedModel: null,
+        modelVerified: false,
+        modelEvidence: null,
+        sessionId: null,
+        usage: null,
+        costUsd: null,
+        error: {
+          message: refusal.message,
+          evidence: evidence(`${run.stdout}\n${run.stderr}`),
+        },
+      });
+      removeIfExists(lane.outputPath);
+      writeReceipt(lane.receiptPath, receipt);
+      return { exitCode: statusExitCode(receipt.status), receipt };
+    }
+  }
+  const preflightArgs = preflight.argv(lane, providerSidecar(lane)?.facts ?? null);
   const runPreflight = async () => {
     const run = await runProcess(executable, preflightArgs, lane.cwd, env, null, deadlineAt, cancellation);
     const verdict = preflight.classify(run, lane);
@@ -907,7 +965,7 @@ async function executeLane(
     launchArgs,
     lane.cwd,
     env,
-    adapter.launch.prompt === "stdin" ? prompt : null,
+    adapter.launch.prompt === "stdin" ? adapter.launch.stdinEnvelope?.(prompt) ?? prompt : null,
     deadlineAt,
     cancellation,
     streamFiles
@@ -1024,7 +1082,7 @@ export async function runLane(
   const progress: LaneProgress = {
     executable: null,
     preflight: {
-      argv: [lane.adapter.executable, ...lane.adapter.preflight.argv(lane)],
+      argv: [lane.adapter.executable, ...lane.adapter.preflight.argv(lane, providerSidecar(lane)?.facts ?? null)],
       status: "not-run",
       evidence: "",
     },

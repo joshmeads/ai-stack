@@ -39,11 +39,13 @@ export function testLane(request: Partial<LaneRequest> & { readonly provider: st
 /** The facts run.ts passes before argv, with the provider sidecar paths it reserves next to the receipt. */
 export function testFacts(adapter: ProviderAdapter, sharedGitDir: string | null = null): LaunchFacts {
   const sidecar = adapter.launch.sidecar;
+  const directory = "/tmp/receipt.json.provider";
   return {
     sharedGitDir,
     providerSidecar: sidecar === null ? null : {
-      output: `/tmp/receipt.json.provider/${sidecar.output}`,
-      config: sidecar.config === null ? null : `/tmp/receipt.json.provider/${sidecar.config.name}`,
+      directory,
+      output: sidecar.output === null ? null : `${directory}/${sidecar.output}`,
+      config: sidecar.config === null ? null : `${directory}/${sidecar.config.name}`,
     },
   };
 }
@@ -55,12 +57,23 @@ export function adapterSuite(adapter: ProviderAdapter): void {
     const lane = (request: Partial<LaneRequest> = {}) =>
       testLane({ provider: adapter.id, effort: unregistered, ...request });
     const argv = (request: Partial<LaneRequest> = {}) => adapter.launch.argv(lane(request), testFacts(adapter));
+    // What the adapter launches is its argv plus the config it has run.ts write.
+    const config = (request: Partial<LaneRequest> = {}) => adapter.launch.sidecar?.config?.content(lane(request)) ?? "";
 
     it("passes the requested model to the CLI unchanged", () => {
-      expect(argv()).toEqual(expect.arrayContaining(["--model", "suite-model"]));
+      expect(argv().includes("suite-model") || config().includes("suite-model")).toBe(true);
     });
 
-    if (adapter.effortIn === "flag") {
+    if (adapter.effortIn === "config") {
+      it("carries the effort in the config only, and omits it for the default effort", () => {
+        // Line by line, so a path in the config that happens to contain "high" does not count.
+        const high = config({ effort: "high" }).split("\n");
+        const base = config({ effort: "default" }).split("\n");
+        expect(high.filter((line) => !base.includes(line))).toEqual([expect.stringContaining("high")]);
+        expect(base.filter((line) => !high.includes(line))).toEqual([]);
+        expect(argv({ effort: "high" })).toEqual(argv({ effort: "default" }));
+      });
+    } else if (adapter.effortIn === "flag") {
       it("omits exactly the effort flag and value for the default effort", () => {
         const high = argv({ effort: "high" });
         const at = high.findIndex((token) => token.includes("high"));
@@ -75,7 +88,7 @@ export function adapterSuite(adapter: ProviderAdapter): void {
           for (const effort of effortsOf(family)) {
             const args = argv({ model: family.model, effort });
             const id = modelIds(family)![effort]!;
-            expect([family.name, effort, args[args.indexOf("--model") + 1]]).toEqual([family.name, effort, id]);
+            expect([family.name, effort, args.includes(id)]).toEqual([family.name, effort, true]);
             expect(args.filter((token) => token.includes(effort) && token !== id)).toEqual([]);
           }
         }
