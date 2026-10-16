@@ -3,6 +3,14 @@
 Mergify auto-queue is live: ready PRs to main require passing verify, Unfret and exact-head live-gate, and no unresolved review thread; workflow changes require operator queueing.
 This port applies the Cursor → Claude Code substitutions in skill bodies. Earlier drafts left them flagged; this revision resolves them. A later pass added a Codex build that shares the same skills; see [Codex port](#codex-port) below.
 
+## 1.14.0 adds a read-only Cursor CLI provider
+
+Open Pstack 1.14.0 keeps the Cursor pstack 0.15.25 sync. It ships PR #211, merged after 1.13.0. Default roles and panels are unchanged. No role uses the new provider by default, and setup refuses it for every role that writes files.
+
+**Read-only Cursor CLI provider.** The runner dispatches `cursor:composer-2.5` at the `default` effort and `cursor:gemini-3.7-flash` at `low`, `medium` or `high` through the signed-in `cursor-agent` CLI from either parent; `high` is Gemini's default, and the effort selects the CLI model ID, such as `gemini-3.7-flash-high`. Gemini 3.7 Flash is the model #37 asked for, which Antigravity did not serve for the measured account. Each lane runs `cursor-agent -p --mode ask --sandbox enabled --trust` with a run-owned `CURSOR_CONFIG_DIR` whose config denies writes, shell commands and every MCP call, and approves no web tool. The login check is `cursor-agent models`, never `cursor-agent status`, and empty output is inconclusive, never unauthenticated (#94). Cursor reports only a display label for the model, so receipts record `pinned-argv` evidence. Sign in with `env -u CURSOR_API_KEY cursor-agent login`: a login made while `CURSOR_API_KEY` was set could not make model calls on the measured Mac (#71).
+
+**Read-only means pstack's own settings.** The runner refuses no repository and adds no pre-launch check because of the operator's own Cursor configuration (#203). Every turn starts Cursor's language-server worker, which runs `npx -y typescript-language-server --stdio` in the workspace and uses a repository's own copy when it has one; the worker stays running for a few idle minutes after the turn. Enterprise, team, user and repository hooks run unsandboxed in every lane, and a repository's `.cursor/cli.json` replaces the run-owned deny list. A lane can start a Task subagent, which ran on the lane's own model under the same limits; Cursor's CLI has no setting that removes Task (#212). The catalog's Cursor notes say what each was measured to do.
+
 ## 1.13.0 adds a read-only Amp provider
 
 Open Pstack 1.13.0 keeps the Cursor pstack 0.15.25 sync. It ships PR #208, merged after 1.12.0. Default roles and panels are unchanged. No role uses the new provider by default, and setup refuses it for every role that writes files.
