@@ -6,7 +6,11 @@ export interface Pull {
   number: number; head: { sha: string }; base: { sha: string };
   state: string; headRepo: string;
 }
-export interface ChangedFile { filename: string; previous_filename?: string }
+export interface ChangedFile {
+  filename: string; previous_filename?: string;
+  /** Set by the publisher when a manifest change only bumps its version strings. */
+  versionOnly?: boolean;
+}
 export interface Registry {
   skills: string[];
   shared: string[];
@@ -31,7 +35,13 @@ export interface Installation {
 }
 export interface Receipt {
   schema: 1; repo: string; pr: number; sha: string; base: string; phase: Phase;
-  selection: Selection; installations: Installation[]; observations: Observation[];
+  /** `features` holds every `<harness>:<feature>` the changed paths reach. */
+  selection: Selection;
+  /** The features this run exercises: the named ones plus automatic project proof. */
+  runFeatures: string[];
+  /** Headless sessions the run plans, and the operator's reason for exceeding the limit. */
+  sessions: number; wide?: string;
+  installations: Installation[]; observations: Observation[];
   selfTest: boolean; artifactRoot: string; publisherRevision?: string; failure?: string;
   commentUrl?: string; status?: 'success' | 'failure'; cleanup: string; started: string;
 }

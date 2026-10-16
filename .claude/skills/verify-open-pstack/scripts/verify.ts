@@ -1,8 +1,13 @@
-import { classify, completeEvidence, newReceipt, requiredHarnesses } from './core.ts';
+import { recipe } from '../features/recipes.ts';
+import { classify, completeEvidence, newReceipt, requiredFeatures, requiredHarnesses } from './core.ts';
 import { retainedFile, sha256 } from './io.ts';
 import { REPO, type Driver, type GitHub, type Pull, type Receipt, type Registry } from './types.ts';
 
 class HeadMoved extends Error {}
+/** An operator choice the verifier refuses before any install or GitHub write; its message is safe to print. */
+export class Refused extends Error {}
+/** Headless sessions one run may start without `--wide "<reason>"`. */
+export const SESSION_LIMIT = 12;
 // Omit unsafe or oversized values whole rather than rewriting recorded evidence.
 export const EVIDENCE_LIMIT = 160;
 export const publishable = (text: string, limit = EVIDENCE_LIMIT): boolean => text.length <= limit && /^[\x20-\x7e]*$/.test(text) && !/[`<>]/.test(text);
@@ -17,6 +22,8 @@ export function evidence(receipt: Receipt): string {
     `- Base SHA: \`${receipt.base}\``,
     `- Result: ${failed ? 'FAILED — verification did not complete; rerun required' : receipt.selection.noRuntime && !receipt.selfTest ? 'PASSED — no runtime change' : 'PASSED — named features verified'}`,
     `- Self-test: ${receipt.selfTest ? failed ? 'required in both harnesses' : 'completed in both harnesses' : 'not requested'}`,
+    `- Planned sessions: ${receipt.sessions} (limit ${SESSION_LIMIT})`,
+    ...(receipt.wide ? [`- Wide run reason: ${safe(receipt.wide)}`] : []),
     `- Publisher revision: ${receipt.publisherRevision ? `\`${receipt.publisherRevision}\`` : 'not supplied'}`,
     `- Evidence-set SHA-256: \`${sha256(JSON.stringify({ installations: receipt.installations, observations: receipt.observations }))}\``,
   ];
@@ -52,6 +59,10 @@ type VerifyOptions = {
   selfTest: boolean;
   /** `<harness>:<feature>` checks the agent named for the PR's changed behavior. */
   features: string[];
+  /** Runner routes, which decide the runner recipe's session count. */
+  routes?: string[];
+  /** The operator's reason for planning more than SESSION_LIMIT sessions. */
+  wide?: string;
   root: string;
   registry: Registry;
   github: GitHub;
@@ -94,14 +105,21 @@ export async function verify(options: VerifyOptions): Promise<Receipt> {
   };
   await phase('classify');
   receipt.selection = classify(await github.files(receipt.base, receipt.sha), options.registry);
-  if (receipt.selection.features.includes('project-skill') && receipt.publisherRevision !== receipt.sha) {
+  if (receipt.selection.features.includes('claude:project-skill') && receipt.publisherRevision !== receipt.sha) {
     throw new Error('Verifier-changing PRs must run from a checkout of the candidate head; rerun from that checkout');
   }
-  if (!receipt.selection.noRuntime && !options.features.length) throw new Error('A runtime change requires at least one --feature <harness>:<feature>');
-  // Only the named features run; classification gates runtime changes and unmapped paths.
+  if (!receipt.selection.noRuntime && !options.features.length) throw new Refused('A runtime change requires at least one --feature <harness>:<feature>');
+  const refused = options.features.filter(feature => !receipt.selection.features.includes(feature));
+  if (refused.length) throw new Refused(`Outside this PR's classified reach: ${refused.join(', ')}. Reachable: ${receipt.selection.features.join(', ') || 'none'}`);
   // Verifier and instruction changes keep their native project-skill proof whatever is named.
-  const project = receipt.selection.features.includes('project-skill') ? ['claude:project-skill', 'codex:project-skill'] : [];
-  receipt.selection.features = receipt.selection.noRuntime ? [] : [...new Set([...options.features, ...project])];
+  const project = receipt.selection.features.includes('claude:project-skill') ? ['claude:project-skill', 'codex:project-skill'] : [];
+  receipt.runFeatures = [...new Set([...options.features, ...project])];
+  for (const harness of requiredHarnesses(receipt)) {
+    for (const feature of requiredFeatures(receipt, harness)) receipt.sessions += recipe(feature, harness, options.routes).length;
+  }
+  console.log(`Planned headless sessions: ${receipt.sessions} (limit ${SESSION_LIMIT})`);
+  if (receipt.sessions > SESSION_LIMIT && !options.wide) throw new Refused(`${receipt.sessions} planned sessions exceed the limit of ${SESSION_LIMIT}; name fewer features or pass --wide "<reason>"`);
+  if (options.wide) receipt.wide = options.wide;
   if (requiredHarnesses(receipt).length) await driver.preflight(receipt);
   try {
     await current(); await persist(receipt);

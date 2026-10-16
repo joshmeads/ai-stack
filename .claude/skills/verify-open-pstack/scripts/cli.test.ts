@@ -80,3 +80,14 @@ test('runner routes are explicit, repeatable, and distinct', () => {
     expect(() => parse(['run', '--pr', '1', '--output', '/fresh/run', ...args])).toThrow();
   }
 });
+test('--wide takes one publishable, nonblank reason and only for run', () => {
+  const run = ['run', '--pr', '1', '--output', '/fresh/run'];
+  expect(parse([...run, '--wide', 'Shared references changed every skill'])).toMatchObject({ wide: 'Shared references changed every skill' });
+  expect(parse(run)).not.toHaveProperty('wide');
+  for (const reason of ['   ', 'uses `backticks`', 'has <angle> brackets', 'non-ASCII — dash', 'r'.repeat(161)]) {
+    expect(() => parse([...run, '--wide', reason])).toThrow('Wide reason must be nonblank printable ASCII');
+  }
+  expect(() => parse([...run, '--wide', 'one', '--wide', 'two'])).toThrow('Duplicate option: --wide');
+  expect(() => parse([...run, '--wide'])).toThrow('Missing value: --wide');
+  expect(() => parse(['doctor', '--output', '/fresh/probe', '--wide', 'reason'])).toThrow('Unknown option: --wide');
+});

@@ -18,26 +18,36 @@ export function matches(path: string, pattern: string): boolean {
   return pattern.endsWith('/**') ? path.startsWith(pattern.slice(0, -2)) : path === pattern;
 }
 
+/** Manifests whose version-only change reaches only the startup hook of the harness that reads them. */
+export const VERSION_MANIFESTS: Readonly<Record<string, Harness>> = {
+  'plugins/pstack/.claude-plugin/plugin.json': 'claude', '.claude-plugin/marketplace.json': 'claude', 'plugins/pstack/.codex-plugin/plugin.json': 'codex',
+};
+
+/** Return every `<harness>:<feature>` the changed paths can reach. */
 export function classify(files: ChangedFile[], registry: Registry): Selection {
   const paths = [...new Set(files.flatMap(f => [f.filename, ...(f.previous_filename ? [f.previous_filename] : [])]))].sort();
+  const versionOnly = new Set(files.filter(f => f.versionOnly && !f.previous_filename).map(f => f.filename));
   const skills = new Set<string>(), features = new Set<string>();
+  const both = (...names: string[]): void => names.forEach(f => HARNESSES.forEach(h => features.add(`${h}:${f}`)));
   for (const path of paths) {
     if (!path || path.startsWith('/') || path.split('/').includes('..')) throw new Error(`Unsafe path: ${path}`);
+    if (versionOnly.has(path) && Object.hasOwn(VERSION_MANIFESTS, path)) { features.add(`${VERSION_MANIFESTS[path]}:hook:startup`); continue; }
     let covered = false;
     if (registry.assets.some(p => matches(path, p))) {
       if (path !== 'plugins/pstack/assets/logo.png') throw new Error(`Unmapped asset consumer: ${path}`);
-      features.add('assets:codex'); covered = true;
+      features.add('codex:assets:codex'); covered = true;
     }
     // Catalog paths change only model and provider facts, so they skip shared expansion and the skill match.
     const catalog = registry.catalog.some(p => matches(path, p));
-    if (catalog) { ['catalog', 'setup', 'runner'].forEach(f => features.add(f)); covered = true; }
+    if (catalog) { both('catalog', 'setup', 'runner'); covered = true; }
     if (!catalog && registry.shared.some(p => matches(path, p))) {
       registry.skills.forEach(s => skills.add(s));
-      ['setup', 'runner', 'shipped-tools'].forEach(f => features.add(f));
+      both('setup', 'runner', 'shipped-tools', 'hook:startup');
+      features.add('claude:agent-preload:poteto-agent');
       covered = true;
     }
     for (const [key, feature] of [['setup', 'setup'], ['runner', 'runner'], ['tools', 'shipped-tools'], ['project', 'project-skill']] as const) {
-      if (registry[key].some(p => matches(path, p))) { features.add(feature); covered = true; }
+      if (registry[key].some(p => matches(path, p))) { both(feature); covered = true; }
     }
     // Reflect's Codex transcript lookup runs this launcher and script; no other skill consumes them.
     if (/^plugins\/pstack\/skills\/poteto-mode\/scripts\/resolve-codex-transcript(?:\.ts)?$/.test(path)) { skills.add('reflect'); covered = true; }
@@ -47,11 +57,13 @@ export function classify(files: ChangedFile[], registry: Registry): Selection {
       if (leaf === 'SKILL.md' || leaf.startsWith('references/') || leaf.startsWith('playbooks/')) {
         skills.add(skill[1]!); covered = true;
       }
+      // poteto-agent preloads poteto-mode's SKILL.md.
+      if (skill[1] === 'poteto-mode' && leaf === 'SKILL.md') features.add('claude:agent-preload:poteto-agent');
     }
     // Runtime ownership always takes precedence over documentation exemptions.
     if (!covered && !registry.nonRuntime.some(p => matches(path, p))) throw new Error(`Unmapped path: ${path}`);
   }
-  skills.forEach(s => features.add(`skill-invocation:${s}`));
+  skills.forEach(s => both(`skill-invocation:${s}`));
   return { paths, skills: [...skills].sort(), features: [...features].sort(), noRuntime: !features.size };
 }
 
@@ -59,12 +71,12 @@ export function newReceipt(pr: number, sha: string, base: string, selfTest: bool
   if (!Number.isSafeInteger(pr) || pr < 1 || !/^[a-f0-9]{40}$/.test(sha) || !/^[a-f0-9]{40}$/.test(base)) throw new Error('Invalid PR/SHA');
   if (publisherRevision !== undefined && !/^[a-f0-9]{40}$/.test(publisherRevision)) throw new Error('Invalid publisher revision');
   return { schema: 1, repo: REPO, pr, sha, base, selfTest, artifactRoot, ...(publisherRevision ? { publisherRevision } : {}), phase: 'resolve',
-    selection: { paths: [], skills: [], features: [], noRuntime: false }, installations: [], observations: [],
+    selection: { paths: [], skills: [], features: [], noRuntime: false }, runFeatures: [], sessions: 0, installations: [], observations: [],
     started: new Date().toISOString(), cleanup: 'Run state retained; operator owns cleanup.' };
 }
 
 export function requiredFeatures(receipt: Receipt, harness: Harness): string[] {
-  const named = receipt.selection.features.filter(f => f.startsWith(`${harness}:`)).map(f => f.slice(harness.length + 1));
+  const named = receipt.runFeatures.filter(f => f.startsWith(`${harness}:`)).map(f => f.slice(harness.length + 1));
   return [...new Set([...named, ...(receipt.selfTest ? ['project-skill'] : [])])];
 }
 

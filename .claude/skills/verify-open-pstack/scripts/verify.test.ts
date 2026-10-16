@@ -1,6 +1,6 @@
 import { afterEach, describe, expect, test } from 'bun:test';
 import { execFileSync } from 'node:child_process';
-import { mkdirSync, mkdtempSync, realpathSync, rmSync, writeFileSync } from 'node:fs';
+import { chmodSync, mkdirSync, mkdtempSync, realpathSync, renameSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import data from '../features/registry.json';
@@ -8,8 +8,8 @@ import { requiredFeatures, requiredHarnesses, validateRegistry } from './core.ts
 import { parseChangedFiles, Publisher } from './github.ts';
 import { command, sha256, type Command } from './io.ts';
 import { MacDriver } from './harness.ts';
-import { evidence, verify } from './verify.ts';
-import { HARNESSES, REPO, type Driver, type GitHub, type Pull, type Receipt } from './types.ts';
+import { evidence, Refused, SESSION_LIMIT, verify } from './verify.ts';
+import { HARNESSES, REPO, type ChangedFile, type Driver, type GitHub, type Pull, type Receipt } from './types.ts';
 
 const SHA = 'a'.repeat(40), BASE = 'b'.repeat(40), NEXT = 'c'.repeat(40), HASH = 'd'.repeat(64), REVISION = 'e'.repeat(40);
 const URL = `https://github.com/${REPO}/pull/123#issuecomment-1`;
@@ -36,7 +36,7 @@ function fixture(runtime = false, selfTest = false) {
     async prepare(r) { mark('prepare'); return requiredHarnesses(r).map(harness => ({ harness, sha: r.sha, cliVersion: 'test', pluginVersion: '1.5.0', treeHash: HASH, location: `/isolated/${harness}/plugin`, home: `/isolated/${harness}` })); },
     async exercise(r) { mark('exercise'); return requiredHarnesses(r).flatMap(harness => requiredFeatures(r, harness).map(feature => ({ harness, feature, surface: 'native surface', action: 'invoke', observed: 'fixture changed', reviewer: 'recipe' as const, assertions: ['invoke:skill-loaded'], transcript: 'retained.log', transcriptHash: sha256('reviewed transcript'), artifacts: [{ path: 'fixture.json', sha256: sha256('reviewed artifact') }] }))); },
   };
-  const options = { pr: 123, root, selfTest, features: ['claude:skill-invocation:architect'], publisherRevision: REVISION, registry: validateRegistry(data), github, driver, persist: async (r: Receipt) => { saved.push(structuredClone(r)); } };
+  const options = { pr: 123, root, selfTest, features: runtime ? ['claude:skill-invocation:architect'] : [], wide: undefined as string | undefined, publisherRevision: REVISION, registry: validateRegistry(data), github, driver, persist: async (r: Receipt) => { saved.push(structuredClone(r)); } };
   return { options, calls, saved, comments, pull, hook: (fn: typeof hook) => { hook = fn; } };
 }
 
@@ -53,7 +53,8 @@ describe('exact-head evidence publication', () => {
 
   test('a runtime change runs only the named features, plus project-skill in both harnesses under self-test', async () => {
     const f = fixture(true, true), receipt = await verify(f.options);
-    expect(receipt.selection.features).toEqual(['claude:skill-invocation:architect']);
+    expect(receipt.selection.features).toEqual(['claude:skill-invocation:architect', 'codex:skill-invocation:architect']);
+    expect(receipt.runFeatures).toEqual(['claude:skill-invocation:architect']);
     expect(receipt.installations.map(record => record.harness).sort()).toEqual([...HARNESSES]);
     expect(receipt.observations.map(record => `${record.harness}/${record.feature}`).sort()).toEqual(['claude/project-skill', 'claude/skill-invocation:architect', 'codex/project-skill']);
     expect(f.comments).toHaveLength(1); expect(f.comments[0]).toContain('PASSED — named features verified');
@@ -94,8 +95,8 @@ describe('exact-head evidence publication', () => {
 
   test('verifier changes require the candidate publisher before any driver call or GitHub write', async () => {
     for (const revision of [REVISION, SHA]) {
-      const f = fixture(); f.options.publisherRevision = revision;
-      f.options.github.files = async () => [{ filename: '.claude/skills/verify-open-pstack/scripts/verify.ts' }];
+      const f = fixture(true); f.options.publisherRevision = revision;
+      f.options.github.files = async () => [{ filename: '.claude/skills/verify-open-pstack/scripts/verify.ts' }, { filename: 'plugins/pstack/skills/architect/SKILL.md' }];
       f.options.driver.cleanup = async () => { f.calls.push('cleanup'); };
       if (revision !== SHA) {
         await expect(verify(f.options)).rejects.toThrow('rerun from that checkout');
@@ -184,6 +185,66 @@ describe('exact-head evidence publication', () => {
     }
   });
 
+  // The changed files of #199's release commit, e99abd7.
+  const RELEASE: ChangedFile[] = [{ filename: '.claude-plugin/marketplace.json', versionOnly: true }, { filename: 'CHANGES.md' }, { filename: 'README.md' }, { filename: 'UPSTREAM.md' },
+    { filename: 'docs/reference.md' }, { filename: 'plugins/pstack/.claude-plugin/plugin.json', versionOnly: true }, { filename: 'plugins/pstack/.codex-plugin/plugin.json', versionOnly: true }];
+  const noWrites = (calls: string[]) => expect(calls.some(call => ['preflight', 'prepare', 'exercise', 'comment'].includes(call) || call.startsWith('status:'))).toBe(false);
+
+  test('a named feature outside the classified reach is refused before preflight or any GitHub write', async () => {
+    const f = fixture(true); f.options.github.files = async () => { f.calls.push('files'); return RELEASE; };
+    // The feature list copied from the 1.9.0 release onto #199.
+    f.options.features = ['claude:hook:startup', 'codex:hook:startup', 'claude:catalog', 'codex:catalog', 'claude:setup', 'codex:setup', 'claude:runner', 'codex:runner'];
+    const error = await verify(f.options).then(() => undefined, (e: unknown) => e);
+    expect(error).toBeInstanceOf(Refused);
+    expect((error as Error).message).toBe("Outside this PR's classified reach: claude:catalog, codex:catalog, claude:setup, codex:setup, claude:runner, codex:runner. Reachable: claude:hook:startup, codex:hook:startup");
+    noWrites(f.calls);
+    const docs = fixture(); docs.options.features = ['claude:skill-invocation:architect'];
+    await expect(verify(docs.options)).rejects.toThrow("Outside this PR's classified reach: claude:skill-invocation:architect. Reachable: none");
+    noWrites(docs.calls);
+  });
+
+  test('the release runs its two startup sessions', async () => {
+    const f = fixture(true); f.options.github.files = async () => RELEASE;
+    f.options.features = ['claude:hook:startup', 'codex:hook:startup'];
+    const receipt = await verify(f.options);
+    expect(receipt.status).toBe('success'); expect(receipt.sessions).toBe(2);
+    expect(f.comments[0]).toContain(`- Planned sessions: 2 (limit ${SESSION_LIMIT})`); expect(f.comments[0]).not.toContain('Wide run reason');
+  });
+
+  test('more than the session limit is refused before preflight unless --wide gives a reason', async () => {
+    const limited = (...extra: string[]) => {
+      const f = fixture(true); f.options.github.files = async () => [{ filename: 'plugins/pstack/skills/poteto-mode/references/codex-tools.md' }];
+      // Setup is eight sessions, the default Claude runner three and the startup hook one.
+      f.options.features = ['claude:setup', 'claude:runner', 'claude:hook:startup', ...extra];
+      return f;
+    };
+    expect(SESSION_LIMIT).toBe(12);
+    const exact = limited();
+    expect((await verify(exact.options)).sessions).toBe(12);
+    const over = limited('codex:hook:startup');
+    await expect(verify(over.options)).rejects.toThrow('13 planned sessions exceed the limit of 12; name fewer features or pass --wide "<reason>"');
+    noWrites(over.calls);
+    const wide = limited('codex:hook:startup'); wide.options.wide = 'Setup and runner changed together in #196';
+    const receipt = await verify(wide.options);
+    expect(receipt.status).toBe('success'); expect(receipt.sessions).toBe(13); expect(receipt.wide).toBe(wide.options.wide);
+    expect(wide.calls.indexOf('preflight')).toBeGreaterThan(-1);
+    expect(wide.comments[0]).toContain('- Planned sessions: 13 (limit 12)');
+    expect(wide.comments[0]).toContain('- Wide run reason: Setup and runner changed together in #196');
+    // A failed run records the reason too.
+    const failed = limited('codex:hook:startup'); failed.options.wide = 'Broad shared change';
+    failed.options.driver.exercise = async () => { throw new Error('session failed'); };
+    failed.options.driver.cleanup = async () => {};
+    await expect(verify(failed.options)).rejects.toThrow('session failed');
+    expect(failed.comments[0]).toContain('FAILED'); expect(failed.comments[0]).toContain('- Wide run reason: Broad shared change');
+  });
+
+  test('an unsupported recipe fails before preflight', async () => {
+    const f = fixture(true); f.options.github.files = async () => [{ filename: 'plugins/pstack/assets/logo.png' }];
+    f.options.features = ['codex:assets:codex'];
+    await expect(verify(f.options)).rejects.toThrow('unsupported-native-consumer:assets:codex');
+    noWrites(f.calls);
+  });
+
   test('closed or foreign PR never enters publication', async () => {
     for (const field of ['state', 'headRepo'] as const) {
       const f = fixture(); f.pull[field] = 'other';
@@ -217,8 +278,46 @@ describe('publisher request boundaries', () => {
     const calls: string[][] = [];
     const publisher = new Publisher(async (args, options) => { calls.push(args); if (args[0] === 'git' && args[1] === 'fetch') args = args.map(arg => arg === `https://github.com/${REPO}.git` ? repository : arg); return command(args, options); });
     expect(await publisher.files(base, head)).toEqual([{ filename: 'runtime/skill.md' }]);
-    expect(calls.some(args => args[0] === 'gh')).toBe(false); expect(calls.at(-1)).toContain(`${base}...${head}`);
+    expect(calls.some(args => args[0] === 'gh')).toBe(false); expect(calls).toContainEqual(expect.arrayContaining([`${base}...${head}`]));
     await expect(publisher.files('main', head)).rejects.toThrow('Invalid diff SHA');
+  });
+
+  test('a manifest is version-only when only its version strings changed since the merge base', async () => {
+    const repository = temporary(), env = { PATH: process.env.PATH ?? '', GIT_CONFIG_GLOBAL: '/dev/null', GIT_CONFIG_NOSYSTEM: '1', GIT_AUTHOR_NAME: 'test', GIT_AUTHOR_EMAIL: 'test@example.com', GIT_COMMITTER_NAME: 'test', GIT_COMMITTER_EMAIL: 'test@example.com' };
+    const git = (...args: string[]) => execFileSync('git', args, { cwd: repository, env, encoding: 'utf8' }).trim();
+    const CLAUDE = 'plugins/pstack/.claude-plugin/plugin.json', CODEX = 'plugins/pstack/.codex-plugin/plugin.json', MARKET = '.claude-plugin/marketplace.json';
+    const write = (path: string, value: unknown, indent = 2) => { mkdirSync(join(repository, path, '..'), { recursive: true }); writeFileSync(join(repository, path), JSON.stringify(value, null, indent) + '\n'); };
+    const manifests = (version: string, extra = {}) => {
+      write(CLAUDE, { name: 'pstack', version, description: 'd' });
+      write(CODEX, { version, name: 'pstack', interface: { logo: './assets/logo.png' } });
+      write(MARKET, { name: 'open-pstack', plugins: [{ name: 'pstack', version, source: './plugins/pstack' }], ...extra });
+    };
+    const commit = (message: string) => { git('add', '-A'); git('commit', '-qm', message); return git('rev-parse', 'HEAD'); };
+    git('init', '-q', '-b', 'main'); manifests('1.0.0'); const mergeBase = commit('base');
+    // main moves after the branch point; comparing the base tip would see this field as a head change.
+    manifests('1.0.0', { owner: 'later' }); const base = commit('main moved');
+    git('checkout', '-q', '-b', 'release', mergeBase);
+    write(CLAUDE, { version: '1.1.0', description: 'd', name: 'pstack' }, 4);
+    write(CODEX, { version: '1.1.0', name: 'pstack', interface: { logo: './assets/logo.png' } });
+    write(MARKET, { name: 'open-pstack', plugins: [{ name: 'pstack', version: '1.1.0', source: './plugins/pstack' }] });
+    const release = commit('release');
+    git('checkout', '-q', '-b', 'edited', mergeBase);
+    write(CLAUDE, { name: 'pstack', version: '1.1.0', description: 'changed' });
+    write(CODEX, { version: '1.0.0', name: 'pstack', interface: { logo: './assets/logo.png' } }, 4);
+    write(MARKET, { name: 'open-pstack', plugins: [{ name: 'pstack', source: './plugins/pstack' }] });
+    const edited = commit('extra field, unchanged version, removed version');
+    git('checkout', '-q', '-b', 'moved', mergeBase);
+    renameSync(join(repository, CLAUDE), join(repository, 'plugins/pstack/.claude-plugin/old.json'));
+    rmSync(join(repository, CODEX));
+    write(MARKET, { name: 'open-pstack', plugins: [{ name: 'pstack', version: '1.1.0', source: './plugins/pstack' }] }); chmodSync(join(repository, MARKET), 0o755);
+    const moved = commit('rename, deletion, mode change');
+    const publisher = new Publisher(async (args, options) => command(args[0] === 'git' && args[1] === 'fetch' ? args.map(arg => arg === `https://github.com/${REPO}.git` ? repository : arg) : args, options));
+    const flagged = async (head: string) => (await publisher.files(base, head)).filter(f => f.versionOnly).map(f => f.filename).sort();
+    expect(await flagged(release)).toEqual([MARKET, CLAUDE, CODEX].sort());
+    expect((await publisher.files(base, edited)).map(f => f.filename).sort()).toEqual([MARKET, CLAUDE, CODEX].sort());
+    expect(await flagged(edited)).toEqual([]);
+    expect((await publisher.files(base, moved)).length).toBe(3);
+    expect(await flagged(moved)).toEqual([]);
   });
 
   test('interruption blocks ordinary status writes but permits a pinned failure gate', () => {
