@@ -27,6 +27,22 @@ impl Harness {
             Harness::Codex => "Codex",
         }
     }
+
+    /// The global instruction file in the harness home, which holds the managed blocks.
+    pub fn instruction_file(self) -> &'static str {
+        match self {
+            Harness::Claude => "CLAUDE.md",
+            Harness::Codex => "AGENTS.md",
+        }
+    }
+
+    /// The harness-specific instructions source: `<stack>/instructions/<stem>.md`.
+    pub fn instructions_stem(self) -> &'static str {
+        match self {
+            Harness::Claude => "claude",
+            Harness::Codex => "codex",
+        }
+    }
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
@@ -90,7 +106,7 @@ const MATRIX: [(&str, &str, &[&str]); 5] = [
 
 // ---- File schema (what config.toml contains) ----
 
-#[derive(Debug, Clone, Deserialize)]
+#[derive(Debug, Clone, Deserialize, Serialize)]
 #[serde(deny_unknown_fields)]
 struct ConfigFile {
     stack: StackSection,
@@ -103,9 +119,11 @@ struct ConfigFile {
     /// Absent in configs from before `--clean` existed; the defaults fill it in.
     #[serde(default)]
     clean: CleanSection,
+    #[serde(default)]
+    skills: SkillsSection,
 }
 
-#[derive(Debug, Clone, Deserialize)]
+#[derive(Debug, Clone, Deserialize, Serialize)]
 #[serde(deny_unknown_fields)]
 struct PerHarness<T> {
     claude: T,
@@ -121,14 +139,14 @@ impl<T> PerHarness<T> {
     }
 }
 
-#[derive(Debug, Clone, Deserialize)]
+#[derive(Debug, Clone, Deserialize, Serialize)]
 #[serde(untagged)]
 enum Lanes {
     Single(String),
     Panel(Vec<String>),
 }
 
-#[derive(Debug, Clone, Deserialize)]
+#[derive(Debug, Clone, Deserialize, Serialize)]
 #[serde(deny_unknown_fields)]
 struct StackSection {
     path: String,
@@ -140,7 +158,7 @@ struct StackSection {
     legacy_paths: Vec<String>,
 }
 
-#[derive(Debug, Clone, Deserialize)]
+#[derive(Debug, Clone, Deserialize, Serialize)]
 #[serde(deny_unknown_fields)]
 struct HarnessSection {
     #[serde(default = "default_claude")]
@@ -155,7 +173,7 @@ impl Default for HarnessSection {
     }
 }
 
-#[derive(Debug, Clone, Deserialize)]
+#[derive(Debug, Clone, Deserialize, Serialize)]
 #[serde(deny_unknown_fields)]
 struct HarnessEntry {
     home: String,
@@ -163,18 +181,20 @@ struct HarnessEntry {
     enabled: bool,
 }
 
-#[derive(Debug, Clone, Deserialize)]
+#[derive(Debug, Clone, Deserialize, Serialize)]
 #[serde(deny_unknown_fields)]
 struct ModelEntry {
     provider: Provider,
     id: String,
     #[serde(default)]
+    #[serde(skip_serializing_if = "Option::is_none")]
     efforts: Option<Vec<Effort>>,
     #[serde(default)]
+    #[serde(skip_serializing_if = "Option::is_none")]
     context: Option<u64>,
 }
 
-#[derive(Debug, Clone, Deserialize)]
+#[derive(Debug, Clone, Deserialize, Serialize)]
 #[serde(deny_unknown_fields, default)]
 struct CleanSection {
     skill_roots: Vec<String>,
@@ -186,6 +206,18 @@ impl Default for CleanSection {
     fn default() -> Self {
         let owned = |items: &[&str]| items.iter().map(|item| item.to_string()).collect();
         CleanSection { skill_roots: owned(&SKILL_ROOTS), keep_skills: owned(&KEEP_SKILLS), keep_plugins: owned(&KEEP_PLUGINS) }
+    }
+}
+
+#[derive(Debug, Clone, Deserialize, Serialize)]
+#[serde(deny_unknown_fields, default)]
+struct SkillsSection {
+    prompt_runner: Vec<String>,
+}
+
+impl Default for SkillsSection {
+    fn default() -> Self {
+        SkillsSection { prompt_runner: ["claude", "-p", "--permission-mode", "acceptEdits"].map(String::from).to_vec() }
     }
 }
 
@@ -235,6 +267,8 @@ pub struct Route {
 #[derive(Debug, Clone, PartialEq, Eq, Serialize)]
 pub struct Stack {
     pub path: PathBuf,
+    /// `path` as written, unexpanded, so a fleet machine can expand `~` itself.
+    pub configured: String,
     pub remote: String,
     pub branch: String,
     pub legacy_paths: Vec<PathBuf>,
@@ -268,7 +302,7 @@ impl Clean {
 }
 
 /// `*` matches any run of characters and `?` one character; everything else is literal.
-fn glob(pattern: &str, text: &str) -> bool {
+pub(crate) fn glob(pattern: &str, text: &str) -> bool {
     let (pattern, text): (Vec<char>, Vec<char>) = (pattern.chars().collect(), text.chars().collect());
     let (mut p, mut t) = (0, 0);
     let mut star: Option<(usize, usize)> = None;
@@ -302,6 +336,8 @@ pub struct Config {
     /// Per harness, each sheet row label with its lanes joined by ", ", in `SHEET_ROWS` order.
     pub sheets: BTreeMap<Harness, Vec<(String, String)>>,
     pub clean: Clean,
+    /// `[skills] prompt_runner`: argv for `type = "prompt"` process steps; the prompt is appended.
+    pub prompt_runner: Vec<String>,
 }
 
 /// The reference config shipped with the CLI.
@@ -413,6 +449,7 @@ pub fn from_str(text: &str, home: &Path) -> Result<Config> {
 
     let stack = Stack {
         path: crate::paths::absolute(&file.stack.path, home)?,
+        configured: file.stack.path.clone(),
         remote: file.stack.remote,
         branch: file.stack.branch,
         legacy_paths: file.stack.legacy_paths.iter().map(|p| crate::paths::absolute(p, home)).collect::<std::io::Result<_>>()?,
@@ -442,7 +479,26 @@ pub fn from_str(text: &str, home: &Path) -> Result<Config> {
         keep_skills: file.clean.keep_skills,
         keep_plugins: file.clean.keep_plugins,
     };
-    Ok(Config { home: home.to_path_buf(), stack, harnesses, models, leads, review, sheets, clean })
+    ensure!(!file.skills.prompt_runner.is_empty(), "[skills] prompt_runner is empty");
+    Ok(Config { home: home.to_path_buf(), stack, harnesses, models, leads, review, sheets, clean, prompt_runner: file.skills.prompt_runner })
+}
+
+pub fn flat(text: &str, home: &Path) -> Result<crate::drift::Flat> {
+    from_str(text, home)?;
+    let file: ConfigFile = toml::from_str(text)?;
+    fn flatten(prefix: &str, value: serde_json::Value, flat: &mut crate::drift::Flat) {
+        if let serde_json::Value::Object(table) = value {
+            for (key, value) in table {
+                let key = if prefix.is_empty() { key } else { format!("{prefix}.{key}") };
+                flatten(&key, value, flat);
+            }
+        } else {
+            flat.insert(prefix.to_string(), value);
+        }
+    }
+    let mut flat = crate::drift::Flat::new();
+    flatten("", serde_json::to_value(file)?, &mut flat);
+    Ok(flat)
 }
 
 fn harness_entry(section: &HarnessSection, harness: Harness) -> &HarnessEntry {
@@ -483,6 +539,8 @@ mod tests {
         let text = default_config_text();
         let older = from_str(&text[..text.find("[clean]").unwrap()], Path::new("/h")).unwrap();
         assert_eq!(older.clean, cfg.clean);
+        assert_eq!(older.prompt_runner, cfg.prompt_runner);
+        assert_eq!(cfg.prompt_runner[0], "claude");
     }
 
     #[test]

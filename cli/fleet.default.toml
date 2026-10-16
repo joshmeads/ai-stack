@@ -1,0 +1,33 @@
+# Machines that `ai-stack fleet` pushes stack updates to. This file is yours:
+# it lives beside config.toml and is not in the stack repo.
+#
+# Each [machine.<name>] sets exactly one of:
+#   ssh = "<alias or user@host>"   run there with `ssh -o BatchMode=yes`
+#   local = true                   run on this machine
+# Optional:
+#   stack = "<checkout path on that machine>"   default: this machine's
+#       stack.path as written in config.toml; `~` expands on that machine
+#   bin = "ai-stack"     the binary there; non-interactive ssh shells may not
+#       have ~/.cargo/bin on PATH, so give a full path if needed
+#   enabled = true
+#
+# `fleet status` reads each machine's branch and commit, `fleet update` runs
+# `<bin> update --yes --plain --branch <its branch>` on each, and
+# `fleet switch <branch>` moves machines to another stack branch.
+
+# Expected config differences across machines. Remove patterns to compare these too.
+[drift]
+ignore = ["stack.path", "harness.*.home"]
+
+# Example: [drift]
+# ignore = ["stack.path", "harness.*.home"]
+
+[machine.this]
+local = true
+
+# [machine.cachy]
+# ssh = "cachy"
+# stack = "~/Documents/Projects/@joshmeads/ai-stack"
+# bin = "~/.cargo/bin/ai-stack"
+
+# drift_ignore = ["clean.skill_roots"]   # expected only on cachy
