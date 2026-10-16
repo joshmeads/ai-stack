@@ -73,7 +73,7 @@ pub fn routing(cfg: &Config, harness: Harness, sheet_path: &Path) -> String {
         }
     }
     parts.push("A lane on the other provider runs that provider's CLI and may need the user's approval. If approval is refused or the lane fails, report the review as single-provider.".to_string());
-    parts.push(format!("jm-games' `art-iteration` critic uses this harness's review model: {review}."));
+    parts.push(format!("The `art-iteration` skill's critic uses this harness's review model: {review}."));
     parts.join("\n\n")
 }
 
@@ -104,7 +104,7 @@ mod tests {
             "A major review uses the `interrogate` skill, whose reviewers are the sheet's `interrogate reviewers` row (`claude:opus@xhigh, codex:gpt-6.1-sol@xhigh`). Run one at two points: after an architecture or design is settled, and before submitting a pull request (or, for a non-trivial code change with no pull request, before calling it done). Questions, assessments and trivial edits get no review.\n\n",
             "`haiku` (`claude-haiku-5-5`) is capped at 100k tokens of context; the owner sets its compaction. Send work whose total context (files read, tool output and conversation) would exceed that to another model.\n\n",
             "A lane on the other provider runs that provider's CLI and may need the user's approval. If approval is refused or the lane fails, report the review as single-provider.\n\n",
-            "jm-games' `art-iteration` critic uses this harness's review model: `claude-opus-5-5` at xhigh effort.",
+            "The `art-iteration` skill's critic uses this harness's review model: `claude-opus-5-5` at xhigh effort.",
         ));
         let codex = routing(&cfg, Harness::Codex, Path::new("/h/.codex/pstack-models.md"));
         assert!(codex.contains("The Codex lead runs `gpt-6.1-sol` at high effort. jm:stack skills delegate through the model sheet `/h/.codex/pstack-models.md`, mirrored in the `pstack:models` block below;"), "{codex}");

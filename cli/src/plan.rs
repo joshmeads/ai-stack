@@ -24,9 +24,14 @@ pub enum Action {
     Unlink { path: PathBuf, target: PathBuf },
     /// Move whatever is at `path` (an unmanaged file or a symlink) into the backup and write `text`.
     ReplaceWithFile { path: PathBuf, text: String, fingerprint: u64 },
-    /// `--clean`: move a skill-root entry (directory, file or symlink, never followed) into the
-    /// backup. `fingerprint` is its lstat tree fingerprint at planning time.
-    MoveToBackup { path: PathBuf, fingerprint: u64 },
+    /// Move an entry (directory, file or symlink, never followed) into the backup.
+    /// `fingerprint` is its lstat tree fingerprint at planning time. `clean` marks a `--clean`
+    /// move of a stray skill; otherwise `--force` is moving a stray skill out of a link's way.
+    MoveToBackup { path: PathBuf, fingerprint: u64, clean: bool },
+    /// Create a symlink at `path` pointing at `target`. `replacing` is the current target of an
+    /// ai-stack link being repointed, or `None` when `path` is free (or an earlier
+    /// `MoveToBackup` in the same plan frees it).
+    Link { path: PathBuf, target: PathBuf, replacing: Option<PathBuf> },
 }
 
 impl Action {
@@ -36,7 +41,16 @@ impl Action {
             | Action::Remove { path, .. }
             | Action::Unlink { path, .. }
             | Action::ReplaceWithFile { path, .. }
-            | Action::MoveToBackup { path, .. } => path,
+            | Action::MoveToBackup { path, .. }
+            | Action::Link { path, .. } => path,
+        }
+    }
+
+    /// Whether applying it copies or moves what is at `path` into the backup.
+    fn backs_up(&self) -> bool {
+        match self {
+            Action::Link { replacing, .. } => replacing.is_some(),
+            _ => fs::symlink_metadata(self.path()).is_ok(),
         }
     }
 }
@@ -106,8 +120,8 @@ impl Plan {
     /// a plugin removal.
     pub fn is_clean(&self, index: usize) -> bool {
         match self.actions.get(index) {
-            Some(action) => matches!(action, Action::MoveToBackup { .. }),
-            None => self.commands.get(index - self.actions.len()).is_some_and(|command| command.undo.is_some()),
+            Some(action) => matches!(action, Action::MoveToBackup { clean: true, .. }),
+            None => self.commands.get(index - self.actions.len()).is_some_and(|command| command.clean),
         }
     }
 
@@ -160,6 +174,10 @@ impl Plan {
                 };
                 format!("Move {} ({kind}) into the backup directory at the same relative path. Nothing is deleted.", path.display())
             }
+            Action::Link { path, target, replacing } => match replacing {
+                Some(before) => format!("link {} -> {} (was {})", path.display(), target.display(), before.display()),
+                None => format!("link {} -> {}", path.display(), target.display()),
+            },
         }
     }
 
@@ -216,8 +234,12 @@ pub fn apply(plan: &Plan, backup_root: &Path, runner: &dyn Runner) -> Result<App
             plan.conflicts.len()
         );
     }
+    // A link may take the place of an entry an earlier action moves into the backup.
+    let freed: BTreeSet<&Path> = plan.actions.iter().filter(|action| matches!(action, Action::MoveToBackup { .. })).map(Action::path).collect();
     for action in &plan.actions {
-        verify(action)?;
+        if !matches!(action, Action::Link { replacing: None, .. } if freed.contains(action.path())) {
+            verify(action)?;
+        }
     }
 
     let stamp = SystemTime::now().duration_since(UNIX_EPOCH)?.as_secs();
@@ -226,7 +248,7 @@ pub fn apply(plan: &Plan, backup_root: &Path, runner: &dyn Runner) -> Result<App
     let mut backup_dir = backup_dir;
     let mut suffix = 1;
     let removals: Vec<&plugins::Command> = plan.commands.iter().filter(|command| command.undo.is_some()).collect();
-    let needs_backup = !removals.is_empty() || plan.actions.iter().any(|action| fs::symlink_metadata(action.path()).is_ok());
+    let needs_backup = !removals.is_empty() || plan.actions.iter().any(Action::backs_up);
     if needs_backup {
         fs::create_dir_all(backup_root)?;
         loop {
@@ -241,14 +263,12 @@ pub fn apply(plan: &Plan, backup_root: &Path, runner: &dyn Runner) -> Result<App
         }
     }
     let mut destinations = BTreeSet::new();
-    for action in &plan.actions {
-        if fs::symlink_metadata(action.path()).is_ok() {
-            let dest = backup_path(action.path(), &backup_dir, plan.home.as_deref())?;
-            if !destinations.insert(dest.clone()) {
-                bail!("refusing to apply: duplicate backup destination {}", dest.display());
-            }
-            vacant_backup(&dest)?;
+    for action in plan.actions.iter().filter(|action| action.backs_up()) {
+        let dest = backup_path(action.path(), &backup_dir, plan.home.as_deref())?;
+        if !destinations.insert(dest.clone()) {
+            bail!("refusing to apply: duplicate backup destination {}", dest.display());
         }
+        vacant_backup(&dest)?;
     }
     let mut backed_up = false;
     for action in &plan.actions {
@@ -271,6 +291,14 @@ pub fn apply(plan: &Plan, backup_root: &Path, runner: &dyn Runner) -> Result<App
             Action::MoveToBackup { path, .. } => {
                 move_to_backup(path, &backup_dir, plan.home.as_deref())?;
                 backed_up = true;
+            }
+            Action::Link { path, target, replacing } => {
+                if replacing.is_some() {
+                    backed_up |= backup(path, &backup_dir, plan.home.as_deref())?;
+                    fs::remove_file(path).with_context(|| format!("removing {}", path.display()))?;
+                }
+                create_parent(path)?;
+                symlink(target, path).with_context(|| format!("linking {} to {}", path.display(), target.display()))?;
             }
         }
     }
@@ -317,6 +345,7 @@ fn summary_line(action: &Action, home: &Path) -> String {
         Action::Unlink { path, .. } => format!("unlink  {}", tilde(path, home)),
         Action::ReplaceWithFile { path, .. } => format!("replace-file {}", tilde(path, home)),
         Action::MoveToBackup { path, .. } => format!("move    {} -> backup", tilde(path, home)),
+        Action::Link { path, .. } => format!("link    {}", tilde(path, home)),
     }
 }
 
@@ -378,7 +407,8 @@ fn verify(action: &Action) -> Result<()> {
         Action::Unlink { path, target } => {
             (current_link(path)? == Some(target.clone())).then_some(())
         }
-        Action::ReplaceWithFile { path, fingerprint: expected, .. } | Action::MoveToBackup { path, fingerprint: expected } => {
+        Action::Link { path, replacing, .. } => (current_link(path)? == *replacing).then_some(()),
+        Action::ReplaceWithFile { path, fingerprint: expected, .. } | Action::MoveToBackup { path, fingerprint: expected, .. } => {
             (fingerprint(path).ok() == Some(*expected)).then_some(())
         }
     };

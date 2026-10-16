@@ -1,13 +1,14 @@
 //! Adds the stack checkout to each harness as the local `jm` marketplace and installs its
-//! plugins through the harness's own CLI. The commands run through a `Runner`, so tests use a
-//! fake and `diff` only runs the read-only `list --json` queries.
+//! plugins through the harness's own CLI. ai-stack owns the `jm` marketplace, so an installed
+//! `jm` plugin the checkout no longer lists is removed. The commands run through a `Runner`, so
+//! tests use a fake and `diff` only runs the read-only `list --json` queries.
 
 use std::fmt;
 use std::io;
 use std::path::{Path, PathBuf};
 use std::process::Stdio;
 
-use anyhow::{Context as _, Result, anyhow};
+use anyhow::{Context as _, Result};
 use serde_json::Value;
 
 use crate::config::{Config, Harness, HarnessConfig};
@@ -15,7 +16,8 @@ use crate::exec::shell_quote as quote;
 use crate::plan::Plan;
 
 pub const MARKETPLACE: &str = "jm";
-pub const PLUGINS: [&str; 3] = ["jm-stack", "jm-games", "jm-tools"];
+/// The plugins every harness gets. The stack's other skills are standalone skills.
+pub const PLUGINS: [&str; 1] = ["jm-stack"];
 
 /// One harness CLI invocation, e.g. `claude plugin install jm-stack@jm`.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -25,14 +27,16 @@ pub struct Command {
     /// CLI would use anyway.
     pub env: Option<(&'static str, PathBuf)>,
     pub args: Vec<String>,
-    /// For a `--clean` removal, the arguments that would restore the plugin. `None` otherwise.
+    /// For a removal, the arguments that would restore the plugin. `None` otherwise.
     pub undo: Option<Vec<String>>,
+    /// A `--clean` removal of a plugin the stack does not own.
+    pub clean: bool,
 }
 
 impl Command {
     pub fn undo_command(&self) -> Option<Command> {
         let args = self.undo.clone()?;
-        Some(Command { harness: self.harness, env: self.env.clone(), args, undo: None })
+        Some(Command { harness: self.harness, env: self.env.clone(), args, undo: None, clean: false })
     }
 }
 
@@ -98,7 +102,7 @@ pub fn plan(cfg: &Config, hc: &HarnessConfig, runner: &dyn Runner, out: &mut Pla
         }
     };
     let env = env_for(hc);
-    let command = |args: &[&str]| Command { harness: hc.harness, env: env.clone(), args: strings(args), undo: None };
+    let command = |args: &[&str]| Command { harness: hc.harness, env: env.clone(), args: strings(args), undo: None, clean: false };
     let stack_text = stack.to_string_lossy();
     let add_marketplace = command(&["plugin", "marketplace", "add", &stack_text]);
     let install = |plugin: &str| {
@@ -153,6 +157,15 @@ pub fn plan(cfg: &Config, hc: &HarnessConfig, runner: &dyn Runner, out: &mut Pla
         out.commands.extend(PLUGINS.map(install));
         return Ok(());
     };
+    // A `jm` plugin the checkout no longer lists, such as the retired jm-games, is removed
+    // before the installs.
+    let removal = |args: &[&str], undo: &[&str]| Command { harness: hc.harness, env: env.clone(), args: strings(args), undo: Some(strings(undo)), clean: false };
+    for entry in &installed {
+        let listed = entry.id.strip_suffix(&format!("@{MARKETPLACE}")).is_some_and(|plugin| manifest.iter().any(|(name, _)| name == plugin));
+        if entry.id.ends_with(&format!("@{MARKETPLACE}")) && !listed {
+            plan_removal(hc.harness, entry, &removal, out);
+        }
+    }
     for plugin in PLUGINS {
         let id = format!("{plugin}@{MARKETPLACE}");
         match installed.iter().find(|entry| entry.id == id) {
@@ -173,17 +186,17 @@ pub fn plan(cfg: &Config, hc: &HarnessConfig, runner: &dyn Runner, out: &mut Pla
     Ok(())
 }
 
-/// `--clean`: removes every installed plugin `[clean] keep_plugins` does not match. Marketplaces
-/// stay. Claude Code cannot uninstall a plugin synced from the claude.ai account, so those are
-/// disabled instead, with a warning that the app may sync them back.
+/// `--clean`: removes every installed plugin `[clean] keep_plugins` does not match, except the
+/// `jm` marketplace's own, which `plan` handles. Marketplaces stay.
 pub fn plan_clean(cfg: &Config, hc: &HarnessConfig, runner: &dyn Runner, out: &mut Plan) -> Result<()> {
     if !hc.home.is_dir() {
         return Ok(());
     }
     let name = hc.harness.name();
     let env = env_for(hc);
-    let command = |args: &[&str], undo: Option<&[&str]>| Command { harness: hc.harness, env: env.clone(), args: strings(args), undo: undo.map(strings) };
-    let installed = match query(runner, &command(&["plugin", "list", "--json"], None)) {
+    let list = Command { harness: hc.harness, env: env.clone(), args: strings(&["plugin", "list", "--json"]), undo: None, clean: false };
+    let removal = |args: &[&str], undo: &[&str]| Command { harness: hc.harness, env: env.clone(), args: strings(args), undo: Some(strings(undo)), clean: true };
+    let installed = match query(runner, &list) {
         // The install pass reports the missing CLI as a conflict.
         Query::Missing => return Ok(()),
         Query::Failed(err) => Err(err),
@@ -197,27 +210,35 @@ pub fn plan_clean(cfg: &Config, hc: &HarnessConfig, runner: &dyn Runner, out: &m
         }
     };
     for entry in installed {
-        let id = entry.id.as_str();
-        let marketplace = id.rsplit_once('@').map_or("", |(_, marketplace)| marketplace);
+        let marketplace = entry.id.rsplit_once('@').map_or("", |(_, marketplace)| marketplace);
         // Skills-directory plugins are entries in a skill root, which the skill pass handles.
-        if cfg.clean.keeps_plugin(id) || marketplace == "skills-dir" {
+        if cfg.clean.keeps_plugin(&entry.id) || marketplace == "skills-dir" || marketplace == MARKETPLACE {
             continue;
         }
-        match (hc.harness, entry.scope.as_deref()) {
-            (Harness::Codex, _) => out.commands.push(command(&["plugin", "remove", id], Some(&["plugin", "add", id]))),
-            (Harness::Claude, Some("synced")) => {
-                out.warnings.push(format!("note: {id} is synced from your claude.ai account; Claude Code cannot uninstall it, so --clean disables it, and the app may sync it back. Remove it on claude.ai to keep it gone."));
-                if entry.enabled {
-                    out.commands.push(command(&["plugin", "disable", id], Some(&["plugin", "enable", id])));
-                }
-            }
-            (Harness::Claude, None | Some("user")) => out.commands.push(command(&["plugin", "uninstall", id], Some(&["plugin", "install", id]))),
-            (Harness::Claude, Some(scope)) => {
-                out.warnings.push(format!("note: {id} is installed in {scope} scope for a project; --clean removes user-scope plugins only, so it stays"));
-            }
-        }
+        plan_removal(hc.harness, &entry, &removal, out);
     }
     Ok(())
+}
+
+/// Removes one installed plugin with a command that records how to restore it: a user-scope
+/// uninstall, a disable for a plugin synced from the claude.ai account (which Claude Code
+/// cannot uninstall, and the app may sync back), or `codex plugin remove`. A Claude plugin
+/// installed for a project stays, with a note.
+fn plan_removal(harness: Harness, entry: &Installed, removal: &dyn Fn(&[&str], &[&str]) -> Command, out: &mut Plan) {
+    let id = entry.id.as_str();
+    match (harness, entry.scope.as_deref()) {
+        (Harness::Codex, _) => out.commands.push(removal(&["plugin", "remove", id], &["plugin", "add", id])),
+        (Harness::Claude, Some("synced")) => {
+            out.warnings.push(format!("note: {id} is synced from your claude.ai account; Claude Code cannot uninstall it, so ai-stack disables it, and the app may sync it back. Remove it on claude.ai to keep it gone."));
+            if entry.enabled {
+                out.commands.push(removal(&["plugin", "disable", id], &["plugin", "enable", id]));
+            }
+        }
+        (Harness::Claude, None | Some("user")) => out.commands.push(removal(&["plugin", "uninstall", id], &["plugin", "install", id])),
+        (Harness::Claude, Some(scope)) => {
+            out.warnings.push(format!("note: {id} is installed in {scope} scope for a project; ai-stack removes user-scope plugins only, so it stays"));
+        }
+    }
 }
 
 fn strings(args: &[&str]) -> Vec<String> {
@@ -305,8 +326,9 @@ fn installed_plugins(harness: Harness, json: &Value) -> Option<Vec<Installed>> {
     )
 }
 
-/// The harness's marketplace manifest in the stack: checks it is `jm` and lists every plugin.
-/// Returns each plugin with the version its harness manifest declares, when it declares one.
+/// The harness's marketplace manifest in the stack: checks it is `jm` and lists every plugin
+/// in `PLUGINS`. Returns every listed plugin with the version its harness manifest declares,
+/// when it declares one.
 fn read_manifest(stack: &Path, harness: Harness) -> Result<Vec<(String, Option<String>)>> {
     let (manifest, plugin_manifest) = match harness {
         Harness::Claude => (".claude-plugin/marketplace.json", ".claude-plugin/plugin.json"),
@@ -318,18 +340,21 @@ fn read_manifest(stack: &Path, harness: Harness) -> Result<Vec<(String, Option<S
     let found = json["name"].as_str().unwrap_or_default();
     anyhow::ensure!(found == MARKETPLACE, "{} names the marketplace {found:?}", path.display());
     let entries = json["plugins"].as_array().map(Vec::as_slice).unwrap_or_default();
-    PLUGINS
+    for plugin in PLUGINS {
+        anyhow::ensure!(entries.iter().any(|entry| entry["name"] == plugin), "{} does not list {plugin}", path.display());
+    }
+    Ok(entries
         .iter()
-        .map(|plugin| {
-            let entry = entries.iter().find(|entry| entry["name"] == *plugin).ok_or_else(|| anyhow!("{} does not list {plugin}", path.display()))?;
+        .filter_map(|entry| {
+            let plugin = entry["name"].as_str()?;
             let source = entry["source"].as_str().or_else(|| entry["source"]["path"].as_str());
             let version = source.and_then(|source| {
                 let text = std::fs::read_to_string(stack.join(source).join(plugin_manifest)).ok()?;
                 serde_json::from_str::<Value>(&text).ok()?["version"].as_str().map(str::to_string)
             });
-            Ok((plugin.to_string(), version))
+            Some((plugin.to_string(), version))
         })
-        .collect()
+        .collect())
 }
 
 fn same_path(a: &Path, b: &Path) -> bool {

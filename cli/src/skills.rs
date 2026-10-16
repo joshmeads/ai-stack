@@ -78,13 +78,13 @@ impl Skills<'_> {
     /// Exit 0 when every entry is current, 1 otherwise.
     pub fn status(&self, out: &mut dyn Write) -> Result<i32> {
         self.clear_stage(out)?;
-        let manifest = stackfile::load(self.stack)?;
-        if manifest.skills.is_empty() {
+        let file = stackfile::load(self.stack)?;
+        if file.skills.is_empty() {
             writeln!(out, "No vendored skills in {}.", self.stack.join(stackfile::FILE).display())?;
             return Ok(0);
         }
         let mut current = true;
-        for skill in &manifest.skills {
+        for skill in &file.skills {
             let missing = fs::symlink_metadata(self.stack.join(skill.target())).is_err();
             let state = match self.resolve(&skill.source, &skill.git_ref) {
                 _ if missing => {
@@ -110,19 +110,19 @@ impl Skills<'_> {
     /// reported and the rest continue. Exit 1 when any failed.
     pub fn update(&self, update: Update, out: &mut dyn Write) -> Result<i32> {
         self.clear_stage(out)?;
-        let mut manifest = stackfile::load(self.stack)?;
+        let mut file = stackfile::load(self.stack)?;
         if let Some(git_ref) = &update.git_ref {
             exec::check_ref(git_ref)?;
             ensure!(!update.names.is_empty(), "--ref retargets named entries; pass the skill names");
         }
         let selected: Vec<usize> = if update.names.is_empty() {
-            (0..manifest.skills.len()).collect()
+            (0..file.skills.len()).collect()
         } else {
             update
                 .names
                 .iter()
                 .map(|name| {
-                    manifest
+                    file
                         .skills
                         .iter()
                         .position(|skill| skill.name == *name || skill.installed_name() == name)
@@ -132,24 +132,24 @@ impl Skills<'_> {
         };
         let (mut changed, mut failed) = (false, 0);
         for index in selected {
-            let mut next = manifest.skills[index].clone();
+            let mut next = file.skills[index].clone();
             if let Some(git_ref) = &update.git_ref {
                 next.git_ref = git_ref.clone();
             }
-            match self.update_one(&manifest.skills[index], next, &update) {
+            match self.update_one(&file.skills[index], next, &update) {
                 Ok((next, message)) => {
                     writeln!(out, "{}: {message}", next.name)?;
-                    changed |= next != manifest.skills[index];
-                    manifest.skills[index] = next;
+                    changed |= next != file.skills[index];
+                    file.skills[index] = next;
                 }
                 Err(err) => {
                     failed += 1;
-                    writeln!(out, "{}: failed: {err:#}", manifest.skills[index].name)?;
+                    writeln!(out, "{}: failed: {err:#}", file.skills[index].name)?;
                 }
             }
         }
         if changed {
-            stackfile::save(self.stack, &manifest)?;
+            stackfile::save(self.stack, &file)?;
         }
         Ok(if failed > 0 { 1 } else { 0 })
     }
