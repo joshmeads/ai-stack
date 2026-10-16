@@ -100,6 +100,24 @@ export const FAMILIES = [
     defaultEffort: "max",
     upstream: null,
   }),
+  family({
+    name: "deepseek-flash",
+    label: "DeepSeek Flash (dsh)",
+    provider: "dsh",
+    model: "deepseek-flash",
+    efforts: ["low", "high", "max"], // dsh 0.2.0-rc.2 fails `medium` locally
+    defaultEffort: "max",
+    upstream: null,
+  }),
+  family({
+    name: "deepseek-v4-pro",
+    label: "DeepSeek V4 Pro (dsh)",
+    provider: "dsh",
+    model: "deepseek-v4-pro",
+    efforts: ["low", "high", "max"],
+    defaultEffort: "max",
+    upstream: null,
+  }),
 ] as const;
 export type FamilyName = (typeof FAMILIES)[number]["name"];
 
@@ -138,4 +156,6 @@ export const RELEASED_PAIRS = [
   { pair: "devin:swe-2", family: "swe-2" },
   { pair: "devin:swe-1.6", family: "swe-1.6" },
   { pair: "opencode:opencode/deepseek-v4.1-flash-free", family: "deepseek-v4.1-flash-free" },
+  { pair: "dsh:deepseek-flash", family: "deepseek-flash" },
+  { pair: "dsh:deepseek-v4-pro", family: "deepseek-v4-pro" },
 ] as const satisfies readonly ReleasedPair<FamilyName>[];

@@ -1,0 +1,13 @@
+# The dsh preflight turn: inference goes to a closed loopback port, so a stored or exported key ends in
+# TRANSPORT and a missing one in MISSING_CREDENTIAL. Retries, the session title call and the session-log
+# upload are off, so the turn ends in about a second and sends nothing. Measured with dsh 0.2.0-rc.2.
+- id: llm-deepseek
+  config:
+    baseURL: http://127.0.0.1:1
+- id: llm-retry
+  disabled: true
+- id: session-title-llm
+  disabled: true
+- id: session-log-deepseek
+  config:
+    enabled: false

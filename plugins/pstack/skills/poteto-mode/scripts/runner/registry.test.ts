@@ -90,6 +90,8 @@ describe("registry data", () => {
       ["swe-2", "max"],
       ["swe-1.6", "default"],
       ["deepseek-v4.1-flash-free", "max"],
+      ["deepseek-flash", "max"],
+      ["deepseek-v4-pro", "max"],
     ]);
     expect(REGISTRY.families.filter((entry) => entry.provider === "claude").map((entry) => [entry.name, entry.model]))
       .toEqual([["fable", "fable"], ["opus", "opus"], ["sonnet", "sonnet"], ["opus-5-5", "claude-opus-5-5"]]);
@@ -278,7 +280,7 @@ describe("hand-written dispatch and setup rules", () => {
     expect(rule).toContain("lacks `isolated-write`: name the role and the provider, and say why.");
     expect(rule).toContain("The runner refuses that provider's writer lane before launch");
     expect(REGISTRY.adapters.filter((adapter) => !adapter.launch.supports.includes("isolated-write")).map((adapter) => adapter.id))
-      .toEqual(["devin", "opencode"]);
+      .toEqual(["devin", "opencode", "dsh"]);
     const devinRoute = renderCatalog(REGISTRY).content.split("\n").find((line) => line.startsWith("| devin |"));
     expect(devinRoute).toContain("| `read-only` |");
   });
@@ -486,7 +488,7 @@ describe("resolveLane", () => {
   it("rejects same-provider recursion and unknown names", () => {
     expect(() => resolveLane(request({ parent: "claude" })))
       .toThrow("provider claude is native to parent claude; use the parent subagent primitive");
-    expect(() => resolveLane(request({ provider: "cursor" }))).toThrow("provider must be one of: claude, codex, grok, devin, opencode");
+    expect(() => resolveLane(request({ provider: "cursor" }))).toThrow("provider must be one of: claude, codex, grok, devin, opencode, dsh");
     expect(() => resolveLane(request({ parent: "grok" }))).toThrow("parent must be one of: claude, codex");
     expect(() => resolveLane(request({ mode: "full" }))).toThrow("mode must be one of: read-only, isolated-write");
     expect(() => resolveLane(request({ model: " " }))).toThrow("model is required");

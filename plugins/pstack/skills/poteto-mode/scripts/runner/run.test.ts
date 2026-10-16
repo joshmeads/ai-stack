@@ -2303,3 +2303,162 @@ await Bun.sleep(5_000);`);
     expect(existsSync(input.receiptPath)).toBe(false);
   });
 });
+
+describe("dsh lanes", () => {
+  const DSH_VARIABLES = ["DSH_PERMISSION_MODE", "DSH_HOME", "DEEPSEEK_BASE_URL", "DEEPSEEK_API_KEY"];
+  const TRANSPORT = `{"type":"status","phase":"turn_end","turn":1,"reason":{"kind":"error","error":{"message":"DeepSeek Messages transport failed","code":"TRANSPORT"}}}`;
+  const MISSING = `{"type":"status","phase":"turn_end","turn":1,"reason":{"kind":"error","error":{"message":"llm-deepseek: no API key","code":"MISSING_CREDENTIAL"}}}`;
+
+  // A dsh stand-in: the preflight (a positional `preflight` task) prints `status`; the model call reads
+  // stdin and runs `turn`, which sees `args`, `patch`, `prompt` and `emit`. The child environment keeps
+  // no test variable, so each case bakes its own.
+  function fakeDsh(status: string, turn: string): void {
+    writeFileSync(join(bin, "dsh"), `#!/usr/bin/env bun
+import { readFileSync, statSync, writeFileSync } from "node:fs";
+import { dirname } from "node:path";
+const args = process.argv.slice(2);
+const patch = args[args.indexOf("--patch") + 1];
+const emit = (event) => console.log(JSON.stringify(event));
+if (args.at(-1) === "preflight") {
+  console.log(${JSON.stringify(status)});
+  process.exit(1);
+}
+const prompt = await Bun.stdin.text();
+emit({ type: "session", sessionId: "session-fixture", cwd: process.cwd() });
+${turn}
+`);
+    chmodSync(join(bin, "dsh"), 0o755);
+  }
+
+  // Reports what the child saw as the final text.
+  const OBSERVE = `const observed = {
+  prompt,
+  patch: readFileSync(patch, "utf8").split("\\n").slice(0, 12),
+  dirMode: (statSync(dirname(patch)).mode & 0o777).toString(8),
+  patchMode: (statSync(patch).mode & 0o777).toString(8),
+  variables: Object.keys(process.env).filter((key) => /^(DSH_|DEEPSEEK_)/.test(key)).sort(),
+};
+emit({ type: "status", phase: "step_end", turn: 1, step: 1, usage: { inputTokens: 5, outputTokens: 2, cacheReadTokens: 3, totalTokens: 10 } });
+emit({ type: "status", phase: "turn_end", turn: 1, reason: { kind: "completed" } });
+emit({ type: "final", text: JSON.stringify(observed) });`;
+
+  function dshOptions(suffix: string, overrides: Partial<LaneRequest> = {}): LaneRequest {
+    return { ...options("grok", suffix), provider: "dsh", model: "deepseek-flash", effort: "high", ...overrides };
+  }
+
+  beforeEach(() => {
+    for (const name of DSH_VARIABLES) process.env[name] = `${name}-value`;
+  });
+  afterEach(() => {
+    for (const name of DSH_VARIABLES) delete process.env[name];
+  });
+
+  it("runs a read-only lane with the run-owned patch, the prompt on stdin and the pinned-argv proof", async () => {
+    fakeDsh(TRANSPORT, OBSERVE);
+    const input = dshOptions("dsh-complete");
+    const result = await runLane(laneOf(input));
+    expect(result.exitCode).toBe(0);
+    const saved = receipt(input.receiptPath);
+    expect(saved).toMatchObject({
+      status: "complete",
+      provider: "dsh",
+      model: "deepseek-flash",
+      effort: "high",
+      mode: "read-only",
+      reportedModel: null,
+      modelVerified: false,
+      modelEvidence: "pinned-argv",
+      sessionId: "session-fixture",
+      usage: { inputTokens: 5, outputTokens: 2, cachedInputTokens: 3, totalTokens: 10 },
+      preflight: { status: "passed", evidence: "credential present; not validated" },
+    });
+    const dir = `${input.receiptPath}.provider`;
+    expect(saved.argv.slice(1)).toEqual(["--profile", "headless", "--patch", join(dir, "patch.yml"), "--json", "-"]);
+    expect(saved.preflight.argv.slice(1, 3)).toEqual(["--profile", "headless"]);
+    expect(saved.preflight.argv.at(-1)).toBe("preflight");
+    expect(JSON.parse(readFileSync(input.outputPath, "utf8"))).toEqual({
+      prompt: "Return the marker.",
+      patch: [
+        "- id: sandbox-policy",
+        "  config:",
+        "    mode: read-only",
+        `    workspaceRoot: ${JSON.stringify(scratch)}`,
+        "- id: approval",
+        "  config:",
+        "    policy: ask",
+        "- id: agent-default-model",
+        "  config:",
+        "    provider: deepseek-official",
+        "    model: \"deepseek-flash\"",
+        "    reasoningEffort: \"high\"",
+      ],
+      dirMode: "700",
+      patchMode: "600",
+      variables: ["DEEPSEEK_API_KEY"],
+    });
+    expect(statSync(dir).mode & 0o777).toBe(0o700);
+  });
+
+  for (const [name, status, exitCode, message] of [
+    ["a missing credential", MISSING, 77, "authentication or model preflight failed"],
+    ["an unknown status", "Welcome to dsh", 70, "authentication preflight output was inconclusive"],
+  ] as const) {
+    it(`classifies ${name} before any model call`, async () => {
+      const started = join(scratch, "dsh-model.started");
+      fakeDsh(status, `writeFileSync(${JSON.stringify(started)}, "started");`);
+      const input = dshOptions(`dsh-preflight-${exitCode}`);
+      const result = await runLane(laneOf(input));
+      expect(result.exitCode).toBe(exitCode);
+      expect(result.receipt).toMatchObject({
+        status: exitCode === 77 ? "unauthenticated" : "child-failed",
+        preflight: { status: "failed" },
+        error: { message },
+      });
+      expect(existsSync(started)).toBe(false);
+    });
+  }
+
+  it("never completes SIGTERM's exit 0 with a partial final", async () => {
+    fakeDsh(TRANSPORT, `emit({ type: "status", phase: "turn_start", turn: 1 });
+emit({ type: "final", text: "partial reply" });`);
+    const input = dshOptions("dsh-sigterm-shape");
+    const result = await runLane(laneOf(input));
+    expect(result.exitCode).toBe(65);
+    expect(result.receipt).toMatchObject({ status: "malformed-output", exitCode: 0, error: { message: "dsh ended without a completed turn" } });
+    expect(existsSync(input.outputPath)).toBe(false);
+  });
+
+  it("classifies a turn error, an unknown model and exit 130 from the captured shapes", async () => {
+    fakeDsh(TRANSPORT, `emit({ type: "status", phase: "turn_end", turn: 1, reason: { kind: "error", error: { message: "rate limited", code: "RATE_LIMIT" } } });
+emit({ type: "final", text: "" });
+console.error("dsh: RATE_LIMIT: rate limited");
+process.exit(1);`);
+    const failed = dshOptions("dsh-turn-error");
+    expect((await runLane(laneOf(failed))).receipt).toMatchObject({
+      status: "child-failed",
+      exitCode: 1,
+      sessionId: "session-fixture",
+      error: { message: "dsh turn failed: RATE_LIMIT: rate limited" },
+    });
+
+    fakeDsh(TRANSPORT, `emit({ type: "status", phase: "turn_end", turn: 1, reason: { kind: "error", error: { message: "The supported API model names are deepseek-flash, deepseek-v4-pro, but you passed deepseek-next.", code: "INVALID_REQUEST", status: 400 } } });
+console.error("dsh: INVALID_REQUEST: The supported API model names are deepseek-flash, deepseek-v4-pro, but you passed deepseek-next.");
+process.exit(1);`);
+    const unknown = dshOptions("dsh-unknown-model", { model: "deepseek-next" });
+    const unknownResult = await runLane(laneOf(unknown));
+    expect(unknownResult.exitCode).toBe(69);
+    expect(unknownResult.receipt).toMatchObject({ status: "unavailable-model", exitCode: 1 });
+
+    fakeDsh(TRANSPORT, `emit({ type: "final", text: "partial reply" });
+process.exit(130);`);
+    const interrupted = dshOptions("dsh-sigint");
+    expect((await runLane(laneOf(interrupted))).receipt).toMatchObject({ status: "cancelled", exitCode: 130, signal: null });
+    expect(existsSync(interrupted.outputPath)).toBe(false);
+  });
+
+  it("refuses an isolated-write dsh lane before launch", () => {
+    const input = dshOptions("dsh-writer", { mode: "isolated-write" });
+    expect(() => laneOf(input)).toThrow("provider dsh does not support isolated-write");
+    expect(existsSync(input.receiptPath)).toBe(false);
+  });
+});
