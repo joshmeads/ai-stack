@@ -237,7 +237,7 @@ const KEEP_SKILLS: [&str; 21] = [
     "gpt-taste", "high-end-visual-design", "image-to-code", "redesign-existing-projects", "full-output-enforcement",
     "make-interfaces-feel-better", "oklch-skill", "color-expert", "minimalist-ui", "cua-*", "gui-automation", "hatch-pet", "turborepo", "computer-use-linux",
 ];
-const KEEP_PLUGINS: [&str; 4] = ["jm-*@jm", "github@claude-plugins-official", "chrome-devtools-mcp@claude-plugins-official", "*@openai-*"];
+const KEEP_PLUGINS: [&str; 3] = ["github@claude-plugins-official", "chrome-devtools-mcp@claude-plugins-official", "*@openai-*"];
 
 fn default_remote() -> String {
     "origin".into()
@@ -562,7 +562,7 @@ mod tests {
         for moved in ["better", "how", "turborepo-extra", "xcua-driver"] {
             assert!(!clean.keeps_skill(moved), "{moved}");
         }
-        for kept in ["jm-stack@jm", "github@claude-plugins-official", "browser@openai-bundled", "pdf@openai-primary-runtime"] {
+        for kept in ["github@claude-plugins-official", "browser@openai-bundled", "pdf@openai-primary-runtime"] {
             assert!(clean.keeps_plugin(kept), "{kept}");
         }
         for removed in ["jm-stack@other", "expo@claude-plugins-official", "pdf-viewer@synced", "github@jm"] {

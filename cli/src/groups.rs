@@ -9,12 +9,16 @@ use serde::Serialize;
 
 use crate::stackfile::{self, SkillName, StackFile};
 
+pub const VERSION: u32 = 1;
+
 /// About four characters per token, the usual rough rule for English text.
 const CHARS_PER_TOKEN: usize = 4;
 
-/// The `--json` shape. Keep it stable: the Swift app reads it.
+/// The `--json` shape, version `VERSION`. The Swift app reads it, so a change that alters an
+/// existing field's meaning bumps the version; new fields do not.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize)]
 pub struct Report {
+    pub version: u32,
     pub groups: Vec<GroupReport>,
     /// The union of the global groups, each skill counted once.
     pub global: Budget,
@@ -27,12 +31,16 @@ pub struct GroupReport {
     pub includes: Vec<String>,
     /// Every skill the group turns on, after includes, sorted.
     pub skills: Vec<String>,
+    /// The vendored ones among `skills` that `skills update` has not built yet. They count no
+    /// tokens and install skips them.
+    pub missing: Vec<String>,
     pub tokens: usize,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize)]
 pub struct Budget {
     pub skills: Vec<String>,
+    pub missing: Vec<String>,
     pub tokens: usize,
 }
 
@@ -40,23 +48,29 @@ pub struct Budget {
 pub fn report(stack: &Path, file: &StackFile) -> Result<Report> {
     let budget = |skills: BTreeSet<SkillName>| -> Result<Budget> {
         let mut chars = 0;
+        let mut missing = Vec::new();
         for skill in &skills {
-            chars += frontmatter_chars(&stack.join(stackfile::SKILLS_DIR).join(skill.as_str()).join("SKILL.md"))?;
+            let dir = stack.join(stackfile::SKILLS_DIR).join(skill.as_str());
+            if !dir.is_dir() {
+                missing.push(skill.to_string());
+            }
+            chars += frontmatter_chars(&dir.join("SKILL.md"))?;
         }
-        Ok(Budget { skills: skills.into_iter().map(String::from).collect(), tokens: chars.div_ceil(CHARS_PER_TOKEN) })
+        Ok(Budget { skills: skills.into_iter().map(String::from).collect(), missing, tokens: chars.div_ceil(CHARS_PER_TOKEN) })
     };
     let mut groups = Vec::new();
     for (name, group) in &file.groups {
-        let Budget { skills, tokens } = budget(stackfile::resolve(&file.groups, [name]))?;
+        let Budget { skills, missing, tokens } = budget(stackfile::resolve(&file.groups, [name]))?;
         groups.push(GroupReport {
             name: name.to_string(),
             global: group.global,
             includes: group.includes.iter().map(ToString::to_string).collect(),
             skills,
+            missing,
             tokens,
         });
     }
-    Ok(Report { groups, global: budget(file.global_skills())? })
+    Ok(Report { version: VERSION, groups, global: budget(file.global_skills())? })
 }
 
 impl Report {
@@ -128,17 +142,20 @@ mod tests {
         std::fs::write(stack.join("stack.toml"), concat!(
             "[groups.base]\nskills = [\"aaaaaaaa\", \"cccc\"]\n",
             "[groups.more]\nglobal = true\nincludes = [\"base\"]\nskills = [\"cccc\"]\n",
-            "[groups.solo]\nglobal = true\nskills = [\"eeee\", \"aaaaaaaa\"]\n",
+            "[groups.solo]\nglobal = true\nskills = [\"eeee\", \"aaaaaaaa\", \"grill\"]\n\n",
+            "[[skill]]\nname = \"grill\"\nsource = \"https://example.com/s\"\npath = \"grill\"\ncommit = \"0123456789abcdef0123456789abcdef01234567\"\n",
         )).unwrap();
         let report = report(stack, &stackfile::load(stack).unwrap()).unwrap();
+        // grill is vendored and not built yet: listed, missing, and zero tokens.
         assert_eq!(serde_json::to_value(&report).unwrap(), serde_json::json!({
+            "version": 1,
             "groups": [
-                {"name": "base", "global": false, "includes": [], "skills": ["aaaaaaaa", "cccc"], "tokens": 8},
-                {"name": "more", "global": true, "includes": ["base"], "skills": ["aaaaaaaa", "cccc"], "tokens": 8},
-                {"name": "solo", "global": true, "includes": [], "skills": ["aaaaaaaa", "eeee"], "tokens": 5},
+                {"name": "base", "global": false, "includes": [], "skills": ["aaaaaaaa", "cccc"], "missing": [], "tokens": 8},
+                {"name": "more", "global": true, "includes": ["base"], "skills": ["aaaaaaaa", "cccc"], "missing": [], "tokens": 8},
+                {"name": "solo", "global": true, "includes": [], "skills": ["aaaaaaaa", "eeee", "grill"], "missing": ["grill"], "tokens": 5},
             ],
-            "global": {"skills": ["aaaaaaaa", "cccc", "eeee"], "tokens": 9},
+            "global": {"skills": ["aaaaaaaa", "cccc", "eeee", "grill"], "missing": ["grill"], "tokens": 9},
         }));
-        assert!(report.text().ends_with("solo        yes          2       5  aaaaaaaa, eeee\nglobal set               3       9\n"), "{}", report.text());
+        assert!(report.text().ends_with("solo        yes          3       5  aaaaaaaa, eeee, grill\nglobal set               4       9\n"), "{}", report.text());
     }
 }

@@ -113,9 +113,10 @@ keep_skills = [
   "color-expert", "minimalist-ui", "cua-*", "gui-automation", "hatch-pet",
   "turborepo", "computer-use-linux",
 ]
-# Codex's built-in plugins come from `openai-*` marketplaces.
+# Codex's built-in plugins come from `openai-*` marketplaces. Clean never
+# touches a `jm` plugin: install owns that marketplace.
 keep_plugins = [
-  "jm-*@jm", "github@claude-plugins-official",
+  "github@claude-plugins-official",
   "chrome-devtools-mcp@claude-plugins-official", "*@openai-*",
 ]
 
