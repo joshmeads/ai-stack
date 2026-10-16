@@ -20,11 +20,12 @@ pub struct Skills<'a> {
     pub prompt_runner: &'a [String],
 }
 
+/// A skill added to a group is a standalone skill, so it always goes into `skills/`. A
+/// `[[skill]]` with another `dest` is written by hand.
 pub struct Add {
     pub source: String,
     pub path: String,
     pub git_ref: String,
-    pub dest: String,
     pub rename: Option<SkillName>,
     pub process: Vec<Step>,
     pub name: Option<SkillName>,
@@ -57,9 +58,8 @@ impl Skills<'_> {
         let mut file = stackfile::load(self.stack)?;
         let group_name = stackfile::GroupName::try_from(add.group.as_str()).context("--group")?;
         ensure!(file.groups.contains_key(&group_name), "no group {:?} in {}; add a [groups.{}] table first", add.group, self.stack.join(stackfile::FILE).display(), add.group);
-        let commit = self.resolve(&source, &add.git_ref)?;
-        let skill = Skill { name, source, path: add.path, git_ref: add.git_ref, commit, dest: add.dest, rename: add.rename, process: add.process };
-        ensure!(skill.is_standalone(), "a skill in a group is a standalone skill, so --dest must be {:?}, not {:?}", stackfile::SKILLS_DIR, skill.dest);
+        // Every argument is checked, with a placeholder commit, before the network is used.
+        let mut skill = Skill { name, source, path: add.path, git_ref: add.git_ref, commit: "0".repeat(40), dest: stackfile::DEFAULT_DEST.into(), rename: add.rename, process: add.process };
         let member = skill.installed_name().clone();
         let group = file.groups.get_mut(&group_name).expect("checked above");
         if !group.skills.contains(&member) {
@@ -70,6 +70,8 @@ impl Skills<'_> {
         let target = self.stack.join(skill.target());
         ensure!(fs::symlink_metadata(&target).is_err(), "{} already exists; remove it first", target.display());
 
+        skill.commit = self.resolve(&skill.source, &skill.git_ref)?;
+        file.skills.last_mut().expect("pushed above").commit = skill.commit.clone();
         self.install(&skill)?;
         writeln!(out, "added {} -> {} at {} in group {}", skill.name, skill.target().display(), short(&skill.commit), add.group)?;
         stackfile::save(self.stack, &file)
@@ -238,6 +240,13 @@ impl Skills<'_> {
         for step in &skill.process {
             self.run_step(step, stage.path()).with_context(|| format!("process step {:?} {:?}", step.kind, step.input))?;
         }
+        let skill_md = stage.path().join("SKILL.md");
+        ensure!(
+            fs::symlink_metadata(&skill_md).is_ok_and(|meta| meta.is_file()),
+            "{} at {} has no SKILL.md file after its process steps, so it is not a skill; nothing was changed",
+            skill.source,
+            short(&skill.commit)
+        );
 
         if fs::symlink_metadata(&target).is_err() {
             fs::rename(stage.path(), &target).with_context(|| format!("cannot move the staged skill to {}", target.display()))?;
@@ -401,7 +410,6 @@ mod tests {
                 source: format!("file://{}", self.upstream.display()),
                 path: "skills/grill-with-docs".into(),
                 git_ref: "main".into(),
-                dest: stackfile::DEFAULT_DEST.into(),
                 rename: Some(SkillName::try_from("grill-docs").unwrap()),
                 process: vec![Step { kind: StepKind::Script, input: "scripts/strip.sh".into() }],
                 name: None,
@@ -504,7 +512,6 @@ mod tests {
             source: fx.stack.join("../root-skill").to_string_lossy().into_owned(),
             path: ".".into(),
             git_ref: "main".into(),
-            dest: stackfile::DEFAULT_DEST.into(),
             rename: None,
             process: Vec::new(),
             name: Some(SkillName::try_from("root").unwrap()),
@@ -518,6 +525,62 @@ mod tests {
         let mut names: Vec<_> = fs::read_dir(&installed).unwrap().map(|e| e.unwrap().file_name()).collect();
         names.sort();
         assert_eq!(names, ["SKILL.md"]);
+    }
+
+    #[test]
+    fn add_checks_every_argument_before_the_network() {
+        let fx = Fixture::new();
+        fs::create_dir_all(fx.stack.join("skills/taken")).unwrap();
+        fs::write(fx.stack.join("skills/taken/SKILL.md"), "---\nname: taken\n---\n").unwrap();
+        fs::write(fx.stack.join(stackfile::FILE), "[groups.tools]\nglobal = true\nskills = [\"taken\"]\n").unwrap();
+        let exec = crate::exec::fake::FakeExec::new(|line| panic!("ran {line}"));
+        let skills = Skills { exec: &exec, stack: &fx.stack, prompt_runner: &fx.runner };
+        let add = |group: &str, rename: Option<&str>, process: Vec<Step>| Add {
+            source: "https://example.com/skills".into(),
+            path: "skills/grill".into(),
+            git_ref: "main".into(),
+            rename: rename.map(|name| SkillName::try_from(name).unwrap()),
+            process,
+            name: None,
+            group: group.into(),
+        };
+        for (add, message) in [
+            (add("nope", None, Vec::new()), "no group \"nope\""),
+            (add("tools", None, vec![Step { kind: StepKind::Prompt, input: "-x".into() }]), "must not start with `-`"),
+            (add("tools", None, vec![Step { kind: StepKind::Script, input: "../s.sh".into() }]), "process script"),
+            (add("tools", Some("taken"), Vec::new()), "skills/taken already exists"),
+        ] {
+            let err = format!("{:#}", skills.add(add, &mut Vec::new()).unwrap_err());
+            assert!(err.contains(message), "{message}: {err}");
+        }
+        assert!(exec.calls.borrow().is_empty());
+    }
+
+    #[test]
+    fn a_tree_without_skill_md_is_refused_and_leaves_the_stack_unchanged() {
+        let fx = Fixture::new();
+        let readme = fx._dir.path().join("readme-only");
+        fs::create_dir_all(&readme).unwrap();
+        fs::write(readme.join("README.md"), "not a skill\n").unwrap();
+        git(&readme, &["init", "-q"]);
+        commit_all(&readme, "readme");
+        let before = fs::read_to_string(fx.stack.join(stackfile::FILE)).unwrap();
+        let add = Add { source: readme.to_string_lossy().into_owned(), path: ".".into(), git_ref: "main".into(), rename: None, process: Vec::new(), name: Some(SkillName::try_from("not-a-skill").unwrap()), group: "tools".into() };
+        let err = format!("{:#}", fx.skills().add(add, &mut Vec::new()).unwrap_err());
+        assert!(err.contains("has no SKILL.md file after its process steps"), "{err}");
+        assert_eq!(fs::read_to_string(fx.stack.join(stackfile::FILE)).unwrap(), before);
+        assert!(!fx.stack.join("skills/not-a-skill").exists());
+        assert!(stackfile::load(&fx.stack).is_ok());
+
+        // A process step that removes SKILL.md fails the update and keeps the installed skill.
+        fx.add();
+        let installed = fx.installed();
+        fs::write(fx.stack.join("scripts/strip.sh"), "rm \"$1/SKILL.md\"\n").unwrap();
+        commit_all(&fx.stack, "break the step");
+        let (code, out) = fx.update(&[], None, true, false);
+        assert_eq!(code, 1, "{out}");
+        assert!(out.contains("has no SKILL.md file"), "{out}");
+        assert_eq!(fx.installed(), installed);
     }
 
     #[test]
@@ -550,7 +613,6 @@ mod tests {
                 source: format!("file://{}", fx.upstream.display()),
                 path: path.into(),
                 git_ref: "main".into(),
-                dest: stackfile::DEFAULT_DEST.into(),
                 rename: Some(SkillName::try_from("renamed").unwrap()),
                 process: Vec::new(),
                 name: None,
