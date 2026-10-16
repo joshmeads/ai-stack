@@ -11,6 +11,7 @@ use anyhow::{Context as _, Result, anyhow};
 use serde_json::Value;
 
 use crate::config::{Config, Harness, HarnessConfig};
+use crate::exec::shell_quote as quote;
 use crate::plan::Plan;
 
 pub const MARKETPLACE: &str = "jm";
@@ -45,14 +46,6 @@ impl fmt::Display for Command {
             write!(f, " {}", quote(arg))?;
         }
         Ok(())
-    }
-}
-
-fn quote(arg: &str) -> String {
-    if !arg.is_empty() && arg.chars().all(|c| c.is_ascii_alphanumeric() || "/._-@:+=,".contains(c)) {
-        arg.to_string()
-    } else {
-        format!("'{}'", arg.replace('\'', "'\\''"))
     }
 }
 
