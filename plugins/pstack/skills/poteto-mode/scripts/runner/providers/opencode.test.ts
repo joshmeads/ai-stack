@@ -64,7 +64,6 @@ describe("opencode launch", () => {
     const policy = opencode.environment(lane().access, "/tmp/r.provider");
     if (policy.kind !== "allowlist") throw new Error("expected an allowlist");
     expect(policy.names.filter((name) => /KEY|TOKEN|OPENCODE/.test(name))).toEqual([]);
-    expect(opencode.launch.projectConfig).toEqual([]);
   });
 });
 

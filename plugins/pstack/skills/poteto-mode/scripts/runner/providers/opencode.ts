@@ -111,7 +111,6 @@ export const opencode = adapter({
     sidecar: { output: null, config: { name: CONFIG_NAME, content: () => `${JSON.stringify(LOCKDOWN, null, 2)}\n` } },
     // No OS sandbox: with external_directory denied, a shell write still escaped the cwd, so no mode is a bounded writer.
     supports: ["read-only"],
-    projectConfig: [],
     needsSharedGitDir: () => false,
     argv: (lane) => [
       "run",

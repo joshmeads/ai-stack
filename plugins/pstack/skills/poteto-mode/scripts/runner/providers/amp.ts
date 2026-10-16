@@ -97,7 +97,6 @@ export const amp = adapter({
     sidecar: { output: null, config: { name: "settings.json", content: () => `${JSON.stringify(LOCKDOWN, null, 2)}\n` } },
     // No sandbox: a shell write escaped the cwd whenever the shell was allowed, so Amp has no bounded writer.
     supports: ["read-only"],
-    projectConfig: [],
     needsSharedGitDir: () => false,
     argv: (lane, facts) => [
       "-x",
