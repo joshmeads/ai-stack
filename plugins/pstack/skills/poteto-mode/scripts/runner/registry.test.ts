@@ -65,14 +65,12 @@ describe("registry data", () => {
     }
   });
 
-  // UPSTREAM.md records these as port choices that upstream syncs do not apply.
   it("keeps the solo code roles on Sol and every panel on Opus, Sol and Grok", () => {
     const lanes = (role: string) => REGISTRY.roleDefaults.find((entry) => entry.role === role)?.lanes;
     for (const role of ["bug-fix", "perf-issue", "hillclimb"]) expect([role, lanes(role)]).toEqual([role, ["sol"]]);
     for (const role of ["arena runners", "arena cross-judge pool", "architect runners", "interrogate reviewers"]) {
       expect([role, lanes(role)]).toEqual([role, ["opus", "sol", "grok"]]);
     }
-    // External lanes lack the parent's MCP surface (provider-dispatch.md), so Why and Reflect stay on the parent.
     for (const role of ["why investigators, synthesizer", "reflect tooling, judgment, divergent, synthesizer"]) {
       expect([role, lanes(role)]).toEqual([role, ["inherit-parent"]]);
     }
@@ -276,8 +274,6 @@ describe("hand-written dispatch and setup rules", () => {
     expect(new Set(writers)).toEqual(new Set(["feature, refactoring", "bug-fix", "perf-issue", "hillclimb"]));
     const rule = section(setup, "### 3. Parse per-family efforts", "### 4. Collect one requested effort per family");
     expect(rule).toContain("Lanes for these roles write files: `feature, refactoring`, `bug-fix`, `perf-issue`, and `hillclimb`, whose playbooks delegate with `isolated-write`; `hardest tasks`, which takes the hardest code changes; and `arena runners`, `architect runners` and `swarm workers`, which write to their own worktrees or output directories.");
-    // poteto-mode sends the hardest changes to `hardest tasks`; arena and architect candidates and swarm workers each write
-    // to their own location.
     expect(readFileSync(join(PLUGIN_ROOT, "skills/poteto-mode/SKILL.md"), "utf8")).toContain("the hardest changes read `hardest tasks`");
     expect(readFileSync(join(PLUGIN_ROOT, "skills/arena/SKILL.md"), "utf8")).toContain("Give each candidate its own output location (a git worktree");
     expect(readFileSync(join(PLUGIN_ROOT, "skills/swarm/SKILL.md"), "utf8")).toContain("in the worker's own worktree");
@@ -320,7 +316,6 @@ describe("hand-written dispatch and setup rules", () => {
 
 const REPO_ROOT = join(PLUGIN_ROOT, "../..");
 const ROLE_DEFAULTS = "model-catalog.md#role-defaults";
-/** Cursor-derived and port files that point at role defaults, and the roles each names. */
 const ROLE_POINTERS: Record<string, readonly string[]> = {
   "skills/arena/SKILL.md": ["arena runners", "arena cross-judge pool"],
   "skills/architect/SKILL.md": ["architect runners"],
@@ -458,7 +453,6 @@ describe("resolveLane", () => {
       expect([lane.family?.name, lane.model, lane.cliModel]).toEqual([model, model, cliModel]);
     }
     expect(() => devin("swe-2", "default")).toThrow("effort default is not offered for devin:swe-2; choose one of: medium, high, max");
-    // An unregistered Devin model is already a CLI model ID, so only the default effort runs it.
     expect([devin("swe-1-7-medium", "default").cliModel, devin("swe-1-7-medium", "default").family]).toEqual(["swe-1-7-medium", null]);
     expect(() => devin("swe-1-7-medium", "max")).toThrow("effort max is not offered for devin:swe-1-7-medium; choose one of: default");
     expect(() => devin("swe-2", "max", "isolated-write"))

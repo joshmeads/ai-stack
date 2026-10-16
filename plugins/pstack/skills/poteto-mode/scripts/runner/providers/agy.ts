@@ -57,7 +57,6 @@ function parse(run: ModelRun): ParseResult {
   if (error === "interrupted") {
     return { kind: "provider-failure", status: "cancelled", message: "agy reported the turn was interrupted", metadata: found };
   }
-  // After an error exit run.ts classifies the output, so `invalid model selection` is unavailable-model.
   if (error !== null) return { kind: "malformed", message: "agy result reported an error" };
   const response = typeof result.response === "string" ? result.response.replace(/\n$/, "") : "";
   // Headless agy denies the first tool that needs approval and ends the turn with exit 0 and status SUCCESS, so

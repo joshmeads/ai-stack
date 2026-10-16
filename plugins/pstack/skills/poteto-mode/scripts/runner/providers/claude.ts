@@ -48,7 +48,6 @@ function loggedIn(stdout: string): boolean {
   }
 }
 
-// A rolling alias matches only a concrete revision of its own family.
 function matches(lane: Lane, reported: string): boolean {
   const rolling = lane.family?.rolling ?? null;
   return rolling === null ? exactOrSuffixed(lane, reported) : isRevision(rolling, reported);
@@ -127,8 +126,6 @@ export const claude = adapter({
   },
   parse: (run, lane) => parse(run.stdout, lane),
   proof: { report: "required", matches },
-  // A writer's git must find its repository from the cwd, as discovery's git did, so an
-  // inherited GIT_DIR or GIT_COMMON_DIR cannot route it to an undenied git directory.
   environment: (access) => ({
     kind: "inherit",
     dropPrefixes: access.mode === "isolated-write" ? ["GIT_"] : [],

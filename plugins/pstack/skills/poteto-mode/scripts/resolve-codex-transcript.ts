@@ -1,6 +1,4 @@
 #!/usr/bin/env bun
-// Resolve one known Codex chat ID to its rollout file and opening user message
-// metadata. Prints bounded JSON and never prints transcript text.
 import { Database } from "bun:sqlite";
 import { createHash } from "node:crypto";
 import { closeSync, openSync, readdirSync, readSync, realpathSync, statSync } from "node:fs";
@@ -53,7 +51,6 @@ function indexFiles(home: string): string[] {
   });
 }
 
-// The index is the `threads` table keyed by `id` alone, with a `rollout_path` column.
 function threadIndex(database: Database): boolean {
   const columns = database.query("PRAGMA table_info(threads)").all() as {
     name: string;
@@ -117,7 +114,6 @@ function scopedRollout(home: string, indexed: string): string {
   return path;
 }
 
-// Returns the user text and its parts, or null when the record is not user input.
 function userText(record: JsonObject): { text: string; parts: string[] } | null {
   const payload = record.payload;
   if (!isObject(payload)) return null;
@@ -156,7 +152,6 @@ function injectedContext(parts: string[]): boolean {
   );
 }
 
-// Reads one byte past the total limit so an oversized file is detected, not truncated.
 function readPrefix(path: string): Buffer {
   let descriptor: number | undefined;
   try {

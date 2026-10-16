@@ -97,7 +97,6 @@ export const codex = adapter({
     ],
   },
   parse: (run) => parse(run.stdout),
-  // Codex never reports the served model, so the pinned argv is the evidence.
   proof: { report: "absent", matches: exactOrSuffixed },
   environment: () => ({ kind: "inherit", dropPrefixes: [] }),
   docs: {

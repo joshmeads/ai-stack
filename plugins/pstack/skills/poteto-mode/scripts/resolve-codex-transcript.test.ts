@@ -79,7 +79,6 @@ function snapshot(): Record<string, string> {
     try {
       files[relative(home, path)] = readFileSync(path).toString("base64");
     } catch {
-      // Directories have no bytes to compare.
     }
   }
   return files;

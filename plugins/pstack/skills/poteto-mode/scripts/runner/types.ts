@@ -1,4 +1,3 @@
-/** The two harnesses with a native subagent primitive, and the markers that identify each one. */
 export const PARENTS = {
   claude: {
     harness: "Claude Code",
@@ -24,12 +23,9 @@ export const PARENTS = {
     ],
   },
 } as const;
-/** `default` passes no effort, so the CLI or model uses its own setting. */
 export const EFFORTS = ["low", "medium", "high", "xhigh", "max", "ultra", "default"] as const;
 export const ACCESS_MODES = ["read-only", "isolated-write"] as const;
-/** A writer's sandbox. `full-access` is an explicit opt-in from the model sheet, never a recovery step. */
 export const WRITER_SANDBOXES = ["bounded", "full-access"] as const;
-/** What an adapter's `launch.supports` lists: each access mode, and the full-access writer as its own capability. */
 export const ACCESS_KINDS = [...ACCESS_MODES, "isolated-write-full-access"] as const;
 
 export type Parent = keyof typeof PARENTS;

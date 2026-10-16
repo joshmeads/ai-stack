@@ -10,8 +10,6 @@ import { dsh } from "./dsh.ts";
 
 adapterSuite(dsh);
 
-// Sanitized from dsh 0.2.0-rc.2 captures: `real-*` and `preflight-transport` against DeepSeek, the rest
-// against a local mock. Structure kept, paths, session IDs and markers replaced.
 const fixture = (name: string): string => readFileSync(join(import.meta.dir, "fixtures/dsh", name), "utf8");
 
 const lane = (request: Partial<LaneRequest> = {}) => testLane({ provider: "dsh", model: "deepseek-flash", effort: "max", ...request });
@@ -58,7 +56,6 @@ describe("dsh launch", () => {
       expect(patch).toContain(`- id: ${id}\n  disabled: true\n`);
     }
     expect(patch).toEndWith("- id: session-log-deepseek\n  config:\n    enabled: false\n");
-    // The setting's own line, so a credentials path that contains the word does not count.
     expect(dsh.launch.sidecar!.config!.content(lane({ model: "deepseek-next", effort: "default" }))).not.toMatch(/^ {4}reasoningEffort:/m);
   });
 
@@ -167,7 +164,6 @@ describe("dsh parse", () => {
     expect(modelFailureStatus(stderr)).toBe("unavailable-model");
     expect(dsh.parse(run({ exitCode: 1, stdout: fixture("real-unknown-model.jsonl"), stderr }), lane()))
       .toEqual({ kind: "malformed", message: "dsh named an unavailable model" });
-    // The model's own reply text cannot trigger the rule: it is anchored to dsh's stderr line.
     expect(modelFailureStatus("TOOL: The supported API model names are a, but you passed b")).toBe("child-failed");
   });
 

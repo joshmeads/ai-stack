@@ -185,8 +185,6 @@ function receipt(path: string): RunnerReceipt {
   return JSON.parse(readFileSync(path, "utf8")) as RunnerReceipt;
 }
 
-// Fixture git never sees the caller's GIT_* routing or hooks. A ceiling, when given, keeps
-// repositories above the fixture root out of discovery.
 function gitEnv(ceiling: string | null = null): NodeJS.ProcessEnv {
   const env = childEnvironment(laneOf({ ...options("claude"), mode: "isolated-write" }));
   return ceiling === null ? env : { ...env, GIT_CEILING_DIRECTORIES: ceiling };
@@ -732,7 +730,6 @@ describe("runLane", () => {
   for (const startup of ["dotenv", "bunfig", "bun-options", "node-options", "combined", "hostile-path", "bare-name"]) {
     it(`shipped launcher startup isolation: ${startup}`, async () => {
       const input = options("codex", startup);
-      // Exceed pipe capacity so the fake provider must consume stdin before exiting.
       writeFileSync(input.promptPath, "Return the marker.\n".repeat(100_000));
       const captured = join(scratch, "provider-env.txt");
       const capturedPrompt = join(scratch, "provider-prompt.txt");
@@ -1691,8 +1688,6 @@ describe("devin lanes", () => {
   const LOGGED_IN = "Logged in (via Devin).\n\nUser: <redacted>";
   const DEVIN_VARIABLES = ["DEVIN_PERMISSION_MODE", "DEVIN_SANDBOX", "DEVIN_MODEL", "DEVIN_REFUSAL_FALLBACK"];
 
-  // A Devin stand-in: `auth status` prints `status`; the model call runs `turn`, which sees `args`, `at`,
-  // `exportPath` and `config`. The child environment keeps no test variable, so each case bakes its own.
   function fakeDevin(status: string, turn: string): void {
     writeFileSync(join(bin, "devin"), `#!/usr/bin/env bun
 import { existsSync, readFileSync, statSync, writeFileSync } from "node:fs";
@@ -1709,7 +1704,6 @@ ${turn}
     chmodSync(join(bin, "devin"), 0o755);
   }
 
-  // Reports what the child saw as the export's final message, and prints a decoy on stdout.
   const OBSERVE = `const observed = {
   model: at("--model"),
   exportAbsent: !existsSync(exportPath),
@@ -1859,8 +1853,6 @@ await Bun.sleep(5_000);`);
   });
 });
 
-// A provider that uses every optional part of the contract: run-owned environment values, a nested sidecar config
-// with no output file and a stdin envelope.
 const STAND_IN_CONFIG = ".agents/agents/lane.md";
 const STAND_IN: ProviderAdapter = {
   ...devin,
@@ -1900,7 +1892,6 @@ function standInLane(suffix: string, overrides: Partial<LaneRequest> = {}): Lane
 describe("stand-in provider contract", () => {
   let inherited: string | undefined;
   beforeEach(() => {
-    // The preflight reports what it sees; the model call echoes stdin.
     writeFileSync(join(bin, "standin"), `#!/usr/bin/env bun
 import { readFileSync, statSync } from "node:fs";
 import { dirname } from "node:path";
@@ -2080,7 +2071,6 @@ describe("discoverSharedGitDir", () => {
       mkdirSync(join(linked, "sub", ".git"));
       expect(await discover(join(linked, "sub"))).toEqual(shared);
 
-      // The gitdir names the main repository through a symlink; the deny is the real directory.
       symlinkSync(main, join(root, "alias"));
       const aliased = join(root, "alias", ".git", "worktrees", "linked");
       writeFileSync(join(linked, ".git"), `gitdir: ${aliased}\n`);
@@ -2105,7 +2095,6 @@ describe("discoverSharedGitDir", () => {
         message: expect.stringContaining("contains a glob or control character"),
       });
 
-      // A .git file naming a missing directory is a broken repository, not a non-repository.
       writeFileSync(join(linked, ".git"), `gitdir: ${join(root, "missing")}\n`);
       expect(await discover(linked)).toMatchObject({ kind: "refused", status: "child-failed" });
     } finally {
@@ -2120,10 +2109,6 @@ describe("opencode lanes", () => {
   const INHERITED = ["OPENCODE_PERMISSION", "OPENCODE_CONFIG_CONTENT", "OPENROUTER_API_KEY"];
   const event = (type: string, part: Record<string, unknown> = {}) => ({ type, timestamp: 1, sessionID: "ses_fixture", part });
 
-  // An OpenCode stand-in: `models` runs `models`; the model call runs `turn`, which
-  // sees `args` and `prompt`. Each call appends its kind to `opencode.calls` next to the stand-in, and its cwd,
-  // environment and config file to `opencode.contexts`. The child environment keeps no test variable, so each case
-  // bakes its own.
   function fakeOpencode(models: string, turn: string): void {
     writeFileSync(join(bin, "opencode"), `#!/usr/bin/env bun
 import { appendFileSync, readFileSync, statSync, writeFileSync } from "node:fs";
@@ -2147,7 +2132,6 @@ ${turn}
   }
 
   const LIST = `console.log(${JSON.stringify(LISTED)}); process.exit(0);`;
-  // Reports what the child saw as the reply, over two steps, the first ending on an allowed tool call.
   const OBSERVE = `const config = process.env.OPENCODE_CONFIG;
 const observed = {
   args,
@@ -2294,10 +2278,6 @@ describe("dsh lanes", () => {
   const TRANSPORT = `{"type":"status","phase":"turn_end","turn":1,"reason":{"kind":"error","error":{"message":"DeepSeek Messages transport failed","code":"TRANSPORT"}}}`;
   const MISSING = `{"type":"status","phase":"turn_end","turn":1,"reason":{"kind":"error","error":{"message":"llm-deepseek: no API key","code":"MISSING_CREDENTIAL"}}}`;
 
-  // A dsh stand-in: `--version` prints `version`; the preflight (a positional `preflight` task) prints
-  // `status`; the model call reads stdin and runs `turn`, which sees `args`, `patch`, `prompt` and `emit`.
-  // Each call appends its kind to `dsh.calls` next to the stand-in. The child environment keeps no test
-  // variable, so each case bakes its own.
   function fakeDsh(status: string, turn: string, version = "0.2.0-rc.2"): void {
     writeFileSync(join(bin, "dsh"), `#!/usr/bin/env bun
 import { appendFileSync, readFileSync, statSync, writeFileSync } from "node:fs";
@@ -2324,7 +2304,6 @@ ${turn}
     chmodSync(join(bin, "dsh"), 0o755);
   }
 
-  // Reports what the child saw as the final text.
   const OBSERVE = `const observed = {
   prompt,
   patch: [["- id: sandbox-policy", 4], ["- id: credentials", 3], ["- id: agent-default-model", 5]].flatMap(([row, count]) => {
@@ -2500,9 +2479,6 @@ describe("amp lanes", () => {
   const MISSING_KEY = "Error: Invalid or missing API key. Run 'amp login' to authenticate.";
   const AMP_VARIABLES = ["AMP_API_KEY", "AMP_SETTINGS_FILE", "AMP_EXECUTOR", "AMP_INITIAL_AGENT_MODE_KEY", "AMP_URL"];
 
-  // An Amp stand-in: `usage` exits `usageExit` and prints `usage` (to stderr when it fails); the model call runs
-  // `turn`, which sees `args`, `at`, `settings` and the stdin `prompt`. The child environment keeps no test
-  // variable, so each case bakes its own.
   function fakeAmp(usage: string, turn: string, usageExit = 0): void {
     writeFileSync(join(bin, "amp"), `#!/usr/bin/env bun
 import { existsSync, readFileSync, statSync, writeFileSync } from "node:fs";
@@ -2521,7 +2497,6 @@ ${turn}
     chmodSync(join(bin, "amp"), 0o755);
   }
 
-  // Reports what the child saw as the result text.
   const OBSERVE = `const observed = {
   prompt,
   mode: at("-m"),
@@ -2654,8 +2629,6 @@ describe("agy lanes", () => {
   const MODELS = "gemini-3.8-flash-high\tGemini 3.8 Flash (High)\ngemini-3.8-flash-medium\tGemini 3.8 Flash (Medium)\ngemini-3.8-flash-low\tGemini 3.8 Flash (Low)\n";
   const SIGN_IN = "Fetching available models...\nError: Please sign in to view available models. Launch the CLI without arguments to sign in.";
 
-  // An agy stand-in: `models` prints `models` to stdout, or `signIn` to stderr with exit 1; the model call runs
-  // `turn`, which sees `args`, `at`, `stdin` and `result(body)`. The child environment keeps no test variable.
   function fakeAgy(turn: string, models = MODELS, signIn = false): void {
     writeFileSync(join(bin, "agy"), `#!/usr/bin/env bun
 import { existsSync, readFileSync, statSync, writeFileSync } from "node:fs";
@@ -2677,7 +2650,6 @@ ${turn}
     chmodSync(join(bin, "agy"), 0o755);
   }
 
-  // Reports what the child saw: the agent file in --add-dir, its modes, the stdin line and the environment.
   const OBSERVE = `const agent = join(at("--add-dir"), ".agents/agents", at("--agent") + ".md");
 if (!existsSync(agent)) {
   console.error('error: unknown agent "' + at("--agent") + '"');
@@ -2788,7 +2760,6 @@ process.exit(1);`);
     expect(interruptedResult.exitCode).toBe(130);
     expect(interruptedResult.receipt).toMatchObject({ status: "cancelled", exitCode: 1, error: { message: "agy reported the turn was interrupted" } });
 
-    // The stand-in fails closed like agy when the run-owned agent file is gone.
     fakeAgy(`import { rmSync } from "node:fs";
 rmSync(join(at("--add-dir"), ".agents"), { recursive: true });
 ${OBSERVE}`);
@@ -2818,9 +2789,6 @@ describe("cursor lanes", () => {
   const AUTH_REQUIRED = "Error: Authentication required. Run 'agent login', pass --api-key/--auth-token, or set CURSOR_API_KEY/CURSOR_AUTH_TOKEN.";
   const CURSOR_VARIABLES = ["CURSOR_API_KEY", "CURSOR_AUTH_TOKEN", "CURSOR_API_ENDPOINT", "CURSOR_SANDBOX_POLICY_DIR", "CURSOR_CONFIG_DIR"];
 
-  // A cursor-agent stand-in: `models` prints `models` to stdout, or the authentication error to stderr with exit 1;
-  // the model call runs `turn`, which sees `args`, `at`, the stdin `prompt` and `emit(event)`. The child environment
-  // keeps no test variable, so each case bakes its own.
   function fakeCursor(turn: string, models = MODELS, loggedOut = false): void {
     writeFileSync(join(bin, "cursor-agent"), `#!/usr/bin/env bun
 import { readFileSync, statSync, writeFileSync } from "node:fs";
@@ -2842,7 +2810,6 @@ ${turn}
     chmodSync(join(bin, "cursor-agent"), 0o755);
   }
 
-  // Reports what the child saw as the last assistant text, after an earlier segment the result joins.
   const OBSERVE = `const dir = process.env.CURSOR_CONFIG_DIR;
 const config = join(dir, "cli-config.json");
 const observed = {
