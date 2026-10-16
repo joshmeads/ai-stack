@@ -1,6 +1,7 @@
 import { mkdtemp, rm } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
+import { VERSION_MANIFESTS } from './core.ts';
 import { command, type Command } from './io.ts';
 import { REPO, type ChangedFile, type GitHub, type Pull } from './types.ts';
 
@@ -18,6 +19,27 @@ export function parseChangedFiles(output: string): ChangedFile[] {
   if (new Set(files.map(f => f.filename)).size !== files.length) throw new Error('Duplicate changed-file diff');
   return files;
 }
+type Json = Record<string, unknown>;
+const object = (value: unknown): value is Json => typeof value === 'object' && value !== null && !Array.isArray(value);
+/** The manifest's version strings, and the manifest without them. */
+function versions(path: string, text: string): { versions: unknown[]; rest: Json } | undefined {
+  let value: unknown;
+  try { value = JSON.parse(text); } catch { return undefined; }
+  if (!object(value)) return undefined;
+  if (path !== '.claude-plugin/marketplace.json') { const { version, ...rest } = value; return { versions: [version], rest }; }
+  if (!Array.isArray(value.plugins)) return undefined;
+  const found: unknown[] = [];
+  const plugins = value.plugins.map(plugin => { if (!object(plugin)) return plugin; const { version, ...rest } = plugin; found.push(version); return rest; });
+  return { versions: found, rest: { ...value, plugins } };
+}
+/** True when the two manifest texts differ only in version strings, and at least one changed. */
+export function versionOnly(path: string, before: string, after: string): boolean {
+  const a = versions(path, before), b = versions(path, after);
+  if (!a || !b || !Bun.deepEquals(a.rest, b.rest)) return false;
+  const changed = a.versions.flatMap((v, i) => v === b.versions[i] ? [] : [[v, b.versions[i]]]);
+  return changed.length > 0 && changed.every(pair => pair.every(v => typeof v === 'string'));
+}
+
 export class Publisher implements GitHub {
   constructor(private run: Command = command) {}
   private async api(path: string, args: string[] = [], allowInterrupted = false): Promise<unknown> {
@@ -39,7 +61,19 @@ export class Publisher implements GitHub {
         if ((await this.run(['git', 'rev-parse', '--verify', `${sha}^{commit}`], { cwd: repository, env })).trim() !== sha) throw new Error('Pinned diff commit unavailable');
       }
       const output = await this.run(['git', 'diff', '--no-ext-diff', '--no-textconv', '--name-status', '-z', '--find-renames', `${base}...${head}`, '--'], { cwd: repository, env });
-      return parseChangedFiles(output);
+      const files = parseChangedFiles(output);
+      // The three-dot diff compares the merge base to the head, so the version check does too.
+      const mergeBase = (await this.run(['git', 'merge-base', base, head], { cwd: repository, env })).trim();
+      const blob = async (commit: string, path: string): Promise<{ mode: string; text: string } | undefined> => {
+        const entry = /^(100644|100755) blob ([a-f0-9]{40})\t/.exec(await this.run(['git', 'ls-tree', '-z', commit, '--', path], { cwd: repository, env }));
+        return entry ? { mode: entry[1]!, text: await this.run(['git', 'cat-file', 'blob', entry[2]!], { cwd: repository, env }) } : undefined;
+      };
+      for (const file of files) {
+        if (file.previous_filename || !Object.hasOwn(VERSION_MANIFESTS, file.filename)) continue;
+        const before = await blob(mergeBase, file.filename), after = await blob(head, file.filename);
+        if (before && after && before.mode === after.mode && versionOnly(file.filename, before.text, after.text)) file.versionOnly = true;
+      }
+      return files;
     } finally { await rm(repository, { recursive: true, force: true }); }
   }
   async comment(pr: number, body: string): Promise<string> {

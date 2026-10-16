@@ -238,7 +238,7 @@ describe('isolated harness boundaries', () => {
     await writeFile(join(config, instructions), original);
     if (harness === 'codex') await writeFile(join(config, 'pstack-models.md'), original);
     const receipt = newReceipt(111, 'a'.repeat(40), 'b'.repeat(40), false, root);
-    receipt.selection = { paths: [], skills: [], features: [`${harness}:setup`], noRuntime: false };
+    receipt.runFeatures = [`${harness}:setup`];
     receipt.installations = [{ harness, home, location: join(workspace, 'plugins/pstack'), sha: receipt.sha, cliVersion: 'test', pluginVersion: 'test', treeHash: await treeHash(join(workspace, 'plugins/pstack')), sourceHash: await sourceDigest(workspace) }];
     const driver = new MacDriver(command, async args => {
       expect(args[0]).toBe(harness);
@@ -302,7 +302,7 @@ async function candidate(harness: Harness): Promise<{ root: string; installation
 }
 function selected(root: string, installation: Installation, features: string[]): Receipt {
   const receipt = newReceipt(111, 'a'.repeat(40), 'b'.repeat(40), false, root);
-  receipt.selection = { paths: [], skills: [], features: features.map(feature => `${installation.harness}:${feature}`), noRuntime: false };
+  receipt.runFeatures = features.map(feature => `${installation.harness}:${feature}`);
   receipt.installations = [installation];
   return receipt;
 }
