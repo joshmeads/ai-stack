@@ -9,6 +9,7 @@ const roots: string[] = [];
 const project = '.claude/skills/verify-open-pstack';
 const plugin = 'plugins/pstack';
 const alias = '.agents/skills/verify-open-pstack';
+const gitEnv = { PATH: process.env.PATH ?? '', GIT_CONFIG_GLOBAL: '/dev/null', GIT_CONFIG_NOSYSTEM: '1' };
 afterEach(async () => { for (const root of roots.splice(0)) await rm(root, { recursive: true, force: true }); });
 async function fixture(): Promise<{ root: string; sha: string }> {
   const root = await realpath(await mkdtemp(join(tmpdir(), 'pstack-provenance-'))); roots.push(root);
@@ -24,8 +25,8 @@ async function fixture(): Promise<{ root: string; sha: string }> {
     ['git', 'init', '--quiet'], ['git', 'config', 'user.name', 'Provenance Test'],
     ['git', 'config', 'user.email', 'test@example.invalid'], ['git', 'add', '.'],
     ['git', '-c', 'commit.gpgsign=false', 'commit', '--quiet', '-m', 'fixture'],
-  ]) await command(args, { cwd: root });
-  return { root, sha: (await command(['git', 'rev-parse', 'HEAD'], { cwd: root })).trim() };
+  ]) await command(args, { cwd: root, env: gitEnv });
+  return { root, sha: (await command(['git', 'rev-parse', 'HEAD'], { cwd: root, env: gitEnv })).trim() };
 }
 
 test('real pinned source remains stable after both permitted dependency bootstraps, including symlinks', async () => {
@@ -54,7 +55,7 @@ test('plugin code mutation, executable-bit changes and missing source fail again
   await writeFile(join(root, plugin, 'plugin.json'), '{}\n');
   await expect(sourceHash(root, sha)).rejects.toThrow('Source differs from pinned Git tree');
   await writeFile(join(root, plugin, 'plugin.json'), '{"version":"1"}\n');
-  await command(['git', 'config', 'core.filemode', 'false'], { cwd: root });
+  await command(['git', 'config', 'core.filemode', 'false'], { cwd: root, env: gitEnv });
   await chmod(join(root, project, 'scripts/verify.sh'), 0o644);
   await expect(sourceHash(root, sha)).rejects.toThrow('Source differs from pinned Git tree');
   await chmod(join(root, project, 'scripts/verify.sh'), 0o755);
@@ -169,9 +170,9 @@ test('HEAD must match exact pinned source and committed dependency directories c
   await expect(sourceHash(root, 'HEAD')).rejects.toThrow('exact pinned SHA');
   await mkdir(join(root, project, 'node_modules'));
   await writeFile(join(root, project, 'node_modules/committed.ts'), 'tracked runtime\n');
-  await command(['git', 'add', '.'], { cwd: root });
-  await command(['git', '-c', 'commit.gpgsign=false', 'commit', '--quiet', '-m', 'tracked dependencies'], { cwd: root });
-  const changed = (await command(['git', 'rev-parse', 'HEAD'], { cwd: root })).trim();
+  await command(['git', 'add', '.'], { cwd: root, env: gitEnv });
+  await command(['git', '-c', 'commit.gpgsign=false', 'commit', '--quiet', '-m', 'tracked dependencies'], { cwd: root, env: gitEnv });
+  const changed = (await command(['git', 'rev-parse', 'HEAD'], { cwd: root, env: gitEnv })).trim();
   await expect(sourceHash(root, sha)).rejects.toThrow('HEAD differs');
   await expect(sourceHash(root, changed)).rejects.toThrow('Pinned source files missing');
 });
