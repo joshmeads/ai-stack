@@ -315,12 +315,18 @@ pub fn apply(plan: &Plan, backup_root: &Path, runner: &dyn Runner) -> Result<App
     let manifest = if removals.is_empty() {
         None
     } else {
-        let entries: Vec<serde_json::Value> = removals.iter().map(|command| serde_json::json!({
-            "harness": command.harness.as_str(),
-            "id": command.args.last(),
-            "removed_with": command.to_string(),
-            "reinstall": command.undo_command().map(|undo| undo.to_string()),
-        })).collect();
+        let entries: Vec<serde_json::Value> = removals.iter().map(|command| {
+            let mut entry = serde_json::json!({
+                "harness": command.harness.as_str(),
+                "id": command.args.last(),
+                "removed_with": command.to_string(),
+                "reinstall": command.undo_command().map(|undo| undo.to_string()),
+            });
+            if let Some(note) = command.undo_note() {
+                entry["note"] = note.into();
+            }
+            entry
+        }).collect();
         let path = backup_dir.join(MANIFEST);
         let text = serde_json::to_string_pretty(&serde_json::json!({ "plugins": entries }))?;
         fs::write(&path, format!("{text}\n")).with_context(|| format!("writing {}", path.display()))?;

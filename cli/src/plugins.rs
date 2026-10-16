@@ -12,7 +12,7 @@ use anyhow::{Context as _, Result};
 use serde_json::Value;
 
 use crate::config::{Config, Harness, HarnessConfig};
-use crate::exec::shell_quote as quote;
+use crate::exec::{self, shell_quote as quote};
 use crate::plan::Plan;
 
 pub const MARKETPLACE: &str = "jm";
@@ -27,16 +27,32 @@ pub struct Command {
     /// CLI would use anyway.
     pub env: Option<(&'static str, PathBuf)>,
     pub args: Vec<String>,
-    /// For a removal, the arguments that would restore the plugin. `None` otherwise.
-    pub undo: Option<Vec<String>>,
+    /// For a removal, how the plugin comes back. `None` otherwise.
+    pub undo: Option<Restore>,
     /// A `--clean` removal of a plugin the stack does not own.
     pub clean: bool,
 }
 
+/// How a removed plugin comes back, recorded in `removed-plugins.json`.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum Restore {
+    /// Arguments to the same CLI that reinstall or re-enable it.
+    Command(Vec<String>),
+    /// No command can, because its marketplace no longer lists it: where to restore it from.
+    Note(String),
+}
+
 impl Command {
     pub fn undo_command(&self) -> Option<Command> {
-        let args = self.undo.clone()?;
-        Some(Command { harness: self.harness, env: self.env.clone(), args, undo: None, clean: false })
+        let Some(Restore::Command(args)) = &self.undo else { return None };
+        Some(Command { harness: self.harness, env: self.env.clone(), args: args.clone(), undo: None, clean: false })
+    }
+
+    pub fn undo_note(&self) -> Option<&str> {
+        match &self.undo {
+            Some(Restore::Note(note)) => Some(note),
+            _ => None,
+        }
     }
 }
 
@@ -158,13 +174,16 @@ pub fn plan(cfg: &Config, hc: &HarnessConfig, runner: &dyn Runner, out: &mut Pla
         return Ok(());
     };
     // A `jm` plugin the checkout no longer lists, such as the retired jm-games, is removed
-    // before the installs.
-    let removal = |args: &[&str], undo: &[&str]| Command { harness: hc.harness, env: env.clone(), args: strings(args), undo: Some(strings(undo)), clean: false };
+    // before the installs. Its marketplace cannot reinstall it, so the record names the last
+    // stack commit that lists it instead of a command.
     for entry in &installed {
-        let listed = entry.id.strip_suffix(&format!("@{MARKETPLACE}")).is_some_and(|plugin| manifest.iter().any(|(name, _)| name == plugin));
-        if entry.id.ends_with(&format!("@{MARKETPLACE}")) && !listed {
-            plan_removal(hc.harness, entry, &removal, out);
+        let Some(plugin) = entry.id.strip_suffix(&format!("@{MARKETPLACE}")) else { continue };
+        if manifest.iter().any(|(name, _)| name == plugin) {
+            continue;
         }
+        let note = retired_note(stack, hc.harness, plugin);
+        let removal = |args: &[&str], _: &[&str]| Command { harness: hc.harness, env: env.clone(), args: strings(args), undo: Some(Restore::Note(note.clone())), clean: false };
+        plan_removal(hc.harness, entry, &removal, out);
     }
     for plugin in PLUGINS {
         let id = format!("{plugin}@{MARKETPLACE}");
@@ -195,7 +214,7 @@ pub fn plan_clean(cfg: &Config, hc: &HarnessConfig, runner: &dyn Runner, out: &m
     let name = hc.harness.name();
     let env = env_for(hc);
     let list = Command { harness: hc.harness, env: env.clone(), args: strings(&["plugin", "list", "--json"]), undo: None, clean: false };
-    let removal = |args: &[&str], undo: &[&str]| Command { harness: hc.harness, env: env.clone(), args: strings(args), undo: Some(strings(undo)), clean: true };
+    let removal = |args: &[&str], undo: &[&str]| Command { harness: hc.harness, env: env.clone(), args: strings(args), undo: Some(Restore::Command(strings(undo))), clean: true };
     let installed = match query(runner, &list) {
         // The install pass reports the missing CLI as a conflict.
         Query::Missing => return Ok(()),
@@ -238,6 +257,32 @@ fn plan_removal(harness: Harness, entry: &Installed, removal: &dyn Fn(&[&str], &
         (Harness::Claude, Some(scope)) => {
             out.warnings.push(format!("note: {id} is installed in {scope} scope for a project; ai-stack removes user-scope plugins only, so it stays"));
         }
+    }
+}
+
+/// Where a retired `jm` plugin can be restored from: the last commit of the stack whose
+/// marketplace manifest lists it. That is HEAD when only the working tree dropped it, and
+/// otherwise the parent of the latest commit that changed its entry.
+fn retired_note(stack: &Path, harness: Harness, plugin: &str) -> String {
+    let manifest = manifest_path(harness);
+    let git = |args: &[&str]| exec::check(&exec::SystemExec, "git", &strings(&[&["-C", &stack.to_string_lossy()], args].concat()), None).map(|out| out.trim().to_string());
+    let quoted = format!("\"{plugin}\"");
+    let listed_at_head = git(&["show", &format!("HEAD:{manifest}")]).is_ok_and(|text| text.contains(&quoted));
+    let commit = if listed_at_head {
+        git(&["rev-parse", "HEAD"]).ok()
+    } else {
+        git(&["log", "-1", "--format=%H", "-S", &quoted, "--", manifest]).ok().filter(|removed| !removed.is_empty()).and_then(|removed| git(&["rev-parse", &format!("{removed}^")]).ok())
+    };
+    match commit {
+        Some(commit) => format!("{plugin} was retired from the {MARKETPLACE} marketplace. Commit {commit} of the stack {} is the last that lists it in {manifest}; restore it from there.", stack.display()),
+        None => format!("{plugin} was retired from the {MARKETPLACE} marketplace, and the stack {} has no commit that lists it in {manifest}.", stack.display()),
+    }
+}
+
+fn manifest_path(harness: Harness) -> &'static str {
+    match harness {
+        Harness::Claude => ".claude-plugin/marketplace.json",
+        Harness::Codex => ".agents/plugins/marketplace.json",
     }
 }
 
@@ -330,9 +375,10 @@ fn installed_plugins(harness: Harness, json: &Value) -> Option<Vec<Installed>> {
 /// in `PLUGINS`. Returns every listed plugin with the version its harness manifest declares,
 /// when it declares one.
 fn read_manifest(stack: &Path, harness: Harness) -> Result<Vec<(String, Option<String>)>> {
-    let (manifest, plugin_manifest) = match harness {
-        Harness::Claude => (".claude-plugin/marketplace.json", ".claude-plugin/plugin.json"),
-        Harness::Codex => (".agents/plugins/marketplace.json", ".codex-plugin/plugin.json"),
+    let manifest = manifest_path(harness);
+    let plugin_manifest = match harness {
+        Harness::Claude => ".claude-plugin/plugin.json",
+        Harness::Codex => ".codex-plugin/plugin.json",
     };
     let path = stack.join(manifest);
     let text = std::fs::read_to_string(&path).with_context(|| format!("cannot read {}", path.display()))?;
