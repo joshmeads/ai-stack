@@ -70,7 +70,8 @@ enum Commands {
         #[arg(long)]
         clean: bool,
     },
-    /// Count the skills and plugins that `--clean` would move or remove. Read-only, like `diff`.
+    /// Report the stray skills (what `--clean` moves and what sits where a skill link goes) and
+    /// the plugins `--clean` removes. Read-only, like `diff`.
     Stray {
         /// Print `{"skills":N,"plugins":M,"skill_names":[...],"plugin_ids":[...]}` on one line.
         #[arg(long)]
@@ -81,7 +82,8 @@ enum Commands {
         /// Apply without review.
         #[arg(long)]
         yes: bool,
-        /// Replace an unmanaged model sheet (backed up first).
+        /// Replace an unmanaged model sheet, and move a stray skill in a skill link's way, each
+        /// into the backup first.
         #[arg(long)]
         force: bool,
         /// Print the plan instead of opening the review screen.
