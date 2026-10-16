@@ -66,8 +66,11 @@ export function adapterSuite(adapter: ProviderAdapter): void {
 
     if (adapter.effortIn === "config") {
       it("carries the effort in the config only, and omits it for the default effort", () => {
-        expect(config({ effort: "high" })).toContain("high");
-        expect(config({ effort: "default" })).not.toContain("high");
+        // Line by line, so a path in the config that happens to contain "high" does not count.
+        const high = config({ effort: "high" }).split("\n");
+        const base = config({ effort: "default" }).split("\n");
+        expect(high.filter((line) => !base.includes(line))).toEqual([expect.stringContaining("high")]);
+        expect(base.filter((line) => !high.includes(line))).toEqual([]);
         expect(argv({ effort: "high" })).toEqual(argv({ effort: "default" }));
       });
     } else if (adapter.effortIn === "flag") {
