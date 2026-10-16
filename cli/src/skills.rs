@@ -67,6 +67,7 @@ impl Skills<'_> {
         }
         file.skills.push(skill.clone());
         file.validate()?;
+        file.check_dests(self.stack)?;
         let target = self.stack.join(skill.target());
         ensure!(fs::symlink_metadata(&target).is_err(), "{} already exists; remove it first", target.display());
 
