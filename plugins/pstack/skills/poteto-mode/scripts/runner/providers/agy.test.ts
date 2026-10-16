@@ -8,7 +8,6 @@ import { agy } from "./agy.ts";
 
 adapterSuite(agy);
 
-// Sanitized from Antigravity CLI 1.3.6 captures: structure kept, identity and host paths replaced.
 const fixture = (name: string): string => readFileSync(join(import.meta.dir, "fixtures/agy", name), "utf8");
 
 const lane = (request: Partial<LaneRequest> = {}) => testLane({ provider: "agy", model: "gemini-3.8-flash", effort: "medium", ...request });
@@ -80,7 +79,6 @@ describe("agy preflight", () => {
   it("reads exit 0 without the variant as an unavailable model", () => {
     expect(preflight(0, fixture("models-logged-in.txt"), "", { model: "gemini-3.7-flash", effort: "default" }))
       .toEqual({ kind: "unavailable-model" });
-    // The label column and a prefix of an ID are not the ID.
     expect(preflight(0, "gemini-3.8-flash-medium-preview\tGemini\nother\tgemini-3.8-flash-medium\n")).toEqual({ kind: "unavailable-model" });
     expect(preflight(0, "")).toEqual({ kind: "unavailable-model" });
   });

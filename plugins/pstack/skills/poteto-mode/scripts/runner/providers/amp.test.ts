@@ -10,7 +10,6 @@ import { BASE_ALLOWLIST, BASE_PREFIXES } from "./shared.ts";
 
 adapterSuite(amp);
 
-// Sanitized from Amp CLI 0.0.1792094445-g3475f5 captures: structure kept, identity and host paths removed.
 const fixture = (name: string): string => readFileSync(join(import.meta.dir, "fixtures/amp", name), "utf8");
 
 const lane = (request: Partial<LaneRequest> = {}) =>

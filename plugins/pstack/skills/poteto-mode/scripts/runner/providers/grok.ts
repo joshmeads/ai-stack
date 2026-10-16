@@ -16,7 +16,6 @@ import {
   type JsonObject,
 } from "./shared.ts";
 
-// Grok's shell can read what it inherits in both access modes, so it adds only its own prefixes.
 const ENVIRONMENT_PREFIXES = [...BASE_PREFIXES, "GROK_", "XAI_"];
 
 const LOGIN = /\blogged in\b|\bYou are using XAI_API_KEY\.|\bYou are authenticated via deployment key\./i;

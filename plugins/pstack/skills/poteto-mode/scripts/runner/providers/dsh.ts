@@ -136,7 +136,6 @@ function parse(run: ModelRun): ParseResult {
   };
   const reason = turnEnd(parsed.list);
   if (reason?.kind === "error") {
-    // The run's nonzero exit lets run.ts read an unknown model from the same stderr line.
     if (modelFailureStatus(run.stderr) === "unavailable-model") return { kind: "malformed", message: "dsh named an unavailable model" };
     const error = object(reason.error);
     const message = `dsh turn failed: ${errorCode(reason) ?? "unknown code"}: ${nullableString(error?.message) ?? "no message"}`;
@@ -181,7 +180,6 @@ export const dsh = adapter({
   launch: {
     prompt: "stdin",
     sidecar: { output: null, config: { name: "patch.yml", content: patch } },
-    // The Seatbelt `workspace-write` writer waits for a writer route in the live gate.
     supports: ["read-only"],
     needsSharedGitDir: () => false,
     // Launcher flags must come before `--json`.

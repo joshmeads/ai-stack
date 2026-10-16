@@ -9,7 +9,6 @@ import { cursor } from "./cursor.ts";
 
 adapterSuite(cursor);
 
-// Sanitized from Cursor CLI 2026.10.14-0f9edde captures: structure kept, IDs and host paths replaced.
 const fixture = (name: string): string => readFileSync(join(import.meta.dir, "fixtures/cursor", name), "utf8");
 
 const lane = (request: Partial<LaneRequest> = {}) => testLane({ provider: "cursor", model: "composer-2.5", effort: "default", ...request });
@@ -78,7 +77,6 @@ describe("cursor preflight", () => {
 
   it("reads a model list without the ID as an unavailable model", () => {
     expect(preflight(0, fixture("models-logged-in.txt"), "", { model: "claude-opus-9-9-max" })).toEqual({ kind: "unavailable-model" });
-    // A label or a longer ID is not the ID.
     expect(preflight(0, "Available models\n\ncomposer-2.5-fast - Composer 2.5 Fast\nauto - composer-2.5 - x\n"))
       .toEqual({ kind: "unavailable-model" });
   });
