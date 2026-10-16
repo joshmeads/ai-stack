@@ -51,7 +51,7 @@ test('reads role defaults, kept predecessors and routes from the generated catal
     expect(installed.route(harness, 'devin:any@max')).toBe('external');
     expect(installed.route(harness, 'inherit-parent')).toBe('native');
   }
-  expect(() => installed.route('claude', 'cursor:any@max')).toThrow('catalog-route-missing');
+  expect(() => installed.route('claude', 'kiro:any@max')).toThrow('catalog-route-missing');
 });
 
 for (const harness of ['claude', 'codex'] as const) {
@@ -234,8 +234,8 @@ for (const harness of ['claude', 'codex'] as const) {
     await swe16!.prepare!(f);
     expect(devin!.prompt(f)).toContain(`--parent ${harness} --provider devin --model swe-2 --effort max --mode read-only`);
     expect(swe16!.prompt(f)).toContain(`--parent ${harness} --provider devin --model swe-1.6 --effort default --mode read-only`);
-    const [unknown] = recipe('runner', harness, ['cursor:auto@default']);
-    await expect(unknown!.prepare!(f)).rejects.toThrow('catalog-route-missing:cursor:auto@default');
+    const [unknown] = recipe('runner', harness, ['kiro:auto@default']);
+    await expect(unknown!.prepare!(f)).rejects.toThrow('catalog-route-missing:kiro:auto@default');
   });
 }
 
