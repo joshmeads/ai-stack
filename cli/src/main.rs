@@ -213,8 +213,8 @@ enum SkillsCommand {
         #[arg(long, value_name = "DIR", default_value = stackfile::DEFAULT_DEST)]
         dest: String,
         /// Install under this directory name and rewrite SKILL.md's `name:` to it.
-        #[arg(long = "move", value_name = "NAME")]
-        rename: Option<String>,
+        #[arg(long = "move", value_name = "NAME", value_parser = skill_name)]
+        rename: Option<stackfile::SkillName>,
         /// Script run as `sh <script> <staged skill dir>` on every pull.
         #[arg(long, value_name = "PATH", conflicts_with = "process_prompt")]
         process_script: Option<String>,
@@ -222,8 +222,8 @@ enum SkillsCommand {
         #[arg(long, value_name = "TEXT")]
         process_prompt: Option<String>,
         /// Entry name in stack.toml (default: the last component of PATH).
-        #[arg(long)]
-        name: Option<String>,
+        #[arg(long, value_parser = skill_name)]
+        name: Option<stackfile::SkillName>,
     },
     /// Compare each entry's commit with its upstream ref. Exit 0 when all are current.
     Status,
@@ -242,6 +242,10 @@ enum SkillsCommand {
         #[arg(long)]
         force: bool,
     },
+}
+
+fn skill_name(text: &str) -> Result<stackfile::SkillName> {
+    stackfile::SkillName::try_from(text)
 }
 
 /// Paths and overrides shared by every command.

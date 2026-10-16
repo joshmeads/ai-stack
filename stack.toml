@@ -1,4 +1,4 @@
-# Skill groups and vendored skills. Written by `ai-stack skills`; comments are not kept.
+# Skill groups and vendored skills. See cli/README.md.
 
 [groups.art]
 global = true
