@@ -1,0 +1,40 @@
+{
+  "amp.mcpServers": {},
+  "amp.skills.disableClaudeCodeSkills": true,
+  "amp.skills.disableGlobalAgentsSkills": true,
+  "amp.tools.enable": [
+    "Read"
+  ],
+  "amp.permissions": [
+    {
+      "tool": "Read",
+      "action": "allow"
+    },
+    {
+      "tool": "create_file",
+      "action": "reject"
+    },
+    {
+      "tool": "edit_file",
+      "action": "reject"
+    },
+    {
+      "tool": "apply_patch",
+      "action": "reject"
+    },
+    {
+      "tool": "shell_command",
+      "action": "reject"
+    },
+    {
+      "tool": "code_exec",
+      "action": "reject"
+    },
+    {
+      "tool": "*",
+      "action": "reject"
+    }
+  ],
+  "amp.updates.mode": "disabled",
+  "amp.notifications.enabled": false
+}

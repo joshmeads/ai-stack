@@ -20,6 +20,7 @@ Model and provider facts for [`provider-dispatch.md`](provider-dispatch.md), whi
 | deepseek-v4.1-flash-free | DeepSeek V4.1 Flash (OpenCode Zen) | opencode | opencode/deepseek-v4.1-flash-free | max | low high max | - | optional | - |
 | deepseek-flash | DeepSeek Flash (dsh) | dsh | deepseek-flash | max | low high max | - | optional | - |
 | deepseek-v4-pro | DeepSeek V4 Pro (dsh) | dsh | deepseek-v4-pro | max | low high max | - | optional | - |
+| amp-deepseek-v4.1-flash | DeepSeek V4.1 Flash (Amp) | amp | deepseek-v4.1-flash | default | default | - | optional | - |
 
 A family is `default` when a role default names it and `optional` otherwise. A Claude-native agent exists for each selectable effort of a Claude family.
 
@@ -31,6 +32,7 @@ Effort in the model ID: for these families the effort selects the CLI model, and
 | swe-2 | high | `swe-2-high` |
 | swe-2 | max | `swe-2-max` |
 | swe-1.6 | default | `swe-1-6` |
+| amp-deepseek-v4.1-flash | default | `deepseek-v4.1-flash` |
 
 ## Kept predecessors and normalization
 
@@ -57,6 +59,7 @@ Rolling aliases:
 | devin | external runner | external runner | `read-only` | file | provider report | allowlist | - |
 | opencode | external runner | external runner | `read-only` | stdin | pinned argv | allowlist | - |
 | dsh | external runner | external runner | `read-only` | stdin | pinned argv | allowlist | - |
+| amp | external runner | external runner | `read-only` | stdin | pinned argv | allowlist | - |
 
 The runner refuses an access mode outside a provider's Access modes cell before launch. `isolated-write-full-access` is a writer capability, not a `--mode` value: the runner takes it as `--mode isolated-write --writer-sandbox full-access`, which a parent passes only when the model sheet opts in, as [`provider-dispatch.md`](provider-dispatch.md#codex-writer-sandbox) says.
 
@@ -131,6 +134,22 @@ The runner refuses an access mode outside a provider's Access modes cell before 
 - The reply is the `--json` stream's `final` text, accepted only after a `status` `turn_end` with `reason.kind` `completed`. SIGTERM exits 0 with a partial `final` and no `turn_end`, so that is `malformed-output`/65, never complete. Exit 130 after SIGINT is `cancelled`/130. A `turn_end` error is `child-failed`/70 with its code and message, except that DeepSeek's `The supported API model names are ...` refusal is `unavailable-model`/69. Usage sums the `step_end` usage; the session ID is the `session` event's. No cost is reported.
 - No served model is reported, so the model proof is the pinned patch (`pinned-argv`).
 - Server side: requests still carry the `x-deepseek-harness-user-id` and `x-deepseek-harness-session-id` headers. Whether DeepSeek keeps request content is not measured.
+
+### amp: Amp CLI
+
+- Executable: `amp`.
+- Host prerequisites: none.
+- State paths: `~/.local/share/amp/` (the login in `secrets.json`, accounts, session and recent threads) and `~/.cache/amp/` (logs, downloaded plugins and skills).
+- Child environment: only `PATH` `HOME` `USER` `LOGNAME` `SHELL` `TMPDIR` `LANG` `TERM` `COLORTERM` `TZ` `HTTP_PROXY` `HTTPS_PROXY` `NO_PROXY` `ALL_PROXY` `http_proxy` `https_proxy` `no_proxy` `all_proxy` `SSL_CERT_FILE` `SSL_CERT_DIR` `NODE_EXTRA_CA_CERTS` `AMP_API_KEY`, and variables starting with `LC_`, `XDG_`; sets `AMP_IGNORE_GUIDANCE_FILES=*`.
+- Effort is part of the model ID. The model is an official Amp agent mode, such as `deepseek-v4.1-flash`, from Amp's own `official-modes` plugin, which Amp serves to every user. Where a mode has effort variants, the variant is part of its name (for example `gpt-6-astra-low` to `gpt-6-astra-max`). An unregistered Amp model must be a mode name with the `default` effort. An unknown mode exits 1 with a generic error and ends `child-failed`/70.
+- Read-only only. Amp has no OS sandbox and auto-approves its `ask` rules in execute mode, and a shell write escaped the cwd whenever the shell was allowed, so no Amp mode is a bounded writer. The runner refuses an `isolated-write` lane before launch.
+- Each lane gets a run-owned `--settings-file` in its private `<receipt>.provider/` directory (0700). It enables only the `Read` tool and rejects every other tool, which turns off the shell, edits, subagents, web tools, code execution, thread tools and `manage_amp`. It also turns off MCP servers, Claude Code and `~/.agents` skills, updates and notifications. The lane sets `AMP_IGNORE_GUIDANCE_FILES=*`, so `AGENTS.md` in the cwd and its parents does not load. The `official-modes` workspace plugin still loads, because it supplies the modes. `Read` can read any path on the host.
+- The runner refuses an Amp lane whose cwd, or any parent up to the git root, holds `.amp`: a `.amp/settings.json` there overrides the run-owned settings, and `.amp/plugins/*.ts` runs its code at startup with no trust check.
+- The environment is an allowlist that adds only `AMP_API_KEY`. No other `AMP_` name passes: `AMP_SETTINGS_FILE`, `AMP_EXECUTOR`, `AMP_INITIAL_AGENT_MODE_KEY` and `AMP_URL` would change the settings, where the turn runs, the mode or the service.
+- The preflight is `amp usage`, run without a terminal. It passes when it exits 0 and starts with `Signed in as `, and records the fixed evidence `authenticated`, because the output holds the account email and credit balance. Exit 1 with `Invalid or missing API key` is `unauthenticated`/77, and any other output is `child-failed`/70. A logged-out Amp command other than `amp usage` can open a browser login on its own, which is why the runner never starts a turn without a passing preflight.
+- The reply, session and token usage come from the stream JSON on stdout: the reply is the `result` event's text, the session is its `session_id` (`T-<uuid>`, also the ampcode.com thread ID), and the usage sums each assistant message's `usage`. The stream has no cost and never names the model, so the proof is the pinned mode in the argv (`pinned-argv`).
+- Failures and cancellations can exit 0, so the `result` event decides. `is_error: true` with `User cancelled (SIGINT/SIGTERM)` is `cancelled`/130, and any other `is_error` result is `child-failed`/70 with its error text, for example a Claude mode on a subscription-only account. A rejected tool comes back to the model as an ordinary tool result, and the turn can still complete.
+- Each run is an ampcode.com thread holding the prompt, tool inputs and outputs, the hostname and the working directory. The lane passes `--visibility private` and the label `pstack-runner`; every captured thread was private and archived. Turns spend Amp credits, or a linked ChatGPT subscription for GPT modes.
 
 ## Role defaults
 

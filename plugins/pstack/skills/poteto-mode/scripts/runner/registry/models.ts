@@ -118,6 +118,15 @@ export const FAMILIES = [
     defaultEffort: "max",
     upstream: null,
   }),
+  family({
+    name: "amp-deepseek-v4.1-flash",
+    label: "DeepSeek V4.1 Flash (Amp)",
+    provider: "amp",
+    model: "deepseek-v4.1-flash",
+    efforts: { default: "deepseek-v4.1-flash" }, // an official Amp mode with no effort variants
+    defaultEffort: "default",
+    upstream: null,
+  }),
 ] as const;
 export type FamilyName = (typeof FAMILIES)[number]["name"];
 
@@ -158,4 +167,5 @@ export const RELEASED_PAIRS = [
   { pair: "opencode:opencode/deepseek-v4.1-flash-free", family: "deepseek-v4.1-flash-free" },
   { pair: "dsh:deepseek-flash", family: "deepseek-flash" },
   { pair: "dsh:deepseek-v4-pro", family: "deepseek-v4-pro" },
+  { pair: "amp:deepseek-v4.1-flash", family: "amp-deepseek-v4.1-flash" },
 ] as const satisfies readonly ReleasedPair<FamilyName>[];

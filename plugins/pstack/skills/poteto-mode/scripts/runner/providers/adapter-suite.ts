@@ -85,7 +85,7 @@ export function adapterSuite(adapter: ProviderAdapter): void {
           for (const effort of effortsOf(family)) {
             const args = argv({ model: family.model, effort });
             const id = modelIds(family)![effort]!;
-            expect([family.name, effort, args[args.indexOf("--model") + 1]]).toEqual([family.name, effort, id]);
+            expect([family.name, effort, args.includes(id)]).toEqual([family.name, effort, true]);
             expect(args.filter((token) => token.includes(effort) && token !== id)).toEqual([]);
           }
         }

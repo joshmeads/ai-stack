@@ -2462,3 +2462,162 @@ process.exit(130);`);
     expect(existsSync(input.receiptPath)).toBe(false);
   });
 });
+
+describe("amp lanes", () => {
+  const SIGNED_IN = "Signed in as <EMAIL>\n**Individual credits:** $<CREDITS> remaining";
+  const MISSING_KEY = "Error: Invalid or missing API key. Run 'amp login' to authenticate.";
+  const AMP_VARIABLES = ["AMP_API_KEY", "AMP_SETTINGS_FILE", "AMP_EXECUTOR", "AMP_INITIAL_AGENT_MODE_KEY", "AMP_URL"];
+
+  // An Amp stand-in: `usage` exits `usageExit` and prints `usage` (to stderr when it fails); the model call runs
+  // `turn`, which sees `args`, `at`, `settings` and the stdin `prompt`. The child environment keeps no test
+  // variable, so each case bakes its own.
+  function fakeAmp(usage: string, turn: string, usageExit = 0): void {
+    writeFileSync(join(bin, "amp"), `#!/usr/bin/env bun
+import { existsSync, readFileSync, statSync, writeFileSync } from "node:fs";
+import { dirname } from "node:path";
+const args = process.argv.slice(2);
+if (args[0] === "usage") {
+  (${usageExit} === 0 ? console.log : console.error)(${JSON.stringify(usage)});
+  process.exit(${usageExit});
+}
+const at = (flag) => args[args.indexOf(flag) + 1];
+const settings = at("--settings-file");
+const prompt = await Bun.stdin.text();
+const emit = (event) => console.log(JSON.stringify({ ...event, session_id: "T-fixture" }));
+${turn}
+`);
+    chmodSync(join(bin, "amp"), 0o755);
+  }
+
+  // Reports what the child saw as the result text.
+  const OBSERVE = `const observed = {
+  prompt,
+  mode: at("-m"),
+  dirMode: (statSync(dirname(settings)).mode & 0o777).toString(8),
+  settingsMode: (statSync(settings).mode & 0o777).toString(8),
+  tools: JSON.parse(readFileSync(settings, "utf8"))["amp.tools.enable"],
+  ampVariables: Object.fromEntries(Object.entries(process.env).filter(([key]) => key.startsWith("AMP_"))),
+};
+emit({ type: "system", subtype: "init", tools: ["Read"], agent_mode: "medium" });
+emit({ type: "assistant", message: { role: "assistant", content: [{ type: "text", text: "x" }], usage: { input_tokens: 3, cache_read_input_tokens: 4, output_tokens: 1 } } });
+emit({ type: "assistant", message: { role: "assistant", content: [{ type: "text", text: "y" }], usage: { input_tokens: 2, output_tokens: 5 } } });
+emit({ type: "result", subtype: "success", is_error: false, num_turns: 2, result: JSON.stringify(observed) });`;
+
+  function ampOptions(suffix: string, overrides: Partial<LaneRequest> = {}): LaneRequest {
+    return { ...options("grok", suffix), provider: "amp", model: "deepseek-v4.1-flash", effort: "default", ...overrides };
+  }
+
+  beforeEach(() => {
+    for (const name of AMP_VARIABLES) process.env[name] = `${name}-value`;
+  });
+  afterEach(() => {
+    for (const name of AMP_VARIABLES) delete process.env[name];
+  });
+
+  for (const parent of ["claude", "codex"] as const) {
+    it(`runs amp:deepseek-v4.1-flash from a ${parent} parent with the pinned mode, lockdown settings and prompt on stdin`, async () => {
+      fakeAmp(SIGNED_IN, OBSERVE);
+      const input = ampOptions(`amp-${parent}`, { parent });
+      const result = await runLane(laneOf(input));
+      expect(result.exitCode).toBe(0);
+      const saved = receipt(input.receiptPath);
+      expect(saved).toMatchObject({
+        status: "complete",
+        parent,
+        provider: "amp",
+        model: "deepseek-v4.1-flash",
+        effort: "default",
+        mode: "read-only",
+        reportedModel: null,
+        modelVerified: false,
+        modelEvidence: "pinned-argv",
+        sessionId: "T-fixture",
+        usage: { inputTokens: 5, cachedInputTokens: 4, outputTokens: 6 },
+        costUsd: null,
+        preflight: { status: "passed", evidence: "authenticated" },
+      });
+      const dir = `${input.receiptPath}.provider`;
+      expect(saved.argv.slice(1)).toEqual([
+        "-x", "--stream-json", "-m", "deepseek-v4.1-flash", "--settings-file", join(dir, "settings.json"),
+        "--visibility", "private", "--no-ide", "--no-notifications", "-l", "pstack-runner",
+      ]);
+      expect(saved.preflight.argv.slice(1)).toEqual(["usage"]);
+      expect(JSON.parse(readFileSync(input.outputPath, "utf8"))).toEqual({
+        prompt: "Return the marker.",
+        mode: "deepseek-v4.1-flash",
+        dirMode: "700",
+        settingsMode: "600",
+        tools: ["Read"],
+        ampVariables: { AMP_API_KEY: "AMP_API_KEY-value", AMP_IGNORE_GUIDANCE_FILES: "*" },
+      });
+      expect(statSync(dir).mode & 0o777).toBe(0o700);
+    });
+  }
+
+  for (const [name, usage, usageExit, exitCode, message] of [
+    ["a missing key", MISSING_KEY, 1, 77, "authentication or model preflight failed"],
+    ["a login prompt", "Would you like to log in to Amp? [(y)es, (n)o]", 0, 70, "authentication preflight output was inconclusive"],
+  ] as const) {
+    it(`classifies ${name} before any model call`, async () => {
+      const started = join(scratch, "amp-model.started");
+      fakeAmp(usage, `writeFileSync(${JSON.stringify(started)}, "started");`, usageExit);
+      const input = ampOptions(`amp-preflight-${exitCode}`);
+      const result = await runLane(laneOf(input));
+      expect(result.exitCode).toBe(exitCode);
+      expect(result.receipt).toMatchObject({
+        status: exitCode === 77 ? "unauthenticated" : "child-failed",
+        preflight: { status: "failed" },
+        error: { message },
+      });
+      expect(existsSync(started)).toBe(false);
+    });
+  }
+
+  it("reads exit-0 error and cancellation results, and an unknown mode's exit 1, as failures", async () => {
+    fakeAmp(SIGNED_IN, `emit({ type: "result", subtype: "error_during_execution", is_error: true, num_turns: 0, error: "Claude Usage is set to Subscription Only." });`);
+    const subscription = ampOptions("amp-subscription");
+    const subscriptionResult = await runLane(laneOf(subscription));
+    expect(subscriptionResult.exitCode).toBe(70);
+    expect(subscriptionResult.receipt).toMatchObject({
+      status: "child-failed",
+      exitCode: 0,
+      sessionId: "T-fixture",
+      error: { message: "Claude Usage is set to Subscription Only." },
+    });
+    expect(existsSync(subscription.outputPath)).toBe(false);
+
+    fakeAmp(SIGNED_IN, `emit({ type: "result", subtype: "error_during_execution", is_error: true, num_turns: 0, error: "User cancelled (SIGINT/SIGTERM)" });`);
+    const cancelled = ampOptions("amp-cancelled");
+    const cancelledResult = await runLane(laneOf(cancelled));
+    expect(cancelledResult.exitCode).toBe(130);
+    expect(cancelledResult.receipt).toMatchObject({ status: "cancelled", exitCode: 0, signal: null });
+    expect(existsSync(cancelled.outputPath)).toBe(false);
+
+    fakeAmp(SIGNED_IN, `console.error("Error: Unexpected error inside Amp CLI. Run with AMP_DEBUG=1 to see detailed logs.");
+process.exit(1);`);
+    const unknown = ampOptions("amp-unknown-mode", { model: "nonexistent-mode-xyz" });
+    expect((await runLane(laneOf(unknown))).receipt).toMatchObject({ status: "child-failed", exitCode: 1 });
+  });
+
+  it("refuses an Amp lane whose workspace holds .amp, up to the git root", async () => {
+    const started = join(scratch, "amp-model.started");
+    fakeAmp(SIGNED_IN, `writeFileSync(${JSON.stringify(started)}, "started");`);
+    const repo = join(scratch, "repo"), nested = join(repo, "src");
+    fs.mkdirSync(join(repo, ".amp"), { recursive: true });
+    fs.mkdirSync(nested);
+    const input = ampOptions("amp-project-config", { cwd: nested });
+    expect((await runLane(laneOf(input))).exitCode).toBe(70);
+    expect(receipt(input.receiptPath)).toMatchObject({
+      status: "child-failed",
+      preflight: { status: "not-run" },
+      error: { message: expect.stringContaining(`${join(fs.realpathSync(repo), ".amp")}: the CLI would load`) },
+    });
+    expect(existsSync(started)).toBe(false);
+  });
+
+  it("refuses an isolated-write Amp lane before launch", () => {
+    const input = ampOptions("amp-writer", { mode: "isolated-write" });
+    expect(() => laneOf(input)).toThrow("provider amp does not support isolated-write");
+    expect(existsSync(input.receiptPath)).toBe(false);
+  });
+});
