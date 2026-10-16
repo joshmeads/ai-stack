@@ -21,6 +21,7 @@ Model and provider facts for [`provider-dispatch.md`](provider-dispatch.md), whi
 | deepseek-flash | DeepSeek Flash (dsh) | dsh | deepseek-flash | max | low high max | - | optional | - |
 | deepseek-v4-pro | DeepSeek V4 Pro (dsh) | dsh | deepseek-v4-pro | max | low high max | - | optional | - |
 | amp-deepseek-v4.1-flash | DeepSeek V4.1 Flash (Amp) | amp | deepseek-v4.1-flash | default | default | - | optional | - |
+| gemini-3.8-flash | Gemini 3.8 Flash (Antigravity) | agy | gemini-3.8-flash | high | low medium high | - | optional | - |
 
 A family is `default` when a role default names it and `optional` otherwise. A Claude-native agent exists for each selectable effort of a Claude family.
 
@@ -33,6 +34,9 @@ Effort in the model ID: for these families the effort selects the CLI model, and
 | swe-2 | max | `swe-2-max` |
 | swe-1.6 | default | `swe-1-6` |
 | amp-deepseek-v4.1-flash | default | `deepseek-v4.1-flash` |
+| gemini-3.8-flash | low | `gemini-3.8-flash-low` |
+| gemini-3.8-flash | medium | `gemini-3.8-flash-medium` |
+| gemini-3.8-flash | high | `gemini-3.8-flash-high` |
 
 ## Kept predecessors and normalization
 
@@ -60,6 +64,7 @@ Rolling aliases:
 | opencode | external runner | external runner | `read-only` | stdin | pinned argv | allowlist | - |
 | dsh | external runner | external runner | `read-only` | stdin | pinned argv | allowlist | - |
 | amp | external runner | external runner | `read-only` | stdin | pinned argv | allowlist | - |
+| agy | external runner | external runner | `read-only` | stdin | pinned argv | allowlist | - |
 
 The runner refuses an access mode outside a provider's Access modes cell before launch. `isolated-write-full-access` is a writer capability, not a `--mode` value: the runner takes it as `--mode isolated-write --writer-sandbox full-access`, which a parent passes only when the model sheet opts in, as [`provider-dispatch.md`](provider-dispatch.md#codex-writer-sandbox) says.
 
@@ -150,6 +155,23 @@ The runner refuses an access mode outside a provider's Access modes cell before 
 - The reply, session and token usage come from the stream JSON on stdout: the reply is the `result` event's text, the session is its `session_id` (`T-<uuid>`, also the ampcode.com thread ID), and the usage sums each assistant message's `usage`. The stream has no cost and never names the model, so the proof is the pinned mode in the argv (`pinned-argv`).
 - Failures and cancellations can exit 0, so the `result` event decides. `is_error: true` with `User cancelled (SIGINT/SIGTERM)` is `cancelled`/130, and any other `is_error` result is `child-failed`/70 with its error text, for example a Claude mode on a subscription-only account. A rejected tool comes back to the model as an ordinary tool result, and the turn can still complete.
 - Each run is an ampcode.com thread holding the prompt, tool inputs and outputs, the hostname and the working directory. The lane passes `--visibility private` and the label `pstack-runner`; every captured thread was private and archived. Turns spend Amp credits, or a linked ChatGPT subscription for GPT modes.
+
+### agy: Antigravity CLI (`agy`)
+
+- Executable: `agy`.
+- Host prerequisites: none.
+- State paths: `~/.gemini/antigravity-cli/`, where the CLI writes conversations, `brain/`, logs, caches and `conversation_summaries.db`; the login is in the macOS keychain.
+- Child environment: only `PATH` `HOME` `USER` `LOGNAME` `SHELL` `TMPDIR` `LANG` `TERM` `COLORTERM` `TZ` `HTTP_PROXY` `HTTPS_PROXY` `NO_PROXY` `ALL_PROXY` `http_proxy` `https_proxy` `no_proxy` `all_proxy` `SSL_CERT_FILE` `SSL_CERT_DIR` `NODE_EXTRA_CA_CERTS`, and variables starting with `LC_`, `XDG_`.
+- Effort is part of the model ID. The runner passes the CLI model ID that the effort table gives for the requested effort and never passes `--effort`, because a variant ID with a conflicting `--effort` exits 1. A bare `gemini-3.8-flash` runs as `gemini-3.8-flash-high`. Issue #37 asked for Gemini 3.7 Flash, but `agy models` did not list it for the measured account. The runner registers Gemini 3.8 Flash and never maps a 3.7 request to it.
+- Read-only only. A lane runs agy's default mode, whose approval policy, not an OS sandbox, denies the write tool and every shell command. `--mode accept-edits` writes only through the edit tool and denies shell, and `--sandbox` blocks shell writes even in the cwd, so no agy mode is a bounded writer. The runner refuses an `isolated-write` lane before launch.
+- Headless agy cannot ask for approval. The first tool that needs it is denied, and the turn ends with exit 0, `status: "SUCCESS"`, an empty `response` and a `denied_actions` list. The runner records that as `child-failed`/70.
+- Each lane writes a run-owned agent file, `.agents/agents/pstack-read-only.md`, in its private `<receipt>.provider/` directory (0700, the file 0600), and runs `--add-dir <that directory> --agent pstack-read-only`. The agent declares only `view_file`, no MCP servers and no skills. The lane keeps `view_file` and `manage_task` and loses web search, `read_url_content`, subagents, `schedule`, `send_message` and the browser. If the file is missing, agy exits 1 with `unknown agent`.
+- The runner refuses an agy lane whose cwd, or any parent up to the git root, holds `.agents`, `.agent`, `_agents` or `_agent`. agy runs the hooks and MCP servers there with no trust check and loads their rules and skills, and a repository agent named `pstack-read-only` would replace the run-owned one.
+- No flag turns off the operator's own configuration. `~/.gemini/GEMINI.md` loads as a global rule, and host skills and agy plugin hooks under `~/.gemini/` still load in every lane. The run-owned agent limits only the lane's tools.
+- The lane passes the base allowlist and nothing else. The login is in the macOS keychain, found through `HOME`, so a run-owned `HOME` would be logged out. `GEMINI_API_KEY` did not authenticate and is not passed.
+- The preflight runs `agy models` and passes when it exits 0 and a line's first tab-separated field is the lane's CLI model ID. Exit 0 without that line is `unavailable-model`/69. Exit 1 with `Please sign in` is `unauthenticated`/77. Any other output is `child-failed`/70.
+- The prompt goes to stdin as one stream-json line, `{"event":"user","message":{"role":"user","content":<prompt>}}`, with `--input-format stream-json --output-format stream-json`. The reply is the `result` event's `response` without its trailing newline. The session is `conversation_id`, and usage is `usage`, with `thinking_tokens` as reasoning and `cache_read_tokens` as cached input. agy reports no cost.
+- agy never reports the served model. `init.model` repeats `--model`, and only an internal log names the resolved model, so the proof is the pinned argv. An unknown model exits 1 with `invalid model selection`, which is `unavailable-model`/69. A `result` error of `interrupted`, after SIGINT or SIGTERM, is `cancelled`/130.
 
 ## Role defaults
 

@@ -2621,3 +2621,183 @@ process.exit(1);`);
     expect(existsSync(input.receiptPath)).toBe(false);
   });
 });
+
+describe("agy lanes", () => {
+  const MODELS = "gemini-3.8-flash-high\tGemini 3.8 Flash (High)\ngemini-3.8-flash-medium\tGemini 3.8 Flash (Medium)\ngemini-3.8-flash-low\tGemini 3.8 Flash (Low)\n";
+  const SIGN_IN = "Fetching available models...\nError: Please sign in to view available models. Launch the CLI without arguments to sign in.";
+
+  // An agy stand-in: `models` prints `models` to stdout, or `signIn` to stderr with exit 1; the model call runs
+  // `turn`, which sees `args`, `at`, `stdin` and `result(body)`. The child environment keeps no test variable.
+  function fakeAgy(turn: string, models = MODELS, signIn = false): void {
+    writeFileSync(join(bin, "agy"), `#!/usr/bin/env bun
+import { existsSync, readFileSync, statSync, writeFileSync } from "node:fs";
+import { join } from "node:path";
+const args = process.argv.slice(2);
+if (args[0] === "models") {
+  if (${signIn}) {
+    console.error(${JSON.stringify(SIGN_IN)});
+    process.exit(1);
+  }
+  process.stdout.write(${JSON.stringify(models)});
+  process.exit(0);
+}
+const at = (flag) => args[args.indexOf(flag) + 1];
+const stdin = await Bun.stdin.text();
+const result = (body) => console.log(JSON.stringify({ event: "result", result: { conversation_id: "a1", status: "SUCCESS", response: "", usage: { input_tokens: 5, output_tokens: 2, thinking_tokens: 1, cache_read_tokens: 0, total_tokens: 7 }, ...body } }));
+${turn}
+`);
+    chmodSync(join(bin, "agy"), 0o755);
+  }
+
+  // Reports what the child saw: the agent file in --add-dir, its modes, the stdin line and the environment.
+  const OBSERVE = `const agent = join(at("--add-dir"), ".agents/agents", at("--agent") + ".md");
+if (!existsSync(agent)) {
+  console.error('error: unknown agent "' + at("--agent") + '"');
+  process.exit(1);
+}
+const mode = (path) => (statSync(path).mode & 0o777).toString(8);
+const observed = {
+  model: at("--model"),
+  stdin: JSON.parse(stdin),
+  stdinLines: stdin.split("\\n").length - 1,
+  tools: readFileSync(agent, "utf8").split("tools:\\n")[1].split("\\n")[0],
+  modes: [mode(at("--add-dir")), mode(agent)],
+  geminiVariables: Object.keys(process.env).filter((key) => key.startsWith("GEMINI_")),
+};
+console.log(JSON.stringify({ event: "init", init: { model: at("--model") } }));
+result({ response: JSON.stringify(observed) + "\\n" });`;
+
+  function agyOptions(suffix: string, overrides: Partial<LaneRequest> = {}): LaneRequest {
+    return { ...options("grok", suffix), provider: "agy", model: "gemini-3.8-flash", effort: "high", ...overrides };
+  }
+
+  beforeEach(() => {
+    process.env.GEMINI_API_KEY = "GEMINI_API_KEY-value";
+  });
+  afterEach(() => {
+    delete process.env.GEMINI_API_KEY;
+  });
+
+  for (const effort of ["low", "medium", "high"] as const) {
+    it(`runs agy:gemini-3.8-flash@${effort} with the envelope on stdin and the run-owned agent, on pinned argv`, async () => {
+      fakeAgy(OBSERVE);
+      const input = agyOptions(`agy-${effort}`, { effort });
+      writeFileSync(input.promptPath, "Read \"marker.txt\".\nReply with its contents.\n");
+      const result = await runLane(laneOf(input));
+      expect(result.exitCode).toBe(0);
+      const saved = receipt(input.receiptPath);
+      const cliModel = `gemini-3.8-flash-${effort}`;
+      expect(saved).toMatchObject({
+        status: "complete",
+        provider: "agy",
+        model: "gemini-3.8-flash",
+        effort,
+        mode: "read-only",
+        reportedModel: null,
+        modelVerified: false,
+        modelEvidence: "pinned-argv",
+        sessionId: "a1",
+        usage: { inputTokens: 5, cachedInputTokens: 0, outputTokens: 2, reasoningTokens: 1, totalTokens: 7 },
+        preflight: { argv: [saved.executable, "models"], status: "passed", evidence: `model ${cliModel} listed` },
+      });
+      const dir = `${input.receiptPath}.provider`;
+      expect(saved.argv.slice(1)).toEqual([
+        "--input-format", "stream-json", "--output-format", "stream-json", "--model", cliModel,
+        "--add-dir", dir, "--agent", "pstack-read-only",
+      ]);
+      expect(JSON.parse(readFileSync(input.outputPath, "utf8"))).toEqual({
+        model: cliModel,
+        stdin: { event: "user", message: { role: "user", content: "Read \"marker.txt\".\nReply with its contents.\n" } },
+        stdinLines: 1,
+        tools: "  - view_file",
+        modes: ["700", "600"],
+        geminiVariables: [],
+      });
+    });
+  }
+
+  for (const [name, signIn, models, status, exitCode] of [
+    ["a sign-in failure", true, MODELS, "unauthenticated", 77],
+    ["an unlisted variant", false, "gemini-3.8-flash-low\tGemini 3.8 Flash (Low)\n", "unavailable-model", 69],
+  ] as const) {
+    it(`classifies ${name} before any model call`, async () => {
+      const started = join(scratch, "agy-model.started");
+      fakeAgy(`writeFileSync(${JSON.stringify(started)}, "started");`, models, signIn);
+      const input = agyOptions(`agy-preflight-${exitCode}`);
+      const result = await runLane(laneOf(input));
+      expect(result.exitCode).toBe(exitCode);
+      expect(result.receipt).toMatchObject({ status, preflight: { status: "failed" } });
+      expect(existsSync(started)).toBe(false);
+    });
+  }
+
+  it("classifies an exit-0 denial, an unknown model, an interruption and a missing agent from the captured shapes", async () => {
+    fakeAgy(`console.error('jetski: no output produced — a tool required the "command" permission that headless mode cannot prompt for, so it was auto-denied.');
+result({ denied_actions: [{ action: "command", display_name: "RunCommand" }] });`);
+    const denied = agyOptions("agy-denied");
+    const deniedResult = await runLane(laneOf(denied));
+    expect(deniedResult.exitCode).toBe(70);
+    expect(deniedResult.receipt).toMatchObject({
+      status: "child-failed",
+      exitCode: 0,
+      sessionId: "a1",
+      error: { message: "agy denied a tool that needed approval" },
+    });
+    expect(deniedResult.receipt.error?.evidence).toContain("auto-denied");
+    expect(existsSync(denied.outputPath)).toBe(false);
+
+    fakeAgy(`console.error('error: invalid model selection (--model "' + at("--model") + '" --effort ""): model is not recognized as a known model');
+result({ conversation_id: "", status: "ERROR", error: 'invalid model selection (--model "' + at("--model") + '")' });
+process.exit(1);`);
+    const unknown = agyOptions("agy-unknown-model");
+    expect((await runLane(laneOf(unknown))).receipt).toMatchObject({ status: "unavailable-model", exitCode: 1, sessionId: null });
+
+    fakeAgy(`console.error("error: interrupted");
+result({ status: "ERROR", error: "interrupted" });
+process.exit(1);`);
+    const interrupted = agyOptions("agy-interrupted");
+    const interruptedResult = await runLane(laneOf(interrupted));
+    expect(interruptedResult.exitCode).toBe(130);
+    expect(interruptedResult.receipt).toMatchObject({ status: "cancelled", exitCode: 1, error: { message: "agy reported the turn was interrupted" } });
+
+    // The stand-in fails closed like agy when the run-owned agent file is gone.
+    fakeAgy(`import { rmSync } from "node:fs";
+rmSync(join(at("--add-dir"), ".agents"), { recursive: true });
+${OBSERVE}`);
+    const missing = agyOptions("agy-missing-agent");
+    expect((await runLane(laneOf(missing))).receipt).toMatchObject({ status: "child-failed", exitCode: 1 });
+    expect(existsSync(missing.outputPath)).toBe(false);
+  });
+
+  it("refuses an agy lane whose workspace holds any of the four project directories, up to the git root", async () => {
+    const repo = join(scratch, "repo"), nested = join(repo, "src");
+    fs.mkdirSync(nested, { recursive: true });
+    for (const name of [".agents", ".agent", "_agents", "_agent"]) {
+      const started = join(scratch, `agy-${name}.started`);
+      fakeAgy(`writeFileSync(${JSON.stringify(started)}, "started");`);
+      fs.mkdirSync(join(repo, name));
+      const input = agyOptions(`agy-project-config${name}`, { cwd: nested });
+      expect((await runLane(laneOf(input))).exitCode).toBe(70);
+      expect(receipt(input.receiptPath)).toMatchObject({
+        status: "child-failed",
+        preflight: { status: "not-run" },
+        error: { message: expect.stringContaining(`${join(fs.realpathSync(repo), name)}: the CLI would load`) },
+      });
+      expect(existsSync(started)).toBe(false);
+      fs.rmSync(join(repo, name), { recursive: true });
+    }
+
+    // The walk stops at the git root: an .agents/ above it belongs to another project.
+    fs.mkdirSync(join(repo, ".agents"));
+    fs.mkdirSync(join(nested, ".git"));
+    fakeAgy(OBSERVE);
+    const inside = agyOptions("agy-below-git-root", { cwd: nested });
+    expect((await runLane(laneOf(inside))).exitCode).toBe(0);
+  });
+
+  it("refuses an isolated-write agy lane before launch", () => {
+    const input = agyOptions("agy-writer", { mode: "isolated-write" });
+    expect(() => laneOf(input)).toThrow("provider agy does not support isolated-write");
+    expect(existsSync(input.receiptPath)).toBe(false);
+  });
+});
