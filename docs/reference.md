@@ -14,7 +14,7 @@ This is not a verbatim copy. Skill bodies have been edited so every Cursor-speci
 
 ### Claude Code
 
-This repo ships as the `jm` marketplace. It lists three plugins: `jm-stack` (this distribution, from `plugins/pstack`), `jm-games`, and `jm-tools`. The ai-stack CLI adds the checkout as a local marketplace and installs all three.
+This repo ships as the `jm` marketplace. It lists one plugin, `jm-stack` (this distribution, from `plugins/pstack`). The repo's other skills are standalone skills in `skills/`, grouped by `stack.toml`. The ai-stack CLI adds the checkout as a local marketplace, installs `jm-stack`, and links the skills of the global groups into each harness's user skill folder.
 
 ```text
 /plugin marketplace add joshmeads/ai-stack
@@ -64,7 +64,8 @@ The marketplace install is the normal user path. Direct links are only for testi
 │   │   └── poteto-mode/scripts/      # bun/bash/node tooling: watch-pr, orch, runner, resolve-codex-transcript, check-plan.mjs, worktree-audit.sh
 │   ├── hooks/                        # SessionStart auto-fire: injects the poteto-mode mandate (Claude Code only)
 │   └── agents/                       # Claude subagents, including native Fable, Opus, and Haiku lanes at each selectable effort
-├── plugins/jm-games/, plugins/jm-tools/  # the other two plugins in the jm marketplace
+├── skills/                           # standalone skills, installed under their plain names
+├── stack.toml                        # skill groups and vendored-skill pins
 ├── tests/skill-collision-repro.sh    # native-skill package invariants and Claude invocation checks
 ├── LICENSE                           # pstack upstream MIT
 ├── LICENSE-cursor-team-kit           # cursor-team-kit upstream MIT

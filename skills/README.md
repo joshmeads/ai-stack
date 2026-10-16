@@ -1,18 +1,18 @@
-# jm-games
+# Standalone skills
 
-Game and graphics skills for Claude Code and Codex, shipped in the `jm` marketplace.
+Each folder here is one standalone skill, installed under its plain name. `stack.toml` at the stack root puts every skill in at least one group, and `ai-stack install` links the skills of the global groups into each harness's user skill folder (`~/.claude/skills` and `~/.agents/skills`). `ai-stack groups` lists the groups, their members and an estimated token cost.
 
 ## Game stages
 
-A browser game moves through three stage skills. Each one reads `delivery` first.
+A browser game moves through three stage skills. Each one reads `game-delivery` first.
 
 | Skill | Use |
 | --- | --- |
-| `gdd` | Interview the user and write a game design document, plus the `AGENTS.md` and Codex agent files the build follows; or a short mini-GDD. |
-| `mini-gdd` | Stage 1: turn a task prompt into a condensed GDD, `REQUIREMENTS.md` and 3-4 concept styles, then stop for the user to pick one. |
-| `mvp` | Stage 2: build the playable MVP from the approved GDD and concept style, and host it. |
-| `final` | Stage 3: apply all feedback, finish the game, package the submission and update the hosted build. |
-| `delivery` | The delivery contract the stage skills follow: fidelity to the prompt, scope per stage, hosting, README sections, end-of-session routine. |
+| `game-gdd` | Interview the user and write a game design document, plus the `AGENTS.md` and Codex agent files the build follows; or a short mini-GDD. |
+| `game-mini-gdd` | Stage 1: turn a task prompt into a condensed GDD, `REQUIREMENTS.md` and 3-4 concept styles, then stop for the user to pick one. |
+| `game-mvp` | Stage 2: build the playable MVP from the approved GDD and concept style, and host it. |
+| `game-final` | Stage 3: apply all feedback, finish the game, package the submission and update the hosted build. |
+| `game-delivery` | The delivery contract the stage skills follow: fidelity to the prompt, scope per stage, hosting, README sections, end-of-session routine. |
 | `feather-prep` | Prepare a Codex-built web game for an OpenAI Feather submission, locally; the user does every Feather action by hand. |
 
 ## Engine and asset tools
@@ -36,24 +36,22 @@ A browser game moves through three stage skills. Each one reads `delivery` first
 | `tools-web-qa` | Decide whether a browser game works, from evidence gathered by running it. |
 | `art-iteration` | Iterate a visual deliverable against reference images until an image-only critic passes it. |
 
-The `art-iteration` critic runs on the review model named in the routing block of your global instructions (Claude Code: Opus 5.5 xhigh; Codex: Sol 6.1 xhigh). The final critique also asks the other provider through its CLI.
+The `art-iteration` critic runs on the review model named in the routing block of your global instructions. The final critique also asks the other provider through its CLI.
 
-## Install
+## Working tools
 
-The ai-stack CLI installs this plugin from the local `jm` marketplace. To install it by hand:
-
-```sh
-# Claude Code
-/plugin marketplace add joshmeads/ai-stack
-/plugin install jm-games@jm
-# Codex
-codex plugin marketplace add joshmeads/ai-stack
-codex plugin add jm-games@jm
-```
+| Skill | Use |
+| --- | --- |
+| `handoff` | Write a continuation packet so work can resume in a fresh session. |
+| `try-to-break` | Try to break a change on purpose and report what fails, with evidence. |
+| `visual-evidence` | Take matching before/after screenshots of a UI change. |
+| `host-static` | Host a built static folder at an unlisted games.joshmeads.dev URL. |
+| `feedback` | Record the user's feedback on the current project in `FEEDBACK.md`, newest first. |
+| `codex-session-export` | Find and export the Codex sessions that contributed to a project, with their metadata. |
 
 ## Credits
 
-Several tool skills are adapted from third-party skills. Each keeps its licence file, and the skill names and cross-references were changed for this plugin.
+Several tool skills are adapted from third-party skills. Each keeps its licence file, and the skill names and cross-references were changed for this stack. [NOTICE.md](../NOTICE.md) has the details.
 
 | Skill | Copyright | Licence |
 | --- | --- | --- |

@@ -1,12 +1,13 @@
 # jm
 
-Personal plugins for Claude Code and Codex, maintained at [joshmeads/ai-stack](https://github.com/joshmeads/ai-stack). The repository is a marketplace named `jm` with three plugins, plus the `ai-stack` CLI that installs them.
+Personal skills for Claude Code and Codex, maintained at [joshmeads/ai-stack](https://github.com/joshmeads/ai-stack). The repository is the stack: a marketplace named `jm` with one plugin, a folder of standalone skills, and the `ai-stack` CLI that installs both.
 
-| Plugin | Shown as | What it is |
+| Part | Shown as | What it is |
 | --- | --- | --- |
-| `jm-stack` | `jm-stack:how`, `jm-stack:poteto-mode`, … | [Open Pstack](https://github.com/ericlitman/open-pstack), the Claude Code and Codex port of Lauren Tan's [pstack](https://github.com/cursor/plugins/tree/main/pstack), renamed jm:stack and set up for the models below. Everything else is upstream's. |
-| `jm-games` | `jm-games:gdd`, `jm-games:mini-gdd`, `jm-games:mvp`, `jm-games:final`, `jm-games:delivery`, `jm-games:feather-prep`, `jm-games:threejs`, `jm-games:tools-threejs-scene`, `jm-games:tools-threejs-materials`, `jm-games:tools-threejs-gltf`, `jm-games:tools-threejs-gameplay`, `jm-games:tools-threejs-look`, `jm-games:tools-threejs-procedural`, `jm-games:tools-threejs-ui`, `jm-games:tools-threejs-debug`, `jm-games:tools-r3f`, `jm-games:tools-postprocessing`, `jm-games:tools-phaser`, `jm-games:tools-audio`, `jm-games:tools-blender-model`, `jm-games:tools-web-qa`, `jm-games:art-iteration` | Write a game design document and take a browser game from prompt to MVP to final build; three.js, react-three-fiber, Phaser, audio, Blender and web QA tools; three.js version facts; and a loop for visual work judged against reference images. |
-| `jm-tools` | `jm-tools:handoff`, `jm-tools:try-to-break`, `jm-tools:visual-evidence`, `jm-tools:host-static`, `jm-tools:feedback`, `jm-tools:codex-session-export` | Hand off work to a fresh session, try to break a change before calling it done, capture before/after UI evidence, host a static build at an unlisted URL, log user feedback, and export the Codex sessions behind a project. |
+| `jm-stack` plugin | `jm-stack:how`, `jm-stack:poteto-mode`, … | [Open Pstack](https://github.com/ericlitman/open-pstack), the Claude Code and Codex port of Lauren Tan's [pstack](https://github.com/cursor/plugins/tree/main/pstack), renamed jm:stack and set up for the models below. Everything else is upstream's. |
+| Standalone skills in [`skills/`](skills/README.md) | `game-gdd`, `game-mvp`, `threejs`, `tools-web-qa`, `art-iteration`, `handoff`, `try-to-break`, … | Write a game design document and take a browser game from prompt to MVP to final build; three.js, react-three-fiber, Phaser, audio, Blender and web QA tools; a loop for visual work judged against reference images; and working tools for handoffs, adversarial checks, visual evidence, static hosting, feedback and Codex session export. |
+
+`stack.toml` sorts the standalone skills into groups. A global group's skills are installed for every harness; `ai-stack groups` lists the groups and their estimated token cost.
 
 ## Install
 
@@ -19,10 +20,11 @@ ai-stack diff
 ai-stack install
 ```
 
-`ai-stack install` does two things for each harness:
+`ai-stack install` does three things for each harness:
 
 1. It writes the files that differ between Claude Code and Codex: the jm:stack model sheet and a short routing block in `~/.claude/CLAUDE.md` or `~/.codex/AGENTS.md`.
-2. It adds this checkout as the `jm` marketplace and installs `jm-stack`, `jm-games`, and `jm-tools` with each harness's own plugin commands.
+2. It adds this checkout as the `jm` marketplace and installs `jm-stack` with each harness's own plugin commands, and uninstalls any other `jm` plugin, such as the retired `jm-games` and `jm-tools`.
+3. It links each skill of the global groups into `~/.claude/skills` (Claude Code) and `~/.agents/skills` (Codex) under its plain name.
 
 It also removes what older ai-stack installs left behind. Every file it changes is backed up under `~/.local/state/ai-stack/backups/`. `ai-stack update` pulls this checkout and installs again. `ai-stack install --clean` (or `c` in the review screen) also moves every skill outside the `[clean] keep_skills` list into the backup and uninstalls every plugin outside `keep_plugins`, so only this install and the keep lists remain; preview it with `ai-stack diff --clean`. See [cli/README.md](cli/README.md) for the details.
 
@@ -58,7 +60,7 @@ Read [UPSTREAM.md](UPSTREAM.md) before changing content that came from pstack. [
 
 jm:stack is pstack under a new name. Lauren Tan ([@poteto](https://x.com/poteto)) created [pstack](https://github.com/cursor/plugins/tree/main/pstack) from the skills she uses at Cursor. [Open Pstack](https://github.com/ericlitman/open-pstack), maintained by Eric Litman, ported it to Claude Code and Codex, building on Michael Denyer's [pstack-claude](https://github.com/michael-denyer/pstack-claude).
 
-Several `jm-games` tool skills are adapted from other authors' MIT and Apache-2.0 skills; [plugins/jm-games/README.md](plugins/jm-games/README.md#credits) and [NOTICE.md](NOTICE.md) list them.
+Several standalone tool skills are adapted from other authors' MIT and Apache-2.0 skills; [skills/README.md](skills/README.md#credits) and [NOTICE.md](NOTICE.md) list them.
 
 ## License
 

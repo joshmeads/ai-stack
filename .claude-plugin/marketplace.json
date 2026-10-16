@@ -3,7 +3,7 @@
   "owner": {
     "name": "Josh Meads"
   },
-  "description": "Josh Meads's agent plugins for Claude Code and Codex: jm:stack (Open Pstack with Josh's model routing), jm:games, and jm:tools.",
+  "description": "Josh Meads's agent plugin for Claude Code and Codex: jm:stack (Open Pstack with Josh's model routing). The stack's other skills install as standalone skills.",
   "plugins": [
     {
       "name": "jm-stack",
@@ -25,26 +25,6 @@
         "subagents",
         "unslop"
       ]
-    },
-    {
-      "name": "jm-games",
-      "source": "./plugins/jm-games",
-      "description": "Game and graphics skills: GDD and staged browser-game delivery (mini-GDD, MVP, final), three.js, react-three-fiber, Phaser, audio, Blender and web QA tools, version-specific three.js facts, and a reference-driven art iteration loop.",
-      "author": {
-        "name": "Josh Meads"
-      },
-      "homepage": "https://github.com/joshmeads/ai-stack",
-      "license": "MIT AND Apache-2.0"
-    },
-    {
-      "name": "jm-tools",
-      "source": "./plugins/jm-tools",
-      "description": "Working tools: continuation handoffs for a fresh session, adversarial try-to-break checks, before/after visual evidence for UI changes, static hosting, feedback logging, and Codex session export.",
-      "author": {
-        "name": "Josh Meads"
-      },
-      "homepage": "https://github.com/joshmeads/ai-stack",
-      "license": "MIT"
     }
   ]
 }
