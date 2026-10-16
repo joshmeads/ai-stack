@@ -137,6 +137,25 @@ export const FAMILIES = [
     defaultEffort: "high",
     upstream: null,
   }),
+  family({
+    name: "composer-2.5",
+    label: "Composer 2.5 (Cursor)",
+    provider: "cursor",
+    model: "composer-2.5",
+    efforts: { default: "composer-2.5" }, // `cursor-agent models`, Cursor CLI 2026.10.14-0f9edde
+    defaultEffort: "default",
+    upstream: null,
+  }),
+  family({
+    name: "gemini-3.7-flash",
+    label: "Gemini 3.7 Flash (Cursor)",
+    provider: "cursor",
+    model: "gemini-3.7-flash",
+    // `cursor-agent models`, Cursor CLI 2026.10.14-0f9edde. There is no bare `gemini-3.7-flash` ID.
+    efforts: { low: "gemini-3.7-flash-low", medium: "gemini-3.7-flash-medium", high: "gemini-3.7-flash-high" },
+    defaultEffort: "high",
+    upstream: null,
+  }),
 ] as const;
 export type FamilyName = (typeof FAMILIES)[number]["name"];
 
@@ -179,4 +198,6 @@ export const RELEASED_PAIRS = [
   { pair: "dsh:deepseek-v4-pro", family: "deepseek-v4-pro" },
   { pair: "amp:deepseek-v4.1-flash", family: "amp-deepseek-v4.1-flash" },
   { pair: "agy:gemini-3.8-flash", family: "gemini-3.8-flash" },
+  { pair: "cursor:composer-2.5", family: "composer-2.5" },
+  { pair: "cursor:gemini-3.7-flash", family: "gemini-3.7-flash" },
 ] as const satisfies readonly ReleasedPair<FamilyName>[];

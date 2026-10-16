@@ -22,6 +22,8 @@ Model and provider facts for [`provider-dispatch.md`](provider-dispatch.md), whi
 | deepseek-v4-pro | DeepSeek V4 Pro (dsh) | dsh | deepseek-v4-pro | max | low high max | - | optional | - |
 | amp-deepseek-v4.1-flash | DeepSeek V4.1 Flash (Amp) | amp | deepseek-v4.1-flash | default | default | - | optional | - |
 | gemini-3.8-flash | Gemini 3.8 Flash (Antigravity) | agy | gemini-3.8-flash | high | low medium high | - | optional | - |
+| composer-2.5 | Composer 2.5 (Cursor) | cursor | composer-2.5 | default | default | - | optional | - |
+| gemini-3.7-flash | Gemini 3.7 Flash (Cursor) | cursor | gemini-3.7-flash | high | low medium high | - | optional | - |
 
 A family is `default` when a role default names it and `optional` otherwise. A Claude-native agent exists for each selectable effort of a Claude family.
 
@@ -37,6 +39,10 @@ Effort in the model ID: for these families the effort selects the CLI model, and
 | gemini-3.8-flash | low | `gemini-3.8-flash-low` |
 | gemini-3.8-flash | medium | `gemini-3.8-flash-medium` |
 | gemini-3.8-flash | high | `gemini-3.8-flash-high` |
+| composer-2.5 | default | `composer-2.5` |
+| gemini-3.7-flash | low | `gemini-3.7-flash-low` |
+| gemini-3.7-flash | medium | `gemini-3.7-flash-medium` |
+| gemini-3.7-flash | high | `gemini-3.7-flash-high` |
 
 ## Kept predecessors and normalization
 
@@ -65,6 +71,7 @@ Rolling aliases:
 | dsh | external runner | external runner | `read-only` | stdin | pinned argv | allowlist | dsh 0.2.0-rc.2 exactly |
 | amp | external runner | external runner | `read-only` | stdin | pinned argv | allowlist | - |
 | agy | external runner | external runner | `read-only` | stdin | pinned argv | allowlist | - |
+| cursor | external runner | external runner | `read-only` | stdin | pinned argv | allowlist | - |
 
 The runner refuses an access mode outside a provider's Access modes cell before launch. `isolated-write-full-access` is a writer capability, not a `--mode` value: the runner takes it as `--mode isolated-write --writer-sandbox full-access`, which a parent passes only when the model sheet opts in, as [`provider-dispatch.md`](provider-dispatch.md#codex-writer-sandbox) says.
 
@@ -179,6 +186,26 @@ The runner refuses an access mode outside a provider's Access modes cell before 
 - The preflight runs `agy models` and passes when it exits 0 and a line's first tab-separated field is the lane's CLI model ID. Exit 0 without that line is `unavailable-model`/69. Exit 1 with `Please sign in` is `unauthenticated`/77. Any other output is `child-failed`/70.
 - The prompt goes to stdin as one stream-json line, `{"event":"user","message":{"role":"user","content":<prompt>}}`, with `--input-format stream-json --output-format stream-json`. The reply is the `result` event's `response` without its trailing newline. The session is `conversation_id`, and usage is `usage`, with `thinking_tokens` as reasoning and `cache_read_tokens` as cached input. agy reports no cost.
 - agy never reports the served model. `init.model` repeats `--model`, and only an internal log names the resolved model, so the proof is the pinned argv. An unknown model exits 1 with `invalid model selection`, which is `unavailable-model`/69. A `result` error of `interrupted`, after SIGINT or SIGTERM, is `cancelled`/130.
+
+### cursor: Cursor CLI (`cursor-agent`)
+
+- Executable: `cursor-agent`.
+- Host prerequisites: none.
+- State paths: `~/.cursor/`, where the CLI reads `mcp.json`, `hooks.json`, plugins and skills and writes `chats/`, `projects/<slug>/`, `statsig-cache.json` and `agent-cli-state.json`; the stored login is in the macOS keychain; `<receipt>.provider/`, the run-owned `CURSOR_CONFIG_DIR`, where the CLI writes `chats/` and `statsig-cache.json` and rewrites `cli-config.json` at 0644 with an identity block, keeping the run-owned permissions; `~/Library/Caches/cursor-compile-cache/`, `$TMPDIR/cursor-agent-logs-<uid>/` and `~/.npm/_npx/`, which it writes.
+- Child environment: only `PATH` `HOME` `USER` `LOGNAME` `SHELL` `TMPDIR` `LANG` `TERM` `COLORTERM` `TZ` `HTTP_PROXY` `HTTPS_PROXY` `NO_PROXY` `ALL_PROXY` `http_proxy` `https_proxy` `no_proxy` `all_proxy` `SSL_CERT_FILE` `SSL_CERT_DIR` `NODE_EXTRA_CA_CERTS` `CURSOR_API_KEY` `CURSOR_AUTH_TOKEN`, and variables starting with `LC_`, `XDG_`; sets `CURSOR_CONFIG_DIR=<receipt>.provider`.
+- The executable is `cursor-agent`. Cursor also installs `agent`, and on a host where another CLI's `agent` comes first on PATH (Grok's, for example), `agent status --format json` exits 2 with empty stdout, which looked like an empty Cursor status in #94.
+- Effort is part of the model ID. The runner passes the CLI model ID that the effort table gives for the requested effort, such as `gemini-3.7-flash-high`. An unregistered Cursor model must be a CLI model ID with the `default` effort. An unknown model exits 1 with `Cannot use this model: <id>`, which is `unavailable-model`/69.
+- Read-only only. A lane runs `-p --output-format stream-json --mode ask --sandbox enabled --trust` with the prompt on stdin. Only `--mode ask --sandbox enabled` refused every edit and shell request, including `ls`; the CLI's permission check enforces it, and the Read tool still works. In agent mode the edit tool wrote outside the cwd under every flag combination, so no Cursor mode is a bounded writer. The runner refuses an `isolated-write` lane before launch. `--trust` is required in a new directory. The lane never passes `--force`, `--yolo` or `--approve-mcps`.
+- Each lane sets `CURSOR_CONFIG_DIR` to its private `<receipt>.provider/` directory (0700) and writes `cli-config.json` there (0600) before the preflight. The config denies `Write(**)`, `Shell(*)` and `Mcp(*:*)`, sets `approvalMode: "allowlist"` with no allow rules, enables the sandbox, and turns off web-search auto-approval and the web-fetch domain allowlist. MCP and plugin tools (such as the GitHub, Gmail and Calendar plugins) are still listed to the model, but every call is blocked. Web search and web fetch are refused, because nothing approves them. A Task subagent runs with the same limits. Without the run-owned directory, every `-p` run rewrites `~/.cursor/cli-config.json` with its default model and an identity block.
+- A Cursor lane runs in any repository, and the repository's configuration applies as it is. `.cursor/cli.json`, which the CLI reads in every directory from the git root down to the cwd, replaces the run-owned deny list. A measured one that allowed `Shell(*)` let the lane run shell commands, and an invalid one stops the run with exit 1. `AGENTS.md`, `CLAUDE.md`, `.cursor/rules/*.mdc` and `.cursorrules` load as always-applied rules.
+- Hooks run unsandboxed: the CLI's command executor runs them with sandbox policy `insecure_none` whatever `--sandbox` is set to (batch-158 containment captures, 2026-10-16). No flag stops them, and no command lists them without running them. Enterprise hooks load from a fixed path that follows neither `CURSOR_CONFIG_DIR` nor `HOME`: `/Library/Application Support/Cursor/hooks.json` on macOS and `/etc/cursor/hooks.json` on Linux. For a team account, a turn fetches the team's hooks from Cursor's server, writes them to `~/.cursor/managed/team_<id>/hooks/` and runs them. User hooks load from `~/.cursor/hooks.json` and `~/.claude/settings.json`. Repository hooks load from `.cursor/hooks.json`, `.claude/settings.json` and `.claude/settings.local.json`.
+- No flag turns off the operator's own configuration. Host skills (from `~/.cursor`, `~/.claude`, `~/.codex` and `~/.agents`), account plugins and `~/.cursor/mcp.json` still load. The run-owned deny list limits only what their tools can do.
+- The environment is an allowlist that adds only `CURSOR_API_KEY` and `CURSOR_AUTH_TOKEN`, the two logins the CLI's own error names, and sets `CURSOR_CONFIG_DIR`. No other `CURSOR_` name passes: `CURSOR_API_ENDPOINT`, `CURSOR_API_BASE_URL`, `CURSOR_SANDBOX_POLICY_DIR`, `CURSOR_FORCED_SHELL_EGRESS` and the rest change the service, the sandbox or the egress. On the measured macOS host, a `cursor-agent login` run while `CURSOR_API_KEY` was set left a stored login that `status` reported as authenticated but that failed every model call once the variable was gone; signing out and in again with `env -u CURSOR_API_KEY cursor-agent login` fixed it.
+- The preflight runs `cursor-agent models`, not `status`: `status` reports a stored login as authenticated while every model call fails with `Authentication required`, and it ignores `CURSOR_API_KEY`. The preflight passes when `models` exits 0, its stdout starts with `Available models`, and a line starts with `<CLI model ID> - `, and records the fixed evidence `model <id> listed`. Exit 0 without that line is `unavailable-model`/69. Exit 1 with `Error: Authentication required` is `unauthenticated`/77. Any other output, including empty output, is `child-failed`/70.
+- The `result` event decides. A `success` result with `is_error: false` is complete, and the reply is the last `assistant` event's text, because the `result` field joins every assistant text segment of the turn. `is_error: true` is `child-failed`/70 with its text. A refused tool comes back to the model as a tool result, and the turn can still complete. SIGINT exits 130 and SIGTERM 143 with no `result` event. The session is `session_id`, and usage is `result.usage`, with `cacheReadTokens` as cached input and `cacheWriteTokens` as cache creation. Cursor reports no cost.
+- Cursor never reports the served model ID. The init event's `model` is a display label such as `Claude Opus 5.5 300K High`, so the proof is the pinned argv (`pinned-argv`).
+- Every turn starts a `worker-server` process in the workspace with the lane's environment, in an empty repository too and whether or not the model reads a file. The worker runs `npx -y typescript-language-server --stdio`, and npx runs a repository's own copy when it has one. In the batch-158 containment captures (Cursor CLI 2026.10.14-0f9edde, 2026-10-16), each of these ran repository code: a `node_modules/.bin/typescript-language-server`, a root `package.json` named `typescript-language-server` with a `bin`, an `.npmrc` `script-shell`, and an `.npmrc` `node-options`. The language server inherits the lane's environment plus `AGENT_CLI_*` and `npm_*` variables. A `package.json` `bin` run leaves a `file:` link to the repository in `~/.npm/_npx/`.
+- The worker and the language server stay running in the CLI's process group after the turn and exit after about five idle minutes. An unknown model exits before the worker starts.
 
 ## Role defaults
 
