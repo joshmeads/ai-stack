@@ -3,6 +3,14 @@
 Mergify auto-queue is live: ready PRs to main require passing verify, Unfret and exact-head live-gate, and no unresolved review thread; workflow changes require operator queueing.
 This port applies the Cursor → Claude Code substitutions in skill bodies. Earlier drafts left them flagged; this revision resolves them. A later pass added a Codex build that shares the same skills; see [Codex port](#codex-port) below.
 
+## 1.15.0 runs Devin, agy and dsh lanes in any repository
+
+Open Pstack 1.15.0 keeps the Cursor pstack 0.15.25 sync. It ships PR #215, merged after 1.14.0. Default roles and panels are unchanged.
+
+**No repository refusals.** A read-only lane means the read-only settings pstack passes to each CLI; the operator's host, account, repository and organization configuration applies as they set it up, and the runner adds no refusal, guard or account check because of it (#203). The runner no longer refuses a Devin lane in a repository holding `.devin/`, an agy lane in one holding `.agents/`, `.agent/`, `_agents/` or `_agent/`, or a dsh lane whose working directory holds `.env`, and the home-directory rule that came with those checks is gone. Every provider now runs in any directory (#204).
+
+**What still loads.** The catalog notes say what each CLI loads from the working directory and its parents up to the git root, or up to `/` outside a repository: Devin's `.devin/` hooks, permissions and MCP servers; agy's hooks, MCP servers, rules and skills in its four directories, with no trust check; dsh's working-directory `.env`, whose values other than dsh's own bootstrap names reach its bash tool. Outside a repository under the home directory, Devin and agy also load the home directory's own `~/.devin/` and `~/.agents/`. dsh still refuses any version except the measured `0.2.0-rc.2`, because dsh ignores a patch row it does not have.
+
 ## 1.14.0 adds a read-only Cursor CLI provider
 
 Open Pstack 1.14.0 keeps the Cursor pstack 0.15.25 sync. It ships PR #211, merged after 1.13.0. Default roles and panels are unchanged. No role uses the new provider by default, and setup refuses it for every role that writes files.
