@@ -3,6 +3,14 @@
 Mergify auto-queue is live: ready PRs to main require passing verify, Unfret and exact-head live-gate, and no unresolved review thread; workflow changes require operator queueing.
 This port applies the Cursor → Claude Code substitutions in skill bodies. Earlier drafts left them flagged; this revision resolves them. A later pass added a Codex build that shares the same skills; see [Codex port](#codex-port) below.
 
+## 1.13.0 adds a read-only Amp provider
+
+Open Pstack 1.13.0 keeps the Cursor pstack 0.15.25 sync. It ships PR #208, merged after 1.12.0. Default roles and panels are unchanged. No role uses the new provider by default, and setup refuses it for every role that writes files.
+
+**Read-only Amp provider.** The runner dispatches `amp:deepseek-v4.1-flash`, Amp's official DeepSeek V4.1 Flash mode, at the `default` effort through the signed-in Amp CLI from either parent. Each lane passes Amp a run-owned settings file that enables only the `Read` tool and rejects every other tool, and turns off MCP servers, Claude Code and `~/.agents` skills, updates and notifications. The lane ignores `AGENTS.md` guidance files, runs as a private ampcode.com thread labelled `pstack-runner`, and spends Amp credits. `amp usage` is the login check. Failures and cancellations can exit 0, so the stream's `result` event decides the outcome. Amp's stream never names the served model, so receipts record `pinned-argv` evidence (#158).
+
+**Read-only means pstack's own settings.** The runner refuses no repository and adds no pre-launch check because of the operator's own Amp configuration (#203). Amp's own `official-modes` plugin, system plugins, personal and workspace plugins, machine and workspace managed settings, and a repository's `.amp/` settings and plugins still load in every lane, and they can enable tools, change modes or run code. The catalog's Amp notes say what each was measured to do.
+
 ## 1.12.0 adds a read-only OpenCode provider
 
 Open Pstack 1.12.0 keeps the Cursor pstack 0.15.25 sync. It ships PR #202, merged after 1.11.0. Default roles and panels are unchanged. No role uses the new provider by default, and setup refuses it for every role that writes files.
