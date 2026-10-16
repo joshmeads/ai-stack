@@ -24,6 +24,7 @@ import { agy } from "./providers/agy.ts";
 import { amp } from "./providers/amp.ts";
 import { cursor } from "./providers/cursor.ts";
 import { devin } from "./providers/devin.ts";
+import { dsh } from "./providers/dsh.ts";
 import { BASE_ALLOWLIST, BASE_PREFIXES } from "./providers/shared.ts";
 import type { ProviderId } from "./registry/family.ts";
 import type { RunnerReceipt } from "./types.ts";
@@ -1853,7 +1854,7 @@ await Bun.sleep(5_000);`);
     fs.mkdirSync(nested);
     const input = devinOptions("devin-project-config", { cwd: nested });
     expect((await runLane(laneOf(input))).exitCode).toBe(70);
-    expect(receipt(input.receiptPath)).toMatchObject({ status: "child-failed", error: { message: expect.stringContaining(`${join(fs.realpathSync(repo), ".devin")}: the CLI would load its repository-controlled hooks, permissions and MCP servers`) } });
+    expect(receipt(input.receiptPath)).toMatchObject({ status: "child-failed", error: { message: expect.stringContaining(`${join(fs.realpathSync(repo), ".devin")}: the CLI would load that repository-controlled config`) } });
 
     // A plain .devin file holds no project config.
     fs.rmSync(join(repo, ".devin"), { recursive: true });
@@ -2021,6 +2022,17 @@ describe("projectConfigIn", () => {
     for (const name of [".agents", ".agent", "_agents", "_agent", ".amp"]) writeFileSync(join(cwd, name), "");
     expect(projectConfigIn(cwd, agy.launch.projectConfig)).toBeNull();
     expect(projectConfigIn(cwd, amp.launch.projectConfig)).toBeNull();
+  });
+
+  it("checks a ./ path as a file in the cwd only", () => {
+    const repo = join(scratch, "home/env-repo"), sub = join(repo, "sub"), venv = join(repo, "venv");
+    mkdirSync(join(repo, ".git"), { recursive: true });
+    mkdirSync(sub);
+    mkdirSync(join(venv, ".env"), { recursive: true });
+    writeFileSync(join(repo, ".env"), "A=1\n");
+    expect(projectConfigIn(repo, dsh.launch.projectConfig)).toBe(join(realpathSync(repo), ".env"));
+    expect(projectConfigIn(sub, dsh.launch.projectConfig)).toBeNull();
+    expect(projectConfigIn(venv, dsh.launch.projectConfig)).toBeNull();
   });
 });
 

@@ -57,13 +57,23 @@ describe("dsh launch", () => {
     expect(dsh.launch.sidecar!.config!.content(lane({ model: "deepseek-next", effort: "default" }))).not.toContain("reasoningEffort");
   });
 
-  it("reads the stored login from the parent's DSH_HOME, else ~/.dsh, without loading that home", () => {
+  it("reads the stored login from the parent's DSH_HOME, resolved as dsh resolves it, else ~/.dsh", () => {
     const saved = process.env.DSH_HOME;
     try {
       process.env.DSH_HOME = "/srv/dsh home";
       expect(dsh.launch.sidecar!.config!.content(lane())).toContain("- id: credentials\n  config:\n    path: \"/srv/dsh home/.credentials.yaml\"\n");
-      delete process.env.DSH_HOME;
-      expect(dsh.launch.sidecar!.config!.content(lane())).toContain(`    path: ${JSON.stringify(join(homedir(), ".dsh/.credentials.yaml"))}\n`);
+      for (const [value, home] of [
+        [undefined, join(homedir(), ".dsh")],
+        [" \t", join(homedir(), ".dsh")],
+        ["~", homedir()],
+        ["~/dsh-alt", join(homedir(), "dsh-alt")],
+        ["dsh-rel", join(process.cwd(), "dsh-rel")],
+        ["~alice/dsh", join(process.cwd(), "~alice/dsh")],
+      ] as const) {
+        if (value === undefined) delete process.env.DSH_HOME;
+        else process.env.DSH_HOME = value;
+        expect(dsh.launch.sidecar!.config!.content(lane())).toContain(`    path: ${JSON.stringify(join(home, ".credentials.yaml"))}\n`);
+      }
     } finally {
       if (saved === undefined) delete process.env.DSH_HOME;
       else process.env.DSH_HOME = saved;

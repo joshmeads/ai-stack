@@ -433,16 +433,20 @@ function within(parent: string, child: string): boolean {
 // cannot be escaped, and Claude Code 2.1.288 on Linux drops entries containing * ? [ ].
 // The first of the provider's project config paths in the cwd or a parent up to the git root, or null. A CLI that
 // loads repository-controlled config from there does not run: the runner bypasses its workspace trust. A path
-// ending in "/" matches only a directory; any other path matches a directory or a file. The walk stops below the
-// home directory, whose CLI config is the user's own host configuration.
+// ending in "/" matches only a directory; one starting with "./" matches only a file in the cwd itself; any other
+// path matches a directory or a file. The walk stops below the home directory, whose CLI config is the user's own
+// host configuration.
 export function projectConfigIn(cwd: string, names: readonly string[]): string | null {
   if (names.length === 0) return null;
   const home = existsSync(homedir()) ? realpathSync(homedir()) : null;
-  for (let dir = realpathSync(cwd); dir !== home; dir = dirname(dir)) {
+  const start = realpathSync(cwd);
+  for (let dir = start; dir !== home; dir = dirname(dir)) {
     for (const name of names) {
+      const cwdOnly = name.startsWith("./");
+      if (cwdOnly && dir !== start) continue;
       const candidate = join(dir, name).replace(/\/$/, "");
       const found = entryAt(candidate);
-      if (found?.isDirectory() || (!name.endsWith("/") && found?.isFile())) return candidate;
+      if (cwdOnly ? found?.isFile() : found?.isDirectory() || (!name.endsWith("/") && found?.isFile())) return candidate;
     }
     if (existsSync(join(dir, ".git")) || dirname(dir) === dir) return null;
   }
@@ -774,7 +778,7 @@ async function executeLane(
       usage: null,
       costUsd: null,
       error: {
-        message: `${adapter.id} lanes do not run in a workspace with ${projectConfig}: the CLI would load its repository-controlled hooks, permissions and MCP servers`,
+        message: `${adapter.id} lanes do not run in a workspace with ${projectConfig}: the CLI would load that repository-controlled config`,
         evidence: "",
       },
     });

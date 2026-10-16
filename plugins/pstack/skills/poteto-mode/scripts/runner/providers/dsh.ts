@@ -25,13 +25,21 @@ const DISABLED_ROWS = [
   "session-title-llm",
 ];
 
+// dsh-home-paths' resolveDshHome in dsh 0.2.0-rc.2: a blank value is unset, a leading `~`, `~/` or `~\` is the
+// home directory, and a relative path resolves against the runner's cwd.
+function dshHome(value: string | undefined): string {
+  const path = value !== undefined && value.trim().length > 0 ? value : join(homedir(), ".dsh");
+  if (path === "~") return homedir();
+  return resolve(path.startsWith("~/") || path.startsWith("~\\") ? join(homedir(), path.slice(2)) : path);
+}
+
 // The lane runs on its own DSH_HOME, so no user layer or home-level file loads, and the stored login is read in
 // place through the `credentials` row. A patch replaces a row's whole config. Pinning `sandbox-policy` and
 // `approval` also overrides DSH_PERMISSION_MODE. JSON strings are YAML double-quoted scalars, so a path or model
 // cannot be reinterpreted.
 function patch(lane: Lane): string {
   const quoted = JSON.stringify;
-  const credentials = join(resolve(process.env.DSH_HOME || join(homedir(), ".dsh")), ".credentials.yaml");
+  const credentials = join(dshHome(process.env.DSH_HOME), ".credentials.yaml");
   return [
     "- id: sandbox-policy",
     "  config:",
@@ -167,8 +175,9 @@ export const dsh = adapter({
     sidecar: { output: null, config: { name: "patch.yml", content: patch } },
     // The Seatbelt `workspace-write` writer waits for a writer route in the live gate.
     supports: ["read-only"],
-    // dsh loads no project patch, hook or MCP file. It loads a cwd `.env` but refuses its bootstrap names.
-    projectConfig: [],
+    // dsh loads no project patch, hook or MCP file, but it loads the cwd's `.env` file, not a parent's, into the
+    // bash tool's environment, where a name such as GIT_CONFIG_PARAMETERS runs repository code.
+    projectConfig: ["./.env"],
     needsSharedGitDir: () => false,
     // Launcher flags must come before `--json`.
     argv: (_lane, facts) => ["--profile", "headless", "--patch", lanePatch(facts.providerSidecar), "--json", "-"],
@@ -191,12 +200,12 @@ export const dsh = adapter({
       "The stored key `<DSH_HOME, else ~/.dsh>/.credentials.yaml`, which the lane reads in place and does not copy",
     ],
     notes: [
-      "Measured with dsh 0.2.0-rc.2, a developer preview. The runner checks `dsh --version` before the preflight and refuses any other version as `unavailable-cli`/69. Recheck on an upgrade: the config row IDs the patch names (dsh silently ignores a patch row it does not have, so a renamed row would drop that part of the lockdown), the SIGTERM exit 0 with a partial `final`, the hardcoded `/tmp` writable root, the session-log upload being on by default, the `.env` bootstrap-name refusal, the transport retry row, and the `credentials` row's `path` config.",
+      "Measured with dsh 0.2.0-rc.2, a developer preview. The runner checks `dsh --version` before the preflight and refuses any other version as `unavailable-cli`/69. Recheck on an upgrade: the config row IDs the patch names (dsh silently ignores a patch row it does not have, so a renamed row would drop that part of the lockdown), the SIGTERM exit 0 with a partial `final`, the hardcoded `/tmp` writable root, the session-log upload being on by default, that dsh reads only the cwd's `.env` and skips a directory there, the transport retry row, and the `credentials` row's `path` config.",
       "Model and effort are config, not flags. Each lane gets a run-owned `--patch` file at `<receipt>.provider/patch.yml` (directory 0700, file 0600) that pins `agent-default-model` to provider `deepseek-official`, the lane's model and, unless the effort is `default`, its `reasoningEffort`. dsh offers efforts `off`, `low`, `high` and `max`, and fails `medium` locally.",
       "Each lane runs with `DSH_HOME` set to its `<receipt>.provider/` directory, and the allowlist drops every inherited `DSH_*` name. dsh creates the `headless` profile there on first use with no network or `pnpm` install (about 70 ms), so no user layer (`profiles/headless/cordis.patch.yml`) and no home `.env` from the operator's dsh home loads. Measured with `--dump-config`: a planted user layer that redirected `llm-deepseek.config.baseURL`, moved `fs-sandbox.config.cwd`, picked another `agent-default-model` provider and disabled `bash-sandbox` changed nothing, and the composed tree was the default rows plus the lane's patch. The patch's `credentials` row points the credential store at `<the parent's DSH_HOME, else ~/.dsh>/.credentials.yaml`, read in place. A key kept only in the operator's `<DSH_HOME>/.env` no longer authenticates; store it or export `DEEPSEEK_API_KEY`.",
       "Read-only only. The patch pins `sandbox-policy` to `read-only` with the lane's cwd as the workspace root and `approval` to `ask`, which overrides `DSH_PERMISSION_MODE`. The other sandbox rows keep dsh's defaults, including the bash tool's own timeout; the runner adds no deadline. Seatbelt enforces it on macOS for bash and the file tools. Headless has no approval channel, so an escalation request fails closed. Bash keeps network access, and the `read` tool is not confined to the cwd. The runner refuses an `isolated-write` lane before launch.",
-      "The patch turns off host and project rules (`AGENTS.md`, `CLAUDE.md` and their local variants), every skill root, the web, subagent and workflow tools, the session-title model call, the plugin inventory and the `dsh_session_log` upload. The goal, job, todo, plan-mode and `read_image` tools still load. dsh loads no project patch, hook or MCP file, so no project path is refused.",
-      "dsh loads the cwd's `.env`. It refuses bootstrap names there (`DSH_*`, `DEEPSEEK_BASE_URL`, `PATH`, `NODE_OPTIONS`, `XDG_*`, `DYLD_*`, proxies) and exits 1, so the runner does not refuse a `.env`. Its other values reach the bash tool. A `DEEPSEEK_API_KEY` there authenticates when none is stored or exported.",
+      "The patch turns off host and project rules (`AGENTS.md`, `CLAUDE.md` and their local variants), every skill root, the web, subagent and workflow tools, the session-title model call, the plugin inventory and the `dsh_session_log` upload. The goal, job, todo, plan-mode and `read_image` tools still load. dsh loads no project patch, hook or MCP file.",
+      "The runner refuses a dsh lane whose cwd holds a `.env` file, before the preflight. dsh loads that file at boot, before any config row applies, and no setting turns it off. dsh rejects only bootstrap names there (`DSH_*`, `DEEPSEEK_BASE_URL`, `PATH`, `NODE_OPTIONS`, `XDG_*`, `DYLD_*`, proxies), and every other value reaches the bash tool: a repository `.env` that sets `GIT_CONFIG_PARAMETERS` with `core.fsmonitor` makes a plain `git status` run the repository's script. dsh reads only the cwd's `.env`, not a parent's, and warns and skips a directory named `.env`, such as a Python virtual environment, so neither is refused. A key stored in `<DSH_HOME, else ~/.dsh>/.credentials.yaml` or an exported `DEEPSEEK_API_KEY` still authenticates.",
       "dsh has no status command. The preflight is a turn on the lane's `DSH_HOME` with the lane's patch and then the shipped `providers/dsh-preflight.yml` patch, which points inference at a closed loopback port and turns off retries. The lane's patch already turns off the title call and the session-log upload. `TRANSPORT` passes with the fixed evidence `credential present; not validated`: it proves only that a key is stored or exported, not that the key works. `MISSING_CREDENTIAL` is `unauthenticated`/77, and any other output is `child-failed`/70.",
       "The reply is the `--json` stream's `final` text, accepted only after a `status` `turn_end` with `reason.kind` `completed`. SIGTERM exits 0 with a partial `final` and no `turn_end`, so that is `malformed-output`/65, never complete. Exit 130 after SIGINT is `cancelled`/130. A `turn_end` error is `child-failed`/70 with its code and message, except that DeepSeek's `The supported API model names are ...` refusal is `unavailable-model`/69. Usage sums the `step_end` usage; the session ID is the `session` event's. No cost is reported.",
       "No served model is reported, so the model proof is the pinned patch (`pinned-argv`).",
