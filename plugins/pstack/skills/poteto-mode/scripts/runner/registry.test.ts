@@ -1,4 +1,5 @@
 import { afterEach, describe, expect, it } from "bun:test";
+import { createHash } from "node:crypto";
 import { mkdtempSync, readdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { dirname, join, relative, resolve } from "node:path";
@@ -46,7 +47,14 @@ function familyOf(provider: string, model: string): string | null {
   return match.kind === "unregistered" ? null : match.family.name;
 }
 
+const RELEASED_BY_1_15_0 = { count: 20, sha256: "d8308fb54209a852f3be8a44a9057153776036bf72eb55142c9e5faefcca49f8" };
+
 describe("registry data", () => {
+  it("keeps every pair released by 1.15.0 in place", () => {
+    const released = REGISTRY.releasedPairs.slice(0, RELEASED_BY_1_15_0.count);
+    expect(createHash("sha256").update(JSON.stringify(released)).digest("hex")).toBe(RELEASED_BY_1_15_0.sha256);
+  });
+
   it("resolves every released pair to its recorded family", () => {
     for (const { pair, family } of REGISTRY.releasedPairs) {
       const at = pair.indexOf(":");
