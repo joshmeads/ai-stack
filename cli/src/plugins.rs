@@ -38,8 +38,9 @@ pub struct Command {
 pub enum Restore {
     /// Arguments to the same CLI that reinstall or re-enable it.
     Command(Vec<String>),
-    /// No command can, because its marketplace no longer lists it: where to restore it from.
-    Note(String),
+    /// No command can, because its marketplace (the stack) no longer lists it. Apply names
+    /// the stack commit to restore it from (`retired_note`).
+    Retired { stack: PathBuf, plugin: String },
 }
 
 impl Command {
@@ -48,9 +49,10 @@ impl Command {
         Some(Command { harness: self.harness, env: self.env.clone(), args: args.clone(), undo: None, clean: false })
     }
 
-    pub fn undo_note(&self) -> Option<&str> {
+    /// For a retired plugin, where to restore it from. Runs `git` in the stack.
+    pub fn undo_note(&self) -> Option<String> {
         match &self.undo {
-            Some(Restore::Note(note)) => Some(note),
+            Some(Restore::Retired { stack, plugin }) => Some(retired_note(stack, self.harness, plugin)),
             _ => None,
         }
     }
@@ -181,8 +183,8 @@ pub fn plan(cfg: &Config, hc: &HarnessConfig, runner: &dyn Runner, out: &mut Pla
         if manifest.iter().any(|(name, _)| name == plugin) {
             continue;
         }
-        let note = retired_note(stack, hc.harness, plugin);
-        let removal = |args: &[&str], _: &[&str]| Command { harness: hc.harness, env: env.clone(), args: strings(args), undo: Some(Restore::Note(note.clone())), clean: false };
+        let undo = Restore::Retired { stack: stack.clone(), plugin: plugin.to_string() };
+        let removal = |args: &[&str], _: &[&str]| Command { harness: hc.harness, env: env.clone(), args: strings(args), undo: Some(undo.clone()), clean: false };
         plan_removal(hc.harness, entry, &removal, out);
     }
     for plugin in PLUGINS {
@@ -260,23 +262,30 @@ fn plan_removal(harness: Harness, entry: &Installed, removal: &dyn Fn(&[&str], &
     }
 }
 
-/// Where a retired `jm` plugin can be restored from: the last commit of the stack whose
-/// marketplace manifest lists it. That is HEAD when only the working tree dropped it, and
-/// otherwise the parent of the latest commit that changed its entry.
+/// Where a retired `jm` plugin can be restored from: the newest stack commit whose marketplace
+/// manifest lists it and whose copy of its source directory still holds a skill (a `SKILL.md`).
+/// A commit that only lists it, after its skills moved out, cannot restore it.
 fn retired_note(stack: &Path, harness: Harness, plugin: &str) -> String {
     let manifest = manifest_path(harness);
-    let git = |args: &[&str]| exec::check(&exec::SystemExec, "git", &strings(&[&["-C", &stack.to_string_lossy()], args].concat()), None).map(|out| out.trim().to_string());
-    let quoted = format!("\"{plugin}\"");
-    let listed_at_head = git(&["show", &format!("HEAD:{manifest}")]).is_ok_and(|text| text.contains(&quoted));
-    let commit = if listed_at_head {
-        git(&["rev-parse", "HEAD"]).ok()
-    } else {
-        git(&["log", "-1", "--format=%H", "-S", &quoted, "--", manifest]).ok().filter(|removed| !removed.is_empty()).and_then(|removed| git(&["rev-parse", &format!("{removed}^")]).ok())
-    };
-    match commit {
-        Some(commit) => format!("{plugin} was retired from the {MARKETPLACE} marketplace. Commit {commit} of the stack {} is the last that lists it in {manifest}; restore it from there.", stack.display()),
-        None => format!("{plugin} was retired from the {MARKETPLACE} marketplace, and the stack {} has no commit that lists it in {manifest}.", stack.display()),
+    match restorable_commit(stack, manifest, plugin) {
+        Some(commit) => format!("{plugin} was retired from the {MARKETPLACE} marketplace. Commit {commit} of the stack {} is the last that lists it in {manifest} with its skills; restore it from there.", stack.display()),
+        None => format!("{plugin} was retired from the {MARKETPLACE} marketplace, and the stack {} has no commit that lists it in {manifest} with its skills.", stack.display()),
     }
+}
+
+fn restorable_commit(stack: &Path, manifest: &str, plugin: &str) -> Option<String> {
+    let git = |args: &[&str]| exec::check(&exec::SystemExec, "git", &strings(&[&["-C", &stack.to_string_lossy()], args].concat()), None).ok();
+    // A plugin no commit ever named needs no walk through the history.
+    git(&["log", "-1", "--format=%H", "-S", &format!("\"{plugin}\""), "--", manifest]).filter(|found| !found.trim().is_empty())?;
+    let commits = git(&["rev-list", "HEAD"])?;
+    commits.lines().find(|commit| {
+        let Some(text) = git(&["show", &format!("{commit}:{manifest}")]) else { return false };
+        let Ok(json) = serde_json::from_str::<Value>(&text) else { return false };
+        let entry = json["plugins"].as_array().and_then(|entries| entries.iter().find(|entry| entry["name"] == plugin));
+        let Some(source) = entry.and_then(|entry| entry["source"].as_str().or_else(|| entry["source"]["path"].as_str())) else { return false };
+        let source = source.trim_start_matches("./").trim_end_matches('/');
+        git(&["ls-tree", "-r", "--name-only", commit, "--", source]).is_some_and(|files| files.lines().any(|file| file.rsplit('/').next() == Some("SKILL.md")))
+    }).map(str::to_string)
 }
 
 fn manifest_path(harness: Harness) -> &'static str {
@@ -475,6 +484,24 @@ pub mod fake {
                 _ => return Ok(Ran { ok: false, stdout: String::new(), stderr: format!("unexpected command {cmd}") }),
             };
             Ok(Ran { ok: true, stdout, stderr: String::new() })
+        }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn the_retired_jm_plugins_restore_from_the_commit_before_their_skills_moved_out() {
+        let repo = Path::new(env!("CARGO_MANIFEST_DIR")).parent().unwrap();
+        let git = |args: &[&str]| exec::check(&exec::SystemExec, "git", &strings(&[&["-C", &repo.to_string_lossy()], args].concat()), None).ok().map(|out| out.trim().to_string());
+        // 8b08520 moved the jm-games and jm-tools skills to skills/; a shallow clone may lack it.
+        let Some(parent) = git(&["rev-parse", "--verify", "-q", "8b08520^{commit}^"]) else { return };
+        for plugin in ["jm-games", "jm-tools"] {
+            for harness in [Harness::Claude, Harness::Codex] {
+                assert_eq!(restorable_commit(repo, manifest_path(harness), plugin), Some(parent.clone()), "{plugin} {harness:?}");
+            }
         }
     }
 }

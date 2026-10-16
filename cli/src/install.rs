@@ -569,10 +569,20 @@ pub(crate) mod tests {
         for (path, text) in manifests.iter().zip(&current) {
             put(&f.stack.join(path), &text.replace("\"name\":\"jm-stack\"", "\"name\":\"jm-games\"},{\"name\":\"jm-stack\""));
         }
+        let manifest_text: Vec<String> = manifests.iter().map(|path| fs::read_to_string(f.stack.join(path)).unwrap()).collect();
+        for (path, text) in manifests.iter().zip(&manifest_text) {
+            put(&f.stack.join(path), &text.replace("{\"name\":\"jm-games\"}", "{\"name\":\"jm-games\",\"source\":\"./plugins/jm-games\"}").replace("{\"name\":\"jm-games\",\"source\":\"./plugins/jm-games\"},{\"name\":\"jm-stack\",\"source\":{", "{\"name\":\"jm-games\",\"source\":{\"source\":\"local\",\"path\":\"./plugins/jm-games\"}},{\"name\":\"jm-stack\",\"source\":{"));
+        }
+        put(&f.stack.join("plugins/jm-games/skills/art/SKILL.md"), "---\nname: art\n---\n");
         git(&["init", "-q"]);
         git(&["add", "-A"]);
         git(&["commit", "-qm", "with jm-games"]);
         let listed = git(&["rev-parse", "HEAD"]);
+        // The skills move out one commit before the manifest drops the plugin.
+        fs::remove_dir_all(f.stack.join("plugins/jm-games/skills")).unwrap();
+        put(&f.stack.join("plugins/jm-games/README.md"), "moved\n");
+        git(&["add", "-A"]);
+        git(&["commit", "-qm", "move the jm-games skills out"]);
         for (path, text) in manifests.iter().zip(&current) {
             put(&f.stack.join(path), text);
         }
@@ -598,7 +608,7 @@ pub(crate) mod tests {
         // No CLI can reinstall a plugin its marketplace dropped, so the record says where it is.
         for (entry, path) in manifest["plugins"].as_array().unwrap().iter().zip(manifests) {
             assert_eq!(entry["reinstall"], Value::Null);
-            assert_eq!(entry["note"], format!("jm-games was retired from the jm marketplace. Commit {listed} of the stack {} is the last that lists it in {path}; restore it from there.", f.stack.display()));
+            assert_eq!(entry["note"], format!("jm-games was retired from the jm marketplace. Commit {listed} of the stack {} is the last that lists it in {path} with its skills; restore it from there.", f.stack.display()));
         }
         assert!(f.plan().is_empty(), "{}", f.plan().render_text(&f.home));
     }
