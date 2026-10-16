@@ -851,7 +851,7 @@ async function executeLane(
       return { exitCode: statusExitCode(receipt.status), receipt };
     }
   }
-  const preflightArgs = preflight.argv(lane);
+  const preflightArgs = preflight.argv(lane, providerSidecar(lane)?.facts ?? null);
   const runPreflight = async () => {
     const run = await runProcess(executable, preflightArgs, lane.cwd, env, null, deadlineAt, cancellation);
     const verdict = preflight.classify(run, lane);
@@ -1084,7 +1084,7 @@ export async function runLane(
   const progress: LaneProgress = {
     executable: null,
     preflight: {
-      argv: [lane.adapter.executable, ...lane.adapter.preflight.argv(lane)],
+      argv: [lane.adapter.executable, ...lane.adapter.preflight.argv(lane, providerSidecar(lane)?.facts ?? null)],
       status: "not-run",
       evidence: "",
     },

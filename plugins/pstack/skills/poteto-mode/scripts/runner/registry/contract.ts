@@ -139,7 +139,8 @@ export interface ProviderAdapter {
    *  "config": the sidecar config carries the effort, and omits it for `default`. */
   readonly effortIn: "flag" | "model-id" | "config";
   readonly preflight: {
-    argv(lane: Lane): readonly string[];
+    /** sidecar is the lane's provider sidecar, already written, or null when the adapter declares none. */
+    argv(lane: Lane, sidecar: LaunchFacts["providerSidecar"]): readonly string[];
     /** One more preflight after an "unauthenticated" verdict, after this delay. null means none. */
     readonly retryAfterUnauthenticatedMs: number | null;
     classify(run: ChildRun, lane: Lane): PreflightVerdict;

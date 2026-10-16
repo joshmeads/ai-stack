@@ -70,8 +70,8 @@ describe("opencode launch", () => {
 
 describe("opencode preflight", () => {
   it("asks the model's provider and passes only when the model is listed", () => {
-    expect(opencode.preflight.argv(lane())).toEqual(["models", "opencode"]);
-    expect(opencode.preflight.argv(lane({ model: "openrouter/deepseek/deepseek-v4-pro" }))).toEqual(["models", "openrouter"]);
+    expect(opencode.preflight.argv(lane(), null)).toEqual(["models", "opencode"]);
+    expect(opencode.preflight.argv(lane({ model: "openrouter/deepseek/deepseek-v4-pro" }), null)).toEqual(["models", "openrouter"]);
     expect(preflight(0, fixture("models-opencode-gate-env.txt"))).toEqual({ kind: "passed", evidence: `model ${MODEL} listed` });
     expect(preflight(0, fixture("models-opencode-gate-env.txt"), "", { model: "opencode/deepseek-v4.1-flash" }))
       .toEqual({ kind: "unavailable-model" });

@@ -60,8 +60,9 @@ function parse(run: ModelRun): ParseResult {
   // After an error exit run.ts classifies the output, so `invalid model selection` is unavailable-model.
   if (error !== null) return { kind: "malformed", message: "agy result reported an error" };
   const response = typeof result.response === "string" ? result.response.replace(/\n$/, "") : "";
-  // Headless agy denies the first tool that needs approval and ends the turn with exit 0 and status SUCCESS.
-  if (Array.isArray(result.denied_actions) && result.denied_actions.length > 0 && response.length === 0) {
+  // Headless agy denies the first tool that needs approval and ends the turn with exit 0 and status SUCCESS, so
+  // any response before the denial is a preamble, not an answer.
+  if (Array.isArray(result.denied_actions) && result.denied_actions.length > 0) {
     return { kind: "provider-failure", status: "child-failed", message: "agy denied a tool that needed approval", metadata: found };
   }
   if (response.length === 0) return { kind: "malformed", message: "agy result has an empty response" };
@@ -129,7 +130,7 @@ export const agy = adapter({
     notes: [
       "Effort is part of the model ID. The runner passes the CLI model ID that the effort table gives for the requested effort and never passes `--effort`, because a variant ID with a conflicting `--effort` exits 1. A bare `gemini-3.8-flash` runs as `gemini-3.8-flash-high`. Issue #37 asked for Gemini 3.7 Flash, but `agy models` did not list it for the measured account. The runner registers Gemini 3.8 Flash and never maps a 3.7 request to it.",
       "Read-only only. A lane runs agy's default mode, whose approval policy, not an OS sandbox, denies the write tool and every shell command. `--mode accept-edits` writes only through the edit tool and denies shell, and `--sandbox` blocks shell writes even in the cwd, so no agy mode is a bounded writer. The runner refuses an `isolated-write` lane before launch.",
-      "Headless agy cannot ask for approval. The first tool that needs it is denied, and the turn ends with exit 0, `status: \"SUCCESS\"`, an empty `response` and a `denied_actions` list. The runner records that as `child-failed`/70.",
+      "Headless agy cannot ask for approval. The first tool that needs it is denied, and the turn ends with exit 0, `status: \"SUCCESS\"` and a `denied_actions` list. Any `response` text is a preamble written before the denied tool, so the runner records a non-empty `denied_actions` as `child-failed`/70 whatever the response says.",
       "Each lane writes a run-owned agent file, `.agents/agents/pstack-read-only.md`, in its private `<receipt>.provider/` directory (0700, the file 0600), and runs `--add-dir <that directory> --agent pstack-read-only`. The agent declares only `view_file`, no MCP servers and no skills. The lane keeps `view_file` and `manage_task` and loses web search, `read_url_content`, subagents, `schedule`, `send_message` and the browser. If the file is missing, agy exits 1 with `unknown agent`.",
       "The runner refuses an agy lane whose cwd, or any parent up to the git root and below the home directory, holds a `.agents/`, `.agent/`, `_agents/` or `_agent/` directory. agy runs the hooks and MCP servers there with no trust check and loads their rules and skills, and a repository agent named `pstack-read-only` would replace the run-owned one.",
       "No flag turns off the operator's own configuration. `~/.gemini/GEMINI.md` loads as a global rule, and host skills and agy plugin hooks under `~/.gemini/` still load in every lane. The run-owned agent limits only the lane's tools.",

@@ -110,9 +110,12 @@ describe("agy parse", () => {
     expect(agy.proof.matches(lane(), "gemini-3.8-flash-medium")).toBe(false);
   });
 
-  it("reads an exit-0 denial with an empty response as a failure", () => {
+  it("reads an exit-0 denial as a failure, with or without a preamble", () => {
     expect(agy.parse(run({ stdout: fixture("stream-denied-shell.jsonl"), stderr: fixture("stream-denied-shell.stderr.txt") }), lane()))
       .toMatchObject({ kind: "provider-failure", status: "child-failed", message: "agy denied a tool that needed approval", metadata: { usage: { outputTokens: 215 } } });
+    const result = (body: object) => `${JSON.stringify({ event: "result", result: body })}\n`;
+    expect(agy.parse(run({ stdout: result({ response: "Let me check.\n", denied_actions: [{ action: "command" }] }) }), lane()))
+      .toMatchObject({ kind: "provider-failure", status: "child-failed", message: "agy denied a tool that needed approval" });
   });
 
   it("reads the interrupted result as cancelled", () => {
@@ -128,8 +131,5 @@ describe("agy parse", () => {
       .toEqual({ kind: "malformed", message: "agy result has an empty response" });
     expect(agy.parse(run({ stdout: "" }), lane())).toEqual({ kind: "malformed", message: "agy wrote no result event" });
     expect(agy.parse(run({ stdout: "PINEAPPLE\n" }), lane())).toEqual({ kind: "malformed", message: "agy emitted a non-JSON event" });
-    // A reply that also lists a denial is still the reply.
-    expect(agy.parse(run({ stdout: result({ response: "OK\n", denied_actions: [{ action: "command" }] }) }), lane()))
-      .toMatchObject({ kind: "complete", text: "OK" });
   });
 });

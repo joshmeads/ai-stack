@@ -1,5 +1,6 @@
 import { describe, expect, it } from "bun:test";
 import { readFileSync } from "node:fs";
+import { homedir } from "node:os";
 import { join } from "node:path";
 import type { ModelRun } from "../registry/contract.ts";
 import type { LaneRequest } from "../registry/index.ts";
@@ -26,39 +27,19 @@ describe("dsh launch", () => {
     expect(dsh.launch.sidecar?.output).toBeNull();
   });
 
-  it("pins every sandbox and approval row enabled, the model and effort, and turns off the lockdown rows", () => {
+  it("pins read-only mode, the stored login in place, the model and effort, and turns off the lockdown rows", () => {
     const patch = dsh.launch.sidecar!.config!.content(lane({ model: "deepseek-v4-pro", effort: "low", cwd: "/tmp/a dir: #x" }));
     expect(patch).toStartWith([
-      "- id: sandbox",
-      "  disabled: false",
       "- id: sandbox-policy",
-      "  disabled: false",
       "  config:",
       "    mode: read-only",
       "    workspaceRoot: \"/tmp/a dir: #x\"",
-      "- id: bash-sandbox",
-      "  disabled: false",
-      "  config:",
-      "    timeoutMs: 60000",
-      "- id: fs-sandbox",
-      "  disabled: false",
       "- id: approval",
-      "  disabled: false",
       "  config:",
       "    policy: ask",
-      "- id: permission",
-      "  disabled: false",
+      "- id: credentials",
       "  config:",
-      "    presets:",
-      "      read-only:",
-      "        sandbox: read-only",
-      "        approval: ask",
-      "      workspace-write:",
-      "        sandbox: workspace-write",
-      "        approval: ask",
-      "      danger-full-access:",
-      "        sandbox: danger-full-access",
-      "        approval: never",
+      `    path: ${JSON.stringify(join(process.env.DSH_HOME || join(homedir(), ".dsh"), ".credentials.yaml"))}`,
       "- id: agent-default-model",
       "  config:",
       "    provider: deepseek-official",
@@ -76,25 +57,41 @@ describe("dsh launch", () => {
     expect(dsh.launch.sidecar!.config!.content(lane({ model: "deepseek-next", effort: "default" }))).not.toContain("reasoningEffort");
   });
 
+  it("reads the stored login from the parent's DSH_HOME, else ~/.dsh, without loading that home", () => {
+    const saved = process.env.DSH_HOME;
+    try {
+      process.env.DSH_HOME = "/srv/dsh home";
+      expect(dsh.launch.sidecar!.config!.content(lane())).toContain("- id: credentials\n  config:\n    path: \"/srv/dsh home/.credentials.yaml\"\n");
+      delete process.env.DSH_HOME;
+      expect(dsh.launch.sidecar!.config!.content(lane())).toContain(`    path: ${JSON.stringify(join(homedir(), ".dsh/.credentials.yaml"))}\n`);
+    } finally {
+      if (saved === undefined) delete process.env.DSH_HOME;
+      else process.env.DSH_HOME = saved;
+    }
+  });
+
   it("refuses an isolated-write lane and the medium effort for a registered family", () => {
     expect(() => lane({ mode: "isolated-write" })).toThrow("provider dsh does not support isolated-write; it supports only: read-only");
     expect(() => lane({ effort: "medium" })).toThrow("effort medium is not offered for dsh:deepseek-flash; choose one of: low, high, max");
   });
 
-  it("passes DEEPSEEK_API_KEY and no other DEEPSEEK_ or DSH_ name", () => {
+  it("passes DEEPSEEK_API_KEY, no other inherited DEEPSEEK_ or DSH_ name, and the provider directory as DSH_HOME", () => {
     const policy = dsh.environment(lane().access, "/tmp/receipt.json.provider");
     if (policy.kind !== "allowlist") throw new Error("expected an allowlist");
     expect(policy.names.filter((name) => /^(DSH_|DEEPSEEK_)/.test(name))).toEqual(["DEEPSEEK_API_KEY"]);
     expect(policy.prefixes.filter((prefix) => /^(DSH|DEEPSEEK)/.test(prefix))).toEqual([]);
-    expect(policy.set).toBeUndefined();
+    expect(policy.set).toEqual({ DSH_HOME: "/tmp/receipt.json.provider" });
   });
 });
 
 describe("dsh preflight", () => {
-  it("runs a positional task with the shipped preflight patch", () => {
-    const argv = dsh.preflight.argv(lane());
-    expect(argv).toEqual(["--profile", "headless", "--patch", join(import.meta.dir, "dsh-preflight.yml"), "--json", "preflight"]);
-    expect(readFileSync(argv[3]!, "utf8")).toContain("baseURL: http://127.0.0.1:1\n- id: llm-retry\n  disabled: true\n");
+  it("runs a positional task with the lane's patch, then the shipped preflight patch", () => {
+    const argv = dsh.preflight.argv(lane(), testFacts(dsh).providerSidecar);
+    expect(argv).toEqual([
+      "--profile", "headless", "--patch", "/tmp/receipt.json.provider/patch.yml",
+      "--patch", join(import.meta.dir, "dsh-preflight.yml"), "--json", "preflight",
+    ]);
+    expect(readFileSync(argv[5]!, "utf8")).toContain("baseURL: http://127.0.0.1:1\n- id: llm-retry\n  disabled: true\n");
   });
 
   it("passes TRANSPORT with fixed evidence that the key is not validated", () => {

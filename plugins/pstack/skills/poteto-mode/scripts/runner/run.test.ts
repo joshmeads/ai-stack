@@ -13,7 +13,7 @@ import {
   symlinkSync,
   writeFileSync,
 } from "node:fs";
-import { dirname, join } from "node:path";
+import { dirname, join, resolve } from "node:path";
 import * as os from "node:os";
 import { tmpdir } from "node:os";
 import { childEnvironment, discoverSharedGitDir, projectConfigIn, runLane } from "./run.ts";
@@ -2386,10 +2386,11 @@ ${turn}
   // Reports what the child saw as the final text.
   const OBSERVE = `const observed = {
   prompt,
-  patch: ["- id: sandbox-policy", "- id: agent-default-model"].flatMap((row) => {
+  patch: [["- id: sandbox-policy", 4], ["- id: credentials", 3], ["- id: agent-default-model", 5]].flatMap(([row, count]) => {
     const lines = readFileSync(patch, "utf8").split("\\n");
-    return lines.slice(lines.indexOf(row), lines.indexOf(row) + 5);
+    return lines.slice(lines.indexOf(row), lines.indexOf(row) + count);
   }),
+  home: process.env.DSH_HOME,
   dirMode: (statSync(dirname(patch)).mode & 0o777).toString(8),
   patchMode: (statSync(patch).mode & 0o777).toString(8),
   variables: Object.keys(process.env).filter((key) => /^(DSH_|DEEPSEEK_)/.test(key)).sort(),
@@ -2430,16 +2431,18 @@ emit({ type: "final", text: JSON.stringify(observed) });`;
     });
     const dir = `${input.receiptPath}.provider`;
     expect(saved.argv.slice(1)).toEqual(["--profile", "headless", "--patch", join(dir, "patch.yml"), "--json", "-"]);
-    expect(saved.preflight.argv.slice(1, 3)).toEqual(["--profile", "headless"]);
+    expect(saved.preflight.argv.slice(1, 5)).toEqual(["--profile", "headless", "--patch", join(dir, "patch.yml")]);
     expect(saved.preflight.argv.at(-1)).toBe("preflight");
     expect(JSON.parse(readFileSync(input.outputPath, "utf8"))).toEqual({
       prompt: "Return the marker.",
       patch: [
         "- id: sandbox-policy",
-        "  disabled: false",
         "  config:",
         "    mode: read-only",
         `    workspaceRoot: ${JSON.stringify(scratch)}`,
+        "- id: credentials",
+        "  config:",
+        `    path: ${JSON.stringify(join(resolve("DSH_HOME-value"), ".credentials.yaml"))}`,
         "- id: agent-default-model",
         "  config:",
         "    provider: deepseek-official",
@@ -2448,7 +2451,8 @@ emit({ type: "final", text: JSON.stringify(observed) });`;
       ],
       dirMode: "700",
       patchMode: "600",
-      variables: ["DEEPSEEK_API_KEY"],
+      home: dir,
+      variables: ["DEEPSEEK_API_KEY", "DSH_HOME"],
     });
     expect(statSync(dir).mode & 0o777).toBe(0o700);
   });
