@@ -24,19 +24,43 @@ const DISABLED_ROWS = [
   "session-title-llm",
 ];
 
-// A patch replaces a row's whole config, so each pinned row is complete. Pinning `sandbox-policy` and
-// `approval` overrides DSH_PERMISSION_MODE. JSON strings are YAML double-quoted scalars, so a path or model
-// cannot be reinterpreted.
+// A patch replaces a row's whole config, so each pinned row is complete. The user layer in
+// ~/.dsh/profiles/headless/cordis.patch.yml applies before --patch, so every row that enforces the sandbox or
+// approvals is pinned enabled with its full config. Pinning `sandbox-policy` and `approval` also overrides
+// DSH_PERMISSION_MODE. JSON strings are YAML double-quoted scalars, so a path or model cannot be reinterpreted.
 function patch(lane: Lane): string {
   const quoted = JSON.stringify;
   return [
+    "- id: sandbox",
+    "  disabled: false",
     "- id: sandbox-policy",
+    "  disabled: false",
     "  config:",
     "    mode: read-only",
     `    workspaceRoot: ${quoted(lane.cwd)}`,
+    "- id: bash-sandbox",
+    "  disabled: false",
+    "  config:",
+    "    timeoutMs: 60000",
+    "- id: fs-sandbox",
+    "  disabled: false",
     "- id: approval",
+    "  disabled: false",
     "  config:",
     "    policy: ask",
+    "- id: permission",
+    "  disabled: false",
+    "  config:",
+    "    presets:",
+    "      read-only:",
+    "        sandbox: read-only",
+    "        approval: ask",
+    "      workspace-write:",
+    "        sandbox: workspace-write",
+    "        approval: ask",
+    "      danger-full-access:",
+    "        sandbox: danger-full-access",
+    "        approval: never",
     "- id: agent-default-model",
     "  config:",
     "    provider: deepseek-official",
@@ -179,7 +203,7 @@ export const dsh = adapter({
     notes: [
       "Measured with dsh 0.2.0-rc.2, a developer preview. The runner checks `dsh --version` before the preflight and refuses any other version as `unavailable-cli`/69. Recheck on an upgrade: the config row IDs the patch names (dsh silently ignores a patch row it does not have, so a renamed row would drop that part of the lockdown), the SIGTERM exit 0 with a partial `final`, the hardcoded `/tmp` writable root, the session-log upload being on by default, the `.env` bootstrap-name refusal, and the transport retry row.",
       "Model and effort are config, not flags. Each lane gets a run-owned `--patch` file at `<receipt>.provider/patch.yml` (directory 0700, file 0600) that pins `agent-default-model` to provider `deepseek-official`, the lane's model and, unless the effort is `default`, its `reasoningEffort`. dsh offers efforts `off`, `low`, `high` and `max`, and fails `medium` locally.",
-      "Read-only only. The patch pins `sandbox-policy` to `read-only` with the lane's cwd as the workspace root and `approval` to `ask`, which overrides `DSH_PERMISSION_MODE`. Seatbelt enforces it on macOS for bash and the file tools. Headless has no approval channel, so an escalation request fails closed. Bash keeps network access, and the `read` tool is not confined to the cwd. The runner refuses an `isolated-write` lane before launch.",
+      "Read-only only. The patch pins `sandbox-policy` to `read-only` with the lane's cwd as the workspace root and `approval` to `ask`, which overrides `DSH_PERMISSION_MODE`. The user layer `~/.dsh/profiles/headless/cordis.patch.yml` applies before `--patch`, and the patch wins only for the rows it names, so it also pins `sandbox`, `bash-sandbox`, `fs-sandbox` and `permission`, and pins all six rows `disabled: false` with their full default config. Measured with `--dump-config`: a user layer that disabled `sandbox`, `sandbox-policy`, `bash-sandbox` and `fs-sandbox`, set `approval` to `never` and widened the `read-only` preset to `danger-full-access` composed to the pinned rows. The user layer can still change rows the patch does not name, and its file documents insert lists for new rows; whether an inserted row can widen a lane is not measured. Seatbelt enforces it on macOS for bash and the file tools. Headless has no approval channel, so an escalation request fails closed. Bash keeps network access, and the `read` tool is not confined to the cwd. The runner refuses an `isolated-write` lane before launch.",
       "The patch turns off host and project rules (`AGENTS.md`, `CLAUDE.md` and their local variants), every skill root, the web, subagent and workflow tools, the session-title model call, the plugin inventory and the `dsh_session_log` upload. The goal, job, todo, plan-mode and `read_image` tools still load. dsh loads no project patch, hook or MCP file, so no project path is refused.",
       "dsh loads the cwd's `.env`. It refuses bootstrap names there (`DSH_*`, `DEEPSEEK_BASE_URL`, `PATH`, `NODE_OPTIONS`, `XDG_*`, `DYLD_*`, proxies) and exits 1, so the runner does not refuse a `.env`. Its other values reach the bash tool. A `DEEPSEEK_API_KEY` there authenticates when none is stored or exported.",
       "dsh has no status command. The preflight is a turn with the shipped `providers/dsh-preflight.yml` patch, which points inference at a closed loopback port and turns off retries, the title call and the session-log upload. `TRANSPORT` passes with the fixed evidence `credential present; not validated`: it proves only that a key is stored or exported, not that the key works. `MISSING_CREDENTIAL` is `unauthenticated`/77, and any other output is `child-failed`/70.",

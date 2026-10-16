@@ -26,16 +26,39 @@ describe("dsh launch", () => {
     expect(dsh.launch.sidecar?.output).toBeNull();
   });
 
-  it("pins the read-only sandbox, ask approval, model and effort, and turns off the lockdown rows", () => {
+  it("pins every sandbox and approval row enabled, the model and effort, and turns off the lockdown rows", () => {
     const patch = dsh.launch.sidecar!.config!.content(lane({ model: "deepseek-v4-pro", effort: "low", cwd: "/tmp/a dir: #x" }));
     expect(patch).toStartWith([
+      "- id: sandbox",
+      "  disabled: false",
       "- id: sandbox-policy",
+      "  disabled: false",
       "  config:",
       "    mode: read-only",
       "    workspaceRoot: \"/tmp/a dir: #x\"",
+      "- id: bash-sandbox",
+      "  disabled: false",
+      "  config:",
+      "    timeoutMs: 60000",
+      "- id: fs-sandbox",
+      "  disabled: false",
       "- id: approval",
+      "  disabled: false",
       "  config:",
       "    policy: ask",
+      "- id: permission",
+      "  disabled: false",
+      "  config:",
+      "    presets:",
+      "      read-only:",
+      "        sandbox: read-only",
+      "        approval: ask",
+      "      workspace-write:",
+      "        sandbox: workspace-write",
+      "        approval: ask",
+      "      danger-full-access:",
+      "        sandbox: danger-full-access",
+      "        approval: never",
       "- id: agent-default-model",
       "  config:",
       "    provider: deepseek-official",

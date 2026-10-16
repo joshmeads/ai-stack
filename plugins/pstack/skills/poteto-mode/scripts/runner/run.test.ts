@@ -2386,7 +2386,10 @@ ${turn}
   // Reports what the child saw as the final text.
   const OBSERVE = `const observed = {
   prompt,
-  patch: readFileSync(patch, "utf8").split("\\n").slice(0, 12),
+  patch: ["- id: sandbox-policy", "- id: agent-default-model"].flatMap((row) => {
+    const lines = readFileSync(patch, "utf8").split("\\n");
+    return lines.slice(lines.indexOf(row), lines.indexOf(row) + 5);
+  }),
   dirMode: (statSync(dirname(patch)).mode & 0o777).toString(8),
   patchMode: (statSync(patch).mode & 0o777).toString(8),
   variables: Object.keys(process.env).filter((key) => /^(DSH_|DEEPSEEK_)/.test(key)).sort(),
@@ -2433,12 +2436,10 @@ emit({ type: "final", text: JSON.stringify(observed) });`;
       prompt: "Return the marker.",
       patch: [
         "- id: sandbox-policy",
+        "  disabled: false",
         "  config:",
         "    mode: read-only",
         `    workspaceRoot: ${JSON.stringify(scratch)}`,
-        "- id: approval",
-        "  config:",
-        "    policy: ask",
         "- id: agent-default-model",
         "  config:",
         "    provider: deepseek-official",
