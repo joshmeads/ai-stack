@@ -36,6 +36,16 @@ impl Harness {
         }
     }
 
+    /// The user skill folder the harness loads standalone skills from, where ai-stack links
+    /// the global groups' skills. Codex also reads `$CODEX_HOME/skills`, but `~/.agents/skills`
+    /// is the folder shared with other agents (checked against codex-cli 0.160.0).
+    pub fn skill_folder(self, harness_home: &Path, user_home: &Path) -> PathBuf {
+        match self {
+            Harness::Claude => harness_home.join("skills"),
+            Harness::Codex => user_home.join(".agents/skills"),
+        }
+    }
+
     /// The harness-specific instructions source: `<stack>/instructions/<stem>.md`.
     pub fn instructions_stem(self) -> &'static str {
         match self {
