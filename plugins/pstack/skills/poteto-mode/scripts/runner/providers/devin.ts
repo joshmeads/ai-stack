@@ -76,7 +76,7 @@ function parse(run: ModelRun): ParseResult {
 
 function sidecar(facts: LaunchFacts): { readonly output: string; readonly config: string } {
   const paths = facts.providerSidecar;
-  if (paths?.config == null) throw new Error("devin argv needs the lane's provider sidecar paths");
+  if (paths?.output == null || paths.config === null) throw new Error("devin argv needs the lane's provider sidecar paths");
   return { output: paths.output, config: paths.config };
 }
 
@@ -97,12 +97,12 @@ export const devin = adapter({
   },
   launch: {
     prompt: "file",
-    sidecar: { output: "export.json", config: { name: "lockdown.json", content: `${JSON.stringify(LOCKDOWN, null, 2)}\n` } },
+    sidecar: { output: "export.json", config: { name: "lockdown.json", content: () => `${JSON.stringify(LOCKDOWN, null, 2)}\n` } },
     // `--sandbox` forces Devin's autonomous mode, which lets shell commands write in the cwd while it
     // rejects the edit tools, so Devin has no bounded writer mode.
     supports: ["read-only"],
     // The lane bypasses workspace trust, so a repository's .devin/ hooks, permissions and MCP servers would load.
-    projectConfigDir: ".devin",
+    projectConfig: [".devin/"],
     needsSharedGitDir: () => false,
     argv(lane, facts) {
       const paths = sidecar(facts);

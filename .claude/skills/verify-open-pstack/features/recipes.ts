@@ -38,9 +38,9 @@ export const CLAUDE_TOOLS = 'Skill,Read,Glob,Grep,Write,Edit,Bash,Agent,Task,Tod
 /** Without --runner-route, the runner recipe dispatches the first lane of this role's default in the installed catalog. */
 export const DEFAULT_ROLES: Record<Harness, string> = { claude: 'bug-fix', codex: 'judgment and prose' };
 /** Any provider's route; the installed candidate's catalog decides whether the provider exists and is external. */
-export const ROUTE = /^([a-z][a-z0-9-]*):([A-Za-z0-9._-]+)@([a-z]+)$/;
+export const ROUTE = /^([a-z][a-z0-9-]*):([A-Za-z0-9._/-]+)@([a-z]+)$/;
 const SETUP_DESCRIPTOR = 'claude:opus@high';
-const DESCRIPTOR = /\b[a-z][a-z0-9-]*:[A-Za-z0-9._-]+@[a-z]+/g;
+const DESCRIPTOR = /\b[a-z][a-z0-9-]*:[A-Za-z0-9._/-]+@[a-z]+/g;
 const SHEET_HEADER = '# pstack model configuration\n\n';
 /** The model sheet's one setting line. It is not a role, so role-line comparisons leave it out. */
 const SETTING = 'codex writer sandbox: ';

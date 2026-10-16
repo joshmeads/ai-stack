@@ -356,7 +356,7 @@ describe("role pointers and text scans", () => {
       .map((path) => join(PLUGIN_ROOT, path)));
     const files = [...walk(PLUGIN_ROOT, (name) => name.endsWith(".md")), join(REPO_ROOT, "README.md"), join(REPO_ROOT, "docs/reference.md")]
       .filter((path) => !generated.has(path));
-    const descriptor = new RegExp(`\\b(?:${REGISTRY.adapters.map((adapter) => adapter.id).join("|")}):[A-Za-z0-9._-]+@[a-z]+`);
+    const descriptor = new RegExp(`\\b(?:${REGISTRY.adapters.map((adapter) => adapter.id).join("|")}):[A-Za-z0-9._/-]+@[a-z]+`);
     const versioned = REGISTRY.families
       .flatMap((entry) => [entry.model, ...(entry.predecessors ?? []).map((kept) => kept.model)])
       .filter((model) => /[0-9]/.test(model))

@@ -18,6 +18,9 @@ import { tmpdir } from "node:os";
 import { childEnvironment, discoverSharedGitDir, runLane } from "./run.ts";
 import { main } from "./cli.ts";
 import { type LaneRequest, resolveLane } from "./registry/index.ts";
+import type { Lane, ProviderAdapter } from "./registry/contract.ts";
+import { devin } from "./providers/devin.ts";
+import { BASE_ALLOWLIST, BASE_PREFIXES } from "./providers/shared.ts";
 import type { ProviderId } from "./registry/family.ts";
 import type { RunnerReceipt } from "./types.ts";
 
@@ -1871,7 +1874,126 @@ await Bun.sleep(5_000);`);
   });
 });
 
+// A provider that uses every optional part of the contract: run-owned environment values, a nested sidecar config
+// with no output file, project config paths that include a file, and a stdin envelope.
+const STAND_IN_CONFIG = ".agents/agents/lane.md";
+const STAND_IN: ProviderAdapter = {
+  ...devin,
+  executable: "standin",
+  effortIn: "config",
+  preflight: {
+    argv: () => ["preflight"],
+    retryAfterUnauthenticatedMs: null,
+    classify: (run) => run.exitCode === 0 ? { kind: "passed", evidence: run.stdout.trim() } : { kind: "inconclusive" },
+  },
+  launch: {
+    prompt: "stdin",
+    sidecar: { output: null, config: { name: STAND_IN_CONFIG, content: (lane) => `effort: ${lane.effort}\n` } },
+    supports: ["read-only"],
+    projectConfig: [".agents/", ".claude/settings.json"],
+    stdinEnvelope: (prompt) => `${JSON.stringify({ event: "user", message: { role: "user", content: prompt } })}\n`,
+    needsSharedGitDir: () => false,
+    argv: () => ["run"],
+  },
+  parse: (run) => ({
+    kind: "complete",
+    text: run.stdout,
+    metadata: { reportedModel: null, sessionId: null, usage: null, costUsd: null },
+  }),
+  proof: { report: "absent", matches: () => false },
+  environment: (_access, sidecarDir) => ({
+    kind: "allowlist",
+    names: BASE_ALLOWLIST,
+    prefixes: BASE_PREFIXES,
+    set: { XDG_CONFIG_HOME: `${sidecarDir}`, STAND_IN_CONFIG: `${sidecarDir}/${STAND_IN_CONFIG}`, CODEX_THREAD_ID: "restored" },
+  }),
+};
+
+function standInLane(suffix: string, overrides: Partial<LaneRequest> = {}): Lane {
+  return { ...laneOf({ ...options("grok", suffix), provider: "devin", model: "swe-2", effort: "max", ...overrides }), adapter: STAND_IN };
+}
+
+describe("stand-in provider contract", () => {
+  let inherited: string | undefined;
+  beforeEach(() => {
+    // The preflight reports what it sees; the model call echoes stdin.
+    writeFileSync(join(bin, "standin"), `#!/usr/bin/env bun
+import { readFileSync, statSync } from "node:fs";
+import { dirname } from "node:path";
+const mode = (path) => (statSync(path).mode & 0o777).toString(8);
+if (process.argv[2] === "preflight") {
+  const config = process.env.STAND_IN_CONFIG;
+  console.log(JSON.stringify({
+    xdg: process.env.XDG_CONFIG_HOME,
+    codexThread: process.env.CODEX_THREAD_ID ?? null,
+    config: readFileSync(config, "utf8"),
+    modes: [mode(dirname(dirname(config))), mode(dirname(config)), mode(config)],
+  }));
+  process.exit(0);
+}
+process.stdout.write(await Bun.stdin.text());
+`);
+    chmodSync(join(bin, "standin"), 0o755);
+    inherited = process.env.XDG_CONFIG_HOME;
+    process.env.XDG_CONFIG_HOME = "/inherited/config";
+  });
+  afterEach(() => {
+    if (inherited === undefined) delete process.env.XDG_CONFIG_HOME;
+    else process.env.XDG_CONFIG_HOME = inherited;
+  });
+
+  it("creates the nested config before the preflight, which sees the set environment, and sends the envelope", async () => {
+    const lane = standInLane("stand-in");
+    writeFileSync(lane.promptPath, "Return \"the\" marker.\n");
+    const result = await runLane(lane);
+    expect(result.exitCode).toBe(0);
+    const dir = `${lane.receiptPath}.provider`;
+    expect(result.receipt).toMatchObject({
+      status: "complete",
+      reportedModel: null,
+      modelVerified: false,
+      modelEvidence: "pinned-argv",
+      preflight: { status: "passed" },
+    });
+    expect(JSON.parse(result.receipt.preflight.evidence)).toEqual({
+      xdg: dir,
+      codexThread: null,
+      config: "effort: max\n",
+      modes: ["700", "700", "600"],
+    });
+    expect(readFileSync(lane.outputPath, "utf8"))
+      .toBe(`${JSON.stringify({ event: "user", message: { role: "user", content: "Return \"the\" marker.\n" } })}\n`);
+  });
+
+  it("refuses a lane whose cwd's parent holds a listed project config file", async () => {
+    const repo = join(scratch, "repo"), nested = join(repo, "src");
+    mkdirSync(join(repo, ".claude"), { recursive: true });
+    mkdirSync(nested);
+    writeFileSync(join(repo, ".claude/settings.json"), "{}\n");
+    const lane = standInLane("stand-in-project-file", { cwd: nested });
+    const result = await runLane(lane);
+    expect(result.exitCode).toBe(70);
+    expect(result.receipt).toMatchObject({
+      status: "child-failed",
+      preflight: { status: "not-run" },
+      error: { message: expect.stringContaining(`${join(realpathSync(repo), ".claude/settings.json")}: the CLI would load`) },
+    });
+  });
+});
+
 describe("childEnvironment", () => {
+  it("applies an adapter's set values after filtering and drops the parent identity markers last", () => {
+    const lane = standInLane("stand-in-env");
+    const source = { PATH: "/bin", XDG_CONFIG_HOME: "/inherited", XDG_DATA_HOME: "/data", CODEX_THREAD_ID: "parent", GITHUB_TOKEN: "t" };
+    const dir = `${lane.receiptPath}.provider`;
+    expect(childEnvironment(lane, source)).toEqual({
+      PATH: "/bin",
+      XDG_CONFIG_HOME: dir,
+      XDG_DATA_HOME: "/data",
+      STAND_IN_CONFIG: `${dir}/${STAND_IN_CONFIG}`,
+    });
+  });
+
   it("removes only inherited runtime identity needed to avoid nested detection", () => {
     const source = {
       PATH: "/bin",

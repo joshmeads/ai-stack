@@ -74,7 +74,6 @@ function modelStreamPaths(receiptPath: string): { stdoutPath: string; stderrPath
 }
 
 interface ReservedSidecar {
-  readonly dir: string;
   readonly facts: NonNullable<LaunchFacts["providerSidecar"]>;
   readonly configContent: string | null;
 }
@@ -83,18 +82,21 @@ interface ReservedSidecar {
 function providerSidecar(lane: Lane): ReservedSidecar | null {
   const declared = lane.adapter.launch.sidecar;
   if (declared === null) return null;
-  const dir = `${lane.receiptPath}.provider`;
+  const directory = `${lane.receiptPath}.provider`;
   return {
-    dir,
-    facts: { output: join(dir, declared.output), config: declared.config === null ? null : join(dir, declared.config.name) },
-    configContent: declared.config?.content ?? null,
+    facts: {
+      directory,
+      output: declared.output === null ? null : join(directory, declared.output),
+      config: declared.config === null ? null : join(directory, declared.config.name),
+    },
+    configContent: declared.config?.content(lane) ?? null,
   };
 }
 
 function reserveOutputs(lane: Lane): ModelStreams {
   const { stdoutPath, stderrPath } = modelStreamPaths(lane.receiptPath);
   const sidecar = providerSidecar(lane);
-  const paths = [lane.outputPath, lane.receiptPath, stdoutPath, stderrPath, ...(sidecar === null ? [] : [sidecar.dir])];
+  const paths = [lane.outputPath, lane.receiptPath, stdoutPath, stderrPath, ...(sidecar === null ? [] : [sidecar.facts.directory])];
   const resolved = paths.map((path) => resolve(path));
   if (new Set(resolved).size !== paths.length || resolved.includes(resolve(lane.promptPath))) {
     throw new UsageError("prompt, output, receipt, and stream paths must be distinct");
@@ -113,9 +115,10 @@ function reserveOutputs(lane: Lane): ModelStreams {
     created.push(stderrPath);
     if (sidecar !== null) {
       // Not recursive, so an existing directory refuses the lane like any other reserved path.
-      mkdirSync(sidecar.dir, { mode: 0o700 });
-      created.push(sidecar.dir);
+      mkdirSync(sidecar.facts.directory, { mode: 0o700 });
+      created.push(sidecar.facts.directory);
       if (sidecar.facts.config !== null && sidecar.configContent !== null) {
+        mkdirSync(dirname(sidecar.facts.config), { recursive: true, mode: 0o700 });
         writeFileSync(sidecar.facts.config, sidecar.configContent, { encoding: "utf8", mode: 0o600, flag: "wx" });
       }
     }
@@ -128,8 +131,8 @@ function reserveOutputs(lane: Lane): ModelStreams {
   }
 }
 
-function readIfPresent(path: string | undefined): string | null {
-  return path !== undefined && existsSync(path) ? readFileSync(path, "utf8") : null;
+function readIfPresent(path: string | null | undefined): string | null {
+  return path != null && existsSync(path) ? readFileSync(path, "utf8") : null;
 }
 
 function writeReceipt(path: string, receipt: RunnerReceipt): void {
@@ -169,17 +172,20 @@ function installRunCancellation(): RunCancellation {
   };
 }
 
-// The adapter's policy applies first; the parent's identity markers are always dropped, so the
-// child cannot detect a nested harness.
+// The adapter's policy applies first, then its run-owned values; the parent's identity markers are
+// always dropped last, so the child cannot detect a nested harness.
 export function childEnvironment(
   lane: Lane,
   source: NodeJS.ProcessEnv = process.env
 ): NodeJS.ProcessEnv {
-  const policy = lane.adapter.environment(lane.access);
+  const policy = lane.adapter.environment(lane.access, providerSidecar(lane)?.facts.directory ?? null);
   const keep = policy.kind === "allowlist"
     ? (key: string) => policy.names.includes(key) || policy.prefixes.some((prefix) => key.startsWith(prefix))
     : (key: string) => !policy.dropPrefixes.some((prefix) => key.startsWith(prefix));
-  const result = Object.fromEntries(Object.entries(source).filter(([key]) => keep(key)));
+  const result = {
+    ...Object.fromEntries(Object.entries(source).filter(([key]) => keep(key))),
+    ...(policy.kind === "allowlist" ? policy.set : undefined),
+  };
   for (const key of PARENTS[lane.parent].identity) delete result[key];
   return result;
 }
@@ -423,12 +429,17 @@ function within(parent: string, child: string): boolean {
 // what the writer's own git will use. Returns null for a non-repository or a directory the cwd
 // contains, and refuses whatever cannot be denied literally: denyWrite entries are globs that
 // cannot be escaped, and Claude Code 2.1.288 on Linux drops entries containing * ? [ ].
-// The provider's project config directory in the cwd or a parent up to the git root, or null. A CLI that loads
-// repository-controlled config from there does not run: the runner bypasses its workspace trust.
-export function projectConfigIn(cwd: string, name: string): string | null {
+// The first of the provider's project config paths in the cwd or a parent up to the git root, or null. A CLI that
+// loads repository-controlled config from there does not run: the runner bypasses its workspace trust. A path
+// ending in "/" matches only a directory; any other path matches a directory or a file.
+export function projectConfigIn(cwd: string, names: readonly string[]): string | null {
+  if (names.length === 0) return null;
   for (let dir = realpathSync(cwd); ; dir = dirname(dir)) {
-    const candidate = join(dir, name);
-    if (statSync(candidate, { throwIfNoEntry: false })?.isDirectory()) return candidate;
+    for (const name of names) {
+      const candidate = join(dir, name).replace(/\/$/, "");
+      const found = statSync(candidate, { throwIfNoEntry: false });
+      if (found?.isDirectory() || (!name.endsWith("/") && found?.isFile())) return candidate;
+    }
     if (existsSync(join(dir, ".git")) || dirname(dir) === dir) return null;
   }
 }
@@ -728,7 +739,7 @@ async function executeLane(
     return { exitCode: statusExitCode(receipt.status), receipt };
   }
 
-  const projectConfig = adapter.launch.projectConfigDir === null ? null : projectConfigIn(lane.cwd, adapter.launch.projectConfigDir);
+  const projectConfig = projectConfigIn(lane.cwd, adapter.launch.projectConfig);
   if (projectConfig !== null) {
     const completed = Date.now();
     receipt = completeReceipt(lane, {
@@ -907,7 +918,7 @@ async function executeLane(
     launchArgs,
     lane.cwd,
     env,
-    adapter.launch.prompt === "stdin" ? prompt : null,
+    adapter.launch.prompt === "stdin" ? adapter.launch.stdinEnvelope?.(prompt) ?? prompt : null,
     deadlineAt,
     cancellation,
     streamFiles
