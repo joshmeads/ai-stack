@@ -565,6 +565,27 @@ pub(crate) mod tests {
     #[test]
     fn a_jm_plugin_the_checkout_no_longer_lists_is_removed_by_a_normal_install() {
         let f = fixture();
+        // The stack's history: jm-games listed, then retired.
+        let git = |args: &[&str]| {
+            let config = ["-c", "user.name=t", "-c", "user.email=t@t", "-c", "commit.gpgsign=false", "-c", "core.hooksPath=/dev/null"];
+            let output = std::process::Command::new("git").args(config).args(args).current_dir(&f.stack).output().unwrap();
+            assert!(output.status.success(), "git {args:?}: {}", String::from_utf8_lossy(&output.stderr));
+            String::from_utf8_lossy(&output.stdout).trim().to_string()
+        };
+        let manifests = [".claude-plugin/marketplace.json", ".agents/plugins/marketplace.json"];
+        let current: Vec<String> = manifests.iter().map(|path| fs::read_to_string(f.stack.join(path)).unwrap()).collect();
+        for (path, text) in manifests.iter().zip(&current) {
+            put(&f.stack.join(path), &text.replace("\"name\":\"jm-stack\"", "\"name\":\"jm-games\"},{\"name\":\"jm-stack\""));
+        }
+        git(&["init", "-q"]);
+        git(&["add", "-A"]);
+        git(&["commit", "-qm", "with jm-games"]);
+        let listed = git(&["rev-parse", "HEAD"]);
+        for (path, text) in manifests.iter().zip(&current) {
+            put(&f.stack.join(path), text);
+        }
+        git(&["commit", "-qam", "retire jm-games"]);
+
         fs::create_dir_all(f.home.join(".claude")).unwrap();
         fs::create_dir_all(f.home.join(".codex")).unwrap();
         for state in [&f.runner.claude, &f.runner.codex] {
@@ -582,7 +603,11 @@ pub(crate) mod tests {
         assert_eq!(plan.stray(&f.home), crate::plan::Stray::default());
         let report = crate::plan::apply(&plan, &f.root.join("backups"), &f.runner).unwrap();
         let manifest: Value = serde_json::from_str(&fs::read_to_string(report.manifest.unwrap()).unwrap()).unwrap();
-        assert_eq!(manifest["plugins"][0]["reinstall"], format!("{claude_env} claude plugin install jm-games@jm"));
+        // No CLI can reinstall a plugin its marketplace dropped, so the record says where it is.
+        for (entry, path) in manifest["plugins"].as_array().unwrap().iter().zip(manifests) {
+            assert_eq!(entry["reinstall"], Value::Null);
+            assert_eq!(entry["note"], format!("jm-games was retired from the jm marketplace. Commit {listed} of the stack {} is the last that lists it in {path}; restore it from there.", f.stack.display()));
+        }
         assert!(f.plan().is_empty(), "{}", f.plan().render_text(&f.home));
     }
 
