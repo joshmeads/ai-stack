@@ -2923,3 +2923,161 @@ ${OBSERVE}`);
     expect(existsSync(input.receiptPath)).toBe(false);
   });
 });
+
+describe("cursor lanes", () => {
+  const MODELS = "Available models\n\nauto - Auto (current, default)\ncomposer-2.5 - Composer 2.5\ngemini-3.7-flash-high - Gemini 3.7 Flash\n";
+  const AUTH_REQUIRED = "Error: Authentication required. Run 'agent login', pass --api-key/--auth-token, or set CURSOR_API_KEY/CURSOR_AUTH_TOKEN.";
+  const CURSOR_VARIABLES = ["CURSOR_API_KEY", "CURSOR_AUTH_TOKEN", "CURSOR_API_ENDPOINT", "CURSOR_SANDBOX_POLICY_DIR", "CURSOR_CONFIG_DIR"];
+
+  // A cursor-agent stand-in: `models` prints `models` to stdout, or the authentication error to stderr with exit 1;
+  // the model call runs `turn`, which sees `args`, `at`, the stdin `prompt` and `emit(event)`. The child environment
+  // keeps no test variable, so each case bakes its own.
+  function fakeCursor(turn: string, models = MODELS, loggedOut = false): void {
+    writeFileSync(join(bin, "cursor-agent"), `#!/usr/bin/env bun
+import { readFileSync, statSync, writeFileSync } from "node:fs";
+import { join } from "node:path";
+const args = process.argv.slice(2);
+if (args[0] === "models") {
+  if (${loggedOut}) {
+    console.error(${JSON.stringify(AUTH_REQUIRED)});
+    process.exit(1);
+  }
+  process.stdout.write(${JSON.stringify(models)});
+  process.exit(0);
+}
+const at = (flag) => args[args.indexOf(flag) + 1];
+const prompt = await Bun.stdin.text();
+const emit = (event) => console.log(JSON.stringify({ ...event, session_id: "c1" }));
+${turn}
+`);
+    chmodSync(join(bin, "cursor-agent"), 0o755);
+  }
+
+  // Reports what the child saw as the last assistant text, after an earlier segment the result joins.
+  const OBSERVE = `const dir = process.env.CURSOR_CONFIG_DIR;
+const config = join(dir, "cli-config.json");
+const observed = {
+  prompt,
+  model: at("--model"),
+  modes: [(statSync(dir).mode & 0o777).toString(8), (statSync(config).mode & 0o777).toString(8)],
+  deny: JSON.parse(readFileSync(config, "utf8")).permissions.deny,
+  cursorVariables: Object.keys(process.env).filter((key) => key.startsWith("CURSOR_")).sort(),
+};
+emit({ type: "system", subtype: "init", model: "Composer 2.5" });
+emit({ type: "assistant", message: { role: "assistant", content: [{ type: "text", text: "Reading the file.\\n" }] } });
+emit({ type: "assistant", message: { role: "assistant", content: [{ type: "text", text: JSON.stringify(observed) }] } });
+emit({ type: "result", subtype: "success", is_error: false, result: "Reading the file.\\n" + JSON.stringify(observed), usage: { inputTokens: 6, outputTokens: 2, cacheReadTokens: 4, cacheWriteTokens: 3 } });`;
+
+  function cursorOptions(suffix: string, overrides: Partial<LaneRequest> = {}): LaneRequest {
+    return { ...options("grok", suffix), provider: "cursor", model: "composer-2.5", effort: "default", ...overrides };
+  }
+
+  beforeEach(() => {
+    for (const name of CURSOR_VARIABLES) process.env[name] = `${name}-value`;
+  });
+  afterEach(() => {
+    for (const name of CURSOR_VARIABLES) delete process.env[name];
+  });
+
+  for (const [parent, model, effort, cliModel] of [
+    ["claude", "composer-2.5", "default", "composer-2.5"],
+    ["codex", "gemini-3.7-flash", "high", "gemini-3.7-flash-high"],
+  ] as const) {
+    it(`runs cursor:${model}@${effort} from a ${parent} parent in the run-owned config directory, on pinned argv`, async () => {
+      fakeCursor(OBSERVE);
+      const input = cursorOptions(`cursor-${parent}`, { parent, model, effort });
+      const result = await runLane(laneOf(input));
+      expect(result.exitCode).toBe(0);
+      const saved = receipt(input.receiptPath);
+      expect(saved).toMatchObject({
+        status: "complete",
+        parent,
+        provider: "cursor",
+        model,
+        effort,
+        mode: "read-only",
+        reportedModel: null,
+        modelVerified: false,
+        modelEvidence: "pinned-argv",
+        sessionId: "c1",
+        usage: { inputTokens: 6, cachedInputTokens: 4, cacheCreationInputTokens: 3, outputTokens: 2 },
+        costUsd: null,
+        preflight: { argv: [saved.executable, "models"], status: "passed", evidence: `model ${cliModel} listed` },
+      });
+      expect(saved.argv.slice(1)).toEqual([
+        "-p", "--output-format", "stream-json", "--model", cliModel, "--mode", "ask", "--sandbox", "enabled", "--trust",
+      ]);
+      expect(JSON.parse(readFileSync(input.outputPath, "utf8"))).toEqual({
+        prompt: "Return the marker.",
+        model: cliModel,
+        modes: ["700", "600"],
+        deny: ["Write(**)", "Shell(*)", "Mcp(*:*)"],
+        cursorVariables: ["CURSOR_API_KEY", "CURSOR_AUTH_TOKEN", "CURSOR_CONFIG_DIR"],
+      });
+    });
+  }
+
+  it("points CURSOR_CONFIG_DIR at the lane's provider directory, replacing an inherited value", async () => {
+    fakeCursor(`emit({ type: "assistant", message: { content: [{ type: "text", text: process.env.CURSOR_CONFIG_DIR }] } });
+emit({ type: "result", subtype: "success", is_error: false });`);
+    const input = cursorOptions("cursor-config-dir");
+    await runLane(laneOf(input));
+    expect(readFileSync(input.outputPath, "utf8")).toBe(`${input.receiptPath}.provider`);
+  });
+
+  for (const [name, loggedOut, models, status, exitCode] of [
+    ["an authentication failure", true, MODELS, "unauthenticated", 77],
+    ["an unlisted model", false, "Available models\n\ncomposer-2.5-fast - Composer 2.5 Fast\n", "unavailable-model", 69],
+    ["empty model-list output", false, "", "child-failed", 70],
+  ] as const) {
+    it(`classifies ${name} before any model call`, async () => {
+      const started = join(scratch, "cursor-model.started");
+      fakeCursor(`writeFileSync(${JSON.stringify(started)}, "started");`, models, loggedOut);
+      const input = cursorOptions(`cursor-preflight-${exitCode}`);
+      const result = await runLane(laneOf(input));
+      expect(result.exitCode).toBe(exitCode);
+      expect(result.receipt).toMatchObject({ status, preflight: { status: "failed" } });
+      expect(existsSync(started)).toBe(false);
+    });
+  }
+
+  it("reads an exit-0 error result, an unknown model and a signal exit as failures", async () => {
+    fakeCursor(`emit({ type: "result", subtype: "error", is_error: true, result: "Usage limit reached." });`);
+    const failed = cursorOptions("cursor-error-result");
+    const failedResult = await runLane(laneOf(failed));
+    expect(failedResult.exitCode).toBe(70);
+    expect(failedResult.receipt).toMatchObject({ status: "child-failed", exitCode: 0, sessionId: "c1", error: { message: "Usage limit reached." } });
+    expect(existsSync(failed.outputPath)).toBe(false);
+
+    fakeCursor(`console.error("Cannot use this model: " + at("--model") + ". Available models: auto, composer-2.5");
+process.exit(1);`, `${MODELS}claude-opus-9-9-max - Listed, then refused by the turn\n`);
+    const unknown = cursorOptions("cursor-unknown-model", { model: "claude-opus-9-9-max" });
+    expect((await runLane(laneOf(unknown))).receipt).toMatchObject({ status: "unavailable-model", exitCode: 1 });
+
+    fakeCursor(`emit({ type: "system", subtype: "init", model: "Composer 2.5" });
+console.error("\\nAborting operation...");
+process.exit(130);`);
+    const interrupted = cursorOptions("cursor-sigint");
+    expect((await runLane(laneOf(interrupted))).receipt).toMatchObject({ status: "child-failed", exitCode: 130 });
+    expect(existsSync(interrupted.outputPath)).toBe(false);
+  });
+
+  it("runs a Cursor lane in a workspace holding .cursor/ and .claude settings files", async () => {
+    const repo = join(scratch, "repo"), nested = join(repo, "src");
+    mkdirSync(join(repo, ".cursor"), { recursive: true });
+    mkdirSync(join(repo, ".claude"));
+    writeFileSync(join(repo, ".claude/settings.json"), "{}");
+    writeFileSync(join(repo, ".claude/settings.local.json"), "{}");
+    mkdirSync(nested);
+    fakeCursor(OBSERVE);
+    const input = cursorOptions("cursor-project-config", { cwd: nested });
+    expect((await runLane(laneOf(input))).exitCode).toBe(0);
+    expect(receipt(input.receiptPath)).toMatchObject({ status: "complete", preflight: { status: "passed" } });
+  });
+
+  it("refuses an isolated-write Cursor lane before launch", () => {
+    const input = cursorOptions("cursor-writer", { mode: "isolated-write" });
+    expect(() => laneOf(input)).toThrow("provider cursor does not support isolated-write");
+    expect(existsSync(input.receiptPath)).toBe(false);
+  });
+});
