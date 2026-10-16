@@ -1,12 +1,13 @@
 # ai-stack CLI
 
-`ai-stack` sets up this repository's `jm` plugins in Claude Code (`~/.claude`) and Codex (`~/.codex`) from one config file. For each enabled harness it:
+`ai-stack` sets up this repository's `jm-stack` plugin and standalone skills in Claude Code (`~/.claude`) and Codex (`~/.codex`) from one config file. For each enabled harness it:
 
-1. adds the stack checkout as the local `jm` plugin marketplace and installs `jm-stack`, `jm-games` and `jm-tools` through the harness's own CLI;
-2. writes the jm:stack model sheet `<home>/pstack-models.md` and wires it into `CLAUDE.md` (an `@` import) or `AGENTS.md` (a mirror of the sheet);
-3. writes one `ai-stack:routing` block into `CLAUDE.md` or `AGENTS.md`;
-4. writes your own global instructions from `<stack>/instructions/` into the same file (see [Global instructions](#global-instructions));
-5. removes what older ai-stack installs left behind.
+1. adds the stack checkout as the local `jm` plugin marketplace and installs `jm-stack` through the harness's own CLI, removing any other installed `jm` plugin the checkout no longer lists;
+2. links each skill of the global groups in `<stack>/stack.toml` into the harness's user skill folder (see [Skills and groups](#skills-and-groups));
+3. writes the jm:stack model sheet `<home>/pstack-models.md` and wires it into `CLAUDE.md` (an `@` import) or `AGENTS.md` (a mirror of the sheet);
+4. writes one `ai-stack:routing` block into `CLAUDE.md` or `AGENTS.md`;
+5. writes your own global instructions from `<stack>/instructions/` into the same file (see [Global instructions](#global-instructions));
+6. removes what older ai-stack installs left behind.
 
 It shows the plan before changing anything, backs up every file or link it replaces or removes, and is idempotent: a second run reports `No changes.` Installation for Cursor and OpenCode is not handled.
 
@@ -39,12 +40,13 @@ Restart Claude Code and Codex sessions after the first install.
 | `ai-stack fleet drift [--ignore KEY]... [--json]` | Compare every enabled machine with local config; exit 0 when all are in sync, otherwise 1. |
 | `ai-stack init [--force]` | Write the default config to `~/.config/ai-stack/config.toml`. Refuses to overwrite unless `--force`. |
 | `ai-stack diff [--clean]` | Print the install plan with unified diffs and the plugin commands it would run. Exit 0 when nothing would change, 1 when changes or conflicts are pending. It runs only the read-only `plugin marketplace list --json` and `plugin list --json` queries. `--clean` adds the clean actions (see [Clean](#clean)). |
-| `ai-stack stray [--json]` | Report what `--clean` alone would affect: `skills: N  plugins: M`, then each skill-root entry (as a `~/` path) and plugin id, indented. `--json` prints `{"skills":N,"plugins":M,"skill_names":[...],"plugin_ids":[...]}` on one line. Runs only the same read-only queries as `diff`; never writes. Exit 0. |
-| `ai-stack install [--yes] [--force] [--plain] [--clean]` | Build the plan, review it in the TUI (or print it with `--plain`), then apply. `--yes` applies without review. `--force` replaces an unmanaged `pstack-models.md`, after backing it up. `--clean` also removes skills and plugins outside the keep lists. Conflicts are printed and never applied. |
+| `ai-stack stray [--json]` | Report what `--clean` alone would affect: `skills: N  plugins: M`, then each skill-root entry (as a `~/` path) and plugin id, indented. ai-stack's own skill links and `jm` plugins are never stray. `--json` prints `{"skills":N,"plugins":M,"skill_names":[...],"plugin_ids":[...]}` on one line. Runs only the same read-only queries as `diff`; never writes. Exit 0. |
+| `ai-stack install [--yes] [--force] [--plain] [--clean]` | Build the plan, review it in the TUI (or print it with `--plain`), then apply. `--yes` applies without review. `--force` replaces an unmanaged `pstack-models.md` and moves a stray skill out of a skill link's way, after backing them up. `--clean` also removes skills and plugins outside the keep lists. Conflicts are printed and never applied. |
 | `ai-stack update [--yes] [--plain] [--bump-models] [--branch B]` | Run `git pull --ff-only <remote> <branch>` in the stack checkout, check models, then install. `--branch` pulls that branch instead of `stack.branch` for this run only; the config is not changed. It refuses when the checkout is on another branch or a detached HEAD, naming both and suggesting `ai-stack update --branch <current>` or `git switch <branch>`, so a pull never merges one branch into another. If the pull changed files under `cli/`, it prints a note to rebuild with `cargo install --path <stack>/cli`; it never rebuilds itself. |
 | `ai-stack models [--bump]` | Report each configured model as `current`, `newer: <id>`, `missing` or `unknown: <reason>`. `--bump` rewrites config IDs to the newest model in the same family. |
-| `ai-stack skills add <SOURCE> <PATH> [--ref REF] [--dest DIR] [--move NAME] [--process-script PATH \| --process-prompt TEXT] [--name NAME]` | Vendor the skill directory `PATH` from the git repo `SOURCE` into the stack and add it to the [manifest](#skills-manifest). Refuses when the manifest already installs that name in that `dest`, or the directory exists. |
-| `ai-stack skills status` | Print `name  installed-name  <commit>  current \| behind: <latest> \| missing \| unknown: <reason>` per entry. `missing` means the installed directory is gone; `skills update` rebuilds it. Exit 0 when every entry is current, 1 otherwise. A network error is `unknown`. |
+| `ai-stack skills add <SOURCE> <PATH> --group GROUP [--ref REF] [--move NAME] [--process-script PATH \| --process-prompt TEXT] [--name NAME]` | Vendor the skill directory `PATH` from the git repo `SOURCE` into `<stack>/skills/`, record it in [`stack.toml`](#vendored-skills) and add it to the existing group `GROUP`. Refuses when the group does not exist, when another entry already installs that name, or when the directory exists. `--dest` must stay `skills`, because a skill in a group is a standalone skill. |
+| `ai-stack groups [--json]` | Print each group in `stack.toml`: whether it is global, its skills after includes, and an estimated token cost; then the global set (the union of the global groups, each skill once). See [Skills and groups](#skills-and-groups). Read-only; exit 0. |
+| `ai-stack skills status` | Print `name  installed-name  <commit>  current \| behind: <latest> \| missing \| unknown: <reason>` per vendored skill. `missing` means the installed directory is gone; `skills update` rebuilds it. Exit 0 when every entry is current, 1 otherwise. A network error is `unknown`. |
 | `ai-stack skills update [NAME...] [--ref REF] [--reprocess] [--force]` | Rebuild the named entries (default all) whose upstream ref moved. `--ref` retargets the named entries to another upstream branch or tag and records it. `--reprocess` rebuilds every selected entry even when upstream has not moved, from the commit its ref names now; when the ref cannot be resolved (offline, or the branch is gone) it rebuilds from the pinned `commit` and says so. A missing skill directory is always rebuilt. Refuses to replace a skill directory with uncommitted, untracked or ignored files unless `--force`. One failure does not stop the rest; exit 1 if any failed. |
 | `ai-stack auth status [--json]` | Report local Claude Code, Codex, Cursor Agent and OpenCode login status. Read-only; exit 0 even when a provider is unavailable. |
 | `ai-stack fleet auth [--json]` | Report those providers on every enabled fleet machine. Exit 0 when every machine reports successfully and every installed provider is logged in with no expired access token that lacks a refresh token; otherwise 1. |
@@ -58,7 +60,7 @@ Global flags, valid on every command:
 
 - `--config <PATH>`: config file. Default `<home>/.config/ai-stack/config.toml`.
 - `--home <DIR>`: home directory. Default `$HOME`.
-- `--stack <DIR>`: use this checkout instead of `stack.path` from the config. Links and hooks into the configured checkout are still treated as leftovers.
+- `--stack <DIR>`: use this checkout instead of `stack.path` from the config. Links and hooks into the configured checkout are still ai-stack's: a skill link a global group wants is repointed to the override, and the rest are removed as leftovers.
 - `--version`.
 
 Exit codes: 0 for success, 1 for pending changes that were not applied, conflicts, or a declined review, and a non-zero error exit for failures such as an unreadable config, a failed `git pull` or a failed plugin command.
@@ -103,11 +105,11 @@ The provider owns credential storage. Login codes and tokens never pass through 
 - `[stack]`: `path` is the checkout of `joshmeads/ai-stack`. `remote` and `branch` are used by `update`. `legacy_paths` lists older checkout roots. `~` is expanded and relative paths resolve against the invocation directory.
 - `[harness.claude]`, `[harness.codex]`: `home` and `enabled`. A disabled harness is skipped entirely.
 - `[models.<alias>]`: `provider` (`anthropic` or `openai`), the exact model `id`, optional `efforts` (the efforts a route on this model may name; it must then name one), and optional `context` (usable context in tokens). The defaults define `sol`, `luna`, `opus` and `haiku`, with `haiku` at 100000. The owner sets Haiku's compaction in Claude Code at 100k because Anthropic bills the whole request at 5x past 100k tokens; ai-stack only states the limit in the routing block. `ai-stack models` checks these IDs against the provider catalogs.
-- `[leads]`, `[review]`: one `"alias@effort"` route per harness. The lead is described in the routing block; install does not change either CLI's default model. The review model is named in the routing block and used by jm-games' `art-iteration` critic.
+- `[leads]`, `[review]`: one `"alias@effort"` route per harness. The lead is described in the routing block; install does not change either CLI's default model. The review model is named in the routing block and used by the `art-iteration` skill's critic.
 - `[sheet.claude]`, `[sheet.codex]`: the 15 jm:stack model-sheet rows for that harness. Each lane is a provider-qualified descriptor `<provider>:<model>@<effort>` from the jm-stack provider-dispatch reference, or `inherit-parent` / `auto`. The loader accepts providers `claude` (models `opus`, `haiku`, `fable`) and `codex` (models `gpt-6.1-sol`, `gpt-6-luna`), efforts `low` to `max`, and `ultra` for `gpt-6.1-sol` only. The four panel rows (`arena runners`, `arena cross-judge pool`, `architect runners`, `interrogate reviewers`) accept arrays. The Why and Reflect rows must be `inherit-parent` or `auto`, because those roles need the parent's MCP servers.
 
 - `[skills]`: `prompt_runner`, the argv that runs a `type = "prompt"` process step, with the prompt appended as the last argument. Default `["claude", "-p", "--permission-mode", "acceptEdits"]`. A config without `[skills]` gets the default.
-- `[clean]`: what `--clean` keeps. `skill_roots` (default `~/.claude/skills`, `~/.codex/skills`, `~/.agents/skills`, resolved against `--home`), `keep_skills` (globs over entry names) and `keep_plugins` (globs over `name@marketplace`; the defaults keep `jm-*@jm`, `github@claude-plugins-official`, `chrome-devtools-mcp@claude-plugins-official` and Codex's built-in `*@openai-*`). Globs use `*` and `?`. A config without `[clean]`, or without one of its keys, gets the defaults that `init` writes.
+- `[clean]`: what `--clean` keeps. `skill_roots` (default `~/.claude/skills`, `~/.codex/skills`, `~/.agents/skills`, resolved against `--home`), `keep_skills` (globs over entry names) and `keep_plugins` (globs over `name@marketplace`; the defaults keep `jm-*@jm`, `github@claude-plugins-official`, `chrome-devtools-mcp@claude-plugins-official` and Codex's built-in `*@openai-*`). `--clean` never touches a `jm` plugin: install owns that marketplace. Globs use `*` and `?`. A config without `[clean]`, or without one of its keys, gets the defaults that `init` writes.
 
 A config from an older ai-stack (with `[roles]`, `[stack.models]` or `[install]`) is rejected with a message to run `ai-stack init --force` and re-apply your edits.
 
@@ -142,14 +144,15 @@ Per enabled harness, with `<home>` the harness home:
   - `ai-stack:instructions`: your global instructions (see [Global instructions](#global-instructions)).
   - Claude: `ai-stack:pstack-models` holding `@<absolute path to pstack-models.md>`. Other `@` lines that import the same sheet are removed so the import appears once.
   - Codex: the exact sheet bytes between `<!-- pstack:models:begin -->` and `<!-- pstack:models:end -->`.
-- **Plugins.** `claude plugin marketplace add <stack>` and `claude plugin install <name>@jm`, or `codex plugin marketplace add <stack>` and `codex plugin add <name>@jm`, for `jm-stack`, `jm-games` and `jm-tools`. A step is skipped when the CLI's `list --json` output shows it done: the `jm` marketplace already points at the stack checkout, and the plugin is installed (for Codex, at the version the checkout declares, because Codex installs a copy). A `jm` marketplace from another source is a conflict. When the harness home is not the CLI's default, the command sets `CLAUDE_CONFIG_DIR` or `CODEX_HOME`. Commands run after every file change, because the CLIs edit `settings.json` and `config.toml` themselves.
+- **Standalone skills.** A symlink `<folder>/<name>` -> `<stack>/skills/<name>` for every skill of the global groups, in the harness's user skill folder (see [Skills and groups](#skills-and-groups)).
+- **Plugins.** `claude plugin marketplace add <stack>` and `claude plugin install jm-stack@jm`, or `codex plugin marketplace add <stack>` and `codex plugin add jm-stack@jm`. ai-stack owns the `jm` marketplace, so an installed `<name>@jm` that the stack's marketplace manifest no longer lists (the retired `jm-games` and `jm-tools`) is removed by every install, the same way `--clean` removes a plugin (user-scope uninstall, disable for a `synced` Claude plugin, `codex plugin remove`), and recorded in `removed-plugins.json`. A step is skipped when the CLI's `list --json` output shows it done: the `jm` marketplace already points at the stack checkout, and the plugin is installed (for Codex, at the version the checkout declares, because Codex installs a copy). A `jm` marketplace from another source is a conflict. When the harness home is not the CLI's default, the command sets `CLAUDE_CONFIG_DIR` or `CODEX_HOME`. Commands run after every file change, because the CLIs edit `settings.json` and `config.toml` themselves.
 - **Leftovers of older installs.**
-  - Symlinks in `<home>/skills` and `<home>/agents` that point into the stack or a legacy root.
+  - Symlinks in `<home>/skills` and `<home>/agents` that point into the stack or a legacy root. Claude's `<home>/skills` is its user skill folder, where the skill links decide instead.
   - Role agent files older ai-stack builds wrote (`agents/*.md` containing the managed marker, `agents/*.toml` starting with it).
   - Every `ai-stack:<name>` block other than `instructions`, `routing`, `pstack-models` and Claude's `anthropic-guidance`, and the `open-pstack:local` block.
   - In Claude's `settings.json`, hook commands that run `<root>/plugins/pstack/hooks/session-start` with bash or `<root>/scripts/task-context.py` with python3, for the stack or a legacy root. Other commands in the same group stay. A malformed `settings.json` is reported as a conflict and never rewritten.
 
-Other skills, agents, links and files are left alone unless `--clean` is on.
+Other skills, agents, links and files are left alone unless `--clean` is on, or `--force` moves a stray skill out of a link's way.
 
 ## Global instructions
 
@@ -164,15 +167,42 @@ Install writes one `ai-stack:instructions` block into `CLAUDE.md` and `AGENTS.md
 
 `--clean` (off by default) leaves only this install plus the `[clean]` keep lists. With it on, the plan also:
 
-- **Moves skills into the backup.** Every entry of each skill root (directory, file or symlink, including a dangling symlink) that no `keep_skills` glob matches moves into the run's backup directory at its home-relative path, for example `<backup>/home/.agents/skills/old-skill`. Symlinks move as symlinks and are never followed. Nothing is deleted. Entries whose name starts with `.` (Codex's `.system`, `.DS_Store`) and `synced` (app-managed) are always kept. An entry the leftover cleanup already unlinks is not planned twice.
+- **Moves skills into the backup.** Every entry of each skill root (directory, file or symlink, including a dangling symlink) that no `keep_skills` glob matches moves into the run's backup directory at its home-relative path, for example `<backup>/home/.agents/skills/old-skill`. Symlinks move as symlinks and are never followed. Nothing is deleted. Entries whose name starts with `.` (Codex's `.system`, `.DS_Store`) and `synced` (app-managed) are always kept. ai-stack's own links (into the stack or a legacy root) are never moved: the skill links and leftover cleanup keep, repoint or unlink them. A stray skill at a name a global group links is moved, then linked over, with no `--force` needed.
 - **Removes plugins.** Every plugin in the `plugin list --json` output that no `keep_plugins` glob matches is removed with `claude plugin uninstall <id>` or `codex plugin remove <id>`. These run before the jm install commands. Marketplaces are left alone. Claude Code cannot uninstall a plugin synced from your claude.ai account (`<name>@synced`), so clean disables it with `claude plugin disable <id>` instead and warns that the app may sync it back; remove it on claude.ai to keep it gone. A Claude plugin installed in project or local scope is reported and left in place.
 - **Records the removals.** Apply writes `removed-plugins.json` in the backup directory, listing each removed plugin with the command that removed it and the command that restores it (`claude plugin install <id>`, `claude plugin enable <id>` or `codex plugin add <id>`), and prints its path.
 
 In the review screen, `c` toggles clean and re-plans. The clean actions appear in their own `Clean (N)` section, and the footer shows `c clean: on` or `off`. `--plain` prints the same section, and `--yes` applies the plan with clean as the flag set it. After `install --clean`, `diff --clean` reports `No changes.`
 
-## Skills manifest
+## Skills and groups
 
-`<stack>/manifest.toml` records every skill the stack vendors from an external git repo. It is checked into the stack repo, so `git pull` (and `ai-stack update`) carries it to every machine. `ai-stack skills add` and `update` rewrite the whole file, so comments and formatting are not preserved. Editing values by hand is fine (a multi-step `process` is written by hand); the next `skills` command validates the file before using it.
+Standalone skills live flat in `<stack>/skills/<name>/`, each with a `SKILL.md`, under plain names unique across the stack. `<stack>/stack.toml` sorts them into groups:
+
+```toml
+[groups.threejs]
+global = true
+skills = ["threejs", "tools-r3f"]
+
+[groups.games]
+global = true                 # on for every harness on every machine (default false)
+includes = ["threejs"]        # optional: other groups whose skills this group also turns on
+skills = ["game-gdd", "game-mvp"]
+```
+
+- Every install reads `stack.toml` and refuses to plan when it is invalid. Each error names the file and the offending key. A group or skill name is letters, digits, `.`, `_` and `-`, not starting with `.`. Every member of a group is a directory `skills/<name>/` with a `SKILL.md`. Every directory in `skills/` belongs to at least one group. An include names an existing group, and includes never form a cycle. A skill appears once per group.
+- The global set is the union of the global groups, with includes followed. For each enabled harness, install links each of those skills into the harness's user skill folder: Claude Code `<claude home>/skills`, Codex `<home>/.agents/skills`. Each link is `<folder>/<name>` -> `<stack>/skills/<name>`, absolute. A folder two harnesses share is linked once.
+- A symlink in those folders that points into the stack or a legacy root is ai-stack's. A correct one is left alone, a wrong one is repointed, and one for a skill no longer in the global set is unlinked.
+- Anything else at a linked name (a directory, a file, or a link pointing elsewhere) is a stray skill in the way. It is a conflict naming the path. `install --force` moves it into the backup first, then links. Nothing is deleted.
+- `ai-stack groups` estimates what a group costs in context at about four characters per token over each skill's frontmatter `name` and `description`, rounded up per group. `--json` prints one line:
+
+```json
+{"groups":[{"name":"games","global":true,"includes":["threejs"],"skills":["game-gdd","game-mvp","threejs","tools-r3f"],"tokens":812}],"global":{"skills":["game-gdd","game-mvp","threejs","tools-r3f"],"tokens":812}}
+```
+
+`groups` lists every group in name order with its resolved `skills`, sorted; `global` is the union of the global groups, each skill counted once.
+
+## Vendored skills
+
+`stack.toml` also records every skill the stack vendors from an external git repo, as `[[skill]]` entries. It is checked into the stack repo, so `git pull` (and `ai-stack update`) carries it to every machine. `ai-stack skills add` and `update` rewrite the whole file, so comments and formatting are not preserved. Editing values by hand is fine (groups and a multi-step `process` are written by hand); the next command validates the file before using it.
 
 ```toml
 [[skill]]
@@ -181,7 +211,7 @@ source = "https://github.com/mattpocock/skills"
 path = "skills/grill-with-docs"          # skill directory inside the source repo
 ref = "main"                             # upstream branch or tag tracked (default "HEAD")
 commit = "<40-hex>"                      # upstream commit installed
-dest = "plugins/jm-tools/skills"         # parent directory in the stack (this is the default)
+dest = "skills"                          # parent directory in the stack (this is the default)
 move = "grill-docs"                      # optional installed name; also rewrites SKILL.md's `name:`
 process = [
   { type = "script", input = "scripts/strip-emdashes.sh" },
@@ -193,8 +223,9 @@ process = [
 - `source` is a git URL or a local path; `skills add` stores a local path as its absolute path. `path = "."` vendors a whole repo whose root is the skill; `.git` is never copied.
 - `process` is one table or an array; steps run in order every time the skill is pulled in or rebuilt. A `script` step runs `sh <stack>/<script> <staged skill dir>` in that directory; the script path must be relative to the stack root, so the manifest works on every machine. A `prompt` step runs `[skills] prompt_runner` with the prompt as its last argument in the staged directory, without a shell. Both run arbitrary code or agents by design; review what you add.
 - The pipeline: fetch the commit into a temp repo (`git init`, `git fetch --depth 1 <source> <commit>`, `git checkout FETCH_HEAD -- <path>`; never kept), refuse the skill if its directory is a symlink or contains one anywhere, copy it into a staging directory under `<stack>/.ai-stack/stage/`, apply `move`, run the steps, then swap it in: the old directory is renamed into `.ai-stack/stage/`, the staged one is renamed into place, and the old one is deleted. A failing step leaves the installed skill untouched. Between the two renames the skill is briefly absent; a crash there leaves the old tree in `.ai-stack/stage/`, and every `skills` command clears that directory when it starts. `.ai-stack/` is git-ignored.
+- A vendored skill installed into `skills/` is a standalone skill, so a group must list its installed name. Until `skills update` builds it, a missing vendored skill is allowed in a group; install skips it with a note.
 - The loader rejects a `path` or `dest` that is absolute or has `.` or `..` components (except `path = "."`), a `dest` with a `.git` component, a `name` or `move` that is not letters, digits, `.`, `_` and `-` or starts with `.`, a script path that is absolute or has `.` or `..`, a prompt starting with `-`, two entries that install the same directory and two entries that share a name or installed name.
-- Typical flow: run `skills update` on one machine, review and commit the result with the manifest, push, then `ai-stack fleet update`.
+- Typical flow: run `skills update` on one machine, review and commit the result with `stack.toml`, push, then `ai-stack fleet update`.
 
 ## Fleet
 
@@ -227,6 +258,8 @@ Each machine sets exactly one of `ssh` or `local = true`. Remote commands run as
 
 ```
 instructions/          global instructions sources (common.md, claude.md, codex.md)
+skills/                standalone skills, one directory each
+stack.toml             skill groups and vendored skills
 cli/
   Cargo.toml
   config.default.toml  reference config written by `ai-stack init`
@@ -235,14 +268,15 @@ cli/
     main.rs     commands, git pull, model reports
     config.rs   config schema, validation, sheet descriptor rules
     exec.rs     process seam for git, ssh, scripts and prompt runners; shell quoting
-    manifest.rs skills manifest schema and validation
+    stackfile.rs stack.toml schema: groups, vendored skills, validation, group resolution
     skills.rs   skills add, status, update and the install pipeline
+    groups.rs   ai-stack groups: resolved members and token estimates
     fleet.rs    fleet file, status, auth, login, drift, update and switch
     drift.rs    pure comparison of flattened config keys
     auth.rs     provider descriptors and login argv, status parsers, safe expiry readers
     render.rs   model sheet and routing block text
     blocks.rs   marker-bounded blocks in instruction files
-    install.rs  the per-harness plan: sheet, blocks (including instructions), leftovers
+    install.rs  the per-harness plan: sheet, blocks (including instructions), leftovers, skill links
     plugins.rs  marketplace and plugin commands, runner seam
     plan.rs     actions, diffs, backups, atomic apply
     models.rs   provider catalogs and --bump
