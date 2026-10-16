@@ -1,5 +1,3 @@
-// Headless recipes for every selectable feature. The trusted parent runs each case as one fresh
-// native session and evaluates `assert` against the parsed record and the fixture it created.
 import { Database } from 'bun:sqlite';
 import { lstat, mkdir, readFile, realpath, rm, writeFile } from 'node:fs/promises';
 import { homedir } from 'node:os';
@@ -10,14 +8,10 @@ import type { Harness, SessionRecord } from '../scripts/types.ts';
 
 export interface Fixture {
   harness: Harness;
-  /** Fresh disposable directory shared by the feature's cases; the session cwd unless a case says otherwise. */
   dir: string;
   workspace: string;
-  /** Candidate plugin root as the harness loads it. */
   location: string;
-  /** Directory setup-pstack writes for this harness. */
   configHome: string;
-  /** Runs fixture preparation with the candidate environment. */
   run: Command;
 }
 export interface Evidence { assertions: string[]; files: string[] }
@@ -33,26 +27,18 @@ export interface Case {
   assert(record: SessionRecord, fixture: Fixture): Promise<Evidence>;
 }
 
-/** Claude tools pre-authorized for every case; anything else is denied without a prompt and fails the case. */
 export const CLAUDE_TOOLS = 'Skill,Read,Glob,Grep,Write,Edit,Bash,Agent,Task,TodoWrite';
-/** Without --runner-route, the runner recipe dispatches the first lane of this role's default in the installed catalog. */
 export const DEFAULT_ROLES: Record<Harness, string> = { claude: 'bug-fix', codex: 'judgment and prose' };
-/** Any provider's route; the installed candidate's catalog decides whether the provider exists and is external. */
 export const ROUTE = /^([a-z][a-z0-9-]*):([A-Za-z0-9._/-]+)@([a-z]+)$/;
 const SETUP_DESCRIPTOR = 'claude:opus@high';
 const DESCRIPTOR = /\b[a-z][a-z0-9-]*:[A-Za-z0-9._/-]+@[a-z]+/g;
 const SHEET_HEADER = '# pstack model configuration\n\n';
-/** The model sheet's one setting line. It is not a role, so role-line comparisons leave it out. */
 const SETTING = 'codex writer sandbox: ';
 const FULL_ACCESS_SETTING = `${SETTING}full-access`, BOUNDED_SETTING = `${SETTING}bounded`;
-/** The writer role and lane that the opt-in reaches on a Claude parent's external runner. */
 const WRITER_ROLE = 'feature, refactoring', WRITER_LANE = 'codex:gpt-6.1-sol@max';
 
-/** The installed candidate's registry, as its generated model catalog renders it. */
 export interface Catalog {
-  /** Role-default lanes by role, in sheet order. */
   defaults: Map<string, string[]>;
-  /** Kept predecessor `provider:model` to its family's current `provider:model`. */
   kept: Map<string, string>;
   route(harness: Harness, descriptor: string): 'native' | 'external';
 }
@@ -79,9 +65,7 @@ export async function readCatalog(location: string): Promise<Catalog> {
 
 const sheetText = (lines: [string, string[]][]): string => SHEET_HEADER + lines.map(([role, lanes]) => `${role}: ${lanes.join(', ')}`).join('\n') + '\n';
 const roleLines = (text: string): string[] => text.split('\n').filter(line => /^[a-z][^:]*: \S/.test(line) && !line.startsWith(SETTING));
-/** Setup writes exactly one setting line after it asks: bounded on the default answer, full-access on a yes. */
 const settingLines = (text: string): string[] => text.split('\n').filter(line => line.startsWith(SETTING));
-/** One literal POSIX sh argument. */
 const sh = (text: string): string => `'${text.replaceAll("'", `'\\''`)}'`;
 
 const rules = (dir: string): string => `Work only inside ${dir}. Do not push, post, open, merge, or modify pull requests, issues, or remote branches, and do not write outside ${dir}. Do not edit any skill, plugin, or configuration file outside ${dir}. Do not ask questions: where the skill would ask, choose its documented default and continue. This is a headless session that ends at your first final reply and stops any background work still running, so run every command and subagent in the foreground, even where the skill says to use the background, and finish all work before you reply.`;
@@ -182,7 +166,6 @@ function parseJson(text: string | undefined): unknown {
 function reflect(harness: Harness): Case[] {
   return [true, false].map(available => {
     const home = (f: Fixture) => join(f.dir, 'transcript-home');
-    // A per-run nonce the prompt never names: Codex in the rollout's file name, Claude as the opening user record's uuid.
     let nonce = '';
     const transcript = (f: Fixture) => join(home(f), harness === 'codex' ? `sessions/2026/10/11/rollout-${nonce}.jsonl` : 'projects/fixture/known.jsonl');
     const index = (f: Fixture) => join(home(f), 'state_5.sqlite');
@@ -218,7 +201,6 @@ function reflect(harness: Harness): Case[] {
         const assertions = [loaded(record, 'pstack:reflect')];
         const paths: string[] = [];
         if (harness === 'codex') {
-          // Both cases resolve the chat; only the opener it reports differs. The output is the harness's capture.
           const expected = { status: 'resolved', chat_id: REFLECT_CHAT, path: transcript(f),
             opening_user_message: { line: 3, record_type: 'response_item', characters: text.length, sha256: sha256(text) } };
           const installed = [RESOLVER, `${RESOLVER}.ts`].map(path => join(f.location, path));
@@ -230,7 +212,6 @@ function reflect(harness: Harness): Case[] {
           await writeFile(retained, output);
           paths.push(retained); assertions.push('resolver-ran');
         } else {
-          // The opener record's uuid is the nonce, held only by the transcript, so a report naming it shows the read.
           assertions.push(await written(record, report(f)));
           const expected = available
             ? { status: 'resolved', path: transcript(f), opening_user_message: { line: 2, characters: text.length, sha256: sha256(text), uuid: nonce } }
@@ -262,7 +243,7 @@ export async function verifyProjectDoctor(texts: string[], workspace: string): P
     try {
       const d = JSON.parse(text);
       if (d.result === 'pass' && d.candidate === true && typeof d.skill === 'string' && await realpath(d.skill) === expected) return;
-    } catch { /* Other retained files need not be doctor reports. */ }
+    } catch {}
   }
   throw new Error('Self-test requires the pinned project skill\'s passing child doctor.json');
 }
@@ -283,8 +264,6 @@ const projectSkill: Case = {
   },
 };
 
-// A Claude writer in a linked worktree must get the shared git directory as a sandbox deny. Only a
-// Codex parent runs it, because a Claude parent dispatches Claude lanes natively.
 const writer: Case = {
   id: 'linked-worktree-writer',
   codexSandbox: 'danger-full-access',
@@ -311,20 +290,15 @@ const writer: Case = {
 };
 
 const CHROME = '/Applications/Google Chrome.app/Contents/MacOS/Google Chrome';
-/** Chrome, else a Playwright Chromium. Neither on the host leaves Chrome's path, and the child's launch fails. */
 async function browser(): Promise<string> {
   if (await lstat(CHROME).catch(() => undefined)) return CHROME;
   const cache = join(homedir(), 'Library/Caches/ms-playwright');
   try {
     for await (const path of new Bun.Glob('chromium-*/*/*.app/Contents/MacOS/*').scan({ cwd: cache })) return join(cache, path);
-  } catch { /* No Playwright cache. */ }
+  } catch {}
   return CHROME;
 }
 
-// A Codex writer from a Claude parent, opted in or bounded. The prompt names the fixture sheet and the role, never the
-// runner flag, so the receipt's sandbox shows the parent applied the sheet. Opted in, the child writes one nonce under
-// `.agents/` and reads the other from a page only a browser renders; the bounded sandbox blocks both on macOS. Bounded,
-// the sheet has no setting line and the child writes its nonce to a plain file, which workspace-write allows.
 const BOUNDED_WRITER_LANE = 'codex:gpt-6.1-sol@low';
 function codexWriter(optIn: boolean): Case {
   const name = optIn ? 'full-access' : 'bounded', descriptor = optIn ? WRITER_LANE : BOUNDED_WRITER_LANE;
@@ -344,7 +318,6 @@ function codexWriter(optIn: boolean): Case {
         await writeFile(at(f, 'prompt.md'), `Create the file result.json in the current directory containing only the JSON {"written":"${fileNonce}"}, and reply DONE.\n`);
         return;
       }
-      // The file holds the nonce only base64-encoded; the DOM a browser dumps holds it decoded.
       await writeFile(at(f, 'page.html'), `<!doctype html><html><body><p id="nonce"></p><script>document.getElementById('nonce').textContent = atob('${btoa(pageNonce)}');</script></body></html>\n`);
       await writeFile(at(f, 'prompt.md'), `Run this command and read the text of the element with id "nonce" in the DOM it prints: ${sh(await browser())} --headless --no-first-run ${sh(`--user-data-dir=${at(f, 'browser-profile')}`)} --dump-dom ${sh(pathToFileURL(at(f, 'page.html')).href)}\nThen create the file .agents/result.json in the current directory containing only the JSON {"written":"${fileNonce}","browser":"<the text you read>"}, and reply DONE.\n`);
     },
@@ -382,7 +355,6 @@ function runner(harness: Harness, routes: string[]): Case[] {
       },
       prompt: f => `${invoke(f.harness, 'poteto-mode', `Dispatch exactly one external lane and nothing else. Run the installed launcher ${join(f.location, 'skills/poteto-mode/scripts/runner/pstack-runner')} with these arguments and wait for it to exit: --parent ${harness} --provider ${provider} --model ${model} --effort ${effort} --mode read-only --prompt ${lane(f, 'prompt.md')} --cwd ${f.dir} --output ${lane(f, 'output.md')} --receipt ${lane(f, 'receipt.json')}`)}. ${rules(f.dir)}`,
       async assert(record, f) {
-        // Sessions often call the launcher through a shell variable; the receipt below is written only by the runner.
         if (!record.commands.some(c => c.includes('pstack-runner'))) throw new Error('runner-not-run');
         const receipt = JSON.parse(await readFile(lane(f, 'receipt.json'), 'utf8'));
         if (receipt.status !== 'complete') throw new Error(`receipt-status:${receipt.status}`);
@@ -400,7 +372,6 @@ const setup: Case[] = [{
   codexSandbox: 'danger-full-access',
   claudePermission: 'bypassPermissions',
   async prepare(f) {
-    // Setup keeps an existing setting line without asking, so drop it and keep every other byte; setup then asks.
     const sheet = join(f.configHome, 'pstack-models.md'), text = await readFile(sheet, 'utf8').catch(() => undefined);
     if (text !== undefined) await writeFile(sheet, text.split('\n').filter(line => !line.startsWith(SETTING)).join('\n'));
   },
@@ -425,7 +396,6 @@ const setup: Case[] = [{
   codexSandbox: 'danger-full-access',
   claudePermission: 'bypassPermissions',
   async prepare(f) {
-    // No sheet and, on Codex, no run-owned AGENTS.md mirror: setup has no configuration to recover.
     await rm(join(f.configHome, 'pstack-models.md'), { force: true });
     if (f.harness === 'codex') await rm(join(f.configHome, 'AGENTS.md'), { force: true });
   },
@@ -439,13 +409,10 @@ const setup: Case[] = [{
   },
 }];
 
-// A case that takes the default answer, on a sheet without a setting line, gets the bounded setting.
 function bounded(text: string): void {
   if (!Bun.deepEquals(settingLines(text), [BOUNDED_SETTING])) throw new Error('setting-not-bounded');
 }
 
-// On Codex, setup's parent integration is one bounded AGENTS.md block: the begin marker and a newline, the sheet's
-// exact bytes, then the end marker. A case that removes the block before the run checks that setup wrote it back.
 const MIRROR_BEGIN = '<!-- pstack:models:begin -->', MIRROR_END = '<!-- pstack:models:end -->';
 export async function mirrored(f: Fixture, sheet: string): Promise<string[]> {
   if (f.harness !== 'codex') return [];
@@ -458,7 +425,6 @@ export async function mirrored(f: Fixture, sheet: string): Promise<string[]> {
   return ['codex-mirror'];
 }
 
-// Releases before v1.5.0 wrote this pair; setup must offer its family's current model and keep it on a decline.
 const KEPT = 'grok:grok-4.6', KEPT_EFFORT = 'high';
 function keptPredecessor(): Case {
   const proposal = (f: Fixture) => join(f.dir, 'proposal.json');
@@ -471,13 +437,10 @@ function keptPredecessor(): Case {
       const installed = await readCatalog(f.location), current = installed.kept.get(KEPT);
       if (!current) throw new Error(`catalog-kept-missing:${KEPT}`);
       proposed = `${current}@${KEPT_EFFORT}`;
-      // Every family lane takes the kept model, so setup probes only it. One alias role is left out, so the rerun must write.
       const roles = [...installed.defaults].map(([role, lanes]): [string, string[]] => [role, lanes.map(lane => lane.includes(':') ? `${KEPT}@${KEPT_EFFORT}` : lane)]);
       const omitted = roles.find(([, lanes]) => lanes.every(lane => !lane.includes(':')))?.[0];
-      // The rewritten sheet must keep every loaded row and restore the omitted one.
       expected = roles.map(([role, lanes]) => `${role}: ${lanes.join(', ')}`).sort();
       await writeFile(join(f.configHome, 'pstack-models.md'), sheetText(roles.filter(([role]) => role !== omitted)));
-      // Codex mirrors the sheet in a run-owned AGENTS.md block; without it the sheet is the only source.
       if (f.harness === 'codex') await rm(join(f.configHome, 'AGENTS.md'), { force: true });
     },
     prompt: f => `${invoke(f.harness, 'setup-pstack', `Use these answers and ask nothing else. Keep every role assignment and the requested effort ${KEPT_EFFORT}. When setup proposes replacing ${KEPT}, decline and keep it. I confirm every write. Write to ${proposal(f)} only JSON of the form {"kept":"<descriptor>","proposed":"<descriptor>"} naming the kept descriptor and the replacement setup proposed. Write the setup report to ${join(f.dir, 'result.md')}.`)} Do not push, post, or contact GitHub.`,
@@ -492,8 +455,6 @@ function keptPredecessor(): Case {
   };
 }
 
-// A rerun on a sheet that assigns Luna, a versioned Sonnet, the registered Opus 5.5 pin and an older Opus revision. Setup
-// keeps Luna and the pin, and writes each revision as its rolling alias.
 const NEW_FAMILY_LANES: Record<string, [string, string]> = {
   'swarm workers': ['codex:gpt-6-luna@max', 'codex:gpt-6-luna@max'],
   'hardest tasks': ['claude:claude-opus-5-5@max', 'claude:claude-opus-5-5@max'],
@@ -512,7 +473,6 @@ function newFamilies(): Case {
       for (const role of Object.keys(NEW_FAMILY_LANES)) if (!roles.some(([name]) => name === role)) throw new Error(`catalog-role-missing:${role}`);
       expected = roles.map(([role, lanes]) => `${role}: ${lane(role, 1, lanes).join(', ')}`).sort();
       await writeFile(join(f.configHome, 'pstack-models.md'), sheetText(roles.map(([role, lanes]) => [role, lane(role, 0, lanes)])));
-      // Codex mirrors the sheet in a run-owned AGENTS.md block; without it the sheet is the only source.
       if (f.harness === 'codex') await rm(join(f.configHome, 'AGENTS.md'), { force: true });
     },
     prompt: f => `${invoke(f.harness, 'setup-pstack', `Use these answers and ask nothing else. Keep every role assignment and every family's current effort. I confirm every write. Write the setup report to ${join(f.dir, 'result.md')}.`)} Do not push, post, or contact GitHub.`,
@@ -529,8 +489,6 @@ function newFamilies(): Case {
   };
 }
 
-// A rerun on a sheet that assigns the read-only role `how explorer` to a read-only-only provider. Setup probes it
-// through the runner and keeps every role line.
 const READ_ONLY_ROLE = 'how explorer', READ_ONLY_LANE = 'devin:swe-2@max';
 function readOnlyProvider(): Case {
   let expected: string[] = [];
@@ -545,7 +503,6 @@ function readOnlyProvider(): Case {
       const lines = roles.map(([role, lanes]): [string, string[]] => [role, role === READ_ONLY_ROLE ? [READ_ONLY_LANE] : lanes]);
       expected = lines.map(([role, lanes]) => `${role}: ${lanes.join(', ')}`).sort();
       await writeFile(join(f.configHome, 'pstack-models.md'), sheetText(lines));
-      // Codex mirrors the sheet in a run-owned AGENTS.md block; without it the sheet is the only source.
       if (f.harness === 'codex') await rm(join(f.configHome, 'AGENTS.md'), { force: true });
     },
     prompt: f => `${invoke(f.harness, 'setup-pstack', `Use these answers and ask nothing else. Keep every role assignment and every family's current effort. I confirm every write. Write the setup report to ${join(f.dir, 'result.md')}.`)} Do not push, post, or contact GitHub.`,
@@ -559,8 +516,6 @@ function readOnlyProvider(): Case {
   };
 }
 
-// Setup refuses a read-only-only provider for a writer role and changes no configuration: the sheet keeps its bytes,
-// Codex's removed mirror is not written back, and setup's refusal names the role and the provider.
 const REFUSED_ROLE = 'bug-fix';
 function writerRefusal(): Case {
   let prepared = '';
@@ -589,8 +544,6 @@ function writerRefusal(): Case {
   };
 }
 
-// A rerun on a sheet that opts Codex writers into full access. Setup keeps the setting line and does not treat it as a
-// role. One alias role is left out, so the rerun must write.
 function keepSetting(): Case {
   let expected: string[] = [];
   return {
@@ -602,7 +555,6 @@ function keepSetting(): Case {
       const omitted = roles.find(([, lanes]) => lanes.every(lane => !lane.includes(':')))?.[0];
       expected = roles.map(([role, lanes]) => `${role}: ${lanes.join(', ')}`).sort();
       await writeFile(join(f.configHome, 'pstack-models.md'), sheetText(roles.filter(([role]) => role !== omitted)) + `${FULL_ACCESS_SETTING}\n`);
-      // Codex mirrors the sheet in a run-owned AGENTS.md block; without it the sheet is the only source.
       if (f.harness === 'codex') await rm(join(f.configHome, 'AGENTS.md'), { force: true });
     },
     prompt: f => `${invoke(f.harness, 'setup-pstack', `Use these answers and ask nothing else. Keep every role assignment and every family's current effort. I confirm every write. Write the setup report to ${join(f.dir, 'result.md')}.`)} Do not push, post, or contact GitHub.`,
@@ -616,11 +568,7 @@ function keepSetting(): Case {
   };
 }
 
-// The parent reads a fixture sheet and reports each role's descriptors and routes, which must equal what the
-// installed candidate's catalog gives for that sheet and parent.
 const CONFIGURED_ROLE = 'judgment and prose', MISSING_ROLES = ['arena runners', 'bug-fix'];
-// Sheet lanes for the new families, and the descriptor the parent dispatches for each: a pin, Luna, a Devin lane and
-// an OpenCode lane, whose model holds a "/", unchanged, a versioned Sonnet as its rolling alias.
 const CATALOG_LANES: Record<string, [string, string]> = {
   'swarm workers': ['codex:gpt-6-luna@max', 'codex:gpt-6-luna@max'],
   'hardest tasks': ['claude:claude-opus-5-5@max', 'claude:claude-opus-5-5@max'],
@@ -629,9 +577,6 @@ const CATALOG_LANES: Record<string, [string, string]> = {
   'interrogate reviewers': ['opencode:opencode/deepseek-v4.1-flash-free@max', 'opencode:opencode/deepseek-v4.1-flash-free@max'],
   [WRITER_ROLE]: [WRITER_LANE, WRITER_LANE],
 };
-// Each generated agent for a new Claude family runs natively: the child reads a fixture nonce and writes it to its own
-// output file. The Agent call returns only a launch notice, so the evidence is the child's recorded tool calls and the
-// nonce it wrote.
 const NATIVE_AGENTS = ['pstack-sonnet-max', 'pstack-opus-5-5-max'];
 const nativeAgents: Case = {
   id: 'native-agents',
@@ -642,7 +587,6 @@ const nativeAgents: Case = {
   async assert(record, f) {
     const assertions: string[] = [];
     for (const agent of NATIVE_AGENTS) {
-      // A model override would run the agent on another model, so the call must leave the agent's own model in place.
       const call = record.tools.find(t => t.name === 'Agent' && t.input.subagent_type === `pstack:${agent}` && t.input.model === undefined && !t.failed);
       if (!call) throw new Error(`agent-not-dispatched:pstack:${agent}`);
       if (!record.tools.some(t => t.parent === call.id)) throw new Error(`child-did-not-run:pstack:${agent}`);
@@ -654,7 +598,6 @@ const nativeAgents: Case = {
   },
 };
 
-// With the setting line opted in, or set to bounded, where no parent passes a writer sandbox.
 function consumeSheet(harness: Harness, optIn: boolean): Case {
   const sheet = (f: Fixture) => join(f.dir, 'pstack-models.md'), report = (f: Fixture) => join(f.dir, 'routes.json');
   let expected: { roles: { role: string; descriptors: string[]; routes: string[] }[]; writerSandbox: 'full-access' | null } = { roles: [], writerSandbox: null };
@@ -662,8 +605,6 @@ function consumeSheet(harness: Harness, optIn: boolean): Case {
     id: optIn ? 'consume-sheet' : 'consume-sheet-bounded',
     async prepare(f) {
       const installed = await readCatalog(f.location), defaults = installed.defaults.get(CONFIGURED_ROLE);
-      // The configured role takes another role's default, so only a read of the fixture sheet reports it.
-      // The missing roles must come from the catalog's role defaults.
       const configured = [...installed.defaults.values()].flat().find(lane => lane.includes(':') && !defaults?.includes(lane));
       if (!defaults || !configured) throw new Error(`catalog-role-missing:${CONFIGURED_ROLE}`);
       const missing = MISSING_ROLES.map(role => ({ role, descriptors: installed.defaults.get(role) ?? [] }));
@@ -674,7 +615,6 @@ function consumeSheet(harness: Harness, optIn: boolean): Case {
       const added = Object.entries(CATALOG_LANES).map(([role, [, dispatched]]) => ({ role, descriptors: [dispatched] }));
       expected = { roles: [{ role: CONFIGURED_ROLE, descriptors: [configured] }, ...missing, ...added]
         .map(r => ({ ...r, routes: r.descriptors.map(d => installed.route(harness, d)) })),
-        // An opted-in sheet passes the flag only on an external route; a native Codex writer passes none.
         writerSandbox: optIn && installed.route(harness, WRITER_LANE) === 'external' ? 'full-access' : null };
     },
     prompt: f => `${invoke(f.harness, 'poteto-mode', `Do no engineering work and launch no lane. For this task the pstack model sheet is ${sheet(f)}; use it in place of any configured sheet. For each of these roles, in this order, find the descriptors this parent would dispatch and the route of each: ${expected.roles.map(r => JSON.stringify(r.role)).join(', ')}. Write to ${report(f)} only JSON of the form {"roles":[{"role":"<role>","descriptors":["<provider:model@effort>"],"routes":["native" or "external"]}],"writerSandbox":"<value>" or null}, one route per descriptor, where "native" is this parent's own subagent primitive and "external" is the external runner. writerSandbox is the --writer-sandbox value this parent would pass when it dispatches the first descriptor of the ${JSON.stringify(WRITER_ROLE)} role as an isolated-write writer, or null if it would pass none.`)} ${rules(f.dir)}`,
@@ -709,11 +649,8 @@ const agentPreload: Case = {
   async assert(record, f) {
     const agent = record.tools.find(t => t.name === 'Agent' && t.input.subagent_type === 'pstack:poteto-agent' && !t.failed);
     if (!agent) throw new Error('agent-not-dispatched:pstack:poteto-agent');
-    // The child answers from the preloaded skill alone: any tool call could load it another way.
     if (record.tools.some(t => t.parent === agent.id)) throw new Error('child-used-tools');
-    // Read the child's own reply, not anything the parent wrote.
     if (!agent.result?.includes('Laziness Protocol')) throw new Error('principle-missing:Laziness Protocol');
-    // The verifier, not the model, records the child's reply as the retained artifact.
     const reply = join(f.dir, 'child-reply.txt');
     await writeFile(reply, agent.result);
     return { assertions: ['agent-dispatched', 'child-no-tools', 'principle-named'], files: [reply] };
@@ -724,18 +661,15 @@ const startupHook: Case = {
   id: 'startup',
   prompt: () => 'Reply with the single word OK.',
   async assert(record, f) {
-    // The harness's own record must carry the installed context file; the model's reply is not read.
     const expected = (await readFile(join(f.location, 'hooks/session-start-context.md'), 'utf8')).trimEnd();
     const injected = record.context.find(text => text.trimEnd() === expected);
     if (injected === undefined) throw new Error('hook-context-missing');
-    // The verifier, not the model, retains the recorded context as the artifact.
     const copy = join(f.dir, 'session-context.md');
     await writeFile(copy, injected);
     return { assertions: ['hook-context-injected'], files: [copy] };
   },
 };
 
-/** Resolve a feature's cases, or fail with a named reason before any session starts. */
 export function recipe(feature: string, harness: Harness, routes: string[] = []): Case[] {
   if (feature === 'assets:codex') throw new Error('unsupported-native-consumer:assets:codex');
   if (feature === 'project-skill') return [projectSkill];

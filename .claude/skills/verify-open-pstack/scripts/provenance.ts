@@ -78,7 +78,6 @@ export async function sourceHash(workspace: string, sha: string, run: Command = 
     entries.push(`${path}\0${mode}\0${sha256(bytes)}`);
   }
   async function walk(path: string): Promise<void> {
-    // Only these two untracked dependency directories may vary after bootstrap.
     if (generated.has(path)) return;
     const actual = join(workspace, path), stat = await lstat(actual);
     if (stat.isSymbolicLink()) throw new Error(`Pinned source symlink refused: ${path}`);

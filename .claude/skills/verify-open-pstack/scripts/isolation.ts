@@ -55,8 +55,6 @@ export async function snapshotSetup(): Promise<SetupSnapshot> {
   for (const directory of directories) {
     for (const name of ['pstack-models.md', 'CLAUDE.md', 'AGENTS.md']) {
       const path = join(directory, name);
-      // An operator's existing link (for example CLAUDE.md kept in a config repository) is restored as
-      // that link plus its target's bytes. Links that appear during the run are still refused.
       const link = (await lstat(path).catch(() => undefined))?.isSymbolicLink() ? await readlink(path) : undefined;
       const target = link === undefined ? path : await realpath(path);
       if (link !== undefined) snapshot.push({ path, link, target });
@@ -83,7 +81,6 @@ export async function restoreSetup(snapshot: SetupSnapshot): Promise<void> {
   }
   for (const { path, bytes, link, target } of snapshot) {
     if (link !== undefined) {
-      // The whole chain must still resolve to the snapshot's file, not only the outer link.
       if (await readlink(path).catch(() => undefined) !== link || await realpath(path).catch(() => undefined) !== target) throw new Error(`Setup restoration verification failed: ${path}`);
       continue;
     }

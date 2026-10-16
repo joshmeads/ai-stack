@@ -1,9 +1,5 @@
 name: Windows hooks
 
-# Evidence for the SessionStart hook on Windows, beside the Mac live gate. It runs the hook the way
-# Codex runs commandWindows in each Windows shell, with no login, so no credential is ever on a runner
-# with pull request code.
-
 on:
   pull_request:
     types: [opened, synchronize, reopened]
@@ -22,7 +18,6 @@ jobs:
         shell: pwsh
         run: |
           $ErrorActionPreference = 'Stop'
-          # The plugin root holds a space, &, % and !, and the session directory holds a planted cmd.exe.
           $root = Join-Path $env:RUNNER_TEMP 'plugin root & 50%OS%!\pstack'
           New-Item -ItemType Directory -Force (Split-Path $root) | Out-Null
           Copy-Item -Recurse plugins/pstack $root

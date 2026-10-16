@@ -36,7 +36,6 @@ export const command: Command = async (args, options = {}) => {
   }
 };
 export type Session = (args: string[], options: { cwd: string; env: Record<string, string>; input: string; stdout: string; stderr: string }) => Promise<number>;
-/** Run one headless session, streaming stdout and stderr to new private files so output survives any exit. */
 export const session: Session = async (args, options) => {
   interruption.signal.throwIfAborted();
   const stdout = await open(options.stdout, 'wx', 0o600);
@@ -79,7 +78,7 @@ export async function freshRoot(path: string, repository: string): Promise<strin
   const root = join(parent, path.split('/').at(-1)!);
   const repo = await realpath(repository);
   if (root === repo || root.startsWith(repo + '/')) throw new Error('Output must be outside the repository');
-  await mkdir(root, { mode: 0o700 }); // EEXIST deliberately rejects reuse and symlinks.
+  await mkdir(root, { mode: 0o700 });
   return root;
 }
 export function sha256(data: string | Uint8Array): string { return createHash('sha256').update(data).digest('hex'); }

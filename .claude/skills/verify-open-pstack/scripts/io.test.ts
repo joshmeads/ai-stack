@@ -2,7 +2,7 @@ import { afterEach, describe, expect, test } from 'bun:test';
 import { chmod, mkdir, mkdtemp, readFile, realpath, rm, stat, symlink, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
-import { command, isolatedEnv, retainedFile, save, session, sha256, treeHash } from './io.ts';
+import { command, freshRoot, isolatedEnv, retainedFile, save, session, sha256, treeHash } from './io.ts';
 
 const roots: string[] = [];
 async function fixture(): Promise<string> {
@@ -20,6 +20,15 @@ describe('private values and retained file boundaries', () => {
     await save(path, evidence);
     expect(await readFile(path, 'utf8')).toBe(JSON.stringify(evidence, null, 2) + '\n');
     expect((await stat(path)).mode & 0o777).toBe(0o600);
+  });
+
+  test('creates a private output root and refuses an existing directory or symlink in its place', async () => {
+    const root = await fixture(), repository = await fixture(), output = join(root, 'run');
+    expect(await freshRoot(output, repository)).toBe(output);
+    expect((await stat(output)).mode & 0o777).toBe(0o700);
+    await expect(freshRoot(output, repository)).rejects.toThrow('EEXIST');
+    await symlink(join(root, 'elsewhere'), join(root, 'alias'));
+    await expect(freshRoot(join(root, 'alias'), repository)).rejects.toThrow('EEXIST');
   });
 
   test('keeps private command errors unchanged', async () => {

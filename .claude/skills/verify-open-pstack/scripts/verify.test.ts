@@ -105,7 +105,6 @@ describe('exact-head evidence publication', () => {
         const receipt = await verify(f.options);
         expect(receipt.status).toBe('success');
         expect(f.calls).toContain('prepare'); expect(f.calls).toContain('exercise');
-        // A verifier change keeps native project proof in both harnesses even when only another feature is named.
         expect(receipt.observations.map(record => `${record.harness}/${record.feature}`).sort()).toEqual(['claude/project-skill', 'claude/skill-invocation:architect', 'codex/project-skill']);
       }
     }
@@ -185,14 +184,12 @@ describe('exact-head evidence publication', () => {
     }
   });
 
-  // The changed files of #199's release commit, e99abd7.
   const RELEASE: ChangedFile[] = [{ filename: '.claude-plugin/marketplace.json', versionOnly: true }, { filename: 'CHANGES.md' }, { filename: 'README.md' }, { filename: 'UPSTREAM.md' },
     { filename: 'docs/reference.md' }, { filename: 'plugins/pstack/.claude-plugin/plugin.json', versionOnly: true }, { filename: 'plugins/pstack/.codex-plugin/plugin.json', versionOnly: true }];
   const noWrites = (calls: string[]) => expect(calls.some(call => ['preflight', 'prepare', 'exercise', 'comment'].includes(call) || call.startsWith('status:'))).toBe(false);
 
   test('a named feature outside the classified reach is refused before preflight or any GitHub write', async () => {
     const f = fixture(true); f.options.github.files = async () => { f.calls.push('files'); return RELEASE; };
-    // The feature list copied from the 1.9.0 release onto #199.
     f.options.features = ['claude:hook:startup', 'codex:hook:startup', 'claude:catalog', 'codex:catalog', 'claude:setup', 'codex:setup', 'claude:runner', 'codex:runner'];
     const error = await verify(f.options).then(() => undefined, (e: unknown) => e);
     expect(error).toBeInstanceOf(Refused);
@@ -214,7 +211,6 @@ describe('exact-head evidence publication', () => {
   test('more than the session limit is refused before preflight unless --wide gives a reason', async () => {
     const limited = (...extra: string[]) => {
       const f = fixture(true); f.options.github.files = async () => [{ filename: 'plugins/pstack/skills/poteto-mode/references/codex-tools.md' }];
-      // Setup is eight sessions, the default Claude runner three and the startup hook one.
       f.options.features = ['claude:setup', 'claude:runner', 'claude:hook:startup', ...extra];
       return f;
     };
@@ -230,7 +226,6 @@ describe('exact-head evidence publication', () => {
     expect(wide.calls.indexOf('preflight')).toBeGreaterThan(-1);
     expect(wide.comments[0]).toContain('- Planned sessions: 13 (limit 12)');
     expect(wide.comments[0]).toContain('- Wide run reason: Setup and runner changed together in #196');
-    // A failed run records the reason too.
     const failed = limited('codex:hook:startup'); failed.options.wide = 'Broad shared change';
     failed.options.driver.exercise = async () => { throw new Error('session failed'); };
     failed.options.driver.cleanup = async () => {};
@@ -294,7 +289,6 @@ describe('publisher request boundaries', () => {
     };
     const commit = (message: string) => { git('add', '-A'); git('commit', '-qm', message); return git('rev-parse', 'HEAD'); };
     git('init', '-q', '-b', 'main'); manifests('1.0.0'); const mergeBase = commit('base');
-    // main moves after the branch point; comparing the base tip would see this field as a head change.
     manifests('1.0.0', { owner: 'later' }); const base = commit('main moved');
     git('checkout', '-q', '-b', 'release', mergeBase);
     write(CLAUDE, { version: '1.1.0', description: 'd', name: 'pstack' }, 4);

@@ -1,7 +1,6 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
-# Prepare and inspect a real-harness run; static checks test the verifier only.
 repo="$(cd "$(dirname "$0")/.." && pwd)"
 usage() {
   cat <<'EOF'

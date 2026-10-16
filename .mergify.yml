@@ -17,7 +17,6 @@ queue_rules:
 merge_protections_settings:
   auto_merge_conditions:
     - base = main
-    # Workflow changes never auto-queue; the operator queues them by hand.
     - -files~=^\.github/
 
 merge_protections:

@@ -76,6 +76,7 @@
     ".gitignore", ".mergify.yml", "docs/**", "assets/**",
     "plugins/pstack/skills/poteto-mode/scripts/bootstrap.test.ts",
     "plugins/pstack/skills/poteto-mode/scripts/check-plan.test.ts",
-    "plugins/pstack/skills/poteto-mode/scripts/resolve-codex-transcript.test.ts", "scripts/release.py", "scripts/release_test.py"
+    "plugins/pstack/skills/poteto-mode/scripts/resolve-codex-transcript.test.ts", "scripts/release.py", "scripts/release_test.py",
+    "tests/setup-config-home-repro.sh"
   ]
 }

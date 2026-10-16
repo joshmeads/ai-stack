@@ -45,14 +45,6 @@ else
   fail=1
 fi
 
-# Active configuration must use Claude's rolling family aliases. Concrete
-# provider reports may still appear in runner fixtures, but no shipped
-# descriptor, native-agent model field, or live test invocation may pin one.
-# The registry's released pairs record old pins so they keep resolving to their family.
-# The registered exact pin claude-opus-5-5 is its own family, with its own generated
-# agents, so only that token is removed before the second match; any other pin on the
-# same line still fails.
-# registry.test.ts scans TypeScript and JavaScript string literals for the same pins.
 rolling='fable|opus|sonnet'
 legacy_model_pins="$(
   grep -REn \
@@ -73,10 +65,8 @@ fi
 
 setup="$repo/plugins/pstack/skills/setup-pstack/SKILL.md"
 
-# Config-home port invariant (#120): guard upstream merges against daily-home writes.
 config_mapping="$repo/plugins/pstack/skills/poteto-mode/references/codex-tools.md"
 config_home_bad=""
-# The legacy import is rendered text, not a hard-coded write destination.
 if sed 's|@~/.claude/pstack-models.md||g' "$setup" | grep -nE '~/(\.claude|\.codex)|\$HOME/(\.claude|\.codex)'; then
   config_home_bad="setup still names a literal default config path outside the legacy import"$'\n'
 fi
@@ -104,7 +94,6 @@ done
 for target in pstack-models.md CLAUDE.md AGENTS.md; do
   grep -Fq "<config-home>/$target" "$setup" || config_home_bad="${config_home_bad}setup does not resolve $target through config-home"$'\n'
 done
-# Resolution only: keep real HOME/USER and never write default or daily targets.
 if ! (
   unset CLAUDE_CONFIG_DIR CODEX_HOME
   [ "${CLAUDE_CONFIG_DIR:-$HOME/.claude}" = "$HOME/.claude" ] &&
@@ -445,7 +434,7 @@ run() {
   claude -p --plugin-dir "$scratch" --model fable --effort max --max-turns 3 "$1" < /dev/null 2>&1
 }
 
-check() { # $1 label, $2 expected marker, $3 output
+check() {
   if printf '%s' "$3" | grep -q "$2"; then
     note "ok: $1 -> $2"
   else

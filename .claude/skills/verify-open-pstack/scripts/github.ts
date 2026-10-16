@@ -21,7 +21,6 @@ export function parseChangedFiles(output: string): ChangedFile[] {
 }
 type Json = Record<string, unknown>;
 const object = (value: unknown): value is Json => typeof value === 'object' && value !== null && !Array.isArray(value);
-/** The manifest's version strings, and the manifest without them. */
 function versions(path: string, text: string): { versions: unknown[]; rest: Json } | undefined {
   let value: unknown;
   try { value = JSON.parse(text); } catch { return undefined; }
@@ -32,7 +31,6 @@ function versions(path: string, text: string): { versions: unknown[]; rest: Json
   const plugins = value.plugins.map(plugin => { if (!object(plugin)) return plugin; const { version, ...rest } = plugin; found.push(version); return rest; });
   return { versions: found, rest: { ...value, plugins } };
 }
-/** True when the two manifest texts differ only in version strings, and at least one changed. */
 export function versionOnly(path: string, before: string, after: string): boolean {
   const a = versions(path, before), b = versions(path, after);
   if (!a || !b || !Bun.deepEquals(a.rest, b.rest)) return false;
