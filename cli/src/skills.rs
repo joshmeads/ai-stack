@@ -63,7 +63,7 @@ impl Skills<'_> {
         let member = skill.installed_name().clone();
         let group = file.groups.get_mut(&group_name).expect("checked above");
         if !group.skills.contains(&member) {
-            group.skills.push(member);
+            group.skills.push(member.clone());
         }
         file.skills.push(skill.clone());
         file.validate()?;
@@ -71,10 +71,16 @@ impl Skills<'_> {
         ensure!(fs::symlink_metadata(&target).is_err(), "{} already exists; remove it first", target.display());
 
         skill.commit = self.resolve(&skill.source, &skill.git_ref)?;
-        file.skills.last_mut().expect("pushed above").commit = skill.commit.clone();
         self.install(&skill)?;
+        // The target did not exist before, so a failed edit takes the new skill out again.
+        if let Err(err) = stackfile::edit(self.stack, &[stackfile::Op::AddMember { group: &group_name, skill: &member }, stackfile::Op::PushSkill(&skill)]) {
+            return Err(match fs::remove_dir_all(&target) {
+                Ok(()) => err.context(format!("{} was removed again", target.display())),
+                Err(remove) => err.context(format!("{} is installed but not recorded, and removing it failed: {remove}", target.display())),
+            });
+        }
         writeln!(out, "added {} -> {} at {} in group {}", skill.name, skill.target().display(), short(&skill.commit), add.group)?;
-        stackfile::save(self.stack, &file)
+        Ok(())
     }
 
     /// Exit 0 when every entry is current, 1 otherwise.
@@ -112,7 +118,7 @@ impl Skills<'_> {
     /// reported and the rest continue. Exit 1 when any failed.
     pub fn update(&self, update: Update, out: &mut dyn Write) -> Result<i32> {
         self.clear_stage(out)?;
-        let mut file = stackfile::load(self.stack)?;
+        let file = stackfile::load(self.stack)?;
         if let Some(git_ref) = &update.git_ref {
             exec::check_ref(git_ref)?;
             ensure!(!update.names.is_empty(), "--ref retargets named entries; pass the skill names");
@@ -132,7 +138,7 @@ impl Skills<'_> {
                 })
                 .collect::<Result<_>>()?
         };
-        let (mut changed, mut failed) = (false, 0);
+        let (mut changed, mut failed) = (Vec::new(), 0);
         for index in selected {
             let mut next = file.skills[index].clone();
             if let Some(git_ref) = &update.git_ref {
@@ -141,8 +147,9 @@ impl Skills<'_> {
             match self.update_one(&file.skills[index], next, &update) {
                 Ok((next, message)) => {
                     writeln!(out, "{}: {message}", next.name)?;
-                    changed |= next != file.skills[index];
-                    file.skills[index] = next;
+                    if next != file.skills[index] {
+                        changed.push(next);
+                    }
                 }
                 Err(err) => {
                     failed += 1;
@@ -150,8 +157,9 @@ impl Skills<'_> {
                 }
             }
         }
-        if changed {
-            stackfile::save(self.stack, &file)?;
+        let ops: Vec<stackfile::Op> = changed.iter().map(|skill| stackfile::Op::SetSkill { name: &skill.name, git_ref: &skill.git_ref, commit: &skill.commit }).collect();
+        if !ops.is_empty() {
+            stackfile::edit(self.stack, &ops)?;
         }
         Ok(if failed > 0 { 1 } else { 0 })
     }
@@ -659,5 +667,38 @@ mod tests {
         fx.skills().status(&mut out).unwrap();
         assert!(String::from_utf8(out).unwrap().starts_with("removed stale "));
         assert_eq!(fs::read_dir(&stage).unwrap().count(), 0);
+    }
+
+    #[test]
+    fn add_keeps_hand_edits_made_while_it_runs_and_takes_the_skill_out_when_the_edit_fails() {
+        let fx = Fixture::new();
+        let add = |script: &str| {
+            fs::write(fx.stack.join("scripts/edit.sh"), script).unwrap();
+            let add = Add {
+                source: format!("file://{}", fx.upstream.display()),
+                path: "skills/grill-with-docs".into(),
+                git_ref: "main".into(),
+                rename: None,
+                process: vec![Step { kind: StepKind::Script, input: "scripts/edit.sh".into() }],
+                name: None,
+                group: "tools".into(),
+            };
+            fx.skills().add(add, &mut Vec::new())
+        };
+        let toml = fx.stack.join(stackfile::FILE);
+        add(&format!("printf '\\n# later\\n[groups.later]\\nskills = []\\n' >> '{}'\n", toml.display())).unwrap();
+        assert_eq!(fs::read_to_string(&toml).unwrap(), concat!(
+            "[groups.tools]\nglobal = true\nskills = [\"grill-with-docs\"]\n",
+            "\n# later\n[groups.later]\nskills = []\n",
+            "\n[[skill]]\nname = \"grill-with-docs\"\nsource = \"file://SOURCE\"\npath = \"skills/grill-with-docs\"\nref = \"main\"\ncommit = \"COMMIT\"\nprocess = [{ type = \"script\", input = \"scripts/edit.sh\" }]\n",
+        ).replace("SOURCE", &fx.upstream.display().to_string()).replace("COMMIT", &git(&fx.upstream, &["rev-parse", "HEAD"])));
+
+        // A hand edit the operations cannot apply to: nothing is recorded and the skill is gone.
+        fs::remove_dir_all(fx.stack.join("skills/grill-with-docs")).unwrap();
+        fs::write(&toml, "[groups.tools]\nglobal = true\nskills = []\n").unwrap();
+        let err = format!("{:#}", add(&format!("printf '[groups.tools]\\nskills = \"x\"\\n' > '{}'\n", toml.display())).unwrap_err());
+        assert!(err.contains("skills is not an array") && err.contains("was removed again"), "{err}");
+        assert!(!fx.stack.join("skills/grill-with-docs").exists());
+        assert_eq!(fs::read_to_string(&toml).unwrap(), "[groups.tools]\nskills = \"x\"\n");
     }
 }

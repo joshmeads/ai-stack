@@ -351,139 +351,131 @@ pub fn load(stack: &Path) -> Result<StackFile> {
     Ok(file)
 }
 
-/// Writes `file` into `<stack>/stack.toml`, editing only the tables and values that changed, so
-/// comments, key order and array layout elsewhere survive.
-pub fn save(stack: &Path, file: &StackFile) -> Result<()> {
-    file.validate()?;
-    let path = stack.join(FILE);
+/// One change to `stack.toml`, applied to the file as it is when the edit is written.
+#[derive(Debug, Clone, Copy)]
+pub enum Op<'a> {
+    /// Appends `skill` to `[groups.<group>] skills`, unless it is already there.
+    AddMember { group: &'a GroupName, skill: &'a SkillName },
+    /// Appends a `[[skill]]` entry.
+    PushSkill(&'a Skill),
+    /// Sets `ref` and `commit` of the `[[skill]]` entry named `name`.
+    SetSkill { name: &'a SkillName, git_ref: &'a str, commit: &'a str },
+}
+
+/// Applies `ops` to `<stack>/stack.toml` as it is now, so hand edits made since it was loaded
+/// survive, and comments and layout around the edited values stay. Each op must find the shape
+/// it edits; the result must parse, validate and show every op's change, or nothing is written.
+/// A symlinked `stack.toml` is written through, and the file keeps its mode.
+pub fn edit(stack: &Path, ops: &[Op]) -> Result<()> {
+    let path = crate::paths::write_through(&stack.join(FILE)).with_context(|| format!("cannot inspect {}", stack.join(FILE).display()))?;
     let before = match std::fs::read_to_string(&path) {
         Ok(text) => text,
         Err(err) if err.kind() == std::io::ErrorKind::NotFound => "# Skill groups and vendored skills. See cli/README.md.\n".to_string(),
         Err(err) => return Err(anyhow!("cannot read {}: {err}", path.display())),
     };
-    let old: StackFile = toml::from_str(&before).with_context(|| format!("invalid {}", path.display()))?;
     let mut doc: toml_edit::DocumentMut = before.parse().with_context(|| format!("invalid {}", path.display()))?;
-    edit::apply(&mut doc, &old, file);
+    for op in ops {
+        edit::apply(&mut doc, op).with_context(|| format!("cannot edit {}", path.display()))?;
+    }
     let text = doc.to_string();
-    use std::io::Write as _;
-    use std::os::unix::fs::PermissionsExt as _;
-    let mut tmp = tempfile::Builder::new()
-        .prefix(".stack.")
-        .suffix(".ai-stack-tmp")
-        .permissions(std::fs::Permissions::from_mode(0o644))
-        .tempfile_in(stack)
-        .with_context(|| format!("creating a temp file in {}", stack.display()))?;
-    tmp.write_all(text.as_bytes())?;
-    tmp.persist(&path).with_context(|| format!("cannot write {}", path.display()))?;
-    Ok(())
+    let file = from_str(&text).with_context(|| format!("editing {} would make it invalid; nothing was written", path.display()))?;
+    for op in ops {
+        ensure!(edit::done(&file, op), "editing {} did not record {op:?}; nothing was written", path.display());
+    }
+    let permissions = std::fs::metadata(&path).ok().map(|meta| meta.permissions());
+    crate::plan::write_atomic(&path, &text, permissions)
 }
 
-/// Edits a parsed `stack.toml` in place from the old model to the new one, touching only what
-/// differs.
+/// The operations on a parsed `stack.toml`. Groups may be `[groups.<name>]` tables, dotted keys
+/// or inline tables; `[[skill]]` entries may be an array of tables or an array of inline tables.
 mod edit {
-    use toml_edit::{Array, ArrayOfTables, DocumentMut, InlineTable, Item, Table, Value};
+    use anyhow::{Result, anyhow, bail};
+    use toml_edit::{Array, ArrayOfTables, DocumentMut, InlineTable, Item, Table, TableLike, Value};
 
-    use super::{DEFAULT_DEST, DEFAULT_REF, Group, Name, Skill, StackFile, Step, StepKind};
+    use super::{DEFAULT_DEST, DEFAULT_REF, Op, Skill, StackFile, Step, StepKind};
 
-    pub fn apply(doc: &mut DocumentMut, old: &StackFile, new: &StackFile) {
-        if old.groups != new.groups {
-            groups(doc, old, new);
-        }
-        if old.skills != new.skills {
-            skills(doc, old, new);
-        }
-    }
-
-    fn groups(doc: &mut DocumentMut, old: &StackFile, new: &StackFile) {
-        let groups = doc.entry("groups").or_insert_with(|| {
-            let mut table = Table::new();
-            table.set_implicit(true);
-            Item::Table(table)
-        });
-        let Some(groups) = groups.as_table_like_mut() else { return };
-        let gone: Vec<String> = groups.iter().map(|(name, _)| name.to_string()).filter(|name| !new.groups.keys().any(|kept| kept.as_str() == name)).collect();
-        for name in gone {
-            groups.remove(&name);
-        }
-        for (name, group) in &new.groups {
-            let before = old.groups.get(name);
-            if before == Some(group) {
-                continue;
+    pub fn apply(doc: &mut DocumentMut, op: &Op) -> Result<()> {
+        match *op {
+            Op::AddMember { group, skill } => {
+                let groups = doc.get_mut("groups").and_then(Item::as_table_like_mut).ok_or_else(|| anyhow!("there is no [groups] table"))?;
+                let table = groups.get_mut(group.as_str()).and_then(Item::as_table_like_mut).ok_or_else(|| anyhow!("there is no [groups.{group}] table"))?;
+                match table.get_mut("skills") {
+                    None => set(table, "skills", Value::Array(Array::from_iter([skill.as_str()]))),
+                    Some(item) => {
+                        let array = item.as_array_mut().ok_or_else(|| anyhow!("[groups.{group}] skills is not an array"))?;
+                        if !array.iter().any(|item| item.as_str() == Some(skill.as_str())) {
+                            append(array, Value::from(skill.as_str()));
+                        }
+                    }
+                }
             }
-            let item = groups.entry(name.as_str()).or_insert(Item::Table(Table::new()));
-            let Some(table) = item.as_table_like_mut() else { continue };
-            let empty = Group::default();
-            let before = before.unwrap_or(&empty);
-            if before.global != group.global {
-                set(table, "global", Value::from(group.global));
-            }
-            if before.includes != group.includes {
-                list(table, "includes", &group.includes);
-            }
-            if before.skills != group.skills || table.get("skills").is_none() {
-                list(table, "skills", &group.skills);
-            }
-        }
-    }
-
-    fn skills(doc: &mut DocumentMut, old: &StackFile, new: &StackFile) {
-        let item = doc.entry("skill").or_insert(Item::ArrayOfTables(ArrayOfTables::new()));
-        let Some(tables) = item.as_array_of_tables_mut() else { return };
-        // Tables follow the old entries in order; one whose entry is gone is dropped.
-        let mut index = 0;
-        tables.retain(|_| {
-            let kept = new.skills.iter().any(|skill| skill.name == old.skills[index].name);
-            index += 1;
-            kept
-        });
-        let old: Vec<&Skill> = old.skills.iter().filter(|skill| new.skills.iter().any(|kept| kept.name == skill.name)).collect();
-        for skill in &new.skills {
-            match old.iter().position(|before| before.name == skill.name) {
-                Some(at) => fields(tables.get_mut(at).expect("one table per entry"), Some(old[at]), skill),
+            Op::PushSkill(skill) => match doc.get_mut("skill") {
                 None => {
                     let mut table = Table::new();
-                    fields(&mut table, None, skill);
+                    fields(&mut table, skill);
+                    doc.insert("skill", Item::ArrayOfTables(ArrayOfTables::from_iter([table])));
+                }
+                Some(Item::ArrayOfTables(tables)) => {
+                    let mut table = Table::new();
+                    fields(&mut table, skill);
                     tables.push(table);
                 }
+                Some(Item::Value(Value::Array(array))) if array.iter().all(Value::is_inline_table) => {
+                    let mut table = InlineTable::new();
+                    fields(&mut table, skill);
+                    append(array, Value::InlineTable(table));
+                }
+                Some(_) => bail!("skill is neither [[skill]] tables nor an array of inline tables"),
+            },
+            Op::SetSkill { name, git_ref, commit } => {
+                let table = entry(doc, name.as_str())?;
+                let current = table.get("ref").and_then(Item::as_str).unwrap_or(DEFAULT_REF);
+                if current != git_ref {
+                    set(table, "ref", Value::from(git_ref));
+                }
+                set(table, "commit", Value::from(commit));
             }
+        }
+        Ok(())
+    }
+
+    /// Whether the parsed result shows `op`'s change.
+    pub fn done(file: &StackFile, op: &Op) -> bool {
+        match *op {
+            Op::AddMember { group, skill } => file.groups.get(group).is_some_and(|group| group.skills.contains(skill)),
+            Op::PushSkill(skill) => file.skills.contains(skill),
+            Op::SetSkill { name, git_ref, commit } => file.skills.iter().any(|skill| skill.name == *name && skill.git_ref == git_ref && skill.commit == commit),
         }
     }
 
-    /// Writes each field of `skill` that differs from `before`. A new entry leaves out `ref` and
-    /// `dest` at their defaults.
-    fn fields(table: &mut Table, before: Option<&Skill>, skill: &Skill) {
-        let changed = |old: Option<&str>, new: &str, default: Option<&str>| match old {
-            Some(old) => old != new,
-            None => default != Some(new),
-        };
-        if before.is_none() {
-            set(table, "name", Value::from(skill.name.as_str()));
+    /// The `[[skill]]` entry named `name`, in either representation.
+    fn entry<'d>(doc: &'d mut DocumentMut, name: &str) -> Result<&'d mut dyn TableLike> {
+        let named = |table: &dyn TableLike| table.get("name").and_then(Item::as_str) == Some(name);
+        match doc.get_mut("skill") {
+            Some(Item::ArrayOfTables(tables)) => tables.iter_mut().find(|table| named(*table)).map(|table| table as &mut dyn TableLike),
+            Some(Item::Value(Value::Array(array))) => array.iter_mut().filter_map(Value::as_inline_table_mut).find(|table| named(*table)).map(|table| table as &mut dyn TableLike),
+            _ => None,
         }
-        for (key, old, new, default) in [
-            ("source", before.map(|b| b.source.as_str()), skill.source.as_str(), None),
-            ("path", before.map(|b| b.path.as_str()), skill.path.as_str(), None),
-            ("ref", before.map(|b| b.git_ref.as_str()), skill.git_ref.as_str(), Some(DEFAULT_REF)),
-            ("commit", before.map(|b| b.commit.as_str()), skill.commit.as_str(), None),
-            ("dest", before.map(|b| b.dest.as_str()), skill.dest.as_str(), Some(DEFAULT_DEST)),
-        ] {
-            if changed(old, new, default) {
-                set(table, key, Value::from(new));
-            }
+        .ok_or_else(|| anyhow!("there is no [[skill]] named {name:?}"))
+    }
+
+    /// Writes a new entry's fields, leaving out `ref` and `dest` at their defaults.
+    fn fields(table: &mut dyn TableLike, skill: &Skill) {
+        set(table, "name", Value::from(skill.name.as_str()));
+        set(table, "source", Value::from(skill.source.as_str()));
+        set(table, "path", Value::from(skill.path.as_str()));
+        if skill.git_ref != DEFAULT_REF {
+            set(table, "ref", Value::from(skill.git_ref.as_str()));
         }
-        if before.map(|b| &b.rename) != Some(&skill.rename) {
-            match &skill.rename {
-                Some(rename) => set(table, "move", Value::from(rename.as_str())),
-                None => {
-                    table.remove("move");
-                }
-            }
+        set(table, "commit", Value::from(skill.commit.as_str()));
+        if skill.dest != DEFAULT_DEST {
+            set(table, "dest", Value::from(skill.dest.as_str()));
         }
-        if before.map_or(!skill.process.is_empty(), |b| b.process != skill.process) {
-            if skill.process.is_empty() {
-                table.remove("process");
-            } else {
-                set(table, "process", Value::Array(skill.process.iter().map(step).collect()));
-            }
+        if let Some(rename) = &skill.rename {
+            set(table, "move", Value::from(rename.as_str()));
+        }
+        if !skill.process.is_empty() {
+            set(table, "process", Value::Array(skill.process.iter().map(step).collect()));
         }
     }
 
@@ -498,7 +490,7 @@ mod edit {
     }
 
     /// Sets `key`, keeping an existing value's surrounding whitespace and comment.
-    fn set(table: &mut dyn toml_edit::TableLike, key: &str, mut value: Value) {
+    fn set(table: &mut dyn TableLike, key: &str, mut value: Value) {
         match table.get_mut(key).and_then(Item::as_value_mut) {
             Some(current) => {
                 *value.decor_mut() = current.decor().clone();
@@ -510,43 +502,32 @@ mod edit {
         }
     }
 
-    /// Sets the name array at `key`. When the new list only drops names or appends them, the
-    /// existing array is edited in place, so its layout and comments stay; otherwise it is
-    /// rewritten.
-    fn list(table: &mut dyn toml_edit::TableLike, key: &str, names: &[Name]) {
-        let Some(array) = table.get_mut(key).and_then(Item::as_array_mut) else {
-            set(table, key, Value::Array(names.iter().map(|name| name.as_str()).collect()));
+    /// Appends like the last item. In a multi-line array the new item goes on its own line with
+    /// the last item's indentation, the last item gets a comma, and a comment that trailed the
+    /// last item stays on that item's line.
+    fn append(array: &mut Array, mut value: Value) {
+        let Some(last) = array.iter_mut().last() else {
+            array.push_formatted(value);
             return;
         };
-        let kept: Vec<String> = array.iter().filter_map(Value::as_str).filter(|item| names.iter().any(|name| name.as_str() == *item)).map(str::to_string).collect();
-        let prefix: Vec<String> = names.iter().take(kept.len()).map(|name| name.as_str().to_string()).collect();
-        if kept != prefix {
-            let fresh: Array = names.iter().map(|name| name.as_str()).collect();
-            set(table, key, Value::Array(fresh));
-            return;
-        }
-        array.retain(|item| item.as_str().is_some_and(|item| names.iter().any(|name| name.as_str() == item)));
-        for name in &names[kept.len()..] {
-            append(array, name.as_str());
-        }
-    }
-
-    /// Appends like the last item: same indentation, and a comment that trailed the last item
-    /// stays on its line.
-    fn append(array: &mut Array, item: &str) {
-        let mut value = Value::from(item);
-        if let Some(last) = array.iter().last() {
-            let prefix = last.decor().prefix().and_then(|raw| raw.as_str()).unwrap_or(" ").to_string();
-            let trailing = array.trailing().as_str().unwrap_or("").to_string();
-            match (prefix.rfind('\n'), trailing.rfind('\n')) {
-                // Multi-line: the old trailing text up to its last newline ends the last item's line.
-                (Some(indent), Some(close)) => {
-                    value.decor_mut().set_prefix(format!("{}{}", &trailing[..close], &prefix[indent..]));
-                    array.set_trailing(trailing[close..].to_string());
-                    array.set_trailing_comma(true);
-                }
-                _ => value.decor_mut().set_prefix(prefix),
+        let prefix = last.decor().prefix().and_then(|raw| raw.as_str()).unwrap_or(" ").to_string();
+        let suffix = last.decor().suffix().and_then(|raw| raw.as_str()).unwrap_or("").to_string();
+        let between = format!("{suffix}{}", array.trailing().as_str().unwrap_or(""));
+        match between.rfind('\n') {
+            Some(close) => {
+                let indent = match prefix.rfind('\n') {
+                    Some(at) => prefix[at..].to_string(),
+                    None => format!("\n{}", prefix.trim()),
+                };
+                let last = array.iter_mut().last().expect("checked above");
+                last.decor_mut().set_suffix("");
+                value.decor_mut().set_prefix(format!("{}{indent}", &between[..close]));
+                array.set_trailing(between[close..].to_string());
+                array.set_trailing_comma(true);
             }
+            // A first item sits right after `[`, so its prefix says nothing about the separator.
+            None if array.len() == 1 => value.decor_mut().set_prefix(" "),
+            None => value.decor_mut().set_prefix(prefix),
         }
         array.push_formatted(value);
     }
@@ -631,8 +612,12 @@ mod tests {
         assert!(!file.global_skills().is_empty());
     }
 
+    fn skill(name_text: &str) -> Skill {
+        Skill { name: name(name_text), source: "https://example.com/skills".into(), path: format!("skills/{name_text}"), git_ref: DEFAULT_REF.into(), commit: COMMIT.into(), dest: DEFAULT_DEST.into(), rename: None, process: Vec::new() }
+    }
+
     #[test]
-    fn save_edits_only_what_changed_and_keeps_comments_and_layout() {
+    fn edit_applies_each_op_to_the_current_file_and_keeps_comments_and_layout() {
         let dir = tempfile::tempdir().unwrap();
         let text = concat!(
             "# The owner's groups.\n\n",
@@ -651,11 +636,13 @@ mod tests {
             "dest = \"vendor\"\n",
         );
         std::fs::write(dir.path().join(FILE), text).unwrap();
-        let mut file = from_str(text).unwrap();
-        file.groups.get_mut("tools").unwrap().skills.push(name("grill"));
-        file.skills[0].commit = "89abcdef0123456789abcdef0123456789abcdef".into();
-        file.skills.push(from_str(&format!("[groups.x]\nskills = [\"grill\"]\n{}", entry("").replace("dest = \"vendor\"\n", ""))).unwrap().skills.remove(0));
-        save(dir.path(), &file).unwrap();
+        let grill = skill("grill");
+        let new = "89abcdef0123456789abcdef0123456789abcdef";
+        edit(dir.path(), &[
+            Op::AddMember { group: &name("tools"), skill: &name("grill") },
+            Op::PushSkill(&grill),
+            Op::SetSkill { name: &name("old"), git_ref: DEFAULT_REF, commit: new },
+        ]).unwrap();
         let saved = std::fs::read_to_string(dir.path().join(FILE)).unwrap();
         assert_eq!(saved, concat!(
             "# The owner's groups.\n\n",
@@ -679,7 +666,68 @@ mod tests {
             "path = \"skills/grill\"\n",
             "commit = \"0123456789abcdef0123456789abcdef01234567\"\n",
         ));
-        assert_eq!(from_str(&saved).unwrap(), file);
+    }
+
+    #[test]
+    fn edit_supports_every_shape_load_accepts_and_refuses_the_rest() {
+        let dir = tempfile::tempdir().unwrap();
+        let run = |text: &str, ops: &[Op]| {
+            std::fs::write(dir.path().join(FILE), text).unwrap();
+            edit(dir.path(), ops).map(|()| std::fs::read_to_string(dir.path().join(FILE)).unwrap())
+        };
+        let (tools, grill, other) = (name("tools"), name("grill"), skill("other"));
+        let add = [Op::AddMember { group: &tools, skill: &grill }];
+        // Inline and dotted group tables.
+        assert_eq!(run("groups = { tools = { skills = [\"a\"] } }\n", &add).unwrap(), "groups = { tools = { skills = [\"a\", \"grill\"] } }\n");
+        assert_eq!(run("groups.tools.skills = [\"a\"]\n", &add).unwrap(), "groups.tools.skills = [\"a\", \"grill\"]\n");
+        // A multi-line array without a trailing comma keeps one item per line and the comment.
+        assert_eq!(
+            run("[groups.tools]\nskills = [\n    \"a\",\n    \"b\"  # last one\n]\n", &add).unwrap(),
+            "[groups.tools]\nskills = [\n    \"a\",\n    \"b\",  # last one\n    \"grill\",\n]\n"
+        );
+        // [[skill]] written as an array of inline tables, pushed to and set in place.
+        let inline = format!("skill = [\n  {{ name = \"other\", source = \"https://example.com/skills\", path = \"skills/other\", commit = \"{COMMIT}\", dest = \"vendor\" }},\n]\n");
+        let mut vendored = other.clone();
+        vendored.dest = "vendor".into();
+        let mut pushed = skill("pushed");
+        pushed.dest = "vendor".into();
+        let new = "89abcdef0123456789abcdef0123456789abcdef";
+        let text = run(&inline, &[Op::PushSkill(&pushed), Op::SetSkill { name: &other.name, git_ref: "main", commit: new }]).unwrap();
+        let file = from_str(&text).unwrap();
+        assert_eq!(file.skills.len(), 2, "{text}");
+        assert_eq!((file.skills[0].git_ref.as_str(), file.skills[0].commit.as_str()), ("main", new));
+        assert_eq!(file.skills[1], pushed);
+        assert!(text.starts_with("skill = [\n  { name = \"other\""), "{text}");
+        // Shapes it cannot edit are errors and leave the file as it was.
+        for (text, ops, message) in [
+            ("[groups]\n", &add[..], "there is no [groups.tools] table"),
+            ("[groups.tools]\nskills = \"grill\"\n", &add[..], "skills is not an array"),
+            ("skill = 3\n", &[Op::PushSkill(&vendored)][..], "neither [[skill]] tables"),
+            ("", &[Op::SetSkill { name: &other.name, git_ref: "main", commit: new }][..], "there is no [[skill]] named \"other\""),
+        ] {
+            let err = format!("{:#}", run(text, ops).unwrap_err());
+            assert!(err.contains(message), "{message}: {err}");
+            assert_eq!(std::fs::read_to_string(dir.path().join(FILE)).unwrap(), text);
+        }
+        // A result that does not validate is not written.
+        let err = format!("{:#}", run("[groups.tools]\nskills = [\"Grill\"]\n", &add).unwrap_err());
+        assert!(err.contains("would make it invalid"), "{err}");
+    }
+
+    #[test]
+    fn edit_writes_through_a_symlink_and_keeps_the_mode() {
+        use std::os::unix::fs::PermissionsExt as _;
+        let dir = tempfile::tempdir().unwrap();
+        let (stack, real) = (dir.path().join("stack"), dir.path().join("dotfiles/stack.toml"));
+        std::fs::create_dir_all(&stack).unwrap();
+        std::fs::create_dir_all(real.parent().unwrap()).unwrap();
+        std::fs::write(&real, "[groups.tools]\nskills = []\n").unwrap();
+        std::fs::set_permissions(&real, std::fs::Permissions::from_mode(0o600)).unwrap();
+        std::os::unix::fs::symlink(&real, stack.join(FILE)).unwrap();
+        edit(&stack, &[Op::AddMember { group: &name("tools"), skill: &name("grill") }]).unwrap();
+        assert!(std::fs::symlink_metadata(stack.join(FILE)).unwrap().file_type().is_symlink());
+        assert_eq!(std::fs::read_to_string(&real).unwrap(), "[groups.tools]\nskills = [\"grill\"]\n");
+        assert_eq!(std::fs::metadata(&real).unwrap().permissions().mode() & 0o777, 0o600);
     }
 
     #[test]
