@@ -23,6 +23,7 @@ import type { Lane, ProviderAdapter } from "./registry/contract.ts";
 import { agy } from "./providers/agy.ts";
 import { devin } from "./providers/devin.ts";
 import { dsh } from "./providers/dsh.ts";
+import { opencode } from "./providers/opencode.ts";
 import { BASE_ALLOWLIST, BASE_PREFIXES } from "./providers/shared.ts";
 import type { ProviderId } from "./registry/family.ts";
 import type { RunnerReceipt } from "./types.ts";
@@ -2213,6 +2214,181 @@ describe("discoverSharedGitDir", () => {
     } finally {
       rmSync(root, { recursive: true, force: true });
     }
+  });
+});
+
+describe("opencode lanes", () => {
+  const MODEL = "opencode/deepseek-v4.1-flash-free";
+  const LISTED = `opencode/big-pickle\n${MODEL}\nopencode/nemotron-3-ultra-free`;
+  const INHERITED = ["OPENCODE_PERMISSION", "OPENCODE_CONFIG_CONTENT", "OPENROUTER_API_KEY"];
+  const event = (type: string, part: Record<string, unknown> = {}) => ({ type, timestamp: 1, sessionID: "ses_fixture", part });
+
+  // An OpenCode stand-in: `models` runs `models`; the model call runs `turn`, which
+  // sees `args` and `prompt`. Each call appends its kind to `opencode.calls` next to the stand-in, and its cwd,
+  // environment and config file to `opencode.contexts`. The child environment keeps no test variable, so each case
+  // bakes its own.
+  function fakeOpencode(models: string, turn: string): void {
+    writeFileSync(join(bin, "opencode"), `#!/usr/bin/env bun
+import { appendFileSync, readFileSync, statSync, writeFileSync } from "node:fs";
+import { dirname, join } from "node:path";
+const args = process.argv.slice(2);
+const call = (kind) => {
+  appendFileSync(join(dirname(process.argv[1]), "opencode.calls"), kind + "\\n");
+  const context = { cwd: process.cwd(), env: process.env, config: readFileSync(process.env.OPENCODE_CONFIG, "utf8") };
+  appendFileSync(join(dirname(process.argv[1]), "opencode.contexts"), JSON.stringify(context) + "\\n");
+};
+if (args[0] === "models") {
+call("preflight");
+${models}
+}
+call("model");
+const prompt = await Bun.stdin.text();
+const emit = (value) => console.log(JSON.stringify(value));
+${turn}
+`);
+    chmodSync(join(bin, "opencode"), 0o755);
+  }
+
+  const LIST = `console.log(${JSON.stringify(LISTED)}); process.exit(0);`;
+  // Reports what the child saw as the reply, over two steps, the first ending on an allowed tool call.
+  const OBSERVE = `const config = process.env.OPENCODE_CONFIG;
+const observed = {
+  args,
+  prompt,
+  xdg: process.env.XDG_CONFIG_HOME === dirname(config),
+  modes: [(statSync(dirname(config)).mode & 0o777).toString(8), (statSync(config).mode & 0o777).toString(8)],
+  permission: JSON.parse(readFileSync(config, "utf8")).permission["*"],
+  opencode: Object.keys(process.env).filter((key) => key.startsWith("OPENCODE_") || key.endsWith("_API_KEY")).sort(),
+};
+emit(${JSON.stringify(event("step_start"))});
+emit(${JSON.stringify(event("step_finish", { reason: "tool-calls", tokens: { total: 10, input: 6, output: 3, reasoning: 1, cache: { read: 2, write: 0 } }, cost: 0.5 }))});
+emit(${JSON.stringify(event("step_start"))});
+emit({ type: "text", timestamp: 2, sessionID: "ses_fixture", part: { type: "text", text: JSON.stringify(observed) } });
+emit(${JSON.stringify(event("step_finish", { reason: "stop", tokens: { total: 5, input: 4, output: 1, reasoning: 0, cache: { read: 0, write: 0 } }, cost: 0.25 }))});`;
+
+  function opencodeOptions(suffix: string, overrides: Partial<LaneRequest> = {}): LaneRequest {
+    return { ...options("grok", suffix), provider: "opencode", model: MODEL, effort: "max", ...overrides };
+  }
+
+  beforeEach(() => {
+    for (const name of INHERITED) process.env[name] = `${name}-value`;
+  });
+  afterEach(() => {
+    for (const name of INHERITED) delete process.env[name];
+  });
+
+  it("runs a read-only lane with the run-owned config, the prompt on stdin and the reply from the last step", async () => {
+    fakeOpencode(LIST, OBSERVE);
+    const input = opencodeOptions("opencode-complete");
+    const result = await runLane(laneOf(input));
+    expect(result.exitCode).toBe(0);
+    const saved = receipt(input.receiptPath);
+    expect(saved).toMatchObject({
+      status: "complete",
+      provider: "opencode",
+      model: MODEL,
+      effort: "max",
+      reportedModel: null,
+      modelVerified: false,
+      modelEvidence: "pinned-argv",
+      sessionId: "ses_fixture",
+      usage: { inputTokens: 10, cachedInputTokens: 2, cacheCreationInputTokens: 0, outputTokens: 4, reasoningTokens: 1, totalTokens: 15 },
+      costUsd: 0.75,
+      preflight: { status: "passed", evidence: `model ${MODEL} listed` },
+    });
+    const args = ["run", "--pure", "--agent", "build", "--format", "json", "--title", "pstack-lane", "--print-logs", "--log-level", "ERROR", "-m", MODEL, "--variant", "max"];
+    expect(saved.argv.slice(1)).toEqual(args);
+    expect(saved.preflight.argv.slice(1)).toEqual(["models", "opencode"]);
+    expect(JSON.parse(readFileSync(input.outputPath, "utf8"))).toEqual({
+      args,
+      prompt: "Return the marker.",
+      xdg: true,
+      modes: ["700", "600"],
+      permission: "deny",
+      opencode: [
+        "OPENCODE_CONFIG",
+        "OPENCODE_DISABLE_AUTOUPDATE",
+        "OPENCODE_DISABLE_CLAUDE_CODE",
+        "OPENCODE_DISABLE_EXTERNAL_SKILLS",
+        "OPENCODE_DISABLE_PROJECT_CONFIG",
+        "OPENCODE_TEST_HOME",
+      ],
+    });
+  });
+
+  it("runs the preflight and the model with one config, environment and cwd", async () => {
+    fakeOpencode(LIST, OBSERVE);
+    const input = opencodeOptions("opencode-one-context");
+    expect((await runLane(laneOf(input))).receipt.status).toBe("complete");
+    expect(readFileSync(join(bin, "opencode.calls"), "utf8")).toBe("preflight\nmodel\n");
+    const contexts = readFileSync(join(bin, "opencode.contexts"), "utf8").trim().split("\n").map((line) => JSON.parse(line));
+    expect(contexts).toHaveLength(2);
+    expect(JSON.parse(contexts[0].config).permission["*"]).toBe("deny");
+    expect(contexts[1]).toEqual(contexts[0]);
+  });
+
+  for (const [name, model, models, status, exitCode] of [
+    ["a provider with no login", "openrouter/deepseek/deepseek-v4-pro", `console.error("\\u001b[91m\\u001b[1mError: \\u001b[0mProvider not found: openrouter"); process.exit(1);`, "unauthenticated", 77],
+    ["an unlisted model", "opencode/deepseek-v4.1-flash", LIST, "unavailable-model", 69],
+  ] as const) {
+    it(`classifies ${name} before any model call`, async () => {
+      const started = join(scratch, "opencode-model.started");
+      fakeOpencode(models, `writeFileSync(${JSON.stringify(started)}, "started");`);
+      const input = opencodeOptions(`opencode-preflight-${exitCode}`, { model, effort: "default" });
+      const result = await runLane(laneOf(input));
+      expect(result.exitCode).toBe(exitCode);
+      expect(result.receipt).toMatchObject({ status, preflight: { status: "failed" }, error: { message: "authentication or model preflight failed" } });
+      expect(existsSync(started)).toBe(false);
+    });
+  }
+
+  it("classifies a rejected tool call, an error event and SIGTERM from the captured shapes", async () => {
+    fakeOpencode(LIST, `console.error("! permission requested: edit (created.txt); auto-rejecting");
+emit(${JSON.stringify(event("step_start"))});
+emit(${JSON.stringify(event("step_finish", { reason: "tool-calls" }))});`);
+    const rejected = opencodeOptions("opencode-rejected");
+    const rejectedResult = await runLane(laneOf(rejected));
+    expect(rejectedResult.exitCode).toBe(70);
+    expect(rejectedResult.receipt).toMatchObject({ status: "child-failed", exitCode: 0, error: { message: "opencode ended on a rejected tool call" } });
+    expect(rejectedResult.receipt.error?.evidence).toContain("auto-rejecting");
+    expect(existsSync(rejected.outputPath)).toBe(false);
+
+    fakeOpencode(LIST, `console.error('level=ERROR message=failed error="ProviderModelNotFoundError: Model not found"');
+emit({ type: "error", timestamp: 1, sessionID: "ses_fixture", error: { name: "UnknownError", data: { message: "Unexpected server error. Check server logs for details." } } });
+process.exit(1);`);
+    const failed = opencodeOptions("opencode-error");
+    const failedResult = await runLane(laneOf(failed));
+    expect(failedResult.exitCode).toBe(70);
+    expect(failedResult.receipt).toMatchObject({ status: "child-failed", exitCode: 1, error: { message: "opencode reported UnknownError: Unexpected server error. Check server logs for details." } });
+    expect(failedResult.receipt.error?.evidence).toContain("ProviderModelNotFoundError");
+
+    fakeOpencode(LIST, `emit(${JSON.stringify(event("step_start"))});
+process.kill(process.pid, "SIGTERM");
+await Bun.sleep(5_000);`);
+    const terminated = opencodeOptions("opencode-sigterm");
+    const terminatedResult = await runLane(laneOf(terminated));
+    expect(terminatedResult.exitCode).toBe(130);
+    expect(terminatedResult.receipt).toMatchObject({ status: "cancelled", exitCode: 143, signal: null });
+    expect(existsSync(terminated.outputPath)).toBe(false);
+  });
+
+  it("runs in a repository holding .opencode/ and an opencode.json, which the environment turns off", async () => {
+    fakeOpencode(LIST, OBSERVE);
+    const repo = join(scratch, "repo"), nested = join(repo, "src");
+    mkdirSync(join(repo, ".opencode", "plugins"), { recursive: true });
+    mkdirSync(nested);
+    writeFileSync(join(repo, "opencode.json"), "{\"permission\":{\"bash\":\"allow\"}}\n");
+    const input = opencodeOptions("opencode-project-config", { cwd: nested });
+    const result = await runLane(laneOf(input));
+    expect(result.exitCode).toBe(0);
+    expect(result.receipt).toMatchObject({ status: "complete", preflight: { status: "passed" } });
+    expect(JSON.parse(readFileSync(input.outputPath, "utf8")).permission).toBe("deny");
+  });
+
+  it("refuses an isolated-write OpenCode lane before launch", () => {
+    const input = opencodeOptions("opencode-writer", { mode: "isolated-write" });
+    expect(() => laneOf(input)).toThrow("provider opencode does not support isolated-write");
+    expect(existsSync(input.receiptPath)).toBe(false);
   });
 });
 
