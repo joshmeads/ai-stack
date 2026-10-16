@@ -9,7 +9,7 @@ use std::path::{Path, PathBuf};
 use anyhow::{Context as _, Result, anyhow, bail, ensure};
 
 use crate::exec::{self, Exec, is_commit, one_line, short, strings};
-use crate::stackfile::{self, Skill, Step, StepKind};
+use crate::stackfile::{self, Skill, SkillName, Step, StepKind};
 
 /// Staging and aside directories, on the same filesystem as every target.
 pub const STAGE: &str = ".ai-stack/stage";
@@ -25,9 +25,9 @@ pub struct Add {
     pub path: String,
     pub git_ref: String,
     pub dest: String,
-    pub rename: Option<String>,
+    pub rename: Option<SkillName>,
     pub process: Vec<Step>,
-    pub name: Option<String>,
+    pub name: Option<SkillName>,
     /// The existing group the new skill joins.
     pub group: String,
 }
@@ -47,7 +47,7 @@ impl Skills<'_> {
             Some(name) => name,
             None => Path::new(&add.path)
                 .file_name()
-                .map(|name| name.to_string_lossy().into_owned())
+                .and_then(|name| SkillName::try_from(name.to_string_lossy().as_ref()).ok())
                 .ok_or_else(|| anyhow!("cannot take a skill name from {:?}; pass --name", add.path))?,
         };
         let source = match fs::canonicalize(&add.source) {
@@ -60,7 +60,7 @@ impl Skills<'_> {
         let commit = self.resolve(&source, &add.git_ref)?;
         let skill = Skill { name, source, path: add.path, git_ref: add.git_ref, commit, dest: add.dest, rename: add.rename, process: add.process };
         ensure!(skill.is_standalone(), "a skill in a group is a standalone skill, so --dest must be {:?}, not {:?}", stackfile::SKILLS_DIR, skill.dest);
-        let member = stackfile::SkillName::try_from(skill.installed_name())?;
+        let member = skill.installed_name().clone();
         let group = file.groups.get_mut(&group_name).expect("checked above");
         if !group.skills.contains(&member) {
             group.skills.push(member);
@@ -125,7 +125,7 @@ impl Skills<'_> {
                     file
                         .skills
                         .iter()
-                        .position(|skill| skill.name == *name || skill.installed_name() == name)
+                        .position(|skill| skill.name.as_str() == name || skill.installed_name().as_str() == name)
                         .ok_or_else(|| anyhow!("no vendored skill named {name:?}"))
                 })
                 .collect::<Result<_>>()?
@@ -233,7 +233,7 @@ impl Skills<'_> {
         fs::set_permissions(stage.path(), fs::Permissions::from_mode(0o755))?;
         copy_contents(&source, stage.path())?;
         if let Some(rename) = &skill.rename {
-            rename_frontmatter(&stage.path().join("SKILL.md"), rename)?;
+            rename_frontmatter(&stage.path().join("SKILL.md"), rename.as_str())?;
         }
         for step in &skill.process {
             self.run_step(step, stage.path()).with_context(|| format!("process step {:?} {:?}", step.kind, step.input))?;
@@ -402,7 +402,7 @@ mod tests {
                 path: "skills/grill-with-docs".into(),
                 git_ref: "main".into(),
                 dest: stackfile::DEFAULT_DEST.into(),
-                rename: Some("grill-docs".into()),
+                rename: Some(SkillName::try_from("grill-docs").unwrap()),
                 process: vec![Step { kind: StepKind::Script, input: "scripts/strip.sh".into() }],
                 name: None,
                 group: "tools".into(),
@@ -445,7 +445,7 @@ mod tests {
         assert!(!installed.contains('\u{2014}'), "{installed}");
         assert!(fx.stack.join("skills/grill-docs/refs/notes.md").is_file());
         let entry = &stackfile::load(&fx.stack).unwrap().skills[0];
-        assert_eq!((entry.commit.as_str(), entry.installed_name()), (v1.as_str(), "grill-docs"));
+        assert_eq!((entry.commit.as_str(), entry.installed_name().as_str()), (v1.as_str(), "grill-docs"));
 
         let mut out = Vec::new();
         assert_eq!(fx.skills().status(&mut out).unwrap(), 0);
@@ -507,7 +507,7 @@ mod tests {
             dest: stackfile::DEFAULT_DEST.into(),
             rename: None,
             process: Vec::new(),
-            name: Some("root".into()),
+            name: Some(SkillName::try_from("root").unwrap()),
             group: "tools".into(),
         };
         fx.skills().add(add, &mut Vec::new()).unwrap();
@@ -551,7 +551,7 @@ mod tests {
                 path: path.into(),
                 git_ref: "main".into(),
                 dest: stackfile::DEFAULT_DEST.into(),
-                rename: Some("renamed".into()),
+                rename: Some(SkillName::try_from("renamed").unwrap()),
                 process: Vec::new(),
                 name: None,
                 group: "tools".into(),
