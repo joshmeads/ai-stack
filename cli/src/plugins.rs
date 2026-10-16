@@ -358,8 +358,7 @@ fn read_manifest(stack: &Path, harness: Harness) -> Result<Vec<(String, Option<S
 }
 
 fn same_path(a: &Path, b: &Path) -> bool {
-    let resolve = |path: &Path| std::fs::canonicalize(path).unwrap_or_else(|_| crate::paths::normalize(path));
-    resolve(a) == resolve(b)
+    crate::paths::resolve(a) == crate::paths::resolve(b)
 }
 
 #[cfg(test)]

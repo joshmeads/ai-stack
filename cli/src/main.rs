@@ -6,6 +6,7 @@ mod exec;
 mod fleet;
 mod groups;
 mod install;
+mod links;
 mod models;
 mod paths;
 mod plan;

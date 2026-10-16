@@ -28,10 +28,21 @@ pub enum Action {
     /// `fingerprint` is its lstat tree fingerprint at planning time. `clean` marks a `--clean`
     /// move of a stray skill; otherwise `--force` is moving a stray skill out of a link's way.
     MoveToBackup { path: PathBuf, fingerprint: u64, clean: bool },
-    /// Create a symlink at `path` pointing at `target`. `replacing` is the current target of an
-    /// ai-stack link being repointed, or `None` when `path` is free (or an earlier
-    /// `MoveToBackup` in the same plan frees it).
-    Link { path: PathBuf, target: PathBuf, replacing: Option<PathBuf> },
+    /// Create a symlink at `path` pointing at `target`, after backing up what `displaces` names.
+    Link { path: PathBuf, target: PathBuf, displaces: Displaced },
+}
+
+/// What a `Link` takes the place of. Apply checks it is still there, then backs it up as part
+/// of the same action.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum Displaced {
+    /// `path` is free.
+    Nothing,
+    /// An ai-stack link to this (wrong) target, copied into the backup and repointed.
+    OwnLink(PathBuf),
+    /// A stray skill with this lstat tree fingerprint, moved into the backup. `clean` marks a
+    /// `--clean` move; otherwise `--force` moves it.
+    Stray { fingerprint: u64, clean: bool },
 }
 
 impl Action {
@@ -49,7 +60,7 @@ impl Action {
     /// Whether applying it copies or moves what is at `path` into the backup.
     fn backs_up(&self) -> bool {
         match self {
-            Action::Link { replacing, .. } => replacing.is_some(),
+            Action::Link { displaces, .. } => *displaces != Displaced::Nothing,
             _ => fs::symlink_metadata(self.path()).is_ok(),
         }
     }
@@ -64,6 +75,9 @@ pub struct Plan {
     pub conflicts: Vec<String>,
     /// Informational lines, such as untouched extras. They never make a plan non-empty.
     pub warnings: Vec<String>,
+    /// Skill folder entries the stack does not own that `--clean` would move or that sit where
+    /// a skill link goes, whatever the options. `stray` reports these.
+    pub stray: Vec<PathBuf>,
     pub home: Option<PathBuf>,
 }
 
@@ -116,11 +130,11 @@ impl Plan {
         self.actions.len() + self.commands.len()
     }
 
-    /// Whether the summary line at `index` belongs to `--clean`: a skill moved into the backup or
-    /// a plugin removal.
+    /// Whether the summary line at `index` belongs to `--clean`: a stray skill moved into the
+    /// backup (on its own or out of a link's way) or a plugin removal.
     pub fn is_clean(&self, index: usize) -> bool {
         match self.actions.get(index) {
-            Some(action) => matches!(action, Action::MoveToBackup { clean: true, .. }),
+            Some(action) => matches!(action, Action::MoveToBackup { clean: true, .. } | Action::Link { displaces: Displaced::Stray { clean: true, .. }, .. }),
             None => self.commands.get(index - self.actions.len()).is_some_and(|command| command.clean),
         }
     }
@@ -129,16 +143,12 @@ impl Plan {
         (0..self.len()).filter(|&index| self.is_clean(index)).count()
     }
 
-    /// What the `--clean` lines alone would affect: skill-root entries moved into the backup
-    /// and plugins removed or disabled.
+    /// The stray skills the skill folders hold (`Plan::stray`), and the plugins the `--clean`
+    /// commands remove or disable.
     pub fn stray(&self, home: &Path) -> Stray {
-        let mut stray = Stray::default();
-        for index in (0..self.len()).filter(|&index| self.is_clean(index)) {
-            match self.actions.get(index) {
-                Some(action) => stray.skill_names.push(tilde(action.path(), home)),
-                None => stray.plugin_ids.extend(self.commands[index - self.actions.len()].args.last().cloned()),
-            }
-        }
+        let mut stray = Stray { skill_names: self.stray.iter().map(|path| tilde(path, home)).collect(), ..Stray::default() };
+        stray.skill_names.sort();
+        stray.plugin_ids = self.commands.iter().filter(|command| command.clean).filter_map(|command| command.args.last().cloned()).collect();
         stray.skills = stray.skill_names.len();
         stray.plugins = stray.plugin_ids.len();
         stray
@@ -166,17 +176,12 @@ impl Plan {
             }
             Action::ReplaceWithFile { path, text, .. } => format!("Back up {} and replace with file\n{}", path.display(), text_diff(&fs::read_to_string(path).unwrap_or_default(), text, path)),
             Action::MoveToBackup { path, .. } => {
-                let kind = match fs::symlink_metadata(path) {
-                    Ok(meta) if meta.file_type().is_symlink() => format!("symlink to {}", fs::read_link(path).map(|t| t.display().to_string()).unwrap_or_default()),
-                    Ok(meta) if meta.is_dir() => "directory".to_string(),
-                    Ok(_) => "file".to_string(),
-                    Err(_) => "missing".to_string(),
-                };
-                format!("Move {} ({kind}) into the backup directory at the same relative path. Nothing is deleted.", path.display())
+                format!("Move {} ({}) into the backup directory at the same relative path. Nothing is deleted.", path.display(), entry_kind(path))
             }
-            Action::Link { path, target, replacing } => match replacing {
-                Some(before) => format!("link {} -> {} (was {})", path.display(), target.display(), before.display()),
-                None => format!("link {} -> {}", path.display(), target.display()),
+            Action::Link { path, target, displaces } => match displaces {
+                Displaced::Nothing => format!("link {} -> {}", path.display(), target.display()),
+                Displaced::OwnLink(before) => format!("link {} -> {} (was {})", path.display(), target.display(), before.display()),
+                Displaced::Stray { .. } => format!("Move the stray skill {} ({}) into the backup directory at the same relative path, then link it -> {}. Nothing is deleted.", path.display(), entry_kind(path), target.display()),
             },
         }
     }
@@ -234,12 +239,8 @@ pub fn apply(plan: &Plan, backup_root: &Path, runner: &dyn Runner) -> Result<App
             plan.conflicts.len()
         );
     }
-    // A link may take the place of an entry an earlier action moves into the backup.
-    let freed: BTreeSet<&Path> = plan.actions.iter().filter(|action| matches!(action, Action::MoveToBackup { .. })).map(Action::path).collect();
     for action in &plan.actions {
-        if !matches!(action, Action::Link { replacing: None, .. } if freed.contains(action.path())) {
-            verify(action)?;
-        }
+        verify(action)?;
     }
 
     let stamp = SystemTime::now().duration_since(UNIX_EPOCH)?.as_secs();
@@ -292,10 +293,17 @@ pub fn apply(plan: &Plan, backup_root: &Path, runner: &dyn Runner) -> Result<App
                 move_to_backup(path, &backup_dir, plan.home.as_deref())?;
                 backed_up = true;
             }
-            Action::Link { path, target, replacing } => {
-                if replacing.is_some() {
-                    backed_up |= backup(path, &backup_dir, plan.home.as_deref())?;
-                    fs::remove_file(path).with_context(|| format!("removing {}", path.display()))?;
+            Action::Link { path, target, displaces } => {
+                match displaces {
+                    Displaced::Nothing => {}
+                    Displaced::OwnLink(_) => {
+                        backed_up |= backup(path, &backup_dir, plan.home.as_deref())?;
+                        fs::remove_file(path).with_context(|| format!("removing {}", path.display()))?;
+                    }
+                    Displaced::Stray { .. } => {
+                        move_to_backup(path, &backup_dir, plan.home.as_deref())?;
+                        backed_up = true;
+                    }
                 }
                 create_parent(path)?;
                 symlink(target, path).with_context(|| format!("linking {} to {}", path.display(), target.display()))?;
@@ -337,6 +345,16 @@ pub fn apply(plan: &Plan, backup_root: &Path, runner: &dyn Runner) -> Result<App
     })
 }
 
+/// `directory`, `file`, `symlink to <target>` or `missing`, for a diff line.
+fn entry_kind(path: &Path) -> String {
+    match fs::symlink_metadata(path) {
+        Ok(meta) if meta.file_type().is_symlink() => format!("symlink to {}", fs::read_link(path).map(|t| t.display().to_string()).unwrap_or_default()),
+        Ok(meta) if meta.is_dir() => "directory".to_string(),
+        Ok(_) => "file".to_string(),
+        Err(_) => "missing".to_string(),
+    }
+}
+
 fn summary_line(action: &Action, home: &Path) -> String {
     match action {
         Action::Write { path, before: None, .. } => format!("create  {}", tilde(path, home)),
@@ -345,6 +363,7 @@ fn summary_line(action: &Action, home: &Path) -> String {
         Action::Unlink { path, .. } => format!("unlink  {}", tilde(path, home)),
         Action::ReplaceWithFile { path, .. } => format!("replace-file {}", tilde(path, home)),
         Action::MoveToBackup { path, .. } => format!("move    {} -> backup", tilde(path, home)),
+        Action::Link { path, displaces: Displaced::Stray { .. }, .. } => format!("link    {} (stray -> backup)", tilde(path, home)),
         Action::Link { path, .. } => format!("link    {}", tilde(path, home)),
     }
 }
@@ -407,8 +426,13 @@ fn verify(action: &Action) -> Result<()> {
         Action::Unlink { path, target } => {
             (current_link(path)? == Some(target.clone())).then_some(())
         }
-        Action::Link { path, replacing, .. } => (current_link(path)? == *replacing).then_some(()),
-        Action::ReplaceWithFile { path, fingerprint: expected, .. } | Action::MoveToBackup { path, fingerprint: expected, .. } => {
+        Action::Link { path, displaces: Displaced::Nothing, .. } => {
+            matches!(fs::symlink_metadata(path), Err(err) if err.kind() == io::ErrorKind::NotFound).then_some(())
+        }
+        Action::Link { path, displaces: Displaced::OwnLink(target), .. } => (current_link(path)?.as_ref() == Some(target)).then_some(()),
+        Action::ReplaceWithFile { path, fingerprint: expected, .. }
+        | Action::MoveToBackup { path, fingerprint: expected, .. }
+        | Action::Link { path, displaces: Displaced::Stray { fingerprint: expected, .. }, .. } => {
             (fingerprint(path).ok() == Some(*expected)).then_some(())
         }
     };

@@ -1,8 +1,6 @@
 //! Builds the install plan for every enabled harness: the model sheet, the instruction-file
-//! blocks, cleanup of what older installs left behind, the standalone skill links, and the
-//! plugin commands.
+//! blocks and settings hooks, then the skill folders (`links`) and the plugin commands.
 
-use std::collections::BTreeSet;
 use std::fs;
 use std::io;
 use std::path::{Path, PathBuf};
@@ -12,11 +10,12 @@ use serde_json::Value;
 
 use crate::blocks;
 use crate::config::{Config, Harness, HarnessConfig};
+use crate::links;
 use crate::paths;
 use crate::plan::{self, Action, Plan};
 use crate::plugins::{self, Runner};
 use crate::render;
-use crate::stackfile::{self, SkillName};
+use crate::stackfile;
 
 const LEGACY_LOCAL_BEGIN: &str = "<!-- open-pstack:local:begin -->";
 const LEGACY_LOCAL_END: &str = "<!-- open-pstack:local:end -->";
@@ -44,19 +43,16 @@ pub struct Options {
 pub fn plan(cfg: &Config, opts: Options, runner: &dyn Runner) -> Result<Plan> {
     ensure!(cfg.stack.path.is_dir(), "stack path {} does not exist; set [stack] path in the config or pass --stack", cfg.stack.path.display());
     let stack_file = stackfile::load(&cfg.stack.path)?;
+    let owner = links::Owner::new(cfg);
     let mut out = Plan { home: Some(cfg.home.clone()), ..Plan::default() };
     for hc in &cfg.harnesses {
-        plan_sheet(cfg, hc, opts, &mut out)?;
+        plan_sheet(cfg, &owner, hc, opts, &mut out)?;
         plan_instructions(cfg, hc, &mut out)?;
         if hc.harness == Harness::Claude {
             plan_settings(cfg, hc, &mut out)?;
         }
-        plan_leftover_links(cfg, hc, &mut out)?;
     }
-    if opts.clean {
-        plan_clean_skills(cfg, &mut out)?;
-    }
-    plan_skill_links(cfg, &stack_file, opts, &mut out)?;
+    links::plan(cfg, &owner, &stack_file, opts, &mut out)?;
     if opts.clean {
         // Removals run before the jm installs.
         for hc in &cfg.harnesses {
@@ -69,104 +65,13 @@ pub fn plan(cfg: &Config, opts: Options, runner: &dyn Runner) -> Result<Plan> {
     Ok(out)
 }
 
-/// `--clean`: every entry of each skill root that `[clean]` does not keep moves into the backup.
-/// ai-stack's own links (into the stack or a legacy root) are never stray: the link pass keeps,
-/// repoints or unlinks them. Entries an earlier action already handles are not planned again,
-/// and a root reached twice through a symlink is read once.
-fn plan_clean_skills(cfg: &Config, out: &mut Plan) -> Result<()> {
-    let mut seen = BTreeSet::new();
-    for root in &cfg.clean.skill_roots {
-        if !seen.insert(fs::canonicalize(root).unwrap_or_else(|_| root.clone())) {
-            continue;
-        }
-        for path in entries(root)? {
-            let kept = path.file_name().is_some_and(|name| cfg.clean.keeps_skill(&name.to_string_lossy()));
-            if kept || out.actions.iter().any(|action| action.path() == path) || is_owned_link(&path, cfg)? {
-                continue;
-            }
-            out.actions.push(Action::MoveToBackup { fingerprint: plan::fingerprint(&path)?, path, clean: true });
-        }
-    }
-    Ok(())
-}
-
-/// Links every skill of the global groups into each harness's user skill folder as
-/// `<folder>/<name>` -> `<stack>/skills/<name>`. In those folders a link into the stack or a
-/// legacy root is ai-stack's: a wrong one is repointed and one to a skill no longer enabled is
-/// unlinked. Anything else at an enabled name is a stray skill in the way: a conflict, or with
-/// `--force` a move into the backup before the link. A folder two harnesses share is planned once.
-fn plan_skill_links(cfg: &Config, file: &stackfile::StackFile, opts: Options, out: &mut Plan) -> Result<()> {
-    let skills_dir = cfg.stack.path.join(stackfile::SKILLS_DIR);
-    let mut enabled = BTreeSet::new();
-    for name in file.global_skills() {
-        if skills_dir.join(name.as_str()).is_dir() {
-            enabled.insert(name);
-        } else {
-            out.warnings.push(format!("note: {name} is in a global group but {} is missing; run `ai-stack skills update {name}` to rebuild it", skills_dir.join(name.as_str()).display()));
-        }
-    }
-    let mut seen = BTreeSet::new();
-    for hc in &cfg.harnesses {
-        let folder = hc.harness.skill_folder(&hc.home, &cfg.home);
-        if seen.insert(fs::canonicalize(&folder).unwrap_or_else(|_| folder.clone())) {
-            plan_folder_links(cfg, &folder, &skills_dir, &enabled, opts, out)?;
-        }
-    }
-    Ok(())
-}
-
-fn plan_folder_links(cfg: &Config, folder: &Path, skills_dir: &Path, enabled: &BTreeSet<SkillName>, opts: Options, out: &mut Plan) -> Result<()> {
-    for path in entries(folder)? {
-        let name = path.file_name().map(|name| name.to_string_lossy().into_owned()).unwrap_or_default();
-        let touched = out.actions.iter().any(|action| action.path() == path);
-        if !name.starts_with('.') && !enabled.contains(name.as_str()) && !touched && is_owned_link(&path, cfg)? {
-            out.actions.push(Action::Unlink { target: fs::read_link(&path)?, path });
-        }
-    }
-    for name in enabled {
-        let (path, target) = (folder.join(name.as_str()), skills_dir.join(name.as_str()));
-        let link = |replacing| Action::Link { path: path.clone(), target: target.clone(), replacing };
-        match metadata(&path)? {
-            None => out.actions.push(link(None)),
-            Some(meta) if meta.file_type().is_symlink() => {
-                let current = fs::read_link(&path)?;
-                if current == target {
-                    continue;
-                }
-                if owned_link(&path, cfg)? {
-                    out.actions.push(link(Some(current)));
-                    continue;
-                }
-                plan_stray_in_the_way(&path, link(None), opts, out)?;
-            }
-            Some(_) => plan_stray_in_the_way(&path, link(None), opts, out)?,
-        }
-    }
-    Ok(())
-}
-
-/// A stray skill sits where a link goes. `--clean` may already move it; otherwise `--force`
-/// moves it into the backup, and without either it is a conflict.
-fn plan_stray_in_the_way(path: &Path, link: Action, opts: Options, out: &mut Plan) -> Result<()> {
-    let moved = out.actions.iter().any(|action| matches!(action, Action::MoveToBackup { .. }) && action.path() == path);
-    if !moved && !opts.force {
-        out.conflicts.push(format!("{} is a stray skill in the way of a skill the stack links there; move it, or run with --force to move it into the backup", path.display()));
-        return Ok(());
-    }
-    if !moved {
-        out.actions.push(Action::MoveToBackup { fingerprint: plan::fingerprint(path)?, path: path.to_path_buf(), clean: false });
-    }
-    out.actions.push(link);
-    Ok(())
-}
-
 fn sheet_path(hc: &HarnessConfig) -> PathBuf {
     hc.home.join("pstack-models.md")
 }
 
 /// `<home>/pstack-models.md`. An unmanaged sheet (for example one setup-stack wrote) is a
 /// conflict unless `--force`.
-fn plan_sheet(cfg: &Config, hc: &HarnessConfig, opts: Options, out: &mut Plan) -> Result<()> {
+fn plan_sheet(cfg: &Config, owner: &links::Owner, hc: &HarnessConfig, opts: Options, out: &mut Plan) -> Result<()> {
     let path = sheet_path(hc);
     let text = render::sheet(cfg, hc.harness);
     let replace = |out: &mut Plan| -> Result<()> {
@@ -178,7 +83,7 @@ fn plan_sheet(cfg: &Config, hc: &HarnessConfig, opts: Options, out: &mut Plan) -
         Some(meta) if meta.is_file() && first_line(&path)?.starts_with("<!-- Managed by ai-stack") => {
             out.actions.extend(plan::write_if_changed(&path, text.clone())?)
         }
-        Some(meta) if meta.file_type().is_symlink() && owned_link(&path, cfg)? => replace(out)?,
+        Some(meta) if meta.file_type().is_symlink() && owner.owns(&path)? => replace(out)?,
         Some(_) if opts.force => replace(out)?,
         Some(_) => out.conflicts.push(format!("{} exists and is not managed by ai-stack; move it or run with --force", path.display())),
     }
@@ -310,39 +215,6 @@ fn owned_hook(command: &str, roots: &[&Path]) -> bool {
     OLD_HOOKS.iter().any(|(owner, relative)| *owner == program && roots.iter().any(|root| Path::new(script) == root.join(relative)))
 }
 
-/// Skill and agent links into the stack or a legacy root, and role agent files older ai-stack
-/// builds wrote. The jm-stack plugin provides agents now. The harness's user skill folder is
-/// left to the link pass, which keeps the links it wants.
-fn plan_leftover_links(cfg: &Config, hc: &HarnessConfig, out: &mut Plan) -> Result<()> {
-    for dir in ["skills", "agents"] {
-        if hc.home.join(dir) == hc.harness.skill_folder(&hc.home, &cfg.home) {
-            continue;
-        }
-        for path in entries(&hc.home.join(dir))? {
-            if path.file_name().is_some_and(|name| name.to_string_lossy().starts_with('.')) {
-                continue;
-            }
-            let meta = fs::symlink_metadata(&path)?;
-            if meta.file_type().is_symlink() {
-                if owned_link(&path, cfg)? {
-                    out.actions.push(Action::Unlink { target: fs::read_link(&path)?, path });
-                }
-            } else if dir == "agents" && meta.is_file() {
-                if let Ok(text) = fs::read_to_string(&path) {
-                    let managed = match hc.harness {
-                        Harness::Claude => text.contains(render::MANAGED_MD),
-                        Harness::Codex => text.lines().next() == Some(render::MANAGED_TOML),
-                    };
-                    if managed {
-                        out.actions.push(Action::Remove { path, before: text });
-                    }
-                }
-            }
-        }
-    }
-    Ok(())
-}
-
 /// The file a shared path writes to: the link's target when `path` is a symlink, so the link stays.
 fn write_through(path: &Path) -> Result<PathBuf> {
     match metadata(path)? {
@@ -378,30 +250,8 @@ fn metadata(path: &Path) -> Result<Option<fs::Metadata>> {
     }
 }
 
-/// Whether `path` is a symlink that `owned_link` claims. Anything else, or nothing, is not.
-fn is_owned_link(path: &Path, cfg: &Config) -> Result<bool> {
-    Ok(metadata(path)?.is_some_and(|meta| meta.file_type().is_symlink()) && owned_link(path, cfg)?)
-}
-
-fn owned_link(path: &Path, cfg: &Config) -> Result<bool> {
-    let target = fs::read_link(path)?;
-    let resolved = paths::normalize(&if target.is_absolute() { target } else { path.parent().expect("entry parent").join(target) });
-    Ok(resolved.starts_with(&cfg.stack.path) || cfg.stack.legacy_paths.iter().any(|root| resolved.starts_with(root)))
-}
-
-fn entries(dir: &Path) -> Result<Vec<PathBuf>> {
-    let read = match fs::read_dir(dir) {
-        Ok(read) => read,
-        Err(err) if err.kind() == io::ErrorKind::NotFound => return Ok(Vec::new()),
-        Err(err) => return Err(err).with_context(|| format!("reading {}", dir.display())),
-    };
-    let mut paths = read.map(|e| e.map(|e| e.path())).collect::<io::Result<Vec<_>>>()?;
-    paths.sort();
-    Ok(paths)
-}
-
 #[cfg(test)]
-mod tests {
+pub(crate) mod tests {
     use std::fs;
     use std::os::unix::fs::{PermissionsExt, symlink};
     use std::path::{Path, PathBuf};
@@ -410,23 +260,25 @@ mod tests {
 
     use super::*;
     use crate::config;
-    use crate::plan::tilde;
     use crate::plugins::fake::FakeRunner;
 
-    struct Fixture {
+    pub(crate) struct Fixture {
         _tmp: tempfile::TempDir,
-        root: PathBuf,
-        stack: PathBuf,
-        home: PathBuf,
-        cfg: Config,
-        runner: FakeRunner,
+        pub(crate) root: PathBuf,
+        pub(crate) stack: PathBuf,
+        pub(crate) home: PathBuf,
+        pub(crate) cfg: Config,
+        pub(crate) runner: FakeRunner,
     }
 
     impl Fixture {
-        fn plan(&self) -> Plan {
-            super::plan(&self.cfg, Options::default(), &self.runner).unwrap()
+        pub(crate) fn plan(&self) -> Plan {
+            self.plan_with(Options::default())
         }
-        fn apply(&self, plan: &Plan) {
+        pub(crate) fn plan_with(&self, opts: Options) -> Plan {
+            super::plan(&self.cfg, opts, &self.runner).unwrap()
+        }
+        pub(crate) fn apply(&self, plan: &Plan) {
             crate::plan::apply(plan, &self.root.join("backups"), &self.runner).unwrap();
         }
         fn read(&self, relative: &str) -> String {
@@ -434,14 +286,14 @@ mod tests {
         }
     }
 
-    const STACK_TOML: &str = "[groups.tools]\nglobal = true\nskills = [\"handoff\", \"feedback\"]\n\n[groups.games]\nskills = [\"game-mvp\"]\n";
+    pub(crate) const STACK_TOML: &str = "[groups.tools]\nglobal = true\nskills = [\"handoff\", \"feedback\"]\n\n[groups.games]\nskills = [\"game-mvp\"]\n";
 
-    fn put(path: &Path, text: &str) {
+    pub(crate) fn put(path: &Path, text: &str) {
         fs::create_dir_all(path.parent().unwrap()).unwrap();
         fs::write(path, text).unwrap();
     }
 
-    fn fixture() -> Fixture {
+    pub(crate) fn fixture() -> Fixture {
         let tmp = tempfile::tempdir().unwrap();
         let root = fs::canonicalize(tmp.path()).unwrap();
         let stack = root.join("stack");
@@ -648,16 +500,18 @@ mod tests {
             f.runner.codex.borrow_mut().installed.insert(id.into(), "1".into());
         }
 
+        let strays = ["~/.agents/skills/notes.txt", "~/.claude/skills/gone", "~/.claude/skills/linked", "~/.claude/skills/old-skill", "~/.codex/skills/codex-only"];
         let off = f.plan();
         assert_eq!(off.clean_count(), 0);
         assert!(!off.actions.iter().any(|a| matches!(a, Action::MoveToBackup { .. })));
-        assert_eq!(off.stray(&f.home), crate::plan::Stray::default());
+        // The strays are the same with clean off; only the moves wait for --clean.
+        assert_eq!(off.stray(&f.home).skill_names, strays);
 
-        let clean = |f: &Fixture| super::plan(&f.cfg, Options { clean: true, ..Options::default() }, &f.runner).unwrap();
+        let clean = |f: &Fixture| f.plan_with(Options { clean: true, ..Options::default() });
         let plan = clean(&f);
         assert!(plan.conflicts.is_empty(), "{:?}", plan.conflicts);
         let moved: Vec<PathBuf> = plan.actions.iter().filter(|a| matches!(a, Action::MoveToBackup { .. })).map(|a| a.path().to_path_buf()).collect();
-        assert_eq!(moved, [claude.join("gone"), claude.join("linked"), claude.join("old-skill"), codex.join("codex-only"), agents.join("notes.txt")]);
+        assert_eq!(moved, [claude.join("gone"), claude.join("linked"), claude.join("old-skill"), agents.join("notes.txt"), codex.join("codex-only")]);
         assert_eq!(plan.actions.iter().filter(|a| a.path() == claude.join("how")).count(), 1);
         let (claude_env, codex_env) = (format!("CLAUDE_CONFIG_DIR={}/.claude", f.home.display()), format!("CODEX_HOME={}/.codex", f.home.display()));
         let commands: Vec<String> = plan.commands.iter().map(ToString::to_string).collect();
@@ -672,10 +526,10 @@ mod tests {
         assert_eq!(serde_json::to_string(&stray).unwrap(), json!({
             "skills": 5,
             "plugins": 3,
-            "skill_names": ["~/.claude/skills/gone", "~/.claude/skills/linked", "~/.claude/skills/old-skill", "~/.codex/skills/codex-only", "~/.agents/skills/notes.txt"],
+            "skill_names": strays,
             "plugin_ids": ["expo@claude-plugins-official", "pdf-viewer@synced", "old@market"],
         }).to_string());
-        assert!(stray.text().starts_with("skills: 5  plugins: 3\n  ~/.claude/skills/gone\n"), "{}", stray.text());
+        assert!(stray.text().starts_with("skills: 5  plugins: 3\n  ~/.agents/skills/notes.txt\n"), "{}", stray.text());
 
         let report = crate::plan::apply(&plan, &f.root.join("backups"), &f.runner).unwrap();
         let backup = report.backup_dir.unwrap().join("home");
@@ -706,99 +560,6 @@ mod tests {
 
         let again = clean(&f);
         assert!(again.is_empty(), "{}", again.render_text(&f.home));
-    }
-
-    fn links(folder: &Path) -> Vec<(String, PathBuf)> {
-        let mut found: Vec<(String, PathBuf)> = entries(folder).unwrap().into_iter()
-            .filter(|path| fs::symlink_metadata(path).unwrap().file_type().is_symlink())
-            .map(|path| (path.file_name().unwrap().to_string_lossy().into_owned(), fs::read_link(&path).unwrap()))
-            .collect();
-        found.sort();
-        found
-    }
-
-    #[test]
-    fn skill_links_follow_the_global_groups() {
-        let f = fixture();
-        let (claude, agents) = (f.home.join(".claude/skills"), f.home.join(".agents/skills"));
-        let target = |name: &str| f.stack.join("skills").join(name);
-        let first = f.plan();
-        // (a) A missing link is a Link in each harness's user skill folder.
-        let planned: Vec<&Action> = first.actions.iter().filter(|a| matches!(a, Action::Link { .. })).collect();
-        assert_eq!(planned, [
-            &Action::Link { path: claude.join("feedback"), target: target("feedback"), replacing: None },
-            &Action::Link { path: claude.join("handoff"), target: target("handoff"), replacing: None },
-            &Action::Link { path: agents.join("feedback"), target: target("feedback"), replacing: None },
-            &Action::Link { path: agents.join("handoff"), target: target("handoff"), replacing: None },
-        ]);
-        f.apply(&first);
-        let tools = vec![("feedback".to_string(), target("feedback")), ("handoff".to_string(), target("handoff"))];
-        assert_eq!(links(&claude), tools);
-        assert_eq!(links(&agents), tools);
-        // (b) Correct links are no action, and the leftover rule leaves them alone.
-        assert!(f.plan().is_empty(), "{}", f.plan().render_text(&f.home));
-
-        // (c) Turning a group off unlinks its skills; turning one on links its skills.
-        put(&f.stack.join("stack.toml"), &STACK_TOML.replace("[groups.tools]\nglobal = true", "[groups.tools]\nglobal = false").replace("[groups.games]\n", "[groups.games]\nglobal = true\n"));
-        let switched = f.plan();
-        let summary: Vec<String> = switched.actions.iter().map(|a| match a {
-            Action::Link { path, .. } => format!("link {}", tilde(path, &f.home)),
-            Action::Unlink { path, .. } => format!("unlink {}", tilde(path, &f.home)),
-            other => panic!("unexpected {other:?}"),
-        }).collect();
-        assert_eq!(summary, [
-            "unlink ~/.claude/skills/feedback", "unlink ~/.claude/skills/handoff", "link ~/.claude/skills/game-mvp",
-            "unlink ~/.agents/skills/feedback", "unlink ~/.agents/skills/handoff", "link ~/.agents/skills/game-mvp",
-        ]);
-        f.apply(&switched);
-        assert_eq!(links(&agents), [("game-mvp".to_string(), target("game-mvp"))]);
-
-        // An ai-stack link to the wrong place (a legacy root) is repointed.
-        fs::remove_file(agents.join("game-mvp")).unwrap();
-        symlink(f.root.join("legacy/skills/game-mvp"), agents.join("game-mvp")).unwrap();
-        let repoint = f.plan();
-        assert_eq!(repoint.actions, [Action::Link { path: agents.join("game-mvp"), target: target("game-mvp"), replacing: Some(f.root.join("legacy/skills/game-mvp")) }]);
-        f.apply(&repoint);
-        assert!(f.plan().is_empty());
-    }
-
-    #[test]
-    fn a_stray_skill_in_a_links_way_is_a_conflict_or_moves_to_backup_and_never_counts_our_links() {
-        let f = fixture();
-        f.apply(&f.plan());
-        let agents = f.home.join(".agents/skills");
-        fs::remove_file(agents.join("handoff")).unwrap();
-        put(&agents.join("handoff/SKILL.md"), "mine\n");
-        put(&agents.join("other/SKILL.md"), "other\n");
-        // A link to somewhere else is not ours either, so it is in the way too.
-        fs::remove_file(f.home.join(".claude/skills/feedback")).unwrap();
-        symlink(f.root.join("elsewhere/feedback"), f.home.join(".claude/skills/feedback")).unwrap();
-
-        // (d) Without --force: a conflict naming the path, and nothing linked over it.
-        let refused = f.plan();
-        assert_eq!(refused.conflicts.len(), 2, "{:?}", refused.conflicts);
-        assert!(refused.conflicts.iter().any(|c| c.starts_with(&format!("{} is a stray skill in the way", agents.join("handoff").display()))), "{:?}", refused.conflicts);
-        assert!(refused.actions.is_empty(), "{}", refused.render_text(&f.home));
-
-        // stray and --clean see the stray entries and never our links.
-        let clean = super::plan(&f.cfg, Options { clean: true, ..Options::default() }, &f.runner).unwrap();
-        let stray = clean.stray(&f.home);
-        assert_eq!(stray.skill_names, ["~/.claude/skills/feedback", "~/.agents/skills/handoff", "~/.agents/skills/other"]);
-        assert!(clean.conflicts.is_empty(), "{:?}", clean.conflicts);
-
-        // With --force: each stray moves into the backup, then the link.
-        let forced = super::plan(&f.cfg, Options { force: true, ..Options::default() }, &f.runner).unwrap();
-        assert!(forced.conflicts.is_empty(), "{:?}", forced.conflicts);
-        let handoff: Vec<&Action> = forced.actions.iter().filter(|a| a.path() == agents.join("handoff")).collect();
-        assert!(matches!(handoff.as_slice(), [Action::MoveToBackup { clean: false, .. }, Action::Link { replacing: None, .. }]), "{handoff:?}");
-        assert_eq!(forced.clean_count(), 0);
-        let report = crate::plan::apply(&forced, &f.root.join("backups"), &f.runner).unwrap();
-        let backup = report.backup_dir.unwrap().join("home");
-        assert_eq!(fs::read_to_string(backup.join(".agents/skills/handoff/SKILL.md")).unwrap(), "mine\n");
-        assert_eq!(fs::read_link(backup.join(".claude/skills/feedback")).unwrap(), f.root.join("elsewhere/feedback"));
-        assert_eq!(fs::read_link(agents.join("handoff")).unwrap(), f.stack.join("skills/handoff"));
-        assert!(agents.join("other/SKILL.md").exists());
-        assert!(f.plan().is_empty(), "{}", f.plan().render_text(&f.home));
     }
 
     #[test]
