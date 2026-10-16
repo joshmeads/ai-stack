@@ -1,0 +1,1 @@
+timestamp=2026-10-16T03:12:25.358Z level=ERROR run=a3eb9568 message=failed ref=err_3131d374 error="ProviderModelNotFoundError: Model not found: opencode/deepseek-nonexistent. Did you mean: deepseek-v4.1-flash-free?

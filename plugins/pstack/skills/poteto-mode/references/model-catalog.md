@@ -17,6 +17,7 @@ Model and provider facts for [`provider-dispatch.md`](provider-dispatch.md), whi
 | opus-5-5 | Opus 5.5 | claude | claude-opus-5-5 | max | low medium high xhigh max | `pstack-opus-5-5-<effort>` | optional | claude-opus-5-5-xhigh |
 | swe-2 | SWE-2 | devin | swe-2 | max | medium high max | - | optional | - |
 | swe-1.6 | SWE-1.6 | devin | swe-1.6 | default | default | - | optional | - |
+| deepseek-v4.1-flash-free | DeepSeek V4.1 Flash (OpenCode Zen) | opencode | opencode/deepseek-v4.1-flash-free | max | low high max | - | optional | - |
 
 A family is `default` when a role default names it and `optional` otherwise. A Claude-native agent exists for each selectable effort of a Claude family.
 
@@ -52,6 +53,7 @@ Rolling aliases:
 | codex | external runner | native `spawn_agent` | `read-only`, `isolated-write`, `isolated-write-full-access` | stdin | pinned argv | inherited | - |
 | grok | external runner | external runner | `read-only`, `isolated-write` | file | provider report | allowlist | Linux: Landlock and `bwrap` |
 | devin | external runner | external runner | `read-only` | file | provider report | allowlist | - |
+| opencode | external runner | external runner | `read-only` | stdin | pinned argv | allowlist | - |
 
 The runner refuses an access mode outside a provider's Access modes cell before launch. `isolated-write-full-access` is a writer capability, not a `--mode` value: the runner takes it as `--mode isolated-write --writer-sandbox full-access`, which a parent passes only when the model sheet opts in, as [`provider-dispatch.md`](provider-dispatch.md#codex-writer-sandbox) says.
 
@@ -93,6 +95,23 @@ The runner refuses an access mode outside a provider's Access modes cell before 
 - Each lane gets a run-owned `--config` file in its private `<receipt>.provider/` directory (0700). It turns off subagents, every host rule source (such as `CLAUDE.md`) and MCP tools, and denies web search and the fetch tools. Devin still loads its own skills. Network isolation is not established: shell network access and the fetch denials were not measured.
 - The preflight passes when `devin auth status` exits 0 and starts with `Logged in (via Devin).`. It also exits 0 when logged out, so output starting with `Not logged in.` is `unauthenticated`/77, and any other output is `child-failed`/70.
 - The reply, session, token usage and model proof come from the `--export` ATIF file at `<receipt>.provider/export.json`, never from stdout. The proof is the last step's `extra.generation_model`, which must equal the CLI model ID. An empty final message, as after a rejected tool call, is `child-failed`/70. An interrupted response, or exit 143 after SIGTERM, is `cancelled`/130. `Error: Unknown model:` is `unavailable-model`/69.
+
+### opencode: OpenCode
+
+- Executable: `opencode`.
+- Host prerequisites: none.
+- State paths: `~/.local/share/opencode/` (`auth.json`, the stored logins, which the CLI reads; the session database, logs and tool output it writes); `~/.local/state/opencode/`, `$XDG_CACHE_HOME/opencode/` and `$TMPDIR/opencode/`, which it writes.
+- Child environment: only `PATH` `HOME` `USER` `LOGNAME` `SHELL` `TMPDIR` `LANG` `TERM` `COLORTERM` `TZ` `HTTP_PROXY` `HTTPS_PROXY` `NO_PROXY` `ALL_PROXY` `http_proxy` `https_proxy` `no_proxy` `all_proxy` `SSL_CERT_FILE` `SSL_CERT_DIR` `NODE_EXTRA_CA_CERTS`, and variables starting with `LC_`, `XDG_`; sets `XDG_CONFIG_HOME=<receipt>.provider`, `OPENCODE_CONFIG=<receipt>.provider/opencode.json`, `OPENCODE_DISABLE_PROJECT_CONFIG=1`, `OPENCODE_DISABLE_CLAUDE_CODE=1`, `OPENCODE_DISABLE_EXTERNAL_SKILLS=1`, `OPENCODE_DISABLE_AUTOUPDATE=1`.
+- The model is `provider/model`, such as `opencode/deepseek-v4.1-flash-free`. The effort is `--variant <effort>`, omitted for `default`. OpenCode accepts an unknown variant silently, so only a registered family's efforts are checked.
+- Read-only only. Each lane uses the default `build` agent with a run-owned config whose `"*": "deny"` permission removes every tool except `read`, `glob`, `grep`, `list` and `todowrite` from the model's tool list. OpenCode's permission policy enforces this, not an OS sandbox. With `external_directory` denied, a shell write still escaped the cwd, so no OpenCode mode is a bounded writer, and the runner refuses an `isolated-write` lane before launch.
+- The runner writes that config to `<receipt>.provider/opencode.json` (0600, in a 0700 directory), points `OPENCODE_CONFIG` at it and sets `XDG_CONFIG_HOME` to the directory, so the host's global OpenCode config, plugins and MCP servers do not load. `OPENCODE_DISABLE_PROJECT_CONFIG=1` stops the repository's `opencode.json`, `opencode.jsonc`, `.opencode/` agents and commands, and `AGENTS.md` from loading. `OPENCODE_DISABLE_CLAUDE_CODE=1` stops `~/.claude/CLAUDE.md` and `~/.claude/skills`, and `OPENCODE_DISABLE_EXTERNAL_SKILLS=1` stops `~/.agents/skills`. `OPENCODE_DISABLE_AUTOUPDATE=1` and `--pure` turn off updates and external plugins. The built-in `customize-opencode` skill remains, but the `skill` tool is denied.
+- The runner refuses an OpenCode lane whose cwd, or any parent up to the git root, holds `.opencode/`. Even with `--pure` and `OPENCODE_DISABLE_PROJECT_CONFIG=1`, OpenCode 1.19.1 imports `.opencode/plugins/*.js`, which runs each module's top-level code; only the plugin's initialization is skipped.
+- The child environment drops every other `OPENCODE_*` variable, because `OPENCODE_PERMISSION` turns `bash` and `edit` back on and others replace the config or the model catalog. It also drops provider keys such as `OPENROUTER_API_KEY`. A lane authenticates only through OpenCode's stored logins (`opencode auth login`, kept in `~/.local/share/opencode/auth.json`), or uses a free OpenCode Zen model, which needs no login.
+- The preflight runs `opencode models <provider>`, where `<provider>` is the model's part before the first `/`. It passes when it exits 0 and one line equals the model. `Error: Provider not found:` with a nonzero exit is `unauthenticated`/77. Exit 0 without the model line is `unavailable-model`/69, and so is a model with no `/`. Any other output is `child-failed`/70.
+- The lane passes `--title pstack-lane`, because without a title OpenCode calls a second model to name the session. The prompt goes on stdin.
+- The reply, session ID, token usage and cost come from the `--format json` event stream on stdout. A lane is complete only when the last `step_finish` has reason `stop` and a `text` event follows the last `step_start`; the reply is those texts in order. Usage and cost are summed over every `step_finish`. An `error` event is `child-failed`/70. For an unknown model that event says only `UnknownError`, and `--print-logs --log-level ERROR` puts its `ProviderModelNotFoundError` cause on stderr, which the receipt keeps. A final `step_finish` with reason `tool-calls` is a permission prompt that headless OpenCode auto-rejected at exit 0, and is `child-failed`/70. Exit 130 or 143 after a signal is `cancelled`/130.
+- No event names the served model, so the model proof is the pinned argv (`pinned-argv`).
+- Sessions stay in the local session database. The config turns sharing off, and OpenCode 1.19.1 keeps no server-side session record.
 
 ## Role defaults
 
