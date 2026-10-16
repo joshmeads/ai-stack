@@ -1,0 +1,2 @@
+Error: Unexpected error inside Amp CLI. Run with AMP_DEBUG=1 to see detailed logs.
+Use 'feedback: report bug' from the command palette to send this to Amp.
