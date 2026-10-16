@@ -1,0 +1,48 @@
+# Skill groups and vendored skills. Written by `ai-stack skills`; comments are not kept.
+
+[groups.art]
+global = true
+skills = ["art-iteration"]
+
+[groups.games]
+global = true
+includes = ["threejs"]
+skills = [
+    "game-gdd",
+    "game-mini-gdd",
+    "game-mvp",
+    "game-final",
+    "game-delivery",
+    "feather-prep",
+    "tools-audio",
+    "tools-phaser",
+    "tools-blender-model",
+    "tools-web-qa",
+]
+
+[groups.threejs]
+global = true
+skills = [
+    "threejs",
+    "tools-threejs-debug",
+    "tools-threejs-gameplay",
+    "tools-threejs-gltf",
+    "tools-threejs-look",
+    "tools-threejs-materials",
+    "tools-threejs-procedural",
+    "tools-threejs-scene",
+    "tools-threejs-ui",
+    "tools-r3f",
+    "tools-postprocessing",
+]
+
+[groups.tools]
+global = true
+skills = [
+    "codex-session-export",
+    "feedback",
+    "handoff",
+    "host-static",
+    "try-to-break",
+    "visual-evidence",
+]
