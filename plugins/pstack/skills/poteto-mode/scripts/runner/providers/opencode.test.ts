@@ -64,7 +64,7 @@ describe("opencode launch", () => {
     const policy = opencode.environment(lane().access, "/tmp/r.provider");
     if (policy.kind !== "allowlist") throw new Error("expected an allowlist");
     expect(policy.names.filter((name) => /KEY|TOKEN|OPENCODE/.test(name))).toEqual([]);
-    expect(opencode.launch.projectConfig).toEqual([".opencode/"]);
+    expect(opencode.launch.projectConfig).toEqual([]);
   });
 });
 
@@ -87,65 +87,6 @@ describe("opencode preflight", () => {
   it("reads any other failure as inconclusive", () => {
     for (const [exitCode, stderr] of [[1, ""], [1, "Error: network unreachable"], [2, "Provider not found: opencode"]] as const) {
       expect([exitCode, stderr, preflight(exitCode, MODEL, stderr)]).toEqual([exitCode, stderr, { kind: "inconclusive" }]);
-    }
-  });
-});
-
-describe("opencode guard", () => {
-  const guard = opencode.preflight.guard!;
-  const check = (stdout: string, exitCode: number | null = 0) => guard.check({ exitCode, stdout, stderr: "" });
-  const differs = (keys: string) => ({
-    status: "child-failed",
-    message: `OpenCode's effective configuration differs from the supported read-only lockdown in ${keys} (\`opencode debug config --pure\`)`,
-  }) as const;
-  const unreadable = { status: "child-failed", message: "`opencode debug config --pure` did not print one JSON object with a string `username`" } as const;
-  const LOCKDOWN = JSON.parse(fixture("debug-config-lockdown.json"));
-
-  it("reads the merged config and passes the lockdown with OpenCode 1.19.1's defaults, in any key order", () => {
-    expect(guard.argv).toEqual(["debug", "config", "--pure"]);
-    expect(check(fixture("debug-config-lockdown.json"))).toBeNull();
-    const reordered = Object.fromEntries(Object.entries(LOCKDOWN).reverse());
-    expect(check(JSON.stringify({ ...reordered, permission: Object.fromEntries(Object.entries(LOCKDOWN.permission).reverse()) }))).toBeNull();
-  });
-
-  // Each recorded with OpenCode 1.19.1 and the layer planted through OPENCODE_TEST_MANAGED_CONFIG_DIR, or for the
-  // well-known layer through a fake wellknown login and a local server.
-  for (const [name, keys] of [
-    ["managed-mcp", "mcp"],
-    ["managed-lsp-command", "lsp"],
-    ["managed-plugin", "plugin, plugin_origins"],
-    ["managed-provider", "provider"],
-    ["managed-default-agent", "default_agent"],
-    ["managed-agent-build", "agent"],
-    ["wellknown-remote", "default_agent, mcp"],
-    ["managed-lsp-true", "lsp"],
-  ] as const) {
-    it(`refuses the recorded ${name} layer and names only its keys`, () => {
-      expect(check(fixture(`debug-config-${name}.json`))).toEqual(differs(keys));
-    });
-  }
-
-  it("refuses a changed value, a missing default and an unknown default key", () => {
-    expect(check(JSON.stringify({ ...LOCKDOWN, permission: { ...LOCKDOWN.permission, bash: "allow" } }))).toEqual(differs("permission"));
-    expect(check(JSON.stringify({ ...LOCKDOWN, instructions: ["AGENTS.md"] }))).toEqual(differs("instructions"));
-    const { command: _, ...noCommand } = LOCKDOWN;
-    expect(check(JSON.stringify(noCommand))).toEqual(differs("command"));
-    expect(check(JSON.stringify({ ...LOCKDOWN, formatter: {} }))).toEqual(differs("formatter"));
-  });
-
-  it("refuses failed or unreadable output", () => {
-    expect(check(fixture("debug-config-lockdown.json"), 1)).toEqual({ status: "child-failed", message: "`opencode debug config --pure` exited with status 1" });
-    expect(check(fixture("debug-config-lockdown.json"), null)).toEqual({ status: "child-failed", message: "`opencode debug config --pure` exited with status none" });
-    const { username: _, ...anonymous } = LOCKDOWN;
-    for (const stdout of [
-      "not json",
-      `${fixture("debug-config-lockdown.json")}{}`,
-      "[]",
-      "null",
-      JSON.stringify(anonymous),
-      JSON.stringify({ ...LOCKDOWN, username: 501 }),
-    ]) {
-      expect([stdout, check(stdout)]).toEqual([stdout, unreadable]);
     }
   });
 });

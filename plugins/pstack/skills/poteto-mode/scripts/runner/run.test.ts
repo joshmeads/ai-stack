@@ -1988,7 +1988,7 @@ describe("projectConfigRefusal", () => {
   // Bun reads HOME once at startup, so the test replaces homedir() instead of setting HOME.
   beforeEach(() => {
     spyOn(os, "homedir").mockReturnValue(join(scratch, "home"));
-    for (const name of [".agents", ".opencode"]) mkdirSync(join(scratch, "home", name), { recursive: true });
+    mkdirSync(join(scratch, "home", ".agents"), { recursive: true });
   });
   afterEach(() => {
     mock.restore();
@@ -2007,14 +2007,13 @@ describe("projectConfigRefusal", () => {
     mkdirSync(join(scratch, "home/.git"));
     expect(refuse(cwd)).toBe(homeMessage());
     expect(refuse(cwd, dsh)).toStartWith("dsh lanes under the home directory");
-    expect(refuse(cwd, opencode)).toStartWith("opencode lanes under the home directory");
   });
 
   it("runs in a repository below the home that holds no listed entry, whatever the home holds", () => {
     const repo = join(scratch, "home/repo");
     mkdirSync(join(repo, ".git"), { recursive: true });
     mkdirSync(join(repo, "src"));
-    for (const adapter of [agy, dsh, opencode]) expect(refuse(join(repo, "src"), adapter)).toBeNull();
+    for (const adapter of [agy, dsh]) expect(refuse(join(repo, "src"), adapter)).toBeNull();
     expect(projectConfigRefusal("claude", join(scratch, "home"), [])).toBeNull();
   });
 
@@ -2224,13 +2223,11 @@ describe("opencode lanes", () => {
   const INHERITED = ["OPENCODE_PERMISSION", "OPENCODE_CONFIG_CONTENT", "OPENROUTER_API_KEY"];
   const event = (type: string, part: Record<string, unknown> = {}) => ({ type, timestamp: 1, sessionID: "ses_fixture", part });
 
-  const fixture = (name: string) => readFileSync(join(import.meta.dir, "providers/fixtures/opencode", name), "utf8");
-
-  // An OpenCode stand-in: `debug config` prints `config`; `models` runs `models`; the model call runs `turn`, which
+  // An OpenCode stand-in: `models` runs `models`; the model call runs `turn`, which
   // sees `args` and `prompt`. Each call appends its kind to `opencode.calls` next to the stand-in, and its cwd,
   // environment and config file to `opencode.contexts`. The child environment keeps no test variable, so each case
   // bakes its own.
-  function fakeOpencode(models: string, turn: string, config = fixture("debug-config-lockdown.json")): void {
+  function fakeOpencode(models: string, turn: string): void {
     writeFileSync(join(bin, "opencode"), `#!/usr/bin/env bun
 import { appendFileSync, readFileSync, statSync, writeFileSync } from "node:fs";
 import { dirname, join } from "node:path";
@@ -2240,11 +2237,6 @@ const call = (kind) => {
   const context = { cwd: process.cwd(), env: process.env, config: readFileSync(process.env.OPENCODE_CONFIG, "utf8") };
   appendFileSync(join(dirname(process.argv[1]), "opencode.contexts"), JSON.stringify(context) + "\\n");
 };
-if (args[0] === "debug") {
-  call("guard");
-  process.stdout.write(${JSON.stringify(config)});
-  process.exit(0);
-}
 if (args[0] === "models") {
 call("preflight");
 ${models}
@@ -2324,51 +2316,15 @@ emit(${JSON.stringify(event("step_finish", { reason: "stop", tokens: { total: 5,
     });
   });
 
-  for (const [name, keys, shown] of [
-    ["managed-mcp", "mcp", "canary.sh"],
-    ["managed-provider", "provider", "http://127.0.0.1:9"],
-    ["wellknown-remote", "default_agent, mcp", "wk-mcp"],
-  ] as const) {
-    it(`refuses the recorded ${name} layer before the preflight and the model, and keeps the config as evidence`, async () => {
-      fakeOpencode(LIST, OBSERVE, fixture(`debug-config-${name}.json`));
-      const input = opencodeOptions(`opencode-guard-${name}`);
-      const result = await runLane(laneOf(input));
-      expect(result.exitCode).toBe(70);
-      expect(result.receipt).toMatchObject({
-        status: "child-failed",
-        preflight: { status: "not-run" },
-        exitCode: 0,
-        error: {
-          message: `OpenCode's effective configuration differs from the supported read-only lockdown in ${keys} (\`opencode debug config --pure\`)`,
-          evidence: expect.stringContaining(shown),
-        },
-      });
-      expect(readFileSync(join(bin, "opencode.calls"), "utf8")).toBe("guard\n");
-      expect(existsSync(input.outputPath)).toBe(false);
-    });
-  }
-
-  it("refuses unreadable guard output, and runs the guard, the preflight and the model with one config, environment and cwd", async () => {
-    fakeOpencode(LIST, OBSERVE, "not json");
-    const refused = opencodeOptions("opencode-guard-unreadable");
-    expect((await runLane(laneOf(refused))).receipt).toMatchObject({
-      status: "child-failed",
-      preflight: { status: "not-run" },
-      error: { message: "`opencode debug config --pure` did not print one JSON object with a string `username`", evidence: "not json" },
-    });
-    expect(readFileSync(join(bin, "opencode.calls"), "utf8")).toBe("guard\n");
-
-    rmSync(join(bin, "opencode.calls"));
-    rmSync(join(bin, "opencode.contexts"));
+  it("runs the preflight and the model with one config, environment and cwd", async () => {
     fakeOpencode(LIST, OBSERVE);
-    const input = opencodeOptions("opencode-guard-lockdown");
+    const input = opencodeOptions("opencode-one-context");
     expect((await runLane(laneOf(input))).receipt.status).toBe("complete");
-    expect(readFileSync(join(bin, "opencode.calls"), "utf8")).toBe("guard\npreflight\nmodel\n");
+    expect(readFileSync(join(bin, "opencode.calls"), "utf8")).toBe("preflight\nmodel\n");
     const contexts = readFileSync(join(bin, "opencode.contexts"), "utf8").trim().split("\n").map((line) => JSON.parse(line));
-    expect(contexts).toHaveLength(3);
+    expect(contexts).toHaveLength(2);
     expect(JSON.parse(contexts[0].config).permission["*"]).toBe("deny");
     expect(contexts[1]).toEqual(contexts[0]);
-    expect(contexts[2]).toEqual(contexts[0]);
   });
 
   for (const [name, model, models, status, exitCode] of [
@@ -2416,22 +2372,17 @@ await Bun.sleep(5_000);`);
     expect(existsSync(terminated.outputPath)).toBe(false);
   });
 
-  it("refuses .opencode/ up to the git root and runs beside an opencode.json, which the environment turns off", async () => {
+  it("runs in a repository holding .opencode/ and an opencode.json, which the environment turns off", async () => {
     fakeOpencode(LIST, OBSERVE);
     const repo = join(scratch, "repo"), nested = join(repo, "src");
     mkdirSync(join(repo, ".opencode", "plugins"), { recursive: true });
     mkdirSync(nested);
     writeFileSync(join(repo, "opencode.json"), "{\"permission\":{\"bash\":\"allow\"}}\n");
-    const refused = opencodeOptions("opencode-project-plugins", { cwd: nested });
-    expect((await runLane(laneOf(refused))).receipt).toMatchObject({
-      status: "child-failed",
-      preflight: { status: "not-run" },
-      error: { message: expect.stringContaining(`${join(realpathSync(repo), ".opencode")}: the CLI would load`) },
-    });
-
-    rmSync(join(repo, ".opencode"), { recursive: true });
-    const input = opencodeOptions("opencode-project-json", { cwd: nested });
-    expect((await runLane(laneOf(input))).exitCode).toBe(0);
+    const input = opencodeOptions("opencode-project-config", { cwd: nested });
+    const result = await runLane(laneOf(input));
+    expect(result.exitCode).toBe(0);
+    expect(result.receipt).toMatchObject({ status: "complete", preflight: { status: "passed" } });
+    expect(JSON.parse(readFileSync(input.outputPath, "utf8")).permission).toBe("deny");
   });
 
   it("refuses an isolated-write OpenCode lane before launch", () => {
