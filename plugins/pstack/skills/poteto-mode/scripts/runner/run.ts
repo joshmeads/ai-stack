@@ -827,16 +827,15 @@ async function executeLane(
   }
 
   const preflight = adapter.preflight;
-  if (preflight.version !== undefined) {
-    const { argv, expected } = preflight.version;
-    const run = await runProcess(executable, argv, lane.cwd, env, null, deadlineAt, cancellation);
-    if (run.cancelledBy !== null) return finishWithoutChild("cancelled", "during the CLI version check");
-    if (run.timedOut) return finishWithoutChild("timed-out", "during the CLI version check");
-    const installed = run.stdout.trim();
-    if (installed !== expected) {
+  if (preflight.guard !== undefined) {
+    const run = await runProcess(executable, preflight.guard.argv, lane.cwd, env, null, deadlineAt, cancellation);
+    if (run.cancelledBy !== null) return finishWithoutChild("cancelled", "during the pre-launch guard");
+    if (run.timedOut) return finishWithoutChild("timed-out", "during the pre-launch guard");
+    const refusal = preflight.guard.check(run);
+    if (refusal !== null) {
       const completed = Date.now();
       receipt = completeReceipt(lane, {
-        status: "unavailable-cli",
+        status: refusal.status,
         startedAt,
         completedAt: new Date(completed).toISOString(),
         elapsedMs: completed - started,
@@ -852,7 +851,7 @@ async function executeLane(
         usage: null,
         costUsd: null,
         error: {
-          message: `${adapter.executable} ${installed} is not the measured ${expected}; the adapter must be re-measured before it runs this version`,
+          message: refusal.message,
           evidence: evidence(`${run.stdout}\n${run.stderr}`),
         },
       });

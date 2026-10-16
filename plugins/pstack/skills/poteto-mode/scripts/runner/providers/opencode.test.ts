@@ -21,11 +21,11 @@ const event = (type: string, part: Record<string, unknown> = {}) => JSON.stringi
 describe("opencode launch", () => {
   it("runs the pinned model and variant with a fixed title and the ERROR log on stderr", () => {
     expect(opencode.launch.argv(lane(), testFacts(opencode))).toEqual([
-      "run", "--pure", "--format", "json", "--title", "pstack-lane", "--print-logs", "--log-level", "ERROR",
+      "run", "--pure", "--agent", "build", "--format", "json", "--title", "pstack-lane", "--print-logs", "--log-level", "ERROR",
       "-m", MODEL, "--variant", "high",
     ]);
     expect(opencode.launch.argv(lane({ effort: "default", model: "openrouter/deepseek/deepseek-v4-pro" }), testFacts(opencode)))
-      .toEqual(["run", "--pure", "--format", "json", "--title", "pstack-lane", "--print-logs", "--log-level", "ERROR", "-m", "openrouter/deepseek/deepseek-v4-pro"]);
+      .toEqual(["run", "--pure", "--agent", "build", "--format", "json", "--title", "pstack-lane", "--print-logs", "--log-level", "ERROR", "-m", "openrouter/deepseek/deepseek-v4-pro"]);
   });
 
   it("refuses an isolated-write lane and efforts the family does not list", () => {
@@ -87,6 +87,51 @@ describe("opencode preflight", () => {
   it("reads any other failure as inconclusive", () => {
     for (const [exitCode, stderr] of [[1, ""], [1, "Error: network unreachable"], [2, "Provider not found: opencode"]] as const) {
       expect([exitCode, stderr, preflight(exitCode, MODEL, stderr)]).toEqual([exitCode, stderr, { kind: "inconclusive" }]);
+    }
+  });
+});
+
+describe("opencode guard", () => {
+  const guard = opencode.preflight.guard!;
+  const check = (stdout: string, exitCode = 0) => guard.check({ exitCode, stdout, stderr: "" });
+  const withRules = (...rules: readonly Record<string, string>[]) => {
+    const agent = JSON.parse(fixture("debug-agent-build-lockdown.json"));
+    return JSON.stringify({ ...agent, permission: [...agent.permission, ...rules] });
+  };
+  const wider = (what: string) => ({
+    status: "child-failed",
+    message: `OpenCode's effective permissions are wider than the read-only lockdown (${what}); a managed, home, project or account config overrides the lane's lockdown`,
+  }) as const;
+
+  it("reads the build agent's merged ruleset and passes the lockdown with OpenCode's own tool-output rule", () => {
+    expect(guard.argv).toEqual(["debug", "agent", "build", "--pure"]);
+    expect(check(fixture("debug-agent-build-lockdown.json"))).toBeNull();
+    expect(check(withRules({ permission: "bash", pattern: "*", action: "deny" }, { permission: "read", pattern: "*.env", action: "ask" }))).toBeNull();
+  });
+
+  it("refuses a managed config's tool and pattern rules after the lockdown", () => {
+    expect(check(fixture("debug-agent-build-managed.json"))).toEqual(wider('bash "git *" allow, edit "*" allow'));
+  });
+
+  it("refuses an allowed or missing default, and a later ask or external_directory allow", () => {
+    expect(check(withRules({ permission: "*", pattern: "*", action: "allow" }))).toEqual(wider('"*" allow'));
+    const agent = JSON.parse(fixture("debug-agent-build-lockdown.json"));
+    const noDefault = { ...agent, permission: agent.permission.filter((rule: { permission: string }) => rule.permission !== "*") };
+    expect(check(JSON.stringify(noDefault))).toEqual(wider('"*" (no rule)'));
+    expect(check(withRules({ permission: "webfetch", pattern: "*", action: "ask" }))).toEqual(wider('webfetch "*" ask'));
+    expect(check(withRules({ permission: "external_directory", pattern: "*", action: "allow" }))).toEqual(wider('external_directory "*" allow'));
+  });
+
+  it("refuses output it cannot read", () => {
+    const unreadable = { status: "child-failed", message: "`opencode debug agent build` did not print a readable permission ruleset" } as const;
+    for (const [stdout, exitCode] of [
+      ["not json", 0],
+      [fixture("debug-agent-build-lockdown.json"), 1],
+      [JSON.stringify({ name: "build", permission: [] }), 0],
+      [JSON.stringify({ name: "build", permission: { "*": "deny" } }), 0],
+      [withRules({ permission: "bash", action: "allow" }), 0],
+    ] as const) {
+      expect(check(stdout, exitCode)).toEqual(unreadable);
     }
   });
 });

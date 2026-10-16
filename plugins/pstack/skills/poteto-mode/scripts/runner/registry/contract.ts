@@ -4,6 +4,7 @@ import {
   type Effort,
   type NormalizedUsage,
   type Parent,
+  type ReceiptStatus,
   UsageError,
   type WriterSandbox,
 } from "../types.ts";
@@ -144,9 +145,12 @@ export interface ProviderAdapter {
     /** One more preflight after an "unauthenticated" verdict, after this delay. null means none. */
     readonly retryAfterUnauthenticatedMs: number | null;
     classify(run: ChildRun, lane: Lane): PreflightVerdict;
-    /** The exact CLI version the adapter was measured against. run.ts runs `<executable> <argv>` before the
-     *  authentication preflight and refuses the lane as unavailable-cli unless the trimmed stdout equals `expected`. */
-    readonly version?: { readonly argv: readonly string[]; readonly expected: string };
+    /** run.ts runs `<executable> <argv>` with the preflight's environment and cwd before the authentication preflight,
+     *  and refuses the lane when `check` returns a refusal. The preflight then stays not-run. */
+    readonly guard?: {
+      readonly argv: readonly string[];
+      check(run: ChildRun): { readonly status: ReceiptStatus; readonly message: string } | null;
+    };
   };
   readonly launch: {
     /** "stdin": run.ts writes the prompt to stdin. "file": argv carries lane.promptPath. */

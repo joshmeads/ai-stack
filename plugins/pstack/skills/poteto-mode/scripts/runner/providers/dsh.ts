@@ -149,6 +149,8 @@ function parse(run: ModelRun): ParseResult {
   return { kind: "complete", text, metadata };
 }
 
+const VERSION = "0.2.0-rc.2";
+
 // dsh has no status command. The preflight turn's error code says only whether a key is stored or exported.
 function classify(run: ChildRun) {
   const parsed = events(run.stdout);
@@ -168,7 +170,13 @@ export const dsh = adapter({
     retryAfterUnauthenticatedMs: null,
     classify,
     // dsh ignores a patch row it does not have, so another version could drop the lockdown silently.
-    version: { argv: ["--version"], expected: "0.2.0-rc.2" },
+    guard: {
+      argv: ["--version"],
+      check: (run) => run.stdout.trim() === VERSION ? null : {
+        status: "unavailable-cli",
+        message: `dsh ${run.stdout.trim()} is not the measured ${VERSION}; the adapter must be re-measured before it runs this version`,
+      },
+    },
   },
   launch: {
     prompt: "stdin",

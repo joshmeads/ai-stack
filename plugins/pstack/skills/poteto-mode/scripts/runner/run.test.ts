@@ -2229,16 +2229,28 @@ describe("opencode lanes", () => {
   const INHERITED = ["OPENCODE_PERMISSION", "OPENCODE_CONFIG_CONTENT", "OPENROUTER_API_KEY"];
   const event = (type: string, part: Record<string, unknown> = {}) => ({ type, timestamp: 1, sessionID: "ses_fixture", part });
 
-  // An OpenCode stand-in: `models` runs `models`; the model call runs `turn`, which sees `args` and `prompt`. The child
+  const AGENT = JSON.parse(readFileSync(join(import.meta.dir, "providers/fixtures/opencode/debug-agent-build-lockdown.json"), "utf8"));
+  const agentWith = (...rules: readonly Record<string, string>[]) => JSON.stringify({ ...AGENT, permission: [...AGENT.permission, ...rules] });
+
+  // An OpenCode stand-in: `debug agent build` prints `agent`; `models` runs `models`; the model call runs `turn`, which
+  // sees `args` and `prompt`. Each call appends its kind to `opencode.calls` next to the stand-in. The child
   // environment keeps no test variable, so each case bakes its own.
-  function fakeOpencode(models: string, turn: string): void {
+  function fakeOpencode(models: string, turn: string, agent = JSON.stringify(AGENT)): void {
     writeFileSync(join(bin, "opencode"), `#!/usr/bin/env bun
-import { readFileSync, statSync, writeFileSync } from "node:fs";
-import { dirname } from "node:path";
+import { appendFileSync, readFileSync, statSync, writeFileSync } from "node:fs";
+import { dirname, join } from "node:path";
 const args = process.argv.slice(2);
+const call = (kind) => appendFileSync(join(dirname(process.argv[1]), "opencode.calls"), kind + "\\n");
+if (args[0] === "debug") {
+  call("guard");
+  console.log(${JSON.stringify(agent)});
+  process.exit(0);
+}
 if (args[0] === "models") {
+call("preflight");
 ${models}
 }
+call("model");
 const prompt = await Bun.stdin.text();
 const emit = (value) => console.log(JSON.stringify(value));
 ${turn}
@@ -2293,7 +2305,7 @@ emit(${JSON.stringify(event("step_finish", { reason: "stop", tokens: { total: 5,
       costUsd: 0.75,
       preflight: { status: "passed", evidence: `model ${MODEL} listed` },
     });
-    const args = ["run", "--pure", "--format", "json", "--title", "pstack-lane", "--print-logs", "--log-level", "ERROR", "-m", MODEL, "--variant", "max"];
+    const args = ["run", "--pure", "--agent", "build", "--format", "json", "--title", "pstack-lane", "--print-logs", "--log-level", "ERROR", "-m", MODEL, "--variant", "max"];
     expect(saved.argv.slice(1)).toEqual(args);
     expect(saved.preflight.argv.slice(1)).toEqual(["models", "opencode"]);
     expect(JSON.parse(readFileSync(input.outputPath, "utf8"))).toEqual({
@@ -2311,6 +2323,47 @@ emit(${JSON.stringify(event("step_finish", { reason: "stop", tokens: { total: 5,
         "OPENCODE_TEST_HOME",
       ],
     });
+  });
+
+  for (const [name, agent, wider] of [
+    ["a permissive bash", agentWith({ permission: "bash", pattern: "*", action: "allow" }), 'bash "*" allow'],
+    ["a bash pattern rule", agentWith({ permission: "bash", pattern: "git *", action: "allow" }), 'bash "git *" allow'],
+    ["an allowed default", agentWith({ permission: "*", pattern: "*", action: "allow" }), '"*" allow'],
+  ] as const) {
+    it(`refuses ${name} in the effective permissions before the preflight`, async () => {
+      fakeOpencode(LIST, OBSERVE, agent);
+      const input = opencodeOptions(`opencode-guard-${name.replaceAll(" ", "-")}`);
+      const result = await runLane(laneOf(input));
+      expect(result.exitCode).toBe(70);
+      expect(result.receipt).toMatchObject({
+        status: "child-failed",
+        preflight: { status: "not-run" },
+        exitCode: 0,
+        error: {
+          message: `OpenCode's effective permissions are wider than the read-only lockdown (${wider}); a managed, home, project or account config overrides the lane's lockdown`,
+          evidence: expect.stringContaining('"name":"build"'),
+        },
+      });
+      expect(readFileSync(join(bin, "opencode.calls"), "utf8")).toBe("guard\n");
+      expect(existsSync(input.outputPath)).toBe(false);
+    });
+  }
+
+  it("refuses unreadable guard output, and runs the guard, the preflight and the model under the lockdown", async () => {
+    fakeOpencode(LIST, OBSERVE, "not json");
+    const refused = opencodeOptions("opencode-guard-unreadable");
+    expect((await runLane(laneOf(refused))).receipt).toMatchObject({
+      status: "child-failed",
+      preflight: { status: "not-run" },
+      error: { message: "`opencode debug agent build` did not print a readable permission ruleset", evidence: "not json" },
+    });
+    expect(readFileSync(join(bin, "opencode.calls"), "utf8")).toBe("guard\n");
+
+    rmSync(join(bin, "opencode.calls"));
+    fakeOpencode(LIST, OBSERVE);
+    const input = opencodeOptions("opencode-guard-lockdown");
+    expect((await runLane(laneOf(input))).receipt.status).toBe("complete");
+    expect(readFileSync(join(bin, "opencode.calls"), "utf8")).toBe("guard\npreflight\nmodel\n");
   });
 
   for (const [name, model, models, status, exitCode] of [
