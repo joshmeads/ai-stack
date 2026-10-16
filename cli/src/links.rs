@@ -739,4 +739,21 @@ mod tests {
         assert_eq!(names, ["feedback", "handoff"]);
         assert!(f.plan().is_empty(), "{}", f.plan().render_text(&f.home));
     }
+
+    #[test]
+    fn the_stray_report_never_fingerprints_and_fingerprint_errors_name_the_path() {
+        use std::os::unix::fs::PermissionsExt as _;
+        let f = fixture();
+        let cache = f.home.join(".claude/skills/old/cache");
+        fs::create_dir_all(&cache).unwrap();
+        fs::set_permissions(&cache, fs::Permissions::from_mode(0o000)).unwrap();
+        let report = crate::install::plan(&f.cfg, Options { clean: true, report: true, ..Options::default() }, &f.runner);
+        let cleaned = crate::install::plan(&f.cfg, clean(), &f.runner).map(|_| ());
+        fs::set_permissions(&cache, fs::Permissions::from_mode(0o755)).unwrap();
+        let report = report.unwrap();
+        assert_eq!(report.stray(&f.home).skill_names, ["~/.claude/skills/old"]);
+        assert!(crate::plan::apply(&report, &f.root.join("backups"), &f.runner).unwrap_err().to_string().contains("read-only report"));
+        let err = format!("{:#}", cleaned.unwrap_err());
+        assert!(err.contains(&cache.display().to_string()), "{err}");
+    }
 }
