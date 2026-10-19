@@ -54,10 +54,10 @@ pub fn plan(cfg: &Config, opts: Options, runner: &dyn Runner) -> Result<Plan> {
     let owner = links::Owner::new(cfg);
     let folders = links::Index::new(cfg, &skipped);
     for hc in &cfg.harnesses {
-        plan_sheet(cfg, &owner, hc, opts, &mut out)?;
-        plan_instructions(cfg, hc, &mut out)?;
+        plan_sheet(cfg, &owner, hc, opts, &folders, &mut out)?;
+        plan_instructions(cfg, hc, &folders, &mut out)?;
         if hc.harness == Harness::Claude {
-            plan_settings(cfg, hc, &mut out)?;
+            plan_settings(cfg, hc, &folders, &mut out)?;
         }
     }
     links::plan(cfg, &owner, &folders, &stack_file, opts, &mut out)?;
@@ -90,8 +90,9 @@ fn sheet_path(hc: &HarnessConfig) -> PathBuf {
 
 /// `<home>/pstack-models.md`. An unmanaged sheet (for example one setup-stack wrote) is a
 /// conflict unless `--force`.
-fn plan_sheet(cfg: &Config, owner: &links::Owner, hc: &HarnessConfig, opts: Options, out: &mut Plan) -> Result<()> {
+fn plan_sheet(cfg: &Config, owner: &links::Owner, hc: &HarnessConfig, opts: Options, folders: &links::Index, out: &mut Plan) -> Result<()> {
     let path = sheet_path(hc);
+    if folders.blocks_write(&path, out) { return Ok(()); }
     let text = render::sheet(cfg, hc.harness);
     let replace = |out: &mut Plan| -> Result<()> {
         out.actions.push(Action::ReplaceWithFile { fingerprint: plan::fingerprint(&path)?, path: path.clone(), text: text.clone() });
@@ -113,8 +114,10 @@ fn plan_sheet(cfg: &Config, owner: &links::Owner, hc: &HarnessConfig, opts: Opti
 /// instructions block, the routing block, the guidance
 /// block (Claude), and the sheet include (Claude) or mirror (Codex). User text outside the
 /// blocks is kept.
-fn plan_instructions(cfg: &Config, hc: &HarnessConfig, out: &mut Plan) -> Result<()> {
-    let path = paths::write_through(&hc.home.join(hc.harness.instruction_file()))?;
+fn plan_instructions(cfg: &Config, hc: &HarnessConfig, folders: &links::Index, out: &mut Plan) -> Result<()> {
+    let requested = hc.home.join(hc.harness.instruction_file());
+    if folders.blocks_write(&requested, out) { return Ok(()); }
+    let path = paths::write_through(&requested)?;
     let original = read_optional(&path)?.unwrap_or_default();
     blocks::validate(&original).with_context(|| format!("checking managed markers in {}", path.display()))?;
     let mut text = blocks::remove_marked(&original, LEGACY_LOCAL_BEGIN, LEGACY_LOCAL_END)?;
@@ -180,8 +183,10 @@ fn remove_sheet_imports(text: &str, cfg: &Config, hc: &HarnessConfig) -> String 
 
 /// Removes hook commands older installs added to settings.json. Other commands in the same
 /// group stay; a group or event list is dropped only when ai-stack's commands were all it held.
-fn plan_settings(cfg: &Config, hc: &HarnessConfig, out: &mut Plan) -> Result<()> {
-    let path = paths::write_through(&hc.home.join("settings.json"))?;
+fn plan_settings(cfg: &Config, hc: &HarnessConfig, folders: &links::Index, out: &mut Plan) -> Result<()> {
+    let requested = hc.home.join("settings.json");
+    if folders.blocks_write(&requested, out) { return Ok(()); }
+    let path = paths::write_through(&requested)?;
     let Some(text) = read_optional(&path)? else { return Ok(()) };
     let mut root: Value = match serde_json::from_str(&text) {
         Ok(root) => root,
@@ -887,6 +892,36 @@ pub(crate) mod tests {
         let text = fs::read_to_string(&target).unwrap();
         assert!(text.starts_with("# Shared\n\n<!-- ai-stack:routing:begin -->") && text.contains(blocks::PSTACK_BEGIN), "{text}");
         assert_eq!(fs::metadata(&target).unwrap().permissions().mode() & 0o777, 0o600);
+    }
+
+    #[test]
+    fn writes_through_aliases_into_skipped_routes_conflict() {
+        for missing in Harness::ALL {
+            for file in ["instructions", "sheet", "home", "settings"] {
+                if file == "settings" && missing == Harness::Claude { continue; }
+                let mut f = fixture();
+                f.runner.missing.insert(missing);
+                let skipped = f.cfg.harnesses.iter().find(|hc| hc.harness == missing).unwrap().clone();
+                let active = f.cfg.harnesses.iter().find(|hc| hc.harness != missing).unwrap().clone();
+                fs::create_dir_all(&skipped.home).unwrap();
+                let (source, target, original) = match file {
+                    "instructions" => (active.home.join(active.harness.instruction_file()), skipped.home.join(skipped.harness.instruction_file()), "# Shared instructions\n".to_string()),
+                    "sheet" => (active.home.join("pstack-models.md"), skipped.home.join("pstack-models.md"), format!("{}\nold sheet\n", render::MANAGED_MD)),
+                    "settings" => (active.home.join("settings.json"), skipped.home.join("settings.json"), "{}\n".to_string()),
+                    "home" => (active.home.clone(), skipped.home.clone(), String::new()),
+                    _ => unreachable!(),
+                };
+                fs::create_dir_all(source.parent().unwrap()).unwrap();
+                if file != "home" { put(&target, &original); }
+                symlink(&target, &source).unwrap();
+                let plan = f.plan_with(Options { force: true, ..Options::default() });
+                assert!(plan.conflicts.iter().any(|conflict| conflict.contains(&source.display().to_string()) && conflict.contains(&target.display().to_string()) && conflict.contains("skipped harness")), "{file}: {:?}", plan.conflicts);
+                assert!(plan.actions.iter().filter(|action| matches!(action, Action::Write { .. } | Action::ReplaceWithFile { .. })).all(|action| !paths::resolve(action.path()).starts_with(&skipped.home)));
+                assert!(crate::plan::apply(&plan, &f.root.join("backups"), &f.runner).is_err());
+                assert_eq!(fs::read_link(&source).unwrap(), target);
+                if file != "home" { assert_eq!(fs::read_to_string(&target).unwrap(), original); }
+            }
+        }
     }
 
     #[test]
