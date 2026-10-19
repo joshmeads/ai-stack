@@ -335,7 +335,7 @@ fn write_config(flat: drift::Flat, json: bool, out: &mut dyn Write) -> Result<()
 }
 
 fn cmd_init(ctx: &Context, force: bool) -> Result<i32> {
-    let detected = init_config_at(&ctx.config_path, force, &SystemRunner::default())?;
+    let detected = init_config_at(&ctx.config_path, force, &SystemRunner::detect())?;
     println!("Wrote {}", ctx.config_path.display());
     for (harness, available) in detected {
         let id = harness.as_str();
@@ -365,14 +365,14 @@ fn init_at(path: &Path, text: &str, force: bool) -> Result<()> {
 
 fn cmd_diff(ctx: &Context, clean: bool) -> Result<i32> {
     let cfg = load_config(ctx)?;
-    let plan = install::plan(&cfg, Options { clean, ..Options::default() }, &SystemRunner::default())?;
+    let plan = install::plan(&cfg, Options { clean, ..Options::default() }, &SystemRunner::detect())?;
     print!("{}", plan.render_text(&ctx.home));
     Ok(if plan.is_empty() { 0 } else { 1 })
 }
 
 fn cmd_stray(ctx: &Context, json: bool) -> Result<i32> {
     let cfg = load_config(ctx)?;
-    let stray = install::plan(&cfg, Options { clean: true, report: true, ..Options::default() }, &SystemRunner::default())?.stray(&ctx.home);
+    let stray = install::plan(&cfg, Options { clean: true, report: true, ..Options::default() }, &SystemRunner::detect())?.stray(&ctx.home);
     if json {
         println!("{}", serde_json::to_string(&stray)?);
     } else {
@@ -395,7 +395,7 @@ fn install_flow(
     plain: bool,
     models: &[ModelReport],
 ) -> Result<i32> {
-    let runner = SystemRunner::default();
+    let runner = SystemRunner::detect();
     let plan = install::plan(cfg, opts, &runner)?;
     if plan.is_empty() {
         for warning in &plan.warnings { println!("{warning}"); }

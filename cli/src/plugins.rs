@@ -4,7 +4,7 @@
 //! tests use a fake and `diff` only runs the read-only `list --json` queries.
 
 use std::fmt;
-use std::collections::BTreeSet;
+use std::collections::BTreeMap;
 use std::io;
 use std::path::{Path, PathBuf};
 use std::process::Stdio;
@@ -81,34 +81,39 @@ pub struct Ran {
 pub trait Runner {
     fn available(&self, harness: Harness) -> bool;
 
-    /// Runs `cmd` to completion. An `Err` means it could not start (e.g. the CLI is missing).
+    /// Runs `cmd` to completion. An `Err` means the detected CLI could not start.
     fn run(&self, cmd: &Command) -> io::Result<Ran>;
 }
 
-/// Runs the real `claude` / `codex` binaries from `PATH`.
+/// Runs the absolute `claude` / `codex` paths captured during detection.
 pub struct SystemRunner {
-    available: BTreeSet<Harness>,
+    executables: BTreeMap<Harness, PathBuf>,
 }
 
-impl Default for SystemRunner {
-    fn default() -> Self {
-        use crate::exec::Exec as _;
-        Self { available: Harness::ALL.into_iter().filter(|harness| exec::SystemExec.available(harness.as_str())).collect() }
+impl SystemRunner {
+    pub fn detect() -> Self {
+        let path = std::env::var_os("PATH");
+        Self::on_path(path.as_deref())
+    }
+
+    fn on_path(path: Option<&std::ffi::OsStr>) -> Self {
+        Self { executables: Harness::ALL.into_iter().filter_map(|harness| exec::executable_on_path(harness.as_str(), path?).map(|path| (harness, path))).collect() }
     }
 }
 
 impl Runner for SystemRunner {
     fn available(&self, harness: Harness) -> bool {
-        self.available.contains(&harness)
+        self.executables.contains_key(&harness)
     }
 
     fn run(&self, cmd: &Command) -> io::Result<Ran> {
-        let mut process = std::process::Command::new(cmd.harness.as_str());
+        let path = self.executables.get(&cmd.harness).ok_or_else(|| io::Error::new(io::ErrorKind::NotFound, format!("{} was not detected on PATH", cmd.harness.name())))?;
+        let mut process = std::process::Command::new(path);
         process.args(&cmd.args).stdin(Stdio::null());
         if let Some((name, value)) = &cmd.env {
             process.env(name, value);
         }
-        let output = process.output()?;
+        let output = process.output().map_err(|err| io::Error::new(err.kind(), format!("{} CLI was found at {} but could not be started: {err}", cmd.harness.name(), path.display())))?;
         Ok(Ran {
             ok: output.status.success(),
             stdout: String::from_utf8_lossy(&output.stdout).into_owned(),
@@ -155,6 +160,10 @@ pub fn plan(cfg: &Config, hc: &HarnessConfig, runner: &dyn Runner, out: &mut Pla
     }
 
     let marketplace = match query(runner, &command(&["plugin", "marketplace", "list", "--json"])) {
+        Query::CannotStart(err) => {
+            out.conflicts.push(err);
+            return Ok(());
+        }
         Query::Failed(err) => {
             out.warnings.push(format!("note: cannot read {name}'s marketplaces ({err}); planning every plugin command, which the CLI skips when already done"));
             out.commands.extend(everything());
@@ -179,6 +188,10 @@ pub fn plan(cfg: &Config, hc: &HarnessConfig, runner: &dyn Runner, out: &mut Pla
     }
 
     let installed = match query(runner, &command(&["plugin", "list", "--json"])) {
+        Query::CannotStart(err) => {
+            out.conflicts.push(err);
+            return Ok(());
+        }
         Query::Json(json) => installed_plugins(hc.harness, &json),
         Query::Failed(_) => None,
     };
@@ -230,6 +243,10 @@ pub fn plan_clean(cfg: &Config, hc: &HarnessConfig, runner: &dyn Runner, out: &m
     let list = Command { harness: hc.harness, env: env.clone(), args: strings(&["plugin", "list", "--json"]), undo: None, clean: false };
     let removal = |args: &[&str], undo: &[&str]| Command { harness: hc.harness, env: env.clone(), args: strings(args), undo: Some(Restore::Command(strings(undo))), clean: true };
     let installed = match query(runner, &list) {
+        Query::CannotStart(err) => {
+            out.conflicts.push(err);
+            return Ok(());
+        }
         Query::Failed(err) => Err(err),
         Query::Json(json) => installed_plugins(hc.harness, &json).ok_or_else(|| "unexpected JSON shape".to_string()),
     };
@@ -322,13 +339,14 @@ fn env_for(hc: &HarnessConfig) -> Option<(&'static str, PathBuf)> {
 }
 
 enum Query {
+    CannotStart(String),
     Failed(String),
     Json(Value),
 }
 
 fn query(runner: &dyn Runner, cmd: &Command) -> Query {
     match runner.run(cmd) {
-        Err(err) => Query::Failed(format!("`{cmd}`: {err}")),
+        Err(err) => Query::CannotStart(format!("`{cmd}`: {err}")),
         Ok(ran) if !ran.ok => Query::Failed(format!("`{cmd}` failed: {}", ran.stderr.trim())),
         Ok(ran) => match serde_json::from_str(&ran.stdout) {
             Ok(json) => Query::Json(json),
@@ -429,7 +447,7 @@ pub mod fake {
     //! A stateful stand-in for the `claude` and `codex` plugin CLIs.
 
     use std::cell::RefCell;
-    use std::collections::BTreeMap;
+    use std::collections::{BTreeMap, BTreeSet};
 
     use serde_json::json;
 
@@ -505,6 +523,76 @@ pub mod fake {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn detected_executable_path_is_reused_and_launch_failure_is_a_conflict() {
+        use std::os::unix::fs::PermissionsExt;
+        use crate::install::{self, Options};
+        use crate::install::tests::{fixture, put};
+
+        let f = fixture();
+        let bin = f.root.join("bin");
+        let program = bin.join("claude");
+        put(&program, "#!/bin/sh\nprintf '%s' \"$0\"\n");
+        std::fs::set_permissions(&program, std::fs::Permissions::from_mode(0o700)).unwrap();
+        let runner = SystemRunner::on_path(Some(bin.as_os_str()));
+        assert!(runner.available(Harness::Claude));
+        assert!(!runner.available(Harness::Codex));
+        let cmd = Command { harness: Harness::Claude, env: None, args: vec![], undo: None, clean: false };
+        assert_eq!(runner.run(&cmd).unwrap().stdout, program.display().to_string());
+        assert_eq!(runner.executables[&Harness::Claude], program);
+        for failure in ["interpreter", "permission", "removed"] {
+            match failure {
+                "interpreter" => put(&program, &format!("#!{}\n", f.root.join("missing-interpreter").display())),
+                "permission" => std::fs::set_permissions(&program, std::fs::Permissions::from_mode(0o600)).unwrap(),
+                "removed" => std::fs::remove_file(&program).unwrap(),
+                _ => unreachable!(),
+            }
+            put(&f.home.join(".claude/CLAUDE.md"), "# Mine\n");
+            let plan = install::plan(&f.cfg, Options::default(), &runner).unwrap();
+            assert!(plan.conflicts.iter().any(|conflict| conflict.contains(&format!("CLI was found at {} but could not be started", program.display()))), "{:?}", plan.conflicts);
+            assert!(crate::plan::apply(&plan, &f.root.join("backups"), &runner).is_err());
+            assert_eq!(std::fs::read_to_string(f.home.join(".claude/CLAUDE.md")).unwrap(), "# Mine\n");
+        }
+    }
+
+    #[test]
+    fn any_query_spawn_error_blocks_apply_before_file_changes() {
+        use crate::install::{self, Options};
+        use crate::install::tests::{fixture, put};
+
+        struct FailingQuery<'a> {
+            inner: &'a fake::FakeRunner,
+            args: Vec<String>,
+            kind: io::ErrorKind,
+        }
+        impl Runner for FailingQuery<'_> {
+            fn available(&self, harness: Harness) -> bool { self.inner.available(harness) }
+            fn run(&self, cmd: &Command) -> io::Result<Ran> {
+                if cmd.harness == Harness::Claude && cmd.args == self.args {
+                    Err(io::Error::new(self.kind, "spawn failed"))
+                } else {
+                    self.inner.run(cmd)
+                }
+            }
+        }
+        for clean in [false, true] {
+            for args in [strings(&["plugin", "marketplace", "list", "--json"]), strings(&["plugin", "list", "--json"])] {
+                for kind in [io::ErrorKind::NotFound, io::ErrorKind::PermissionDenied, io::ErrorKind::InvalidInput] {
+                    let f = fixture();
+                    let instructions = f.home.join(".claude/CLAUDE.md");
+                    put(&instructions, "# Mine\n");
+                    f.runner.claude.borrow_mut().marketplaces.insert(MARKETPLACE.into(), f.stack.display().to_string());
+                    let runner = FailingQuery { inner: &f.runner, args: args.clone(), kind };
+                    let plan = install::plan(&f.cfg, Options { clean, ..Options::default() }, &runner).unwrap();
+                    assert!(plan.conflicts.iter().any(|conflict| conflict.contains("spawn failed")), "{kind:?}: {:?}", plan.conflicts);
+                    assert!(crate::plan::apply(&plan, &f.root.join("backups"), &runner).is_err());
+                    assert_eq!(std::fs::read_to_string(&instructions).unwrap(), "# Mine\n");
+                    assert!(f.runner.ran.borrow().is_empty());
+                }
+            }
+        }
+    }
 
     #[test]
     fn the_retired_jm_plugins_restore_from_the_commit_before_their_skills_moved_out() {
