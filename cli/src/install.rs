@@ -81,7 +81,7 @@ fn available_config(cfg: &Config, runner: &dyn Runner, out: &mut Plan) -> (Confi
     }
     for hc in &skipped {
         let id = hc.harness.as_str();
-        out.warnings.push(format!("skipping {}: `{id}` not found on PATH (set [harness.{id}] enabled = false to hide this)", hc.harness.name()));
+        out.warnings.push(format!("skipping {}: `{id}` not found on PATH", hc.harness.name()));
     }
     let folders = |hc: &HarnessConfig| [hc.home.join("skills"), hc.home.join("agents"), hc.harness.skill_folder(&hc.home, &cfg.home)];
     let skipped_roots: Vec<_> = skipped.iter().flat_map(|hc| {

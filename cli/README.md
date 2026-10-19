@@ -11,7 +11,7 @@
 
 It shows the plan before changing anything, backs up every file or link it replaces or removes, and is idempotent: a second run reports `No changes.` Installation for Cursor and OpenCode is not handled.
 
-An enabled harness is skipped when its CLI (`claude` or `codex`) is not executable on `PATH`. `diff` and `install` print one skip notice per missing CLI, with the config setting that hides it. The other harness still installs. A skipped harness gets no file edits, skill links, plugin commands or removals, including with `--clean`, except that an available harness continues to manage shared skill folders. If both CLIs are missing, these commands exit successfully with nothing to do. Detection happens once per command, before planning, without running either CLI.
+An enabled harness is skipped when its CLI (`claude` or `codex`) is not executable on `PATH`. `diff` and `install` print one skip notice per missing CLI. The other harness still installs. A skipped harness gets no file edits, skill links, plugin commands or removals, including with `--clean`, except that an available harness continues to manage shared skill folders. If every enabled harness is missing its CLI, these commands exit successfully with nothing to do. Explicitly disabled harnesses do not get skip protection from independently configured clean roots. Detection happens once per command, before planning, without running either CLI.
 
 ## Build and install
 
@@ -102,10 +102,10 @@ The provider owns credential storage. Login codes and tokens never pass through 
 
 ## Config
 
-`config.default.toml` in `cli/` is the reference for `ai-stack init`. Init sets each harness's `enabled` flag from CLI detection.
+`config.default.toml` in `cli/` is the reference for `ai-stack init`. Init writes it unchanged with both harnesses enabled and prints CLI detection results. Missing CLIs are skipped at runtime, so installing one needs no config change.
 
 - `[stack]`: `path` is the checkout of `joshmeads/ai-stack`. `remote` and `branch` are used by `update`. `legacy_paths` lists older checkout roots. `~` is expanded and relative paths resolve against the invocation directory.
-- `[harness.claude]`, `[harness.codex]`: `home` and `enabled`. A disabled harness produces no harness work or skip notice; independently configured clean roots still apply. An enabled harness whose CLI is missing is skipped with a notice. After installing a CLI that init did not find, set its flag to `true` to enable it.
+- `[harness.claude]`, `[harness.codex]`: `home` and `enabled`. A disabled harness produces no harness work or skip notice; independently configured clean roots still apply. An enabled harness whose CLI is missing is skipped with a notice.
 - `[models.<alias>]`: `provider` (`anthropic` or `openai`), the exact model `id`, optional `efforts` (the efforts a route on this model may name; it must then name one), and optional `context` (usable context in tokens). The defaults define `sol`, `luna`, `opus` and `haiku`, with `haiku` at 100000. The owner sets Haiku's compaction in Claude Code at 100k because Anthropic bills the whole request at 5x past 100k tokens; ai-stack only states the limit in the routing block. `ai-stack models` checks these IDs against the provider catalogs.
 - `[leads]`, `[review]`: one `"alias@effort"` route per harness. The lead is described in the routing block; install does not change either CLI's default model. The review model is named in the routing block and used by the `art-iteration` skill's critic.
 - `[sheet.claude]`, `[sheet.codex]`: the 15 jm:stack model-sheet rows for that harness. Each lane is a provider-qualified descriptor `<provider>:<model>@<effort>` from the jm-stack provider-dispatch reference, or `inherit-parent` / `auto`. The loader accepts providers `claude` (models `opus`, `haiku`, `fable`) and `codex` (models `gpt-6.1-sol`, `gpt-6-luna`), efforts `low` to `max`, and `ultra` for `gpt-6.1-sol` only. The four panel rows (`arena runners`, `arena cross-judge pool`, `architect runners`, `interrogate reviewers`) accept arrays. The Why and Reflect rows must be `inherit-parent` or `auto`, because those roles need the parent's MCP servers.
