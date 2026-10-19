@@ -353,14 +353,14 @@ fn init_at(path: &Path, text: &str, force: bool) -> Result<()> {
 
 fn cmd_diff(ctx: &Context, clean: bool) -> Result<i32> {
     let cfg = load_config(ctx)?;
-    let plan = install::plan(&cfg, Options { clean, ..Options::default() }, &SystemRunner)?;
+    let plan = install::plan(&cfg, Options { clean, ..Options::default() }, &SystemRunner::default())?;
     print!("{}", plan.render_text(&ctx.home));
     Ok(if plan.is_empty() { 0 } else { 1 })
 }
 
 fn cmd_stray(ctx: &Context, json: bool) -> Result<i32> {
     let cfg = load_config(ctx)?;
-    let stray = install::plan(&cfg, Options { clean: true, report: true, ..Options::default() }, &SystemRunner)?.stray(&ctx.home);
+    let stray = install::plan(&cfg, Options { clean: true, report: true, ..Options::default() }, &SystemRunner::default())?.stray(&ctx.home);
     if json {
         println!("{}", serde_json::to_string(&stray)?);
     } else {
@@ -383,7 +383,8 @@ fn install_flow(
     plain: bool,
     models: &[ModelReport],
 ) -> Result<i32> {
-    let plan = install::plan(cfg, opts, &SystemRunner)?;
+    let runner = SystemRunner::default();
+    let plan = install::plan(cfg, opts, &runner)?;
     if plan.is_empty() {
         for warning in &plan.warnings { println!("{warning}"); }
         println!("Nothing to install.");
@@ -406,14 +407,14 @@ fn install_flow(
         confirm("Apply these changes? [y/N] ")?.then_some(plan)
     } else {
         // The review screen can toggle --clean, which re-plans.
-        let mut replan = |clean| install::plan(cfg, Options { clean, ..opts }, &SystemRunner);
+        let mut replan = |clean| install::plan(cfg, Options { clean, ..opts }, &runner);
         tui::review(plan, opts.clean, models, &ctx.home, &mut replan)?
     };
     let Some(plan) = approved else {
         println!("Not applied.");
         return Ok(1);
     };
-    apply_plan(ctx, &plan)
+    apply_plan(ctx, &plan, &runner)
 }
 
 fn confirm(prompt: &str) -> Result<bool> {
@@ -424,8 +425,8 @@ fn confirm(prompt: &str) -> Result<bool> {
     Ok(matches!(line.trim().to_ascii_lowercase().as_str(), "y" | "yes"))
 }
 
-fn apply_plan(ctx: &Context, plan: &Plan) -> Result<i32> {
-    let report = plan::apply(plan, &ctx.home.join(".local/state/ai-stack/backups"), &SystemRunner)?;
+fn apply_plan(ctx: &Context, plan: &Plan, runner: &dyn plugins::Runner) -> Result<i32> {
+    let report = plan::apply(plan, &ctx.home.join(".local/state/ai-stack/backups"), runner)?;
     println!("Applied {} change(s).", report.applied);
     if let Some(dir) = report.backup_dir {
         println!("Backups: {}", dir.display());

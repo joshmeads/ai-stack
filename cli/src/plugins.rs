@@ -4,6 +4,7 @@
 //! tests use a fake and `diff` only runs the read-only `list --json` queries.
 
 use std::fmt;
+use std::collections::BTreeSet;
 use std::io;
 use std::path::{Path, PathBuf};
 use std::process::Stdio;
@@ -78,14 +79,29 @@ pub struct Ran {
 }
 
 pub trait Runner {
+    fn available(&self, harness: Harness) -> bool;
+
     /// Runs `cmd` to completion. An `Err` means it could not start (e.g. the CLI is missing).
     fn run(&self, cmd: &Command) -> io::Result<Ran>;
 }
 
 /// Runs the real `claude` / `codex` binaries from `PATH`.
-pub struct SystemRunner;
+pub struct SystemRunner {
+    available: BTreeSet<Harness>,
+}
+
+impl Default for SystemRunner {
+    fn default() -> Self {
+        use crate::exec::Exec as _;
+        Self { available: Harness::ALL.into_iter().filter(|harness| exec::SystemExec.available(harness.as_str())).collect() }
+    }
+}
 
 impl Runner for SystemRunner {
+    fn available(&self, harness: Harness) -> bool {
+        self.available.contains(&harness)
+    }
+
     fn run(&self, cmd: &Command) -> io::Result<Ran> {
         let mut process = std::process::Command::new(cmd.harness.as_str());
         process.args(&cmd.args).stdin(Stdio::null());
@@ -139,10 +155,6 @@ pub fn plan(cfg: &Config, hc: &HarnessConfig, runner: &dyn Runner, out: &mut Pla
     }
 
     let marketplace = match query(runner, &command(&["plugin", "marketplace", "list", "--json"])) {
-        Query::Missing => {
-            out.conflicts.push(format!("{name}: `{}` is not on PATH; install it or set [harness.{}] enabled = false", hc.harness.as_str(), hc.harness.as_str()));
-            return Ok(());
-        }
         Query::Failed(err) => {
             out.warnings.push(format!("note: cannot read {name}'s marketplaces ({err}); planning every plugin command, which the CLI skips when already done"));
             out.commands.extend(everything());
@@ -168,7 +180,7 @@ pub fn plan(cfg: &Config, hc: &HarnessConfig, runner: &dyn Runner, out: &mut Pla
 
     let installed = match query(runner, &command(&["plugin", "list", "--json"])) {
         Query::Json(json) => installed_plugins(hc.harness, &json),
-        Query::Missing | Query::Failed(_) => None,
+        Query::Failed(_) => None,
     };
     let Some(installed) = installed else {
         out.warnings.push(format!("note: cannot read {name}'s installed plugins; planning every install command, which the CLI skips when already done"));
@@ -218,8 +230,6 @@ pub fn plan_clean(cfg: &Config, hc: &HarnessConfig, runner: &dyn Runner, out: &m
     let list = Command { harness: hc.harness, env: env.clone(), args: strings(&["plugin", "list", "--json"]), undo: None, clean: false };
     let removal = |args: &[&str], undo: &[&str]| Command { harness: hc.harness, env: env.clone(), args: strings(args), undo: Some(Restore::Command(strings(undo))), clean: true };
     let installed = match query(runner, &list) {
-        // The install pass reports the missing CLI as a conflict.
-        Query::Missing => return Ok(()),
         Query::Failed(err) => Err(err),
         Query::Json(json) => installed_plugins(hc.harness, &json).ok_or_else(|| "unexpected JSON shape".to_string()),
     };
@@ -312,14 +322,12 @@ fn env_for(hc: &HarnessConfig) -> Option<(&'static str, PathBuf)> {
 }
 
 enum Query {
-    Missing,
     Failed(String),
     Json(Value),
 }
 
 fn query(runner: &dyn Runner, cmd: &Command) -> Query {
     match runner.run(cmd) {
-        Err(err) if err.kind() == io::ErrorKind::NotFound => Query::Missing,
         Err(err) => Query::Failed(format!("`{cmd}`: {err}")),
         Ok(ran) if !ran.ok => Query::Failed(format!("`{cmd}` failed: {}", ran.stderr.trim())),
         Ok(ran) => match serde_json::from_str(&ran.stdout) {
@@ -438,6 +446,7 @@ pub mod fake {
 
     #[derive(Default)]
     pub struct FakeRunner {
+        pub missing: BTreeSet<Harness>,
         pub claude: RefCell<State>,
         pub codex: RefCell<State>,
         /// Every mutating command run, as displayed.
@@ -447,7 +456,12 @@ pub mod fake {
     }
 
     impl Runner for FakeRunner {
+        fn available(&self, harness: Harness) -> bool {
+            !self.missing.contains(&harness)
+        }
+
         fn run(&self, cmd: &Command) -> io::Result<Ran> {
+            assert!(self.available(cmd.harness), "unavailable harness command: {cmd}");
             let mut state = match cmd.harness { Harness::Claude => self.claude.borrow_mut(), Harness::Codex => self.codex.borrow_mut() };
             let args: Vec<&str> = cmd.args.iter().map(String::as_str).collect();
             let stdout = match (cmd.harness, args.as_slice()) {
