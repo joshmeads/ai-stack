@@ -117,18 +117,22 @@ impl Index {
             });
             if skipped { folders[at].skipped = true; } else { role(&mut folders[at]); }
         };
-        for (hc, skipped) in cfg.harnesses.iter().map(|hc| (hc, false)).chain(skipped.iter().map(|hc| (hc, true))) {
-            add(hc.harness.skill_folder(&hc.home, &cfg.home), skipped, &|folder| folder.links = true);
-            add(hc.home.join("skills"), skipped, &|folder| folder.leftover = true);
-            add(hc.home.join("agents"), skipped, &|folder| {
+        for hc in &cfg.harnesses {
+            add(hc.harness.skill_folder(&hc.home, &cfg.home), false, &|folder| folder.links = true);
+        }
+        for hc in &cfg.harnesses {
+            add(hc.home.join("skills"), false, &|folder| folder.leftover = true);
+            add(hc.home.join("agents"), false, &|folder| {
                 folder.leftover = true;
                 folder.agents = true;
             });
-            if skipped {
-                add(hc.home.clone(), true, &|_| {});
-                // Default clean roots still name this folder when a custom harness home is configured.
-                add(cfg.home.join(format!(".{}", hc.harness.as_str())).join("skills"), true, &|_| {});
+        }
+        for hc in skipped {
+            for path in [hc.harness.skill_folder(&hc.home, &cfg.home), hc.home.join("skills"), hc.home.join("agents"), hc.home.clone()] {
+                add(path, true, &|_| {});
             }
+            // Default clean roots still name this folder when a custom harness home is configured.
+            add(cfg.home.join(format!(".{}", hc.harness.as_str())).join("skills"), true, &|_| {});
         }
         for root in &cfg.clean.skill_roots {
             add(root.clone(), false, &|folder| folder.clean = true);
@@ -385,6 +389,32 @@ mod tests {
         let mut only = plan.clone();
         only.actions.retain(|action| matches!(action, Action::Link { .. } | Action::Unlink { .. } | Action::MoveToBackup { .. }));
         summary(&only, home)
+    }
+
+    #[test]
+    fn all_links_folders_precede_leftovers_and_keep_their_spelling() {
+        for alias in [false, true] {
+            let f = fixture();
+            let agents = f.home.join(".claude/agents");
+            let codex_links = f.home.join(".agents/skills");
+            if alias {
+                fs::create_dir_all(&codex_links).unwrap();
+                fs::create_dir_all(agents.parent().unwrap()).unwrap();
+                symlink(&codex_links, &agents).unwrap();
+            } else {
+                fs::create_dir_all(&agents).unwrap();
+            }
+            symlink(f.stack.join("skills/game-mvp"), agents.join("retired")).unwrap();
+            let plan = f.plan();
+            assert!(plan.conflicts.is_empty(), "{:?}", plan.conflicts);
+            let mut expected = vec!["link ~/.claude/skills/feedback", "link ~/.claude/skills/handoff"];
+            if alias { expected.push("unlink ~/.agents/skills/retired"); }
+            expected.extend(["link ~/.agents/skills/feedback", "link ~/.agents/skills/handoff"]);
+            if !alias { expected.push("unlink ~/.claude/agents/retired"); }
+            assert_eq!(link_actions(&plan, &f.home), expected);
+            f.apply(&plan);
+            assert!(f.plan().is_empty());
+        }
     }
 
     #[test]
