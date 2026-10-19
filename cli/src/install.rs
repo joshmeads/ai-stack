@@ -466,16 +466,21 @@ pub(crate) mod tests {
 
     #[test]
     fn absent_skipped_home_reserves_a_wanted_link_name() {
-        let mut f = fixture();
-        f.runner.missing.insert(Harness::Claude);
-        let claude = f.home.join(".agents/skills/handoff");
-        f.cfg.harnesses[0].home = claude.clone();
-        let plan = f.plan_with(Options { clean: true, force: true, ..Options::default() });
-        assert!(plan.conflicts.is_empty(), "{:?}", plan.conflicts);
-        assert!(plan.actions.iter().all(|action| !action.path().starts_with(&claude)));
-        f.apply(&plan);
-        assert!(!claude.exists());
-        assert!(f.home.join(".agents/skills/feedback").is_symlink());
+        for name in ["handoff", "HANDOFF"] {
+            let mut f = fixture();
+            f.runner.missing.insert(Harness::Claude);
+            let skills = f.home.join(".agents/skills");
+            put(&skills.join("CaseProbe/SKILL.md"), "probe");
+            if name == "HANDOFF" && !skills.join("caseprobe").exists() { continue; }
+            let claude = skills.join(name);
+            f.cfg.harnesses[0].home = claude.clone();
+            let plan = f.plan_with(Options { clean: true, force: true, ..Options::default() });
+            assert!(plan.conflicts.is_empty(), "{:?}", plan.conflicts);
+            assert!(plan.actions.iter().all(|action| action.path() != skills.join("handoff")));
+            f.apply(&plan);
+            assert!(!claude.exists());
+            assert!(skills.join("feedback").is_symlink());
+        }
     }
 
     #[test]

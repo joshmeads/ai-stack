@@ -138,7 +138,7 @@ impl Index {
 
     pub fn blocks_write(&self, path: &Path, out: &mut Plan) -> bool {
         let target = paths::resolve(path);
-        if let Some(root) = self.skipped_routes.iter().find(|root| target.starts_with(root)) {
+        if let Some(root) = self.skipped_routes.iter().find(|root| paths::starts_with(&target, root)) {
             out.conflicts.push(format!("{} resolves to {}, inside skipped harness route {}; ai-stack cannot write there", path.display(), target.display(), root.display()));
             return true;
         }
@@ -149,10 +149,10 @@ impl Index {
         let entry = folder.real.join(name);
         paths::routes(&entry).iter().any(|route| self.skipped_routes.iter().any(|root| {
             // An active links folder may share a skipped root; aliases leaving it stay protected.
-            if folder.links && folder.real.starts_with(root) && route.starts_with(&folder.real) {
+            if folder.links && paths::starts_with(&folder.real, root) && paths::starts_with(route, &folder.real) {
                 return false;
             }
-            route.starts_with(root) || root.starts_with(route)
+            paths::starts_with(route, root) || paths::starts_with(root, route)
         }))
     }
 }
@@ -197,7 +197,7 @@ pub fn plan(cfg: &Config, owner: &Owner, index: &Index, file: &StackFile, opts: 
     }
     let skills = Skills { dir: &skills_dir, real: paths::resolve(&skills_dir) };
     for folder in &index.folders {
-        if !folder.links && (folder.skipped || index.skipped_routes.iter().any(|root| folder.real.starts_with(root))) {
+        if !folder.links && (folder.skipped || index.skipped_routes.iter().any(|root| paths::starts_with(&folder.real, root))) {
             continue;
         }
         if let Some(root) = owner.roots().find(|root| folder.real.starts_with(root)) {
