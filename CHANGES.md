@@ -13,7 +13,7 @@ This distribution publishes Open Pstack 1.7.0 as jm:stack in the `jm` marketplac
 
 **Marketplace.** `.claude-plugin/marketplace.json` and `.agents/plugins/marketplace.json` are named `jm` (owner Josh Meads) and list `jm-stack`, `jm-games`, and `jm-tools`.
 
-**Harness detection.** `ai-stack diff` and `install` skip enabled harnesses whose CLI is missing from `PATH`, print a notice, and continue with the available harnesses. A skipped harness gets no file edits, skill links, plugin commands or cleanup, except that an available harness continues to manage shared skill folders. Both missing is a successful no-op. `stray` uses the same filtering. `init` enables only detected harnesses and prints the detected flags, writing both disabled when neither CLI is found.
+**Harness detection.** `ai-stack diff` and `install` skip enabled harnesses whose CLI is missing from `PATH`, print a notice, and continue with the available harnesses. A skipped harness gets no file edits, skill links, plugin commands or cleanup, except that an available harness continues to manage shared skill folders. If every enabled harness is missing its CLI, planning succeeds with no changes. Explicitly disabled harnesses get no skip protection from independently configured clean roots. `stray` uses the same filtering. `init` writes the default config unchanged with both harnesses enabled and prints what it detected. Installing a missing CLI needs no config change.
 
 ## 1.7.0 syncs to Cursor pstack 0.15.20
 

@@ -340,18 +340,15 @@ fn cmd_init(ctx: &Context, force: bool) -> Result<i32> {
     for (harness, available) in detected {
         let id = harness.as_str();
         let status = if available { "found" } else { "not found" };
-        println!("{}: `{id}` {status} on PATH; [harness.{id}] enabled = {available}", harness.name());
+        let suffix = if available { "" } else { "; it will be skipped until installed" };
+        println!("{}: `{id}` {status} on PATH{suffix}", harness.name());
     }
     Ok(0)
 }
 
 fn init_config_at(path: &Path, force: bool, runner: &dyn plugins::Runner) -> Result<Vec<(Harness, bool)>> {
-    let mut doc: toml_edit::DocumentMut = config::default_config_text().parse()?;
     let detected: Vec<_> = Harness::ALL.into_iter().map(|harness| (harness, runner.available(harness))).collect();
-    for (harness, available) in &detected {
-        doc["harness"][harness.as_str()]["enabled"] = toml_edit::value(*available);
-    }
-    init_at(path, &doc.to_string(), force)?;
+    init_at(path, config::default_config_text(), force)?;
     Ok(detected)
 }
 
@@ -683,7 +680,7 @@ mod tests {
     }
 
     #[test]
-    fn init_enables_only_detected_harnesses_and_preserves_existing_config() {
+    fn init_keeps_defaults_reports_detection_and_preserves_existing_config() {
         use crate::plugins::fake::FakeRunner;
 
         for missing in [vec![], vec![Harness::Claude], vec![Harness::Codex], Harness::ALL.to_vec()] {
@@ -693,9 +690,10 @@ mod tests {
             let detected = init_config_at(&path, false, &runner).unwrap();
             let text = fs::read_to_string(&path).unwrap();
             let cfg = config::from_str(&text, dir.path()).unwrap();
+            assert_eq!(text, config::default_config_text());
             for (harness, available) in detected {
                 assert_eq!(available, !missing.contains(&harness));
-                assert_eq!(cfg.harnesses.iter().any(|hc| hc.harness == harness), available);
+                assert!(cfg.harnesses.iter().any(|hc| hc.harness == harness));
             }
             fs::write(&path, "owner's config\n").unwrap();
             assert!(init_config_at(&path, false, &runner).unwrap_err().to_string().contains("--force"));
