@@ -24,7 +24,7 @@ use std::path::{Path, PathBuf};
 use anyhow::{Context as _, Result, anyhow, bail};
 use clap::{Parser, Subcommand};
 
-use crate::config::{Config, Provider, Stack};
+use crate::config::{Config, Harness, Provider, Stack};
 use crate::install::Options;
 use crate::models::{ModelReport, Status};
 use crate::plan::Plan;
@@ -335,9 +335,24 @@ fn write_config(flat: drift::Flat, json: bool, out: &mut dyn Write) -> Result<()
 }
 
 fn cmd_init(ctx: &Context, force: bool) -> Result<i32> {
-    init_at(&ctx.config_path, config::default_config_text(), force)?;
+    let detected = init_config_at(&ctx.config_path, force, &SystemRunner::default())?;
     println!("Wrote {}", ctx.config_path.display());
+    for (harness, available) in detected {
+        let id = harness.as_str();
+        let status = if available { "found" } else { "not found" };
+        println!("{}: `{id}` {status} on PATH; [harness.{id}] enabled = {available}", harness.name());
+    }
     Ok(0)
+}
+
+fn init_config_at(path: &Path, force: bool, runner: &dyn plugins::Runner) -> Result<Vec<(Harness, bool)>> {
+    let mut doc: toml_edit::DocumentMut = config::default_config_text().parse()?;
+    let detected: Vec<_> = Harness::ALL.into_iter().map(|harness| (harness, runner.available(harness))).collect();
+    for (harness, available) in &detected {
+        doc["harness"][harness.as_str()]["enabled"] = toml_edit::value(*available);
+    }
+    init_at(path, &doc.to_string(), force)?;
+    Ok(detected)
 }
 
 /// Writes `text` to `path`, refusing to overwrite unless `force`.
@@ -665,6 +680,29 @@ mod tests {
         let exec = FakeExec::new(|line| if line.contains("symbolic-ref") { ok("main\n") } else { ok("abc\n") });
         assert!(!git_pull(&exec, &stack).unwrap());
         assert!(exec.calls.borrow().contains(&"git -C /s pull --ff-only origin main".to_string()));
+    }
+
+    #[test]
+    fn init_enables_only_detected_harnesses_and_preserves_existing_config() {
+        use crate::plugins::fake::FakeRunner;
+
+        for missing in [vec![], vec![Harness::Claude], vec![Harness::Codex], Harness::ALL.to_vec()] {
+            let dir = tempfile::tempdir().unwrap();
+            let path = dir.path().join("config.toml");
+            let runner = FakeRunner { missing: missing.iter().copied().collect(), ..FakeRunner::default() };
+            let detected = init_config_at(&path, false, &runner).unwrap();
+            let text = fs::read_to_string(&path).unwrap();
+            let cfg = config::from_str(&text, dir.path()).unwrap();
+            for (harness, available) in detected {
+                assert_eq!(available, !missing.contains(&harness));
+                assert_eq!(cfg.harnesses.iter().any(|hc| hc.harness == harness), available);
+            }
+            fs::write(&path, "owner's config\n").unwrap();
+            assert!(init_config_at(&path, false, &runner).unwrap_err().to_string().contains("--force"));
+            assert_eq!(fs::read_to_string(&path).unwrap(), "owner's config\n");
+            init_config_at(&path, true, &runner).unwrap();
+            assert_eq!(fs::read_to_string(&path).unwrap(), text);
+        }
     }
 
     #[test]
