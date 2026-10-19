@@ -11,7 +11,7 @@
 
 It shows the plan before changing anything, backs up every file or link it replaces or removes, and is idempotent: a second run reports `No changes.` Installation for Cursor and OpenCode is not handled.
 
-An enabled harness is skipped when its CLI (`claude` or `codex`) is not executable on `PATH`. `diff` and `install` print one skip notice per missing CLI, with the config setting that hides it. The other harness still installs. A skipped harness gets no file edits, skill links, plugin commands or removals, including with `--clean`. If both CLIs are missing, these commands exit successfully with nothing to do. Detection happens once per command, before planning, without running either CLI.
+An enabled harness is skipped when its CLI (`claude` or `codex`) is not executable on `PATH`. `diff` and `install` print one skip notice per missing CLI, with the config setting that hides it. The other harness still installs. A skipped harness gets no file edits, skill links, plugin commands or removals, including with `--clean`, except that an available harness continues to manage shared skill folders. If both CLIs are missing, these commands exit successfully with nothing to do. Detection happens once per command, before planning, without running either CLI.
 
 ## Build and install
 
@@ -173,7 +173,7 @@ Install writes one `ai-stack:instructions` block into `CLAUDE.md` and `AGENTS.md
 - **Removes plugins.** Every plugin in the `plugin list --json` output that no `keep_plugins` glob matches is removed with `claude plugin uninstall <id>` or `codex plugin remove <id>`. These run before the jm install commands. Marketplaces are left alone. Claude Code cannot uninstall a plugin synced from your claude.ai account (`<name>@synced`), so clean disables it with `claude plugin disable <id>` instead and warns that the app may sync it back; remove it on claude.ai to keep it gone. A Claude plugin installed in project or local scope is reported and left in place.
 - **Records the removals.** Apply writes `removed-plugins.json` in the backup directory, listing each removed plugin with the command that removed it and the command that restores it (`claude plugin install <id>`, `claude plugin enable <id>` or `codex plugin add <id>`), and prints its path. A retired `jm` plugin, which every install removes, has `"reinstall": null` and a `note` instead.
 
-`stray` uses the same harness detection as install. Clean roots that overlap a skipped harness's home or skill folders are excluded, including symlink aliases. A folder shared with an available harness still serves that harness.
+`stray` uses the same harness detection as install. Clean roots that overlap a skipped harness's home or skill folders are excluded, including symlink aliases. A root containing a skipped home is left alone as a whole. A skill folder shared with an available harness still serves that harness.
 
 In the review screen, `c` toggles clean and re-plans. The clean actions appear in their own `Clean (N)` section, and the footer shows `c clean: on` or `off`. `--plain` prints the same section, and `--yes` applies the plan with clean as the flag set it. After `install --clean`, `diff --clean` reports `No changes.`
 
