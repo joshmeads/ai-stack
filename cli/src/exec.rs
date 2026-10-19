@@ -1,8 +1,10 @@
 //! Runs git, ssh, process scripts and prompt runners for `skills` and `fleet`. Tests swap in
 //! `fake::FakeExec`, which records each call and answers from a closure.
 
+use std::ffi::{CString, OsStr};
 use std::io;
-use std::path::Path;
+use std::os::unix::ffi::OsStrExt as _;
+use std::path::{Path, PathBuf};
 use std::process::{Command, Stdio};
 
 use anyhow::{Result, anyhow};
@@ -17,16 +19,27 @@ pub struct Ran {
 
 pub trait Exec {
     fn available(&self, program: &str) -> bool {
-        use std::os::unix::fs::PermissionsExt;
-        std::env::var_os("PATH").is_some_and(|path| std::env::split_paths(&path).any(|dir| {
-            std::fs::metadata(dir.join(program)).is_ok_and(|meta| meta.is_file() && meta.permissions().mode() & 0o111 != 0)
-        }))
+        find_executable(program).is_some()
     }
 
     fn interactive(&self, program: &str, args: &[String]) -> io::Result<Option<i32>>;
 
     /// Runs `program` to completion with stdin closed. An `Err` means it could not start.
     fn run(&self, program: &str, args: &[String], cwd: Option<&Path>) -> io::Result<Ran>;
+}
+
+pub fn find_executable(program: &str) -> Option<PathBuf> {
+    executable_on_path(program, &std::env::var_os("PATH")?)
+}
+
+pub(crate) fn executable_on_path(program: &str, path: &OsStr) -> Option<PathBuf> {
+    std::env::split_paths(path).find_map(|dir| {
+        let path = std::path::absolute(dir.join(program)).ok()?;
+        let meta = std::fs::metadata(&path).ok()?;
+        let name = CString::new(path.as_os_str().as_bytes()).ok()?;
+        // access checks the current user's permissions, including ACLs and directory traversal.
+        (meta.is_file() && unsafe { libc::access(name.as_ptr(), libc::X_OK) } == 0).then_some(path)
+    })
 }
 
 pub struct SystemExec;
@@ -174,6 +187,33 @@ pub mod fake {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn executable_resolution_checks_current_user_and_returns_an_absolute_path() {
+        use std::os::unix::fs::{PermissionsExt, symlink};
+
+        let tmp = tempfile::tempdir().unwrap();
+        let first = tmp.path().join("first");
+        let second = tmp.path().join("second");
+        for dir in [&first, &second] { std::fs::create_dir_all(dir).unwrap(); }
+        let path = std::env::join_paths([&first, &second]).unwrap();
+        let program = first.join("claude");
+        std::fs::write(&program, "#!/bin/sh\n").unwrap();
+        std::fs::set_permissions(&program, std::fs::Permissions::from_mode(0o600)).unwrap();
+        assert!(executable_on_path("claude", &path).is_none());
+        if unsafe { libc::getuid() } != 0 {
+            std::fs::set_permissions(&program, std::fs::Permissions::from_mode(0o641)).unwrap();
+            assert!(executable_on_path("claude", &path).is_none(), "the owner's permissions take precedence over other execute");
+        }
+        let real = second.join("real");
+        std::fs::write(&real, "#!/bin/sh\n").unwrap();
+        std::fs::set_permissions(&real, std::fs::Permissions::from_mode(0o700)).unwrap();
+        symlink(&real, second.join("claude")).unwrap();
+        assert_eq!(executable_on_path("claude", &path), Some(second.join("claude")));
+        assert!(executable_on_path("claude", &path).unwrap().is_absolute());
+        std::fs::create_dir(first.join("codex")).unwrap();
+        assert!(executable_on_path("codex", &path).is_none());
+    }
 
     #[test]
     fn shell_quote_handles_spaces_and_single_quotes() {
