@@ -29,6 +29,18 @@ const MAX_LINKS: usize = 40;
 /// `fs::canonicalize`, which also gives a case-insensitive disk's own spelling. Two spellings of
 /// one place, such as `/tmp/x` and `/private/tmp/x`, resolve alike.
 pub fn resolve(path: &Path) -> PathBuf {
+    resolve_inner(path, None)
+}
+
+/// The full path at each symlink traversed during resolution, followed by the resolved path.
+pub fn routes(path: &Path) -> Vec<PathBuf> {
+    let mut routes = Vec::new();
+    let real = resolve_inner(path, Some(&mut routes));
+    routes.push(real);
+    routes
+}
+
+fn resolve_inner(path: &Path, mut routes: Option<&mut Vec<PathBuf>>) -> PathBuf {
     let path = std::path::absolute(path).unwrap_or_else(|_| path.to_path_buf());
     let mut pending: Vec<std::ffi::OsString> = Vec::new();
     push_components(&mut pending, &path);
@@ -50,6 +62,10 @@ pub fn resolve(path: &Path) -> PathBuf {
         };
         match target {
             Some(target) => {
+                if let Some(routes) = routes.as_mut() {
+                    let parent = std::fs::canonicalize(&resolved).unwrap_or_else(|_| resolved.clone());
+                    routes.push(parent.join(&part).join(pending.iter().rev().collect::<PathBuf>()));
+                }
                 followed += 1;
                 if target.is_absolute() {
                     resolved = PathBuf::from("/");

@@ -44,7 +44,7 @@ pub struct Options {
 
 pub fn plan(cfg: &Config, opts: Options, runner: &dyn Runner) -> Result<Plan> {
     let mut out = Plan { home: Some(cfg.home.clone()), report: opts.report, ..Plan::default() };
-    let active = available_config(cfg, runner, &mut out);
+    let (active, skipped_roots) = available_config(cfg, runner, &mut out);
     if active.harnesses.is_empty() && !cfg.harnesses.is_empty() {
         return Ok(out);
     }
@@ -59,7 +59,7 @@ pub fn plan(cfg: &Config, opts: Options, runner: &dyn Runner) -> Result<Plan> {
             plan_settings(cfg, hc, &mut out)?;
         }
     }
-    links::plan(cfg, &owner, &stack_file, opts, &mut out)?;
+    links::plan(cfg, &owner, &stack_file, opts, &skipped_roots, &mut out)?;
     if opts.clean {
         // Removals run before the jm installs.
         for hc in &cfg.harnesses {
@@ -72,31 +72,25 @@ pub fn plan(cfg: &Config, opts: Options, runner: &dyn Runner) -> Result<Plan> {
     Ok(out)
 }
 
-fn available_config(cfg: &Config, runner: &dyn Runner, out: &mut Plan) -> Config {
+fn available_config(cfg: &Config, runner: &dyn Runner, out: &mut Plan) -> (Config, Vec<PathBuf>) {
     let mut active = cfg.clone();
     active.harnesses.retain(|hc| runner.available(hc.harness));
     let skipped: Vec<_> = cfg.harnesses.iter().filter(|hc| !active.harnesses.iter().any(|other| other.harness == hc.harness)).collect();
     if skipped.is_empty() {
-        return active;
+        return (active, Vec::new());
     }
     for hc in &skipped {
         let id = hc.harness.as_str();
         out.warnings.push(format!("skipping {}: `{id}` not found on PATH (set [harness.{id}] enabled = false to hide this)", hc.harness.name()));
     }
     let folders = |hc: &HarnessConfig| [hc.home.join("skills"), hc.home.join("agents"), hc.harness.skill_folder(&hc.home, &cfg.home)];
-    let active_folders: Vec<_> = active.harnesses.iter().flat_map(folders).map(|path| paths::resolve(&path)).collect();
     let skipped_roots: Vec<_> = skipped.iter().flat_map(|hc| {
         folders(hc).into_iter().chain([
             hc.home.clone(),
             cfg.home.join(format!(".{}", hc.harness.as_str())).join("skills"),
         ])
-    }).map(|path| paths::resolve(&path)).collect();
-    active.clean.skill_roots.retain(|root| {
-        let real = paths::resolve(root);
-        let shared = active_folders.contains(&real) && !skipped_roots.iter().any(|skipped| skipped != &real && skipped.starts_with(&real));
-        shared || !skipped_roots.iter().any(|skipped| real.starts_with(skipped) || skipped.starts_with(&real))
-    });
-    active
+    }).flat_map(|path| paths::routes(&path)).collect();
+    (active, skipped_roots)
 }
 
 fn sheet_path(hc: &HarnessConfig) -> PathBuf {
@@ -401,6 +395,26 @@ pub(crate) mod tests {
     }
 
     #[test]
+    fn legacy_cleanup_alias_leaves_skipped_skill_links_alone() {
+        use std::os::unix::fs::symlink;
+
+        let mut f = fixture();
+        f.runner.missing.insert(Harness::Claude);
+        let claude_skills = f.home.join(".claude/skills");
+        fs::create_dir_all(&claude_skills).unwrap();
+        fs::create_dir_all(f.home.join(".codex")).unwrap();
+        symlink(f.stack.join("skills/handoff"), claude_skills.join("handoff")).unwrap();
+        symlink(&claude_skills, f.home.join(".codex/skills")).unwrap();
+        for clean in [false, true] {
+            let plan = f.plan_with(Options { clean, ..Options::default() });
+            assert!(plan.conflicts.is_empty(), "{:?}", plan.conflicts);
+            assert!(plan.actions.iter().all(|action| !action.path().starts_with(&claude_skills) && !action.path().starts_with(f.home.join(".codex/skills"))));
+            f.apply(&plan);
+            assert!(claude_skills.join("handoff").is_symlink());
+        }
+    }
+
+    #[test]
     fn available_harness_keeps_a_shared_skill_folder() {
         use std::os::unix::fs::symlink;
 
@@ -422,22 +436,43 @@ pub(crate) mod tests {
     fn clean_cannot_move_a_skipped_home_through_an_ancestor_or_alias() {
         use std::os::unix::fs::symlink;
 
-        let mut f = fixture();
-        let claude = f.home.join("harnesses/agents/claude");
-        f.cfg.harnesses[0].home = claude.clone();
-        f.cfg.harnesses[1].home = f.home.join("harnesses");
-        f.runner.missing.insert(Harness::Claude);
-        let external = f.root.join("external-skills");
-        put(&external.join("stray/SKILL.md"), "leave alone");
-        fs::create_dir_all(&claude).unwrap();
-        symlink(&external, claude.join("skills")).unwrap();
-        f.cfg.clean.skill_roots.extend([f.home.join("harnesses"), f.home.join("harnesses/agents"), external.clone()]);
-        put(&f.home.join(".claude/skills/stray/SKILL.md"), "leave alone");
-        let plan = f.plan_with(Options { clean: true, ..Options::default() });
-        assert!(plan.conflicts.is_empty(), "{:?}", plan.conflicts);
-        assert!(plan.actions.iter().all(|action| !action.path().starts_with(&claude) && !action.path().starts_with(&external) && !action.path().starts_with(f.home.join(".claude"))));
-        f.apply(&plan);
-        assert!(claude.join("skills/stray/SKILL.md").exists());
+        for layout in ["directory", "symlink", "chain", "case"] {
+            let mut f = fixture();
+            if layout == "case" {
+                fs::create_dir_all(f.home.join("Harnesses")).unwrap();
+                if !f.home.join("harnesses").is_dir() { continue; }
+            }
+            let claude = f.home.join(if layout == "chain" { "other/claude" } else { "harnesses/agents/claude" });
+            f.cfg.harnesses[0].home = claude.clone();
+            f.cfg.harnesses[1].home = f.home.join("harnesses");
+            f.runner.missing.insert(Harness::Claude);
+            let external = f.root.join("external-skills");
+            put(&external.join("stray/SKILL.md"), "leave alone");
+            if layout != "directory" {
+                let target = f.stack.join("skipped-home");
+                fs::create_dir_all(&target).unwrap();
+                fs::create_dir_all(claude.parent().unwrap()).unwrap();
+                if layout == "chain" {
+                    let bridge = f.home.join("harnesses/agents/bridge");
+                    fs::create_dir_all(bridge.parent().unwrap()).unwrap();
+                    fs::create_dir_all(target.join("profile")).unwrap();
+                    symlink(target, &bridge).unwrap();
+                    symlink(bridge.join("profile"), &claude).unwrap();
+                } else {
+                    symlink(target, &claude).unwrap();
+                }
+            } else {
+                fs::create_dir_all(&claude).unwrap();
+            }
+            symlink(&external, claude.join("skills")).unwrap();
+            f.cfg.clean.skill_roots.extend([f.home.join("harnesses"), f.home.join("harnesses/agents"), external.clone()]);
+            put(&f.home.join(".claude/skills/stray/SKILL.md"), "leave alone");
+            let plan = f.plan_with(Options { clean: true, ..Options::default() });
+            assert!(plan.conflicts.is_empty(), "{:?}", plan.conflicts);
+            assert!(plan.actions.iter().all(|action| !action.path().starts_with(&claude) && !action.path().starts_with(&external) && !action.path().starts_with(f.home.join(".claude"))));
+            f.apply(&plan);
+            assert!(claude.join("skills/stray/SKILL.md").exists());
+        }
     }
 
     #[test]
