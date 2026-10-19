@@ -682,6 +682,8 @@ mod tests {
 
     struct NoCommands;
     impl Runner for NoCommands {
+        fn available(&self, _: crate::config::Harness) -> bool { true }
+
         fn run(&self, cmd: &plugins::Command) -> io::Result<plugins::Ran> {
             panic!("unexpected command {cmd}")
         }

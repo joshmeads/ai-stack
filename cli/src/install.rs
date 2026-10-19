@@ -43,10 +43,15 @@ pub struct Options {
 }
 
 pub fn plan(cfg: &Config, opts: Options, runner: &dyn Runner) -> Result<Plan> {
+    let mut out = Plan { home: Some(cfg.home.clone()), report: opts.report, ..Plan::default() };
+    let active = available_config(cfg, runner, &mut out);
+    if active.harnesses.is_empty() && !cfg.harnesses.is_empty() {
+        return Ok(out);
+    }
+    let cfg = &active;
     ensure!(cfg.stack.path.is_dir(), "stack path {} does not exist; set [stack] path in the config or pass --stack", cfg.stack.path.display());
     let stack_file = stackfile::load(&cfg.stack.path)?;
     let owner = links::Owner::new(cfg);
-    let mut out = Plan { home: Some(cfg.home.clone()), report: opts.report, ..Plan::default() };
     for hc in &cfg.harnesses {
         plan_sheet(cfg, &owner, hc, opts, &mut out)?;
         plan_instructions(cfg, hc, &mut out)?;
@@ -65,6 +70,32 @@ pub fn plan(cfg: &Config, opts: Options, runner: &dyn Runner) -> Result<Plan> {
         plugins::plan(cfg, hc, runner, &mut out)?;
     }
     Ok(out)
+}
+
+fn available_config(cfg: &Config, runner: &dyn Runner, out: &mut Plan) -> Config {
+    let mut active = cfg.clone();
+    active.harnesses.retain(|hc| runner.available(hc.harness));
+    let skipped: Vec<_> = cfg.harnesses.iter().filter(|hc| !active.harnesses.iter().any(|other| other.harness == hc.harness)).collect();
+    if skipped.is_empty() {
+        return active;
+    }
+    for hc in &skipped {
+        let id = hc.harness.as_str();
+        out.warnings.push(format!("skipping {}: `{id}` not found on PATH (set [harness.{id}] enabled = false to hide this)", hc.harness.name()));
+    }
+    let folders = |hc: &HarnessConfig| [hc.home.join("skills"), hc.home.join("agents"), hc.harness.skill_folder(&hc.home, &cfg.home)];
+    let active_folders: Vec<_> = active.harnesses.iter().flat_map(folders).map(|path| paths::resolve(&path)).collect();
+    let skipped_roots: Vec<_> = skipped.iter().flat_map(|hc| {
+        folders(hc).into_iter().chain([
+            hc.home.clone(),
+            cfg.home.join(format!(".{}", hc.harness.as_str())).join("skills"),
+        ])
+    }).map(|path| paths::resolve(&path)).collect();
+    active.clean.skill_roots.retain(|root| {
+        let real = paths::resolve(root);
+        active_folders.contains(&real) || !skipped_roots.iter().any(|skipped| real.starts_with(skipped) || skipped.starts_with(&real))
+    });
+    active
 }
 
 fn sheet_path(hc: &HarnessConfig) -> PathBuf {
@@ -308,6 +339,85 @@ pub(crate) mod tests {
         let runner = FakeRunner::default();
         *runner.codex_version.borrow_mut() = "1.0.0".into();
         Fixture { _tmp: tmp, root, stack, home, cfg, runner }
+    }
+
+    #[test]
+    fn unavailable_harness_is_skipped_before_files_plugins_and_clean() {
+        for missing in Harness::ALL {
+            for existing in [false, true] {
+                let mut f = fixture();
+                f.runner.missing.insert(missing);
+                let hc = f.cfg.harnesses.iter().find(|hc| hc.harness == missing).unwrap().clone();
+                let skills = hc.harness.skill_folder(&hc.home, &f.home);
+                if existing {
+                    put(&hc.home.join(hc.harness.instruction_file()), "<!-- ai-stack:broken:begin -->");
+                    put(&hc.home.join("pstack-models.md"), "unmanaged");
+                    put(&skills.join("stray/SKILL.md"), "leave alone");
+                    put(&hc.home.join("agents/old.md"), render::MANAGED_MD);
+                }
+                let plan = f.plan_with(Options { clean: true, ..Options::default() });
+                assert!(plan.conflicts.is_empty(), "{:?}", plan.conflicts);
+                assert_eq!(plan.warnings.len(), 1);
+                assert!(plan.render_text(&f.home).contains(&format!("skipping {}:", missing.name())));
+                assert!(!plan.is_empty());
+                assert!(plan.commands.iter().all(|cmd| cmd.harness != missing));
+                assert!(plan.actions.iter().all(|action| !action.path().starts_with(&hc.home) && !action.path().starts_with(&skills)));
+                f.apply(&plan);
+                assert!(f.plan_with(Options { clean: true, ..Options::default() }).is_empty());
+                if existing {
+                    assert_eq!(fs::read_to_string(skills.join("stray/SKILL.md")).unwrap(), "leave alone");
+                } else {
+                    assert!(!hc.home.exists());
+                }
+            }
+        }
+    }
+
+    #[test]
+    fn both_missing_plan_nothing_even_with_clean() {
+        let mut f = fixture();
+        f.runner.missing.extend(Harness::ALL);
+        put(&f.home.join(".agents/skills/stray/SKILL.md"), "leave alone");
+        let plan = f.plan_with(Options { clean: true, ..Options::default() });
+        assert!(plan.is_empty(), "{plan:?}");
+        assert_eq!(plan.warnings.len(), 2);
+        assert!(plan.render_text(&f.home).ends_with("No changes.\n"));
+        f.apply(&plan);
+        assert!(!f.home.join(".claude").exists());
+        assert!(!f.home.join(".codex").exists());
+    }
+
+    #[test]
+    fn explicitly_disabled_harness_has_no_skip_notice() {
+        let mut f = fixture();
+        f.cfg.harnesses.retain(|hc| hc.harness != Harness::Claude);
+        f.runner.missing.insert(Harness::Claude);
+        let plan = f.plan();
+        assert!(plan.warnings.is_empty());
+        assert!(plan.conflicts.is_empty());
+        assert!(plan.commands.iter().all(|cmd| cmd.harness == Harness::Codex));
+        assert!(plan.actions.iter().all(|action| !action.path().starts_with(f.home.join(".claude"))));
+    }
+
+    #[test]
+    fn clean_cannot_move_a_skipped_home_through_an_ancestor_or_alias() {
+        use std::os::unix::fs::symlink;
+
+        let mut f = fixture();
+        let claude = f.home.join("harnesses/claude");
+        f.cfg.harnesses[0].home = claude.clone();
+        f.runner.missing.insert(Harness::Claude);
+        let external = f.root.join("external-skills");
+        put(&external.join("stray/SKILL.md"), "leave alone");
+        fs::create_dir_all(&claude).unwrap();
+        symlink(&external, claude.join("skills")).unwrap();
+        f.cfg.clean.skill_roots.extend([f.home.join("harnesses"), external.clone()]);
+        put(&f.home.join(".claude/skills/stray/SKILL.md"), "leave alone");
+        let plan = f.plan_with(Options { clean: true, ..Options::default() });
+        assert!(plan.conflicts.is_empty(), "{:?}", plan.conflicts);
+        assert!(plan.actions.iter().all(|action| !action.path().starts_with(&claude) && !action.path().starts_with(&external) && !action.path().starts_with(f.home.join(".claude"))));
+        f.apply(&plan);
+        assert!(claude.join("skills/stray/SKILL.md").exists());
     }
 
     #[test]
