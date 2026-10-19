@@ -153,6 +153,10 @@ pub fn plan(cfg: &Config, hc: &HarnessConfig, runner: &dyn Runner, out: &mut Pla
     };
     let everything = || std::iter::once(add_marketplace.clone()).chain(PLUGINS.map(install)).collect::<Vec<_>>();
     if !hc.home.is_dir() {
+        if let Query::CannotStart(err) = query(runner, &command(&["--version"])) {
+            out.conflicts.push(err);
+            return Ok(());
+        }
         // Nothing is configured yet, and Codex refuses a CODEX_HOME that does not exist.
         // The file actions create the home before the commands run.
         out.commands.extend(everything());
@@ -235,12 +239,16 @@ pub fn plan(cfg: &Config, hc: &HarnessConfig, runner: &dyn Runner, out: &mut Pla
 /// `--clean`: removes every installed plugin `[clean] keep_plugins` does not match, except the
 /// `jm` marketplace's own, which `plan` handles. Marketplaces stay.
 pub fn plan_clean(cfg: &Config, hc: &HarnessConfig, runner: &dyn Runner, out: &mut Plan) -> Result<()> {
-    if !hc.home.is_dir() {
-        return Ok(());
-    }
     let name = hc.harness.name();
     let env = env_for(hc);
     let list = Command { harness: hc.harness, env: env.clone(), args: strings(&["plugin", "list", "--json"]), undo: None, clean: false };
+    if !hc.home.is_dir() {
+        let version = Command { args: strings(&["--version"]), ..list };
+        if let Query::CannotStart(err) = query(runner, &version) {
+            out.conflicts.push(err);
+        }
+        return Ok(());
+    }
     let removal = |args: &[&str], undo: &[&str]| Command { harness: hc.harness, env: env.clone(), args: strings(args), undo: Some(Restore::Command(strings(undo))), clean: true };
     let installed = match query(runner, &list) {
         Query::CannotStart(err) => {
@@ -483,6 +491,7 @@ pub mod fake {
             let mut state = match cmd.harness { Harness::Claude => self.claude.borrow_mut(), Harness::Codex => self.codex.borrow_mut() };
             let args: Vec<&str> = cmd.args.iter().map(String::as_str).collect();
             let stdout = match (cmd.harness, args.as_slice()) {
+                (_, ["--version"]) => "1.0.0".into(),
                 (Harness::Claude, ["plugin", "marketplace", "list", "--json"]) => json!(state.marketplaces.iter().map(|(name, path)| json!({"name": name, "source": "directory", "path": path})).collect::<Vec<_>>()).to_string(),
                 (Harness::Codex, ["plugin", "marketplace", "list", "--json"]) => json!({"marketplaces": state.marketplaces.iter().map(|(name, path)| json!({"name": name, "marketplaceSource": {"sourceType": "local", "source": path}})).collect::<Vec<_>>()}).to_string(),
                 (Harness::Claude, ["plugin", "list", "--json"]) => json!(state.installed.iter().map(|(id, version)| {
@@ -592,6 +601,71 @@ mod tests {
                 }
             }
         }
+    }
+
+    #[test]
+    fn fresh_home_launch_failure_blocks_apply_before_files_or_commands() {
+        use crate::install::{self, Options};
+        use crate::install::tests::fixture;
+
+        struct FailingLaunch<'a> {
+            inner: &'a fake::FakeRunner,
+            harness: Harness,
+        }
+        impl Runner for FailingLaunch<'_> {
+            fn available(&self, harness: Harness) -> bool { self.inner.available(harness) }
+            fn run(&self, cmd: &Command) -> io::Result<Ran> {
+                if cmd.harness == self.harness {
+                    assert_eq!(cmd.args, ["--version"]);
+                    Err(io::Error::new(io::ErrorKind::NotFound, "bad interpreter"))
+                } else {
+                    self.inner.run(cmd)
+                }
+            }
+        }
+        for harness in Harness::ALL {
+            for clean in [false, true] {
+                let f = fixture();
+                let runner = FailingLaunch { inner: &f.runner, harness };
+                let plan = install::plan(&f.cfg, Options { clean, ..Options::default() }, &runner).unwrap();
+                assert!(plan.conflicts.iter().any(|conflict| conflict.contains("--version") && conflict.contains("bad interpreter")), "{:?}", plan.conflicts);
+                assert!(crate::plan::apply(&plan, &f.root.join("backups"), &runner).is_err());
+                assert!(!f.home.exists());
+                assert!(!f.root.join("backups").exists());
+                assert!(f.runner.ran.borrow().is_empty());
+
+                let hc = f.cfg.harnesses.iter().find(|hc| hc.harness == harness).unwrap();
+                let mut clean_plan = Plan::default();
+                plan_clean(&f.cfg, hc, &runner, &mut clean_plan).unwrap();
+                assert!(clean_plan.conflicts.iter().any(|conflict| conflict.contains("bad interpreter")));
+                assert!(clean_plan.commands.is_empty());
+            }
+        }
+    }
+
+    #[test]
+    fn fresh_home_nonzero_launch_probe_still_plans_every_plugin_command() {
+        use crate::install::tests::fixture;
+
+        struct NonzeroVersion;
+        impl Runner for NonzeroVersion {
+            fn available(&self, _: Harness) -> bool { true }
+            fn run(&self, cmd: &Command) -> io::Result<Ran> {
+                assert_eq!(cmd.args, ["--version"]);
+                Ok(Ran { ok: false, stdout: String::new(), stderr: "home does not exist".into() })
+            }
+        }
+        let f = fixture();
+        for hc in &f.cfg.harnesses {
+            let mut plan = Plan::default();
+            plan_clean(&f.cfg, hc, &NonzeroVersion, &mut plan).unwrap();
+            assert!(plan.conflicts.is_empty());
+            assert!(plan.commands.is_empty());
+            super::plan(&f.cfg, hc, &NonzeroVersion, &mut plan).unwrap();
+            assert!(plan.conflicts.is_empty());
+            assert_eq!(plan.commands.len(), 1 + PLUGINS.len());
+        }
+        assert!(!f.home.exists());
     }
 
     #[test]
