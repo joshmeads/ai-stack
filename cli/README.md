@@ -11,6 +11,8 @@
 
 It shows the plan before changing anything, backs up every file or link it replaces or removes, and is idempotent: a second run reports `No changes.` Installation for Cursor and OpenCode is not handled.
 
+An enabled harness is skipped when its CLI (`claude` or `codex`) is not executable on `PATH`. `diff` and `install` print one skip notice per missing CLI, with the config setting that hides it. The other harness still installs. A skipped harness gets no file edits, skill links, plugin commands or removals, including with `--clean`. If both CLIs are missing, these commands exit successfully with nothing to do. Detection happens once per command, before planning, without running either CLI.
+
 ## Build and install
 
 From the repository root:
@@ -38,7 +40,7 @@ Restart Claude Code and Codex sessions after the first install.
 | --- | --- |
 | `ai-stack config show [--json]` | Print effective config as sorted dotted keys, preserving paths as written. Read-only; exit 0. |
 | `ai-stack fleet drift [--ignore KEY]... [--json]` | Compare every enabled machine with local config; exit 0 when all are in sync, otherwise 1. |
-| `ai-stack init [--force]` | Write the default config to `~/.config/ai-stack/config.toml`. Refuses to overwrite unless `--force`. |
+| `ai-stack init [--force]` | Write the default config to `~/.config/ai-stack/config.toml`, enabling only harnesses whose CLIs are on `PATH`, and print what was detected. Writes both disabled if neither is found. Refuses to overwrite unless `--force`. |
 | `ai-stack diff [--clean]` | Print the install plan with unified diffs and the plugin commands it would run. Exit 0 when nothing would change, 1 when changes or conflicts are pending. It runs only the read-only `plugin marketplace list --json` and `plugin list --json` queries. `--clean` adds the clean actions (see [Clean](#clean)). |
 | `ai-stack stray [--json]` | Report the stray skills and the plugins `--clean` would remove: `skills: N  plugins: M`, then each stray skill (as a `~/` path) and plugin id, indented. A stray skill is an entry `--clean` would move or one in a skill link's way, including one `keep_skills` matches, so `stray` names every entry that blocks an install. ai-stack's own skill links and `jm` plugins are never stray. `--json` prints `{"skills":N,"plugins":M,"skill_names":[...],"plugin_ids":[...]}` on one line. Runs only the same read-only queries as `diff`, and never reads a stray tree in full or runs `git`; never writes. Exit 0. |
 | `ai-stack install [--yes] [--force] [--plain] [--clean]` | Build the plan, review it in the TUI (or print it with `--plain`), then apply. `--yes` applies without review. `--force` replaces an unmanaged `pstack-models.md` and moves a stray skill out of a skill link's way, after backing them up. `--clean` also removes skills and plugins outside the keep lists. Conflicts are printed and never applied. |
@@ -100,10 +102,10 @@ The provider owns credential storage. Login codes and tokens never pass through 
 
 ## Config
 
-`config.default.toml` in `cli/` is the reference that `ai-stack init` writes.
+`config.default.toml` in `cli/` is the reference for `ai-stack init`. Init sets each harness's `enabled` flag from CLI detection.
 
 - `[stack]`: `path` is the checkout of `joshmeads/ai-stack`. `remote` and `branch` are used by `update`. `legacy_paths` lists older checkout roots. `~` is expanded and relative paths resolve against the invocation directory.
-- `[harness.claude]`, `[harness.codex]`: `home` and `enabled`. A disabled harness is skipped entirely.
+- `[harness.claude]`, `[harness.codex]`: `home` and `enabled`. A disabled harness is skipped silently. An enabled harness whose CLI is missing is skipped with a notice. After installing a CLI that init did not find, set its flag to `true` to enable it.
 - `[models.<alias>]`: `provider` (`anthropic` or `openai`), the exact model `id`, optional `efforts` (the efforts a route on this model may name; it must then name one), and optional `context` (usable context in tokens). The defaults define `sol`, `luna`, `opus` and `haiku`, with `haiku` at 100000. The owner sets Haiku's compaction in Claude Code at 100k because Anthropic bills the whole request at 5x past 100k tokens; ai-stack only states the limit in the routing block. `ai-stack models` checks these IDs against the provider catalogs.
 - `[leads]`, `[review]`: one `"alias@effort"` route per harness. The lead is described in the routing block; install does not change either CLI's default model. The review model is named in the routing block and used by the `art-iteration` skill's critic.
 - `[sheet.claude]`, `[sheet.codex]`: the 15 jm:stack model-sheet rows for that harness. Each lane is a provider-qualified descriptor `<provider>:<model>@<effort>` from the jm-stack provider-dispatch reference, or `inherit-parent` / `auto`. The loader accepts providers `claude` (models `opus`, `haiku`, `fable`) and `codex` (models `gpt-6.1-sol`, `gpt-6-luna`), efforts `low` to `max`, and `ultra` for `gpt-6.1-sol` only. The four panel rows (`arena runners`, `arena cross-judge pool`, `architect runners`, `interrogate reviewers`) accept arrays. The Why and Reflect rows must be `inherit-parent` or `auto`, because those roles need the parent's MCP servers.
@@ -170,6 +172,8 @@ Install writes one `ai-stack:instructions` block into `CLAUDE.md` and `AGENTS.md
 - **Moves skills into the backup.** Every entry of each skill root (directory, file or symlink, including a dangling symlink) that no `keep_skills` glob matches moves into the run's backup directory at its home-relative path, for example `<backup>/home/.agents/skills/old-skill`. Symlinks move as symlinks and are never followed. Nothing is deleted. Entries whose name starts with `.` (Codex's `.system`, `.DS_Store`) and `synced` (app-managed) are always kept. ai-stack's own links are never moved: the skill links and leftover cleanup keep, repoint or unlink them. A stray skill at a name a global group links is moved, then linked over, with no `--force` needed; one that `keep_skills` matches stays a conflict until `--force`. A skill root reached through several spellings (a symlinked folder) is read once, so each entry moves once.
 - **Removes plugins.** Every plugin in the `plugin list --json` output that no `keep_plugins` glob matches is removed with `claude plugin uninstall <id>` or `codex plugin remove <id>`. These run before the jm install commands. Marketplaces are left alone. Claude Code cannot uninstall a plugin synced from your claude.ai account (`<name>@synced`), so clean disables it with `claude plugin disable <id>` instead and warns that the app may sync it back; remove it on claude.ai to keep it gone. A Claude plugin installed in project or local scope is reported and left in place.
 - **Records the removals.** Apply writes `removed-plugins.json` in the backup directory, listing each removed plugin with the command that removed it and the command that restores it (`claude plugin install <id>`, `claude plugin enable <id>` or `codex plugin add <id>`), and prints its path. A retired `jm` plugin, which every install removes, has `"reinstall": null` and a `note` instead.
+
+`stray` uses the same harness detection as install. Clean roots that overlap a skipped harness's home or skill folders are excluded, including symlink aliases. A folder shared with an available harness still serves that harness.
 
 In the review screen, `c` toggles clean and re-plans. The clean actions appear in their own `Clean (N)` section, and the footer shows `c clean: on` or `off`. `--plain` prints the same section, and `--yes` applies the plan with clean as the flag set it. After `install --clean`, `diff --clean` reports `No changes.`
 

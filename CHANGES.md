@@ -5,6 +5,8 @@ This port applies the Cursor → Claude Code substitutions in skill bodies. Earl
 
 ## Unreleased: jm:stack rename and model routing
 
+**Harness detection.** `ai-stack diff` and `install` skip enabled harnesses whose CLI is missing from `PATH`, print a notice, and continue with the available harnesses. A skipped harness gets no file edits, skill links, plugin commands or cleanup. Both missing is a successful no-op. `stray` uses the same filtering. `init` enables only detected harnesses and prints the detected flags, writing both disabled when neither CLI is found.
+
 This distribution publishes Open Pstack 1.7.0 as jm:stack in the `jm` marketplace, with two changes. `UPSTREAM.md` records how to keep them through upstream merges.
 
 **Rename.** The plugin is `jm-stack`, shown as "jm:stack", so skills are `jm-stack:poteto-mode`, `jm-stack:how`, and so on. `/setup-pstack` is `/setup-stack`. The native Claude agents are `stack-<stem>-<effort>`. The SessionStart text, `poteto-agent`'s preload, `poteto-help`'s install steps, `codex-tools.md`, and `docs/reference.md` use the new names. The plugin directory, `pstack-models.md`, the `pstack:models` markers, the sheet heading, and `pstack-runner` keep their names.
