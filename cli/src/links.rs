@@ -144,7 +144,7 @@ struct Entry {
 
 /// Plans every skill folder: links for the global groups' skills, removal of ai-stack's
 /// leftovers, and the stray skills (`Plan::stray`, and `--clean` moves).
-pub fn plan(cfg: &Config, owner: &Owner, file: &StackFile, opts: Options, out: &mut Plan) -> Result<()> {
+pub fn plan(cfg: &Config, owner: &Owner, file: &StackFile, opts: Options, skipped_roots: &[PathBuf], out: &mut Plan) -> Result<()> {
     let skills_dir = cfg.stack.path.join(stackfile::SKILLS_DIR);
     let mut wanted = BTreeSet::new();
     for name in file.global_skills() {
@@ -158,6 +158,10 @@ pub fn plan(cfg: &Config, owner: &Owner, file: &StackFile, opts: Options, out: &
     let skills = Skills { dir: &skills_dir, real: paths::resolve(&skills_dir) };
     let none = BTreeSet::new();
     for folder in index(cfg) {
+        let contains_skipped = skipped_roots.iter().any(|root| root != &folder.real && root.starts_with(&folder.real));
+        if contains_skipped || (!folder.links && skipped_roots.iter().any(|root| folder.real.starts_with(root))) {
+            continue;
+        }
         if let Some(root) = owner.roots().find(|root| folder.real.starts_with(root)) {
             out.conflicts.push(format!("{} resolves to {}, inside the stack checkout {}; ai-stack never links, unlinks or moves anything there. Make it a directory outside the stack", folder.path.display(), folder.real.display(), root.display()));
             continue;
