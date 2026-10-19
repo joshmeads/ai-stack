@@ -18,6 +18,28 @@ pub fn normalize(path: &Path) -> PathBuf {
     normalized
 }
 
+/// Component-prefix comparison, including absent suffixes on a case-insensitive macOS volume.
+pub fn starts_with(path: &Path, root: &Path) -> bool {
+    if path.starts_with(root) { return true; }
+    #[cfg(target_os = "macos")]
+    {
+        use std::ffi::CString;
+        use std::os::unix::ffi::OsStrExt as _;
+
+        let mut parts = path.components();
+        if !root.components().all(|root| parts.next().is_some_and(|part| part.as_os_str().as_bytes().eq_ignore_ascii_case(root.as_os_str().as_bytes()))) {
+            return false;
+        }
+        path.ancestors().find_map(|ancestor| {
+            let name = CString::new(ancestor.as_os_str().as_bytes()).ok()?;
+            let sensitive = unsafe { libc::pathconf(name.as_ptr(), libc::_PC_CASE_SENSITIVE) };
+            (sensitive != -1).then_some(sensitive == 0)
+        }).unwrap_or(false)
+    }
+    #[cfg(not(target_os = "macos"))]
+    { false }
+}
+
 /// Symlinks followed in one `resolve` before the rest is taken as written, as the kernel's
 /// `ELOOP` limit does.
 const MAX_LINKS: usize = 40;
