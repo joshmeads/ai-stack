@@ -150,6 +150,9 @@ impl Index {
     }
 
     fn skipped_entry(&self, folder: &Folder, name: &str) -> bool {
+        if self.skipped_routes.is_empty() {
+            return false;
+        }
         let entry = folder.real.join(name);
         paths::routes(&entry).iter().any(|route| self.skipped_routes.iter().any(|root| {
             // An active links folder may share a skipped root; aliases leaving it stay protected.
