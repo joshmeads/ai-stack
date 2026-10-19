@@ -11,7 +11,7 @@
 
 It shows the plan before changing anything, backs up every file or link it replaces or removes, and is idempotent: a second run reports `No changes.` Installation for Cursor and OpenCode is not handled.
 
-An enabled harness is skipped when its CLI (`claude` or `codex`) is not executable on `PATH`. `diff` and `install` print one skip notice per missing CLI. The other harness still installs. A skipped harness gets no file edits, skill links, plugin commands or removals, including with `--clean`, except that an available harness continues to manage shared skill folders. If every enabled harness is missing its CLI, these commands exit successfully with nothing to do. Explicitly disabled harnesses do not get skip protection from independently configured clean roots. Detection happens once per command, before planning, without running either CLI.
+An enabled harness is skipped when its CLI (`claude` or `codex`) is not executable on `PATH`. `diff` and `install` print one skip notice per missing CLI. The other harness still installs. A skipped harness gets no file edits, skill links, plugin commands or removals, including with `--clean`, except that an available harness continues to manage shared skill folders. If every enabled harness is missing its CLI, these commands exit successfully with nothing to do. Explicitly disabled harnesses do not get skip protection from independently configured clean roots. Detection happens once per command, before planning, without running either CLI. A file write that resolves through an alias into a skipped harness's routes is a conflict naming both paths.
 
 ## Build and install
 

@@ -136,6 +136,15 @@ impl Index {
         Self { folders, skipped_routes }
     }
 
+    pub fn blocks_write(&self, path: &Path, out: &mut Plan) -> bool {
+        let target = paths::resolve(path);
+        if let Some(root) = self.skipped_routes.iter().find(|root| target.starts_with(root)) {
+            out.conflicts.push(format!("{} resolves to {}, inside skipped harness route {}; ai-stack cannot write there", path.display(), target.display(), root.display()));
+            return true;
+        }
+        false
+    }
+
     fn skipped_entry(&self, folder: &Folder, name: &str) -> bool {
         let entry = folder.real.join(name);
         paths::routes(&entry).iter().any(|route| self.skipped_routes.iter().any(|root| {
@@ -182,7 +191,10 @@ pub fn plan(cfg: &Config, owner: &Owner, index: &Index, file: &StackFile, opts: 
             out.warnings.push(format!("note: {name} is in a global group but {} is missing; run `ai-stack skills update {name}` to rebuild it", skills_dir.join(name.as_str()).display()));
         }
     }
-    out.ledger = Some(ledger::path(&cfg.home));
+    let ledger = ledger::path(&cfg.home);
+    if !index.blocks_write(&ledger, out) {
+        out.ledger = Some(ledger);
+    }
     let skills = Skills { dir: &skills_dir, real: paths::resolve(&skills_dir) };
     for folder in &index.folders {
         if !folder.links && (folder.skipped || index.skipped_routes.iter().any(|root| folder.real.starts_with(root))) {
