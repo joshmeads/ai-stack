@@ -15,7 +15,7 @@ use std::path::{Path, PathBuf};
 
 use anyhow::{Context as _, Result};
 
-use crate::config::Config;
+use crate::config::{Config, HarnessConfig};
 use crate::install::Options;
 use crate::ledger;
 use crate::paths;
@@ -94,32 +94,58 @@ struct Folder {
     agents: bool,
     /// A `[clean] skill_roots` entry.
     clean: bool,
+    skipped: bool,
 }
 
-fn index(cfg: &Config) -> Vec<Folder> {
-    let mut folders: Vec<Folder> = Vec::new();
-    let mut add = |path: PathBuf, role: &dyn Fn(&mut Folder)| {
-        let real = paths::resolve(&path);
-        let at = folders.iter().position(|folder| folder.real == real).unwrap_or_else(|| {
-            folders.push(Folder { path, real, ..Folder::default() });
-            folders.len() - 1
-        });
-        role(&mut folders[at]);
-    };
-    for hc in &cfg.harnesses {
-        add(hc.harness.skill_folder(&hc.home, &cfg.home), &|folder| folder.links = true);
+pub struct Index {
+    folders: Vec<Folder>,
+    skipped_routes: Vec<PathBuf>,
+}
+
+impl Index {
+    pub fn new(cfg: &Config, skipped: &[HarnessConfig]) -> Self {
+        let mut folders: Vec<Folder> = Vec::new();
+        let mut skipped_routes = Vec::new();
+        let mut add = |path: PathBuf, skipped: bool, role: &dyn Fn(&mut Folder)| {
+            if skipped {
+                skipped_routes.extend(paths::routes(&path));
+            }
+            let real = paths::resolve(&path);
+            let at = folders.iter().position(|folder| folder.real == real).unwrap_or_else(|| {
+                folders.push(Folder { path, real, ..Folder::default() });
+                folders.len() - 1
+            });
+            if skipped { folders[at].skipped = true; } else { role(&mut folders[at]); }
+        };
+        for (hc, skipped) in cfg.harnesses.iter().map(|hc| (hc, false)).chain(skipped.iter().map(|hc| (hc, true))) {
+            add(hc.harness.skill_folder(&hc.home, &cfg.home), skipped, &|folder| folder.links = true);
+            add(hc.home.join("skills"), skipped, &|folder| folder.leftover = true);
+            add(hc.home.join("agents"), skipped, &|folder| {
+                folder.leftover = true;
+                folder.agents = true;
+            });
+            if skipped {
+                add(hc.home.clone(), true, &|_| {});
+                // Default clean roots still name this folder when a custom harness home is configured.
+                add(cfg.home.join(format!(".{}", hc.harness.as_str())).join("skills"), true, &|_| {});
+            }
+        }
+        for root in &cfg.clean.skill_roots {
+            add(root.clone(), false, &|folder| folder.clean = true);
+        }
+        Self { folders, skipped_routes }
     }
-    for hc in &cfg.harnesses {
-        add(hc.home.join("skills"), &|folder| folder.leftover = true);
-        add(hc.home.join("agents"), &|folder| {
-            folder.leftover = true;
-            folder.agents = true;
-        });
+
+    fn skipped_entry(&self, folder: &Folder, name: &str) -> bool {
+        let entry = folder.real.join(name);
+        paths::routes(&entry).iter().any(|route| self.skipped_routes.iter().any(|root| {
+            // An active links folder may share a skipped root; aliases leaving it stay protected.
+            if folder.links && folder.real.starts_with(root) && route.starts_with(&folder.real) {
+                return false;
+            }
+            route.starts_with(root) || root.starts_with(route)
+        }))
     }
-    for root in &cfg.clean.skill_roots {
-        add(root.clone(), &|folder| folder.clean = true);
-    }
-    folders
 }
 
 /// What one folder entry is, decided once.
@@ -132,6 +158,8 @@ enum Kind {
     Protected { root: PathBuf },
     /// Anything else: a stray skill.
     Stray,
+    /// An entry that holds or routes into a skipped harness.
+    Skipped,
 }
 
 struct Entry {
@@ -144,7 +172,7 @@ struct Entry {
 
 /// Plans every skill folder: links for the global groups' skills, removal of ai-stack's
 /// leftovers, and the stray skills (`Plan::stray`, and `--clean` moves).
-pub fn plan(cfg: &Config, owner: &Owner, file: &StackFile, opts: Options, skipped_roots: &[PathBuf], out: &mut Plan) -> Result<()> {
+pub fn plan(cfg: &Config, owner: &Owner, index: &Index, file: &StackFile, opts: Options, out: &mut Plan) -> Result<()> {
     let skills_dir = cfg.stack.path.join(stackfile::SKILLS_DIR);
     let mut wanted = BTreeSet::new();
     for name in file.global_skills() {
@@ -156,24 +184,23 @@ pub fn plan(cfg: &Config, owner: &Owner, file: &StackFile, opts: Options, skippe
     }
     out.ledger = Some(ledger::path(&cfg.home));
     let skills = Skills { dir: &skills_dir, real: paths::resolve(&skills_dir) };
-    let none = BTreeSet::new();
-    for folder in index(cfg) {
-        let contains_skipped = skipped_roots.iter().any(|root| root != &folder.real && root.starts_with(&folder.real));
-        if contains_skipped || (!folder.links && skipped_roots.iter().any(|root| folder.real.starts_with(root))) {
+    for folder in &index.folders {
+        if !folder.links && (folder.skipped || index.skipped_routes.iter().any(|root| folder.real.starts_with(root))) {
             continue;
         }
         if let Some(root) = owner.roots().find(|root| folder.real.starts_with(root)) {
             out.conflicts.push(format!("{} resolves to {}, inside the stack checkout {}; ai-stack never links, unlinks or moves anything there. Make it a directory outside the stack", folder.path.display(), folder.real.display(), root.display()));
             continue;
         }
-        let wanted = if folder.links { &wanted } else { &none };
+        let wanted: BTreeSet<_> = wanted.iter().filter(|name| folder.links && !index.skipped_entry(folder, name.as_str())).cloned().collect();
         if !wanted.is_empty() {
             if let Some((link, target)) = dangling(&folder.path) {
                 out.conflicts.push(format!("{} is a symlink to {}, which does not exist; mount or create it, or remove the link, then run again", link.display(), target.display()));
                 continue;
             }
         }
-        plan_folder(cfg, owner, &folder, wanted, &skills, opts, out)?;
+        let entries = read(owner, folder, index)?;
+        plan_folder(cfg, &entries, folder, &wanted, &skills, opts, out)?;
     }
     Ok(())
 }
@@ -196,8 +223,7 @@ fn dangling(path: &Path) -> Option<(PathBuf, PathBuf)> {
     })
 }
 
-fn plan_folder(cfg: &Config, owner: &Owner, folder: &Folder, wanted: &BTreeSet<SkillName>, skills: &Skills, opts: Options, out: &mut Plan) -> Result<()> {
-    let entries = read(owner, folder)?;
+fn plan_folder(cfg: &Config, entries: &[Entry], folder: &Folder, wanted: &BTreeSet<SkillName>, skills: &Skills, opts: Options, out: &mut Plan) -> Result<()> {
     let anchor = Anchor::of(&folder.real);
     let mut at: BTreeMap<&SkillName, usize> = BTreeMap::new();
     for name in wanted {
@@ -220,7 +246,7 @@ fn plan_folder(cfg: &Config, owner: &Owner, folder: &Folder, wanted: &BTreeSet<S
         }
         match &entry.kind {
             Kind::Ours { target, .. } if folder.links || folder.leftover => out.actions.push(Action::Unlink { path: entry.path.clone(), target: target.clone(), anchor: anchor.clone() }),
-            Kind::Ours { .. } | Kind::Protected { .. } => {}
+            Kind::Ours { .. } | Kind::Protected { .. } | Kind::Skipped => {}
             Kind::ManagedAgent { text } => out.actions.push(Action::Remove { path: entry.path.clone(), before: text.clone(), anchor: anchor.clone() }),
             Kind::Stray if folder.clean && !cfg.clean.keeps_skill(&entry.name) => {
                 out.stray.push(entry.path.clone());
@@ -235,7 +261,7 @@ fn plan_folder(cfg: &Config, owner: &Owner, folder: &Folder, wanted: &BTreeSet<S
         let (path, target) = (folder.path.join(name.as_str()), skills.dir.join(name.as_str()));
         let displaces = match at.get(name).map(|&index| &entries[index]) {
             None => Displaced::Nothing,
-            Some(Entry { kind: Kind::Protected { .. }, .. }) => continue,
+            Some(Entry { kind: Kind::Protected { .. } | Kind::Skipped, .. }) => continue,
             Some(Entry { path: entry, kind: Kind::Ours { target: was, real }, .. }) => {
                 if *real == skills.real.join(name.as_str()) && *entry == path {
                     continue;
@@ -262,7 +288,7 @@ fn plan_folder(cfg: &Config, owner: &Owner, folder: &Folder, wanted: &BTreeSet<S
 
 /// The folder's entries, sorted and classified, without dot entries (Codex's `.system`,
 /// `.DS_Store`), which ai-stack never touches.
-fn read(owner: &Owner, folder: &Folder) -> Result<Vec<Entry>> {
+fn read(owner: &Owner, folder: &Folder, index: &Index) -> Result<Vec<Entry>> {
     let listing = match fs::read_dir(&folder.path) {
         Ok(listing) => listing,
         Err(err) if err.kind() == io::ErrorKind::NotFound => return Ok(Vec::new()),
@@ -278,7 +304,9 @@ fn read(owner: &Owner, folder: &Folder) -> Result<Vec<Entry>> {
         let path = item.path();
         let meta = fs::symlink_metadata(&path).with_context(|| format!("inspecting {}", path.display()))?;
         let protected = || owner.roots().find(|root| root.starts_with(folder.real.join(&name))).cloned();
-        let kind = if meta.file_type().is_symlink() {
+        let kind = if index.skipped_entry(folder, &name) {
+            Kind::Skipped
+        } else if meta.file_type().is_symlink() {
             let target = read_link(&path)?;
             let real = target_of(&folder.real, &target);
             match owner.owns_skill_link(&folder.real, &name, &target, &real) {
