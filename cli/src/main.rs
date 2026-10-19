@@ -372,7 +372,9 @@ fn cmd_diff(ctx: &Context, clean: bool) -> Result<i32> {
 
 fn cmd_stray(ctx: &Context, json: bool) -> Result<i32> {
     let cfg = load_config(ctx)?;
-    let stray = install::plan(&cfg, Options { clean: true, report: true, ..Options::default() }, &SystemRunner::detect())?.stray(&ctx.home);
+    let plan = install::plan(&cfg, Options { clean: true, report: true, ..Options::default() }, &SystemRunner::detect())?;
+    for warning in &plan.warnings { eprintln!("{warning}"); }
+    let stray = plan.stray(&ctx.home);
     if json {
         println!("{}", serde_json::to_string(&stray)?);
     } else {
