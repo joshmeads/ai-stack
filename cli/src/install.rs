@@ -93,7 +93,8 @@ fn available_config(cfg: &Config, runner: &dyn Runner, out: &mut Plan) -> Config
     }).map(|path| paths::resolve(&path)).collect();
     active.clean.skill_roots.retain(|root| {
         let real = paths::resolve(root);
-        active_folders.contains(&real) || !skipped_roots.iter().any(|skipped| real.starts_with(skipped) || skipped.starts_with(&real))
+        let shared = active_folders.contains(&real) && !skipped_roots.iter().any(|skipped| skipped != &real && skipped.starts_with(&real));
+        shared || !skipped_roots.iter().any(|skipped| real.starts_with(skipped) || skipped.starts_with(&real))
     });
     active
 }
@@ -400,18 +401,37 @@ pub(crate) mod tests {
     }
 
     #[test]
+    fn available_harness_keeps_a_shared_skill_folder() {
+        use std::os::unix::fs::symlink;
+
+        let mut f = fixture();
+        f.runner.missing.insert(Harness::Claude);
+        let shared = f.home.join(".agents/skills");
+        put(&shared.join("stray/SKILL.md"), "stray");
+        fs::create_dir_all(f.home.join(".claude")).unwrap();
+        symlink(&shared, f.home.join(".claude/skills")).unwrap();
+        let plan = f.plan_with(Options { clean: true, ..Options::default() });
+        assert!(plan.conflicts.is_empty(), "{:?}", plan.conflicts);
+        f.apply(&plan);
+        assert!(!shared.join("stray").exists());
+        assert!(shared.join("handoff").is_symlink());
+        assert!(!f.home.join(".claude/CLAUDE.md").exists());
+    }
+
+    #[test]
     fn clean_cannot_move_a_skipped_home_through_an_ancestor_or_alias() {
         use std::os::unix::fs::symlink;
 
         let mut f = fixture();
-        let claude = f.home.join("harnesses/claude");
+        let claude = f.home.join("harnesses/agents/claude");
         f.cfg.harnesses[0].home = claude.clone();
+        f.cfg.harnesses[1].home = f.home.join("harnesses");
         f.runner.missing.insert(Harness::Claude);
         let external = f.root.join("external-skills");
         put(&external.join("stray/SKILL.md"), "leave alone");
         fs::create_dir_all(&claude).unwrap();
         symlink(&external, claude.join("skills")).unwrap();
-        f.cfg.clean.skill_roots.extend([f.home.join("harnesses"), external.clone()]);
+        f.cfg.clean.skill_roots.extend([f.home.join("harnesses"), f.home.join("harnesses/agents"), external.clone()]);
         put(&f.home.join(".claude/skills/stray/SKILL.md"), "leave alone");
         let plan = f.plan_with(Options { clean: true, ..Options::default() });
         assert!(plan.conflicts.is_empty(), "{:?}", plan.conflicts);
