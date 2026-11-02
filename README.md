@@ -50,6 +50,7 @@ The choices come from Artificial Analysis's intelligence, cost, and time-per-tas
 jm:stack follows Open Pstack. Merge its updates explicitly:
 
 ```sh
+git remote add upstream https://github.com/ericlitman/open-pstack.git   # once, on a fresh clone
 git fetch upstream main
 git merge upstream/main
 ```
