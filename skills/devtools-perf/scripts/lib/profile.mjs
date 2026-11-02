@@ -7,7 +7,7 @@ import { round } from "./util.mjs";
 const SKIP_FRAMES = new Set(["(idle)", "(root)"]);
 
 // Libraries, runtimes and cdt's own preloaded hook.
-const VENDOR = /node_modules|next-sourcemaps-hook\.cjs|^(node:|internal\/|evalmachine|(turbopack:\/\/\/)?\[(turbopack|externals)\])/;
+const VENDOR = /node_modules|next-sourcemaps-hook\.cjs|next-guard\.cjs|^(node:|internal\/|evalmachine|(turbopack:\/\/\/)?\[(turbopack|externals)\])/;
 const BUNDLE_CHUNK = /\/_next\/|\.next\//;
 
 const NAME_PATTERNS = [
