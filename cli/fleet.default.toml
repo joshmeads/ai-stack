@@ -12,15 +12,12 @@
 #   enabled = true
 #
 # `fleet status` reads each machine's branch and commit, `fleet update` runs
-# `<bin> update --yes --plain --branch <its branch>` on each, and
+# `<bin> --stack <stack> update --yes --plain --branch <its branch>` on each, and
 # `fleet switch <branch>` moves machines to another stack branch.
 
 # Expected config differences across machines. Remove patterns to compare these too.
 [drift]
 ignore = ["stack.path", "harness.*.home"]
-
-# Example: [drift]
-# ignore = ["stack.path", "harness.*.home"]
 
 [machine.this]
 local = true

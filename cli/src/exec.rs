@@ -68,7 +68,16 @@ impl Exec for SystemExec {
 /// Runs and returns stdout, or an error carrying the command line and its stderr.
 pub fn check(exec: &dyn Exec, program: &str, args: &[String], cwd: Option<&Path>) -> Result<String> {
     let line = command_line(program, args);
-    let ran = exec.run(program, args, cwd).map_err(|err| anyhow!("cannot run `{line}`: {err}"))?;
+    finish(&line, launch(exec, program, args, cwd)?)
+}
+
+/// Launches a command with the same diagnostics as `check`, leaving its exit code available.
+pub fn launch(exec: &dyn Exec, program: &str, args: &[String], cwd: Option<&Path>) -> Result<Ran> {
+    exec.run(program, args, cwd).map_err(|err| anyhow!("cannot run `{}`: {err}", command_line(program, args)))
+}
+
+/// Returns stdout on success, or the standard command failure diagnostic.
+pub fn finish(line: &str, ran: Ran) -> Result<String> {
     if !ran.ok {
         let detail = if ran.stderr.trim().is_empty() { ran.stdout.trim() } else { ran.stderr.trim() };
         return Err(anyhow!("`{line}` failed: {detail}"));

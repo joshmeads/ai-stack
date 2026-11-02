@@ -218,14 +218,16 @@ pub fn plan(cfg: &Config, hc: &HarnessConfig, runner: &dyn Runner, out: &mut Pla
     }
     for plugin in PLUGINS {
         let id = format!("{plugin}@{MARKETPLACE}");
-        match installed.iter().find(|entry| entry.id == id) {
+        match installed.iter().find(|entry| entry.id == id && (hc.harness != Harness::Claude || matches!(entry.scope.as_deref(), None | Some("user")))) {
             None => out.commands.push(install(plugin)),
             Some(entry) => {
-                // Codex installs a copy, so a new version in the checkout needs a reinstall.
-                // Claude Code loads a directory marketplace's plugins in place.
+                // Both CLIs cache an installed version; a checkout version change needs a refresh.
                 let wanted = manifest.iter().find(|(name, _)| name == plugin).and_then(|(_, version)| version.as_deref());
-                if hc.harness == Harness::Codex && wanted.is_some() && entry.version.as_deref() != wanted {
-                    out.commands.push(install(plugin));
+                if wanted.is_some() && entry.version.as_deref() != wanted {
+                    out.commands.push(match hc.harness {
+                        Harness::Claude => command(&["plugin", "update", &id, "--scope", "user"]),
+                        Harness::Codex => install(plugin),
+                    });
                 }
                 if !entry.enabled {
                     out.warnings.push(format!("note: {id} is installed but disabled in {name}; ai-stack leaves it disabled"));
@@ -477,8 +479,6 @@ pub mod fake {
         pub codex: RefCell<State>,
         /// Every mutating command run, as displayed.
         pub ran: RefCell<Vec<String>>,
-        /// Version a Codex `plugin add` records.
-        pub codex_version: RefCell<String>,
     }
 
     impl Runner for FakeRunner {
@@ -517,8 +517,14 @@ pub mod fake {
                     self.ran.borrow_mut().push(cmd.to_string());
                     String::new()
                 }
-                (_, ["plugin", "install" | "add", id]) => {
-                    state.installed.insert(id.to_string(), self.codex_version.borrow().clone());
+                (_, ["plugin", "install" | "add", id]) | (Harness::Claude, ["plugin", "update", id, "--scope", "user"]) => {
+                    let version = if let Some(plugin) = id.strip_suffix("@jm") {
+                        let stack = Path::new(&state.marketplaces[MARKETPLACE]);
+                        read_manifest(stack, cmd.harness).unwrap().into_iter().find(|(name, _)| name == plugin).and_then(|(_, version)| version).unwrap_or_default()
+                    } else {
+                        "1.0.0".into()
+                    };
+                    state.installed.insert(id.to_string(), version);
                     self.ran.borrow_mut().push(cmd.to_string());
                     String::new()
                 }
@@ -666,6 +672,47 @@ mod tests {
             assert_eq!(plan.commands.len(), 1 + PLUGINS.len());
         }
         assert!(!f.home.exists());
+    }
+
+    #[test]
+    fn claude_refresh_uses_the_user_install_and_plugin_manifest_version() {
+        use crate::install::tests::{fixture, put};
+        use serde_json::json;
+
+        struct ScopedPlugins<'a> {
+            inner: &'a fake::FakeRunner,
+            installed: Value,
+        }
+        impl Runner for ScopedPlugins<'_> {
+            fn available(&self, harness: Harness) -> bool { self.inner.available(harness) }
+            fn run(&self, cmd: &Command) -> io::Result<Ran> {
+                if cmd.harness == Harness::Claude && cmd.args == strings(&["plugin", "list", "--json"]) {
+                    Ok(Ran { ok: true, stdout: self.installed.to_string(), stderr: String::new() })
+                } else {
+                    self.inner.run(cmd)
+                }
+            }
+        }
+
+        let f = fixture();
+        f.apply(&f.plan());
+        // The throwaway CLI probe confirmed plugin.json wins when these versions disagree.
+        put(&f.stack.join(".claude-plugin/marketplace.json"), &json!({"name":"jm", "plugins":[{"name":"jm-stack", "source":"./plugins/pstack", "version":"9.0.0"}]}).to_string());
+        let hc = f.cfg.harnesses.iter().find(|hc| hc.harness == Harness::Claude).unwrap();
+        let project = json!({"id":"jm-stack@jm", "version":"0.1.0", "scope":"project"});
+        for (installed, expected) in [
+            (json!([project, {"id":"jm-stack@jm", "version":"1.0.0", "scope":"user"}]), vec![]),
+            (json!([project, {"id":"jm-stack@jm", "version":"0.1.0", "scope":"user"}]), strings(&["plugin", "update", "jm-stack@jm", "--scope", "user"])),
+            (json!([project, {"id":"jm-stack@jm", "version":"0.1.0"}]), strings(&["plugin", "update", "jm-stack@jm", "--scope", "user"])),
+            (json!([project]), strings(&["plugin", "install", "jm-stack@jm"])),
+            (json!([{"id":"jm-stack@jm", "version":"0.1.0", "scope":"local"}, {"id":"jm-stack@jm", "version":"0.1.0", "scope":"synced"}]), strings(&["plugin", "install", "jm-stack@jm"])),
+        ] {
+            let runner = ScopedPlugins { inner: &f.runner, installed };
+            let mut out = Plan::default();
+            plan(&f.cfg, hc, &runner, &mut out).unwrap();
+            assert!(out.conflicts.is_empty(), "{:?}", out.conflicts);
+            assert_eq!(out.commands.iter().map(|cmd| cmd.args.clone()).collect::<Vec<_>>(), if expected.is_empty() { vec![] } else { vec![expected] });
+        }
     }
 
     #[test]

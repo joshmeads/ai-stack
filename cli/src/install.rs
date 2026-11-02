@@ -20,8 +20,6 @@ use crate::stackfile;
 const LEGACY_LOCAL_BEGIN: &str = "<!-- open-pstack:local:begin -->";
 const LEGACY_LOCAL_END: &str = "<!-- open-pstack:local:end -->";
 const ROUTING_BLOCK: &str = "routing";
-/// Claude only: the Anthropic prompting-guide bullets.
-const GUIDANCE_BLOCK: &str = "anthropic-guidance";
 /// Claude's `@` import of the sheet.
 const SHEET_BLOCK: &str = "pstack-models";
 /// The owner's global instructions from `<stack>/instructions/`, inlined for every harness.
@@ -111,9 +109,8 @@ fn plan_sheet(cfg: &Config, owner: &links::Owner, hc: &HarnessConfig, opts: Opti
 }
 
 /// CLAUDE.md or AGENTS.md: drops leftover blocks, then upserts (or removes) the owner's
-/// instructions block, the routing block, the guidance
-/// block (Claude), and the sheet include (Claude) or mirror (Codex). User text outside the
-/// blocks is kept.
+/// instructions block, the routing block, and the sheet include (Claude) or mirror (Codex).
+/// User text outside the blocks is kept.
 fn plan_instructions(cfg: &Config, hc: &HarnessConfig, folders: &links::Index, out: &mut Plan) -> Result<()> {
     let requested = hc.home.join(hc.harness.instruction_file());
     if folders.blocks_write(&requested, out) { return Ok(()); }
@@ -122,8 +119,7 @@ fn plan_instructions(cfg: &Config, hc: &HarnessConfig, folders: &links::Index, o
     blocks::validate(&original).with_context(|| format!("checking managed markers in {}", path.display()))?;
     let mut text = blocks::remove_marked(&original, LEGACY_LOCAL_BEGIN, LEGACY_LOCAL_END)?;
     for name in blocks::block_names(&text) {
-        let guidance = hc.harness == Harness::Claude && name == GUIDANCE_BLOCK;
-        if ![ROUTING_BLOCK, SHEET_BLOCK, INSTRUCTIONS_BLOCK].contains(&name.as_str()) && !guidance {
+        if ![ROUTING_BLOCK, SHEET_BLOCK, INSTRUCTIONS_BLOCK].contains(&name.as_str()) {
             text = blocks::remove(&text, &name)?;
         }
     }
@@ -137,9 +133,6 @@ fn plan_instructions(cfg: &Config, hc: &HarnessConfig, folders: &links::Index, o
     }
     let sheet = sheet_path(hc);
     text = blocks::upsert(&text, ROUTING_BLOCK, &render::routing(cfg, hc.harness, &sheet))?;
-    if hc.harness == Harness::Claude {
-        text = blocks::upsert(&text, GUIDANCE_BLOCK, render::ANTHROPIC_GUIDANCE)?;
-    }
     text = match hc.harness {
         Harness::Claude => blocks::upsert(&text, SHEET_BLOCK, &format!("@{}", sheet.display()))?,
         Harness::Codex => blocks::upsert_marked(&text, blocks::PSTACK_BEGIN, blocks::PSTACK_END, &render::sheet(cfg, hc.harness))?,
@@ -318,7 +311,9 @@ pub(crate) mod tests {
         put(&stack.join(".claude-plugin/marketplace.json"), &json!({"name": "jm", "plugins": claude}).to_string());
         put(&stack.join(".agents/plugins/marketplace.json"), &json!({"name": "jm", "plugins": codex}).to_string());
         for (name, dir) in sources {
-            put(&stack.join(dir).join(".codex-plugin/plugin.json"), &json!({"name": name, "version": "1.0.0"}).to_string());
+            for manifest in [".claude-plugin/plugin.json", ".codex-plugin/plugin.json"] {
+                put(&stack.join(dir).join(manifest), &json!({"name": name, "version": "1.0.0"}).to_string());
+            }
         }
         for skill in ["handoff", "feedback", "game-mvp"] {
             put(&stack.join("skills").join(skill).join("SKILL.md"), &format!("---\nname: {skill}\ndescription: The {skill} skill.\n---\n"));
@@ -328,7 +323,6 @@ pub(crate) mod tests {
         cfg.stack.path = stack.clone();
         cfg.stack.legacy_paths = vec![root.join("legacy")];
         let runner = FakeRunner::default();
-        *runner.codex_version.borrow_mut() = "1.0.0".into();
         Fixture { _tmp: tmp, root, stack, home, cfg, runner }
     }
 
@@ -586,8 +580,7 @@ pub(crate) mod tests {
         let claude = f.read(".claude/CLAUDE.md");
         let routing = render::routing(&f.cfg, Harness::Claude, &f.home.join(".claude/pstack-models.md"));
         assert_eq!(claude, format!(
-            "<!-- ai-stack:routing:begin -->\n{routing}\n<!-- ai-stack:routing:end -->\n\n<!-- ai-stack:anthropic-guidance:begin -->\n{}\n<!-- ai-stack:anthropic-guidance:end -->\n\n<!-- ai-stack:pstack-models:begin -->\n@{}/.claude/pstack-models.md\n<!-- ai-stack:pstack-models:end -->\n",
-            render::ANTHROPIC_GUIDANCE,
+            "<!-- ai-stack:routing:begin -->\n{routing}\n<!-- ai-stack:routing:end -->\n\n<!-- ai-stack:pstack-models:begin -->\n@{}/.claude/pstack-models.md\n<!-- ai-stack:pstack-models:end -->\n",
             f.home.display()
         ));
         let codex = f.read(".codex/AGENTS.md");
@@ -596,10 +589,19 @@ pub(crate) mod tests {
 
         assert!(f.plan().is_empty(), "{}", f.plan().render_text(&f.home));
 
-        // A new plugin version in the checkout reinstalls it in Codex only.
-        put(&f.stack.join("plugins/pstack/.codex-plugin/plugin.json"), &json!({"name": "jm-stack", "version": "1.1.0"}).to_string());
-        let bumped: Vec<String> = f.plan().commands.iter().map(ToString::to_string).collect();
-        assert_eq!(bumped, [format!("{codex_env} codex plugin add jm-stack@jm")]);
+        // Both harnesses refresh copied plugins when the checkout version changes.
+        for manifest in [".claude-plugin/plugin.json", ".codex-plugin/plugin.json"] {
+            put(&f.stack.join("plugins/pstack").join(manifest), &json!({"name": "jm-stack", "version": "1.1.0"}).to_string());
+        }
+        f.runner.claude.borrow_mut().disabled.insert("jm-stack@jm".into());
+        let bumped = f.plan();
+        assert_eq!(bumped.commands.iter().map(ToString::to_string).collect::<Vec<_>>(), [
+            format!("{claude_env} claude plugin update jm-stack@jm --scope user"),
+            format!("{codex_env} codex plugin add jm-stack@jm"),
+        ]);
+        f.apply(&bumped);
+        assert!(f.runner.claude.borrow().disabled.contains("jm-stack@jm"));
+        assert!(f.plan().is_empty(), "{}", f.plan().render_text(&f.home));
 
         // A `jm` marketplace from somewhere else is never replaced silently.
         f.runner.claude.borrow_mut().marketplaces.insert("jm".into(), "/elsewhere".into());
@@ -610,6 +612,8 @@ pub(crate) mod tests {
     #[test]
     fn migration_removes_old_links_blocks_hooks_and_agent_files_but_keeps_user_content() {
         let f = fixture();
+        let guidance = include_str!("../../instructions/claude.md").trim();
+        put(&f.stack.join("instructions/claude.md"), guidance);
         let legacy = f.root.join("legacy");
         let skills = f.home.join(".claude/skills");
         let agents = f.home.join(".claude/agents");
@@ -629,6 +633,8 @@ pub(crate) mod tests {
             "# My notes\n\nKeep this.\n\n",
             "<!-- ai-stack:task-discipline:begin -->\nold discipline\n<!-- ai-stack:task-discipline:end -->\n\n",
             "<!-- ai-stack:anthropic-guidance:begin -->\nold guidance\n<!-- ai-stack:anthropic-guidance:end -->\n\n",
+            "<!-- ai-stack:routing:begin -->\nold routing\n<!-- ai-stack:routing:end -->\n\n",
+            "<!-- ai-stack:pstack-models:begin -->\n@/old/sheet.md\n<!-- ai-stack:pstack-models:end -->\n\n",
             "@~/.claude/pstack-models.md\n",
             "<!-- ai-stack:stack-models:begin -->\n@/old/sheet.md\n<!-- ai-stack:stack-models:end -->\n",
         ));
@@ -665,10 +671,12 @@ pub(crate) mod tests {
         assert!(skills.join("own/SKILL.md").exists() && agents.join("haiku-worker.md").exists());
 
         let claude = f.read(".claude/CLAUDE.md");
-        // An existing guidance block is updated where it stands.
-        assert!(claude.starts_with("# My notes\n\nKeep this.\n\n<!-- ai-stack:anthropic-guidance:begin -->"), "{claude}");
-        assert_eq!(blocks::block_names(&claude), ["anthropic-guidance", "routing", "pstack-models"]);
-        assert!(claude.contains(render::ANTHROPIC_GUIDANCE));
+        assert!(claude.starts_with("# My notes\n\nKeep this.\n\n<!-- ai-stack:routing:begin -->"), "{claude}");
+        // Migration appends the new instructions block after the existing routing and sheet.
+        assert_eq!(blocks::block_names(&claude), ["routing", "pstack-models", "instructions"]);
+        assert!(claude.ends_with(&format!("<!-- ai-stack:instructions:begin -->\n{guidance}\n<!-- ai-stack:instructions:end -->\n")));
+        assert!(!f.read(".codex/AGENTS.md").contains(guidance));
+        assert!(!claude.contains("anthropic-guidance"));
         for stale in ["open-pstack:local", "old rules", "old discipline", "old guidance", "@~/.claude/pstack-models.md", "/old/sheet.md"] {
             assert!(!claude.contains(stale), "{stale} in {claude}");
         }
