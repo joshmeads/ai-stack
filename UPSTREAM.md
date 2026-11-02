@@ -21,7 +21,7 @@ This checkout publishes Open Pstack as jm:stack in the `jm` marketplace. It also
 - **Rename.** The plugin is `jm-stack` with display name "jm:stack" in both plugin manifests, so skills are namespaced `jm-stack:<skill>`. `setup-pstack` is `setup-stack`, and the native Claude agents are `stack-<stem>-<effort>`. The SessionStart text, `poteto-agent`'s preload, `poteto-help`, `codex-tools.md`, `docs/reference.md`, and the tests use these names. Other skill names stay upstream's. Internal names stay: the `plugins/pstack/` directory, `pstack-models.md`, the `pstack:models` markers, the sheet heading, and `pstack-runner`.
 - **Models.** The Grok family and the runner's Grok adapter are removed, with their matrix row, defaults, docs, and tests. The matrix adds `luna` (`codex:gpt-6-luna`, default `xhigh`) and `haiku` (`claude:haiku`, a rolling alias normalized and verified like Fable and Opus, default `xhigh`, native agents `stack-haiku-<effort>`). Opus and Sol default to `xhigh`. Every first-run role and every skill's built-in default uses Opus or Sol, and the panels are Opus then Sol. Fable, Luna, and Haiku stay selectable but unused by default; the ai-stack CLI's per-harness sheets assign Luna or Haiku to `how explorer`.
 - **Marketplace.** Both marketplace manifests are named `jm` and list only `jm-stack` (`./plugins/pstack`). The repo's other skills are standalone skills in `skills/`.
-- **Maintainer process.** Open Pstack's own process files are removed: the `verify-open-pstack` project skill and its static check, `REVIEW.md`, `.github/unfret.json`, the `live-gate` pull request template, and `open-pstack.code-workspace`. When an Open Pstack merge changes them, keep them deleted.
+- **Maintainer process.** Open Pstack's own process files are removed: the `verify-open-pstack` project skill and its static check, `REVIEW.md`, `.github/unfret.json`, the `live-gate` pull request template, `open-pstack.code-workspace`, `.mergify.yml`, and `scripts/release.py` with `scripts/release_test.py`. When an Open Pstack merge changes them, keep them deleted.
 
 When a Cursor or Open Pstack change touches Grok (runner adapter, preflight, environment allowlist, default descriptors), apply only the parts that are not Grok-specific and restate any changed default as Opus or Sol. The runner contract keeps the generic adapter features Grok used (`prompt: "file"`, the preflight retry, the environment allowlist) so Open Pstack merges stay small.
 
@@ -71,11 +71,11 @@ No output means the tracked pstack tree has not changed. This comparison does no
 
 ## Incorporate a change
 
-1. Create or update a GitHub issue in `ericlitman/open-pstack` and branch from current `main`.
+1. Create or update a GitHub issue in `joshmeads/ai-stack` and branch from current `main`.
 2. Read each upstream pstack commit in order. Bring over its intent and content, then apply only the Claude Code and Codex substitutions documented in `CHANGES.md`.
 3. Keep one shared `plugins/pstack/skills/` tree. Put harness translation in the existing `codex-tools.md` and provider routing in `provider-dispatch.md`; do not fork a skill per harness.
 4. Update the commit and version in this file, the affected provenance rows in `NOTICE.md`, and `README-UPSTREAM.md` when upstream changes it.
 5. Run CI-equivalent checks locally, then run the installed Claude Code and Codex behavioral lanes required by the changed surface. Unit tests alone are not a release gate.
-6. Merge the reviewed PR before tagging the next open-pstack release. Publish the release with `python3 scripts/release.py publish` from a clean checkout of `main`.
+6. Merge the reviewed PR into `main`. This repository has no release script. Version bumps follow the plugin version rule in `AGENTS.md`.
 
 Cursor's version and open-pstack's version are independent. Cursor's version identifies the imported content; open-pstack's version identifies the cross-harness distribution.
