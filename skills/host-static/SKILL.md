@@ -8,6 +8,8 @@ description: Host a built static folder (a demo, playground or build preview) at
 The logic lives in `scripts/host.sh` of the games deploy repo on `cachy`:
 `~/Documents/Projects/@joshmeads/games/deploy/.claude/worktrees/host` (branch `host-caddy`). It copies the folder to `hosted/<slug>/` on the `site` branch, commits only that path, releases it, checks for a 200 and prints the URL. Nothing on the site links to it.
 
+The script lives only on the unmerged `host-caddy` branch, in that worktree. It is not on the deploy repo's `main` yet, so do not use the main checkout.
+
 1. Build with relative asset paths (Vite: `--base ./`). Pick a slug of lowercase letters, digits and dashes. Rerunning with the same slug replaces that page.
 2. Pass the page to open as ENTRY when the folder's `index.html` is not the one to land on; the root then redirects there.
 3. Run it. On cachy, call the script directly. From another machine, copy the folder over first:
