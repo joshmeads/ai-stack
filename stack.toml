@@ -40,6 +40,7 @@ skills = [
 global = true
 skills = [
     "codex-session-export",
+    "devtools-perf",
     "feedback",
     "handoff",
     "host-static",
