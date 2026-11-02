@@ -62,8 +62,7 @@ export function printStep(r) {
   if (b) {
     const mt = b.mainThread;
     const procs = Object.entries(b.processCpuMs).filter(([, v]) => v > 0.5).sort((x, y) => y[1] - x[1]).map(([k, v]) => `${k} ${v}`).join(", ");
-    if (b.navigated) console.log("  navigated: browser heap and DOM are totals after GC, not deltas");
-    if (mt.countersReset) console.log("  main-thread counters restarted in a new renderer: figures cover the new document only");
+    if (b.navigated || mt.countersReset) console.log("  navigated: main-thread figures cover the new document only; heap and DOM are totals after GC, not deltas");
     console.log(`  browser main thread ${mt.taskMs}ms: script ${mt.scriptMs}, layout ${mt.layoutMs} (${mt.layouts}x), style ${mt.styleMs} (${mt.styleRecalcs}x)${procs ? ` | process cpu ms: ${procs}` : ""}`);
     const dom = b.dom
       ? `dom nodes ${signed(b.dom.nodes)}, listeners ${signed(b.dom.listeners)}`
