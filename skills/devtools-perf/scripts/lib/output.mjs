@@ -29,7 +29,10 @@ const scriptName = (u) => u.split("?")[0].split("/").slice(-2).join("/");
 
 function printProfile(indent, prof) {
   if (!prof) return;
-  const { cpu, alloc } = prof;
+  const { cpu, alloc, partial } = prof;
+  if (partial) {
+    console.log(`${indent} PARTIAL profile: the profilers restarted mid-step (a new document), so function lists and allocated bytes cover only the last ${partial.coveredMs}ms of ${partial.windowMs}ms`);
+  }
   if (cpu?.error) console.log(`${indent} cpu profile unavailable: ${cpu.error}`);
   else if (cpu) {
     if (cpu.self.length) console.log(`${indent} top self: ${list(cpu.self, ms)}`);
@@ -47,7 +50,7 @@ function printProfile(indent, prof) {
 }
 
 function heapLine(h) {
-  const alloc = h.allocatedBytes === null ? "" : `${size(h.allocatedBytes, false)} allocated, `;
+  const alloc = h.allocatedBytes === null ? "" : `${size(h.allocatedBytes, false)} allocated${h.allocatedPartial ? " (partial)" : ""}, `;
   const retained = h.retainedBytes === null ? "" : `${size(h.retainedBytes)} retained after GC, `;
   return `${alloc}${retained}total after GC ${size(h.totalAfterGcBytes, false)}`;
 }
@@ -62,17 +65,28 @@ export function printStep(r) {
   if (b) {
     const mt = b.mainThread;
     const procs = Object.entries(b.processCpuMs).filter(([, v]) => v > 0.5).sort((x, y) => y[1] - x[1]).map(([k, v]) => `${k} ${v}`).join(", ");
+    const scope = b.processCpuRenderers === "this page" ? "renderer = this page's" : "renderer = all renderers";
     if (b.navigated || mt.countersReset) console.log("  navigated: main-thread figures cover the new document only; heap and DOM are totals after GC, not deltas");
-    console.log(`  browser main thread ${mt.taskMs}ms: script ${mt.scriptMs}, layout ${mt.layoutMs} (${mt.layouts}x), style ${mt.styleMs} (${mt.styleRecalcs}x)${procs ? ` | process cpu ms: ${procs}` : ""}`);
+    console.log(`  browser main thread ${mt.taskMs}ms: script ${mt.scriptMs}, layout ${mt.layoutMs} (${mt.layouts}x), style ${mt.styleMs} (${mt.styleRecalcs}x)${procs ? ` | process cpu ms (${scope}): ${procs}` : ""}`);
+    if (b.processesExitedMidStep) {
+      const gone = b.processesExitedMidStep.map((p) => `${p.thisPage ? "this page's " : ""}${p.type} pid ${p.pid}`).join(", ");
+      console.log(`  exited mid-step, CPU not counted: ${gone}`);
+    }
     const dom = b.dom
       ? `dom nodes ${signed(b.dom.nodes)}, listeners ${signed(b.dom.listeners)}`
       : `dom nodes ${b.domTotalAfterGc.nodes}, listeners ${b.domTotalAfterGc.listeners} (totals)`;
     console.log(`  browser heap ${heapLine(b.heap)} | ${dom}`);
     const lt = b.longTasks;
-    if (lt?.error) console.log(`  long tasks: not observed (${lt.error})`);
-    else if (lt && !lt.observed) console.log(`  long tasks: not observed (${lt.reason})`);
-    else if (lt?.longTasksMs.length) console.log(`  long tasks ${lt.longTasksMs.length} (max ${Math.max(...lt.longTasksMs)}ms, total ${lt.longTasksMs.reduce((x, y) => x + y, 0)}ms)`);
-    else if (lt) console.log("  long tasks: none");
+    if (lt.error) console.log(`  long tasks: not observed (${lt.error})`);
+    else if (!lt.observed) console.log(`  long tasks: not observed (${lt.reason})`);
+    else {
+      const on = [lt.withProfiler && "profiler", lt.withTraceSampler && "--trace sampler"].filter(Boolean);
+      const label = `long tasks${on.length ? ` (with ${on.join(" and ")} on)` : ""}`;
+      const found = lt.longTasksMs.length
+        ? `${lt.longTasksMs.length} (max ${Math.max(...lt.longTasksMs)}ms, total ${lt.longTasksMs.reduce((x, y) => x + y, 0)}ms)`
+        : lt.dataLoss ? "" : "none";
+      console.log(`  ${label}: ${[found, lt.dataLoss && "incomplete (trace data lost)"].filter(Boolean).join(", ")}`);
+    }
     if (b.requests.length) console.log(`  requests: ${b.requests.slice(0, 8).map((q) => `${q.method} ${shortUrl(q.url)} ${q.status ?? "?"} ${q.ms ?? "?"}ms`).join("; ")}${b.requests.length > 8 ? ` (+${b.requests.length - 8} more)` : ""}`);
     printProfile("  browser", b.profile);
   }

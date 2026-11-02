@@ -19,8 +19,8 @@ Setup:
   cdt pages                                      list browser page targets
   cdt node-targets [--scan 9229-9239]            list Node inspectors (pid, argv) to pick for --node
   cdt close                                      close the browser on --port
-  cdt next build|start [--dir app] [-- args]     Next.js with source maps forced on, built into .next/cdt-profile;
-                                                 your next.config and .next are not touched
+  cdt next build|start [--dir app] [-- args]     Next.js with source maps forced on, built into <distDir>/cdt-profile;
+                                                 your next.config and own build are not touched
 
 Page helpers:
   cdt goto <url> | eval <js> | shot <file.png> | heap <file.heapsnapshot>
@@ -52,9 +52,10 @@ Options:
   --settle MS         wait after the action before sampling (default 500)
   --repeat N          run the action/flow N times and report the after-GC trend per iteration
   --throttle N        browser CPU throttling factor (e.g. 4)
-  --no-profile        no CPU or allocation profilers and no long-task trace: clean CPU numbers, but no
-                      function lists, allocated bytes or long tasks
-  --trace             also record a browser DevTools trace (open in the Performance panel)
+  --no-profile        no CPU or allocation profilers: clean CPU numbers and long tasks, but no function
+                      lists or allocated bytes
+  --trace             also record a full browser DevTools trace (open in the Performance panel); it
+                      samples JS too, so read pictures from it, not numbers
   --heap-snapshots    heap snapshot before and after each step, per target (slow on big heaps)
   --cdp-timeout MS    longest wait for a DevTools protocol reply (default 60000; 0 waits forever)
   --action-timeout MS longest wait for an action, e.g. a page load or a run command (default 300000; 0 waits forever)
@@ -63,6 +64,7 @@ Options:
 `;
 
 const BOOL = new Set(["headless", "no-profile", "no-browser", "trace", "heap-snapshots", "json", "help"]);
+const VALUE = new Set(["port", "target", "node", "filter", "label", "settle", "repeat", "throttle", "cdp-timeout", "action-timeout", "out", "dir", "scan"]);
 
 function parseArgs(argv) {
   const opts = {};
@@ -73,7 +75,8 @@ function parseArgs(argv) {
     if (a.startsWith("--")) {
       const key = a.slice(2);
       if (BOOL.has(key)) opts[key] = true;
-      else if (i + 1 >= argv.length) throw new Error(`--${key} needs a value`);
+      else if (!VALUE.has(key)) throw new Error(`unknown flag --${key}. See cdt --help.`);
+      else if (i + 1 >= argv.length || argv[i + 1].startsWith("--")) throw new Error(`--${key} needs a value`);
       else opts[key] = argv[++i];
     } else pos.push(a);
   }
