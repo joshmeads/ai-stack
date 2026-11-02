@@ -55,7 +55,7 @@ git fetch upstream main
 git merge upstream/main
 ```
 
-Read [UPSTREAM.md](UPSTREAM.md) before changing content that came from pstack. [README-OPEN-PSTACK.md](README-OPEN-PSTACK.md) is Open Pstack's own README, and [README-UPSTREAM.md](README-UPSTREAM.md) is Lauren Tan's original.
+Read [UPSTREAM.md](UPSTREAM.md) before changing content that came from pstack. [Open Pstack's README](https://github.com/ericlitman/open-pstack) describes the upstream port, and [README-UPSTREAM.md](README-UPSTREAM.md) is Lauren Tan's original.
 
 ## Credits
 
