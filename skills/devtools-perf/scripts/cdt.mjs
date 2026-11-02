@@ -52,7 +52,8 @@ Options:
   --settle MS         wait after the action before sampling (default 500)
   --repeat N          run the action/flow N times and report the after-GC trend per iteration
   --throttle N        browser CPU throttling factor (e.g. 4)
-  --no-profile        no CPU or allocation profilers: clean CPU numbers, no function lists or allocation bytes
+  --no-profile        no CPU or allocation profilers and no long-task trace: clean CPU numbers, but no
+                      function lists, allocated bytes or long tasks
   --trace             also record a browser DevTools trace (open in the Performance panel)
   --heap-snapshots    heap snapshot before and after each step, per target (slow on big heaps)
   --cdp-timeout MS    longest wait for a DevTools protocol reply (default 60000; 0 waits forever)

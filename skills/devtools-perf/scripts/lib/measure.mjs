@@ -1,11 +1,12 @@
 // One measured step on every target (browser page and Node servers):
 //
 //   heap snapshots (opt) → prepare action → GC → start probes → sample
-//   → act → settle → sample → stop probes (in parallel) → GC → sample
-//   → heap snapshots (opt) → symbolicate and write artifacts
+//   → act → settle → sample → stop probes (trace first, then the rest in
+//   parallel) → GC → sample → heap snapshots (opt) → symbolicate and write
+//   artifacts
 //
 // Nothing that costs CPU or allocates on a target (fetching source maps
-// from the server, writing files) runs before the last sample.
+// from the server) runs before the last sample.
 
 import { appendFileSync, closeSync, existsSync, mkdirSync, openSync, readdirSync, writeFileSync, writeSync } from "node:fs";
 import { tmpdir } from "node:os";
@@ -16,31 +17,6 @@ import { printLeak, printStep, slug } from "./output.mjs";
 import { allocSummary, cpuSummary } from "./profile.mjs";
 import { round, sec, sleep } from "./util.mjs";
 
-const BINDING = "__cdtReport";
-
-// Long-task and long-animation-frame observer. Installed in the current
-// document and, through Page.addScriptToEvaluateOnNewDocument, in every new
-// top-level document before its own scripts, so navigations stay observed.
-// Entries go straight to the CLI through a CDP binding and survive the
-// document that produced them.
-const OBSERVER = `(() => {
-  if (window !== window.top || window.__cdtObs || typeof ${BINDING} !== "function") return;
-  const types = ["longtask", "long-animation-frame"].filter(t => PerformanceObserver.supportedEntryTypes?.includes(t));
-  if (!types.includes("longtask")) return;
-  const send = list => {
-    if (!list.length) return;
-    ${BINDING}(JSON.stringify({ entries: list.map(e => ({
-      type: e.entryType,
-      at: performance.timeOrigin + e.startTime,
-      ms: Math.round(e.entryType === "long-animation-frame" ? e.blockingDuration : e.duration),
-    })) }));
-  };
-  window.__cdtObs = new PerformanceObserver(l => send(l.getEntries()));
-  for (const type of types) window.__cdtObs.observe({ type, buffered: true });
-  window.__cdtFlush = () => send(window.__cdtObs.takeRecords());
-  ${BINDING}(JSON.stringify({ install: true }));
-})()`;
-
 // Two frames so rendering caused by the action lands in the window. Raced
 // against a timeout because rAF stalls in hidden tabs; the loser is
 // cancelled so nothing lingers into the retained-memory sample.
@@ -50,11 +26,19 @@ const TWO_FRAMES = `new Promise(r => {
   id = requestAnimationFrame(() => { id = requestAnimationFrame(() => { clearTimeout(t); r(); }); });
 })`;
 
+// Long tasks come from a trace, not a PerformanceObserver: a task that runs
+// while a same-process navigation commits (parsing the new page's first
+// chunk, its inline scripts) is attributed to the outgoing document, so no
+// observer ever sees it. This category carries RunTask for every task plus
+// the frame-to-process events that tie renderer threads to this page.
+const LONG_TASK_CATEGORIES = ["-*", "disabled-by-default-devtools.timeline"];
+// --trace: what the Performance panel records, JS samples included.
 const TRACE_CATEGORIES = [
   "-*", "devtools.timeline", "disabled-by-default-devtools.timeline", "disabled-by-default-devtools.timeline.frame",
   "disabled-by-default-devtools.timeline.stack", "v8.execute", "disabled-by-default-v8.cpu_profiler", "blink.user_timing",
   "loading", "latencyInfo", "gpu",
 ];
+const LONG_TASK_US = 50_000;
 
 // ---------- probes ----------
 // A probe records something between start() and stop(). Failures other
@@ -123,7 +107,6 @@ function navProbe(page) {
     },
     async () => { offs.forEach((off) => off()); return count; },
   );
-  p.count = () => count;
   p.untilLoaded = async (ms) => {
     if (!loading) return;
     const w = page.waitFor("Page.frameStoppedLoading", ms, (e) => e.frameId === page.mainFrameId);
@@ -133,43 +116,44 @@ function navProbe(page) {
   return p;
 }
 
-function longTaskProbe(page, nav) {
-  let from = Infinity, startObserved = false, installs = 0, off;
-  const entries = [];
+// Records the page's trace for the step. Returns long tasks: tasks of 50ms
+// or more on the main thread of any renderer that hosted one of the page's
+// frames. With file set, also streams every event there (--trace).
+function traceProbe(page, file) {
+  const threads = new Map(), pids = new Set(), pending = new Set(), tasks = [];
+  let off, fd, sep = "";
+  const see = (e) => {
+    const d = e.args?.data;
+    if (e.ph === "M" && e.name === "thread_name") threads.set(`${e.pid}:${e.tid}`, e.args.name);
+    else if (e.name === "TracingStartedInBrowser") (d?.frames ?? []).forEach((f) => f.processId && pids.add(f.processId));
+    else if (e.name === "FrameCommittedInBrowser") { if (d?.processId) pids.add(d.processId); else if (d?.processPseudoId) pending.add(d.processPseudoId); }
+    else if (e.name === "ProcessReadyInBrowser") { if (pending.has(d?.processPseudoId)) pids.add(d.processId); }
+    else if (e.ph === "X" && e.name === "RunTask" && e.dur >= LONG_TASK_US) tasks.push(e);
+  };
   return probe(
     async () => {
-      off = page.on("Runtime.bindingCalled", (p) => {
-        if (p.name !== BINDING) return;
-        const m = JSON.parse(p.payload);
-        if (m.install) installs++;
-        for (const e of m.entries ?? []) if (e.at >= from) entries.push(e);
+      if (file) { fd = openSync(file, "w"); writeSync(fd, '{"traceEvents":[\n'); }
+      off = page.on("Tracing.dataCollected", ({ value }) => {
+        for (const e of value) see(e);
+        if (fd !== undefined) { writeSync(fd, sep + value.map((e) => JSON.stringify(e)).join(",\n")); if (value.length) sep = ",\n"; }
       });
-      const now = await evaluate(page, `(${OBSERVER}, window.__cdtObs ? performance.timeOrigin + performance.now() : null)`);
-      startObserved = now !== null;
-      if (startObserved) from = now;
+      await page.send("Tracing.start", { traceConfig: { includedCategories: file ? TRACE_CATEGORIES : LONG_TASK_CATEGORIES }, transferMode: "ReportEvents" });
     },
     async () => {
-      await evaluate(page, "window.__cdtFlush?.()").catch((e) => { if (e instanceof TargetLost) throw e; });
-      off();
-      // Observed only if the starting document and every document the
-      // step navigated to had the observer.
-      const observed = startObserved && installs >= nav.count();
-      const pick = (type) => entries.filter((e) => e.type === type && e.ms > 0).map((e) => e.ms);
-      return observed
-        ? { observed, longTasksMs: pick("longtask"), loafBlockingMs: pick("long-animation-frame") }
-        : { observed, reason: startObserved ? "a navigated-to document had no observer" : "this browser has no longtask observer" };
+      const done = page.waitFor("Tracing.tracingComplete", limits.cdpMs);
+      try {
+        await page.send("Tracing.end");
+        await done.promise;
+      } finally {
+        off();
+        if (fd !== undefined) { writeSync(fd, "\n]}\n"); closeSync(fd); }
+      }
+      if (!pids.size) return { observed: false, reason: "the trace did not say which renderer hosts this page" };
+      const main = tasks.filter((e) => pids.has(e.pid) && threads.get(`${e.pid}:${e.tid}`) === "CrRendererMain");
+      return { observed: true, longTasksMs: main.map((e) => Math.round(e.dur / 1000)) };
     },
   );
 }
-
-const traceProbe = (page) => probe(
-  () => page.send("Tracing.start", { traceConfig: { includedCategories: TRACE_CATEGORIES }, transferMode: "ReturnAsStream" }),
-  async () => {
-    const done = page.waitFor("Tracing.tracingComplete", limits.cdpMs);
-    await page.send("Tracing.end");
-    return (await done.promise).stream;
-  },
-);
 
 // ---------- samples ----------
 
@@ -209,30 +193,16 @@ export async function heapSnapshot(t, file) {
   return file;
 }
 
-async function writeStream(t, handle, file) {
-  const fd = openSync(file, "w");
-  try {
-    for (;;) {
-      const r = await t.send("IO.read", { handle, size: 1 << 20 });
-      writeSync(fd, r.base64Encoded ? Buffer.from(r.data, "base64") : r.data);
-      if (r.eof) break;
-    }
-  } finally {
-    closeSync(fd);
-    await t.send("IO.close", { handle }).catch(() => {});
-  }
-  return file;
-}
-
 // ---------- diffs ----------
 
 const MAIN_THREAD = { taskMs: "TaskDuration", scriptMs: "ScriptDuration", layoutMs: "LayoutDuration", styleMs: "RecalcStyleDuration", layouts: "LayoutCount", styleRecalcs: "RecalcStyleCount" };
 const DOM = { nodes: "Nodes", listeners: "JSEventListeners", documents: "Documents", frames: "Frames" };
 
 function mainThread(a, b) {
-  // A navigation into a new renderer starts these counters from zero; the
-  // after values are then the new document's whole cost so far.
-  const reset = Object.values(MAIN_THREAD).some((k) => (b.m[k] ?? 0) < (a.m[k] ?? 0));
+  // These counters restart with every new document (NavigationStart
+  // changes; same-site navigations included), so after a navigation the
+  // after values are the new document's whole cost so far.
+  const reset = b.m.NavigationStart !== a.m.NavigationStart || Object.values(MAIN_THREAD).some((k) => (b.m[k] ?? 0) < (a.m[k] ?? 0));
   const out = {};
   for (const [name, k] of Object.entries(MAIN_THREAD)) {
     const v = (b.m[k] ?? 0) - (reset ? 0 : (a.m[k] ?? 0));
@@ -255,7 +225,7 @@ const pick = (m, keys) => Object.fromEntries(Object.entries(keys).map(([name, k]
 
 // ---------- step ----------
 
-async function summarise(t, cpu, alloc, filter) {
+async function summarise(cpu, alloc, filter) {
   const out = {};
   if (cpu) out.cpu = cpu.result?.error ? cpu.result : cpu.result && (await cpuSummary(cpu.result, filter));
   if (alloc) out.alloc = alloc.result?.error ? alloc.result : alloc.result && (await allocSummary(alloc.result, filter));
@@ -284,12 +254,19 @@ export async function measureStep(ctx, step, cfg, tag) {
   const cpu = new Map(cfg.profile ? targets.map((t) => [t, cpuProbe(t)]) : []);
   const alloc = new Map(cfg.profile ? targets.map((t) => [t, allocProbe(t)]) : []);
   const nav = page && navProbe(page);
-  const pageProbes = page ? { nav, network: networkProbe(page), longTasks: longTaskProbe(page, nav), trace: cfg.trace && traceProbe(page) } : {};
-  const all = [...cpu.values(), ...alloc.values(), ...Object.values(pageProbes)].filter(Boolean);
+  const network = page && networkProbe(page);
+  const traceFile = cfg.trace && page && art(page, "trace.json");
+  const trace = page && (cfg.profile || cfg.trace) ? traceProbe(page, traceFile) : null;
+  const rest = [...cpu.values(), ...alloc.values(), nav, network].filter(Boolean);
+  const all = [...rest, trace].filter(Boolean);
 
   let before, after, afterGc;
   try {
-    await Promise.all(all.map((p) => p.start()));
+    // The trace starts last and stops first, so starting and stopping the
+    // profilers (Profiler.stop serialises the whole profile on the main
+    // thread) never shows up as a long task.
+    await Promise.all(rest.map((p) => p.start()));
+    await trace?.start();
     before = await sampleAll(ctx);
     const t0 = performance.now();
     try {
@@ -313,7 +290,8 @@ export async function measureStep(ctx, step, cfg, tag) {
     if (e instanceof TargetLost) throw e;
     return { ...result, error: `measurement failed: ${e.message}` };
   }
-  await Promise.all(all.map((p) => p.stop()));
+  await trace?.stop();
+  await Promise.all(rest.map((p) => p.stop()));
   await Promise.all(targets.map(gc));
   afterGc = await sampleAll(ctx);
   if (cfg.heapSnapshots) for (const t of targets) artifacts[`${t.name} heapAfter`] = await heapSnapshot(t, art(t, "after.heapsnapshot"));
@@ -324,17 +302,19 @@ export async function measureStep(ctx, step, cfg, tag) {
     if (c && !c.error) writeFileSync((artifacts[`${t.name} cpuprofile`] = art(t, "cpuprofile")), JSON.stringify(c));
     if (a && !a.error) writeFileSync((artifacts[`${t.name} heapprofile`] = art(t, "heapprofile")), JSON.stringify(a));
   }
-  const trace = pageProbes.trace?.result;
-  if (trace?.error) artifacts.traceError = trace.error;
-  else if (trace) artifacts.trace = await writeStream(page, trace, art(page, "trace.json"));
+  if (traceFile) {
+    if (trace.result?.error) artifacts.traceError = trace.result.error;
+    else artifacts.trace = traceFile;
+  }
 
   if (page) {
     const [b, a, g] = [before.page, after.page, afterGc.page];
-    const navigated = nav.result > 0;
-    const prof = await summarise(page, cpu.get(page), alloc.get(page), cfg.filter);
+    const mt = mainThread(b, a);
+    const navigated = nav.result > 0 || !!mt.countersReset;
+    const prof = await summarise(cpu.get(page), alloc.get(page), cfg.filter);
     result.browser = {
       navigated,
-      mainThread: mainThread(b, a),
+      mainThread: mt,
       processCpuMs: processCpu(b, a),
       heap: {
         allocatedBytes: prof.alloc && !prof.alloc.error ? prof.alloc.allocatedBytes : null,
@@ -345,14 +325,14 @@ export async function measureStep(ctx, step, cfg, tag) {
       },
       dom: navigated ? null : Object.fromEntries(Object.entries(DOM).map(([name, k]) => [name, (g.m[k] ?? 0) - (b.m[k] ?? 0)])),
       domTotalAfterGc: pick(g.m, DOM),
-      longTasks: pageProbes.longTasks.result,
-      requests: pageProbes.network.result ?? [],
+      longTasks: trace ? trace.result : { observed: false, reason: "not recorded with --no-profile" },
+      requests: network.result ?? [],
       profile: cfg.profile ? prof : null,
     };
   }
   result.servers = await Promise.all(nodes.map(async (t, i) => {
     const [b, a, g] = [before.nodes[i], after.nodes[i], afterGc.nodes[i]];
-    const prof = await summarise(t, cpu.get(t), alloc.get(t), cfg.filter);
+    const prof = await summarise(cpu.get(t), alloc.get(t), cfg.filter);
     return {
       name: t.name,
       argv: t.argv,
@@ -421,19 +401,13 @@ function prepareOut(dir) {
 
 async function setupPage(page, cfg) {
   await page.send("Page.enable");
-  await page.send("Runtime.enable");
   await page.send("Performance.enable");
   await page.send("Network.enable");
   await page.send("Page.bringToFront").catch(() => {});
   page.mainFrameId = (await page.send("Page.getFrameTree")).frameTree.frame.id;
-  await page.send("Runtime.addBinding", { name: BINDING });
-  const { identifier } = await page.send("Page.addScriptToEvaluateOnNewDocument", { source: OBSERVER });
   if (cfg.throttle) await page.send("Emulation.setCPUThrottlingRate", { rate: cfg.throttle });
   return async () => {
     if (cfg.throttle) await page.send("Emulation.setCPUThrottlingRate", { rate: 1 });
-    await page.send("Page.removeScriptToEvaluateOnNewDocument", { identifier });
-    await evaluate(page, "window.__cdtObs?.disconnect(); delete window.__cdtObs; delete window.__cdtFlush;");
-    await page.send("Runtime.removeBinding", { name: BINDING });
   };
 }
 
