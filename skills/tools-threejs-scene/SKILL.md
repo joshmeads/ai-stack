@@ -3,9 +3,9 @@ name: tools-threejs-scene
 description: >
   Stand up a three.js scene: import maps and the three/addons path, the
   Scene/PerspectiveCamera/WebGLRenderer trio, the setAnimationLoop render loop,
-  responsive resize, and OrbitControls. Use when starting or debugging a three.js
-  app — when the user mentions three.js, THREE.Scene, WebGLRenderer,
-  PerspectiveCamera, the render loop, resizing, or OrbitControls. For models use
+  responsive resize, and OrbitControls. Use when starting a three.js app or
+  fixing its scene setup: THREE.Scene, WebGLRenderer, PerspectiveCamera, the
+  render loop, resizing, or OrbitControls. For models use
   tools-threejs-gltf; for materials/lights use tools-threejs-materials.
 ---
 

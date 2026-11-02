@@ -1,6 +1,6 @@
 ---
 name: tools-blender-model
-description: Build or fix a 3D model in Blender (prop, vehicle, building, character or scenery) as parametric Python that exports to glTF for a browser game. Works a build, render, look, fix loop with headless Blender rather than writing geometry blind, then has the result reviewed from the renders alone. Use for any request to make, change or improve a 3D model, mesh, or game asset.
+description: Build or fix a 3D model in Blender (prop, vehicle, building, character or scenery) as parametric Python that exports to glTF for a browser game. Works a build, render, look, fix loop with headless Blender rather than writing geometry blind, then has the result reviewed from the renders alone. Use when asked to make, change or improve a 3D model in Blender, or to produce a glTF or GLB model for a game.
 ---
 
 # Making a model that reads
