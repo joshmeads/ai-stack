@@ -102,6 +102,11 @@ enum Word<'a> {
     Arg(&'a str),
 }
 
+enum UpdateResult {
+    Updated(String),
+    RebuildNeeded(String),
+}
+
 pub struct Fleet<'a> {
     pub exec: &'a dyn Exec,
     pub home: &'a Path,
@@ -167,6 +172,15 @@ impl Fleet<'_> {
     fn update_words<'w>(&'w self, machine: &'w Machine, branch: &'w str) -> Vec<Word<'w>> {
         let args = vec![Word::Arg("--stack"), Word::Path(&machine.stack), Word::Arg("update"), Word::Arg("--yes"), Word::Arg("--plain"), Word::Arg("--branch"), Word::Arg(branch)];
         self.ai_stack(machine, args)
+    }
+
+    fn run_update(&self, machine: &Machine, branch: &str) -> Result<UpdateResult> {
+        let (program, args) = self.invocation(machine, &self.update_words(machine, branch));
+        let ran = exec::launch(self.exec, &program, &args, None)?;
+        if ran.code == Some(crate::REBUILD_NEEDED) {
+            return Ok(UpdateResult::RebuildNeeded(ran.stdout));
+        }
+        exec::finish(&command_line(&program, &args), ran).map(UpdateResult::Updated)
     }
 
     /// Each machine's branch, commit and whether it matches the remote tip of its own branch.
@@ -402,8 +416,8 @@ impl Fleet<'_> {
         }
     }
 
-    /// Runs `<bin> update --yes --plain --branch <B>` on each machine, `B` being `branch` or the
-    /// machine's current branch. Without `yes`, prints the commands and runs nothing.
+    /// Runs `<bin> --stack <stack> update --yes --plain --branch <B>` on each machine, `B` being
+    /// `branch` or the machine's current branch. Without `yes`, prints commands and runs nothing.
     pub fn update(&self, branch: Option<&str>, yes: bool, out: &mut dyn Write) -> Result<i32> {
         if let Some(branch) = branch {
             exec::check_branch(branch)?;
@@ -426,15 +440,15 @@ impl Fleet<'_> {
                 None => self.current_branch(machine),
             };
             let line = match result {
-                Err(err) => format!("failed: {err:#}"),
-                Ok(None) => "skipped: detached HEAD; run `ai-stack fleet switch <branch>` first".into(),
-                Ok(Some(branch)) => match self.run(machine, &self.update_words(machine, &branch)) {
-                    Ok(stdout) => format!("updated {branch}\n{}", indent(&stdout)),
-                    Err(err) => format!("failed: {err:#}"),
+                Err(err) => { ok = false; format!("{}: failed: {err:#}", machine.name) }
+                Ok(None) => { ok = false; format!("{}: skipped: detached HEAD; run `ai-stack fleet switch <branch>` first", machine.name) }
+                Ok(Some(branch)) => match self.run_update(machine, &branch) {
+                    Ok(UpdateResult::Updated(stdout)) => format!("{}: updated {branch}\n{}", machine.name, indent(&stdout)),
+                    Ok(UpdateResult::RebuildNeeded(stdout)) => { ok = false; rebuild_message(machine, "update", &stdout) }
+                    Err(err) => { ok = false; format!("{}: failed: {err:#}", machine.name) }
                 },
             };
-            ok &= line.starts_with("updated");
-            writeln!(out, "{}: {}", machine.name, line.trim_end())?;
+            writeln!(out, "{}", line.trim_end())?;
         }
         Ok(if ok { 0 } else { 1 })
     }
@@ -468,26 +482,42 @@ impl Fleet<'_> {
             let fetch = Self::git(machine, &["fetch", self.remote, &refspec]);
             let checkout = Self::git(machine, &["switch", branch]);
             let create = Self::git(machine, &["switch", "-c", branch, "--track", &tracking]);
+            let head = Self::git(machine, &["rev-parse", "HEAD"]);
             let update = self.update_words(machine, branch);
             if !yes {
                 writeln!(out, "{}:", machine.name)?;
+                writeln!(out, "  {}", self.display(machine, &head))?;
                 writeln!(out, "  {}", self.display(machine, &fetch))?;
                 writeln!(out, "  {}", self.display(machine, &checkout))?;
                 writeln!(out, "  (if no local branch) {}", self.display(machine, &create))?;
-                writeln!(out, "  {}", self.display(machine, &update))?;
+                writeln!(out, "  {}", self.display(machine, &Self::git(machine, &["diff", "--name-only", "<before switch>", "HEAD", "--", "cli"])))?;
+                writeln!(out, "  (if cli/ unchanged) {}", self.display(machine, &update))?;
                 continue;
             }
-            let result = (|| -> Result<String> {
+            let result = (|| -> Result<UpdateResult> {
                 let changes = self.run(machine, &dirty)?;
                 ensure!(changes.trim().is_empty(), "the checkout has uncommitted changes:\n{}", indent(&changes));
+                let before = self.run(machine, &head)?.trim().to_string();
+                ensure!(exec::is_commit(&before), "unexpected git HEAD: {before:?}");
                 self.run(machine, &fetch)?;
                 if let Err(first) = self.run(machine, &checkout) {
                     self.run(machine, &create).map_err(|second| anyhow!("{first:#}\n{second:#}"))?;
                 }
-                self.run(machine, &update).with_context(|| format!("now on {branch}, but the update failed"))
+                (|| {
+                    let diff = self.run(machine, &Self::git(machine, &["diff", "--name-only", &before, "HEAD", "--", "cli"]))?;
+                    if !diff.trim().is_empty() {
+                        let cli_path = remote_path(&format!("{}/cli", machine.stack.trim_end_matches('/')));
+                        return Ok(UpdateResult::RebuildNeeded(format!("The checkout changed files under cli/. Nothing was installed. Rebuild with `cargo install --path {cli_path}`.")));
+                    }
+                    self.run_update(machine, branch)
+                })().with_context(|| format!("now on {branch}, but the update failed"))
             })();
             match result {
-                Ok(stdout) => writeln!(out, "{}: switched to {branch}\n{}", machine.name, indent(&stdout).trim_end())?,
+                Ok(UpdateResult::Updated(stdout)) => writeln!(out, "{}: switched to {branch}\n{}", machine.name, indent(&stdout).trim_end())?,
+                Ok(UpdateResult::RebuildNeeded(stdout)) => {
+                    ok = false;
+                    writeln!(out, "now on {branch}; {}", rebuild_message(machine, "switch", &stdout))?;
+                }
                 Err(err) => {
                     ok = false;
                     writeln!(out, "{}: failed: {err:#}", machine.name)?;
@@ -513,6 +543,10 @@ fn remote_path(path: &str) -> String {
 
 fn indent(text: &str) -> String {
     text.lines().map(|line| format!("  {line}\n")).collect()
+}
+
+fn rebuild_message(machine: &Machine, command: &str, details: &str) -> String {
+    format!("rebuild needed on {}; rebuild there, then rerun the same `ai-stack fleet {command}` command.\n{}", machine.name, indent(details).trim_end())
 }
 
 #[cfg(test)]
@@ -938,8 +972,58 @@ drift_ignore = ["harness.*.home"]
     }
 
     #[test]
+    fn update_and_switch_report_rebuild_needed_and_continue_to_other_machines() {
+        for switching in [false, true] {
+            let exec = FakeExec::new(|line| {
+                if line.contains("update --yes") && line.starts_with("ssh ") {
+                    Ok(exec::Ran { ok: false, code: Some(crate::REBUILD_NEEDED), stdout: "Nothing was installed. Rebuild, then rerun the same command.\n".into(), stderr: String::new() })
+                } else if line.contains("rev-parse HEAD") {
+                    ok(A)
+                } else {
+                    ok("")
+                }
+            });
+            let (code, out) = run(|out| {
+                if switching { fleet(&exec).switch("main", &[], true, out) }
+                else { fleet(&exec).update(Some("main"), true, out) }
+            });
+            assert_eq!(code, 1, "{out}");
+            for name in ["box", "cachy"] {
+                assert!(out.contains(&format!("rebuild needed on {name}")), "{out}");
+                assert!(!out.contains(&format!("{name}: updated")) && !out.contains(&format!("{name}: switched")), "{out}");
+            }
+            assert!(out.contains("Nothing was installed"), "{out}");
+            assert!(!out.contains("failed"), "{out}");
+            assert!(out.contains(if switching { "now on main; rebuild needed on box" } else { "rebuild needed on box" }), "{out}");
+            assert!(out.contains(if switching { "rerun the same `ai-stack fleet switch` command" } else { "rerun the same `ai-stack fleet update` command" }), "{out}");
+            assert!(out.contains(if switching { "mac: switched to main" } else { "mac: updated main" }), "{out}");
+        }
+    }
+
+    #[test]
+    fn switch_stops_before_update_when_the_checkout_changes_cli() {
+        let exec = FakeExec::new(|line| {
+            if line.contains("rev-parse HEAD") { ok(A) }
+            else if line.starts_with("ssh ") && line.contains("diff --name-only") { ok("cli/src/main.rs\n") }
+            else { ok("") }
+        });
+        let (code, out) = run(|out| fleet(&exec).switch("feat", &[], true, out));
+        assert_eq!(code, 1, "{out}");
+        for name in ["box", "cachy"] {
+            assert!(out.contains(&format!("now on feat; rebuild needed on {name}")), "{out}");
+        }
+        assert!(out.contains("Nothing was installed") && out.contains("cargo install --path ~/'My Stack/cli'"), "{out}");
+        assert!(out.contains("mac: switched to feat"), "{out}");
+        assert!(!out.contains("failed"), "{out}");
+        let calls = exec.calls.borrow();
+        assert!(calls.iter().any(|line| line.contains(&format!("diff --name-only {A} HEAD -- cli"))), "{calls:?}");
+        assert!(!calls.iter().any(|line| line.starts_with("ssh ") && line.contains("update --yes")), "{calls:?}");
+    }
+
+    #[test]
     fn switch_fetches_switches_with_tracking_fallback_then_updates() {
         let exec = FakeExec::new(|line| match line {
+            l if l.contains("rev-parse HEAD") => ok(A),
             l if l.contains("cachy") && l.contains("switch feat") => fail("fatal: invalid reference: feat"),
             l if l.starts_with("/bin/self") => fail("install failed"),
             _ => ok(""),
@@ -962,13 +1046,17 @@ drift_ignore = ["harness.*.home"]
             *exec.calls.borrow(),
             [
                 cachy(&format!("{git} status --porcelain --untracked-files=no")),
+                cachy(&format!("{git} rev-parse HEAD")),
                 cachy(&format!("{git} fetch origin +refs/heads/feat:refs/remotes/origin/feat")),
                 cachy(&format!("{git} switch feat")),
                 cachy(&format!("{git} switch -c feat --track origin/feat")),
+                cachy(&format!("{git} diff --name-only {A} HEAD -- cli")),
                 cachy(r#"ai-stack --stack ~/'\''My Stack'\'' update --yes --plain --branch feat"#),
                 "git -C /h/stack status --porcelain --untracked-files=no".to_string(),
+                "git -C /h/stack rev-parse HEAD".to_string(),
                 "git -C /h/stack fetch origin +refs/heads/feat:refs/remotes/origin/feat".to_string(),
                 "git -C /h/stack switch feat".to_string(),
+                format!("git -C /h/stack diff --name-only {A} HEAD -- cli"),
                 "/bin/self --stack /h/stack update --yes --plain --branch feat".to_string(),
             ]
         );

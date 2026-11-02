@@ -30,6 +30,9 @@ use crate::models::{ModelReport, Status};
 use crate::plan::Plan;
 use crate::plugins::SystemRunner;
 
+/// `update` pulled CLI changes and stopped before installing. Fleet preserves this signal.
+const REBUILD_NEEDED: i32 = 3;
+
 #[derive(Parser)]
 #[command(name = "ai-stack", version, about = "Install and update the jm:stack agent configuration")]
 struct Cli {
@@ -96,6 +99,7 @@ enum Commands {
         clean: bool,
     },
     /// Pull the stack checkout (it must be on the branch pulled), check models, then install.
+    /// Exit 3 before checking models or installing if this pull changes cli/; rebuild and rerun.
     Update {
         /// Apply without review.
         #[arg(long)]
@@ -177,7 +181,7 @@ enum FleetCommand {
     /// Print each machine's stack branch and commit against that branch's remote tip. Exit 0
     /// when every machine is current.
     Status,
-    /// Run `<bin> update --yes --plain --branch <B>` on every enabled machine.
+    /// Run `<bin> --stack <stack> update --yes --plain --branch <B>` on every enabled machine.
     Update {
         /// Run the commands; without it they are only printed.
         #[arg(long)]
@@ -460,9 +464,10 @@ fn cmd_update(ctx: &Context, yes: bool, plain: bool, bump: bool, branch: Option<
     }
     if git_pull(&exec::SystemExec, &stack)? {
         println!(
-            "note: this pull changed files under cli/. The installed ai-stack binary is not rebuilt automatically; rebuild it with `cargo install --path {}`.",
-            cfg.stack.path.join("cli").display()
+            "note: this pull changed files under cli/. Nothing was installed. Rebuild with `cargo install --path {}`, then rerun the same command.",
+            exec::shell_quote(&cfg.stack.path.join("cli").to_string_lossy())
         );
+        return Ok(REBUILD_NEEDED);
     }
 
     let catalogs = fetch_catalogs();
