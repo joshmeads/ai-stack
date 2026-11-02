@@ -1,36 +1,29 @@
 // One measured step on every target (browser page and Node servers):
 //
 //   heap snapshots (opt) → prepare action → GC → start probes → sample
-//   → act → settle → sample → stop probes (trace first, then the rest in
-//   parallel) → GC → sample → heap snapshots (opt) → symbolicate and write
-//   artifacts
+//   → act → settle → sample → end the trace → stop the profilers
+//   → drain the trace → GC → sample → heap snapshots (opt) → symbolicate
+//   and write artifacts
 //
-// Nothing that costs CPU or allocates on a target (fetching source maps
-// from the server) runs before the last sample.
+// The CPU and allocation profilers stop right after the last sample, so
+// transferring the trace is in no profile. Nothing that costs CPU or
+// allocates on a target (fetching source maps from the server) runs before
+// the last sample.
 
 import { appendFileSync, closeSync, existsSync, mkdirSync, openSync, readdirSync, writeFileSync, writeSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join, resolve } from "node:path";
-import { PAGE_ACTIONS, prepareAction } from "./actions.mjs";
+import { PAGE_ACTIONS, TWO_FRAMES, prepareAction } from "./actions.mjs";
 import { TargetLost, connectNodes, connectPage, evaluate, limits } from "./cdp.mjs";
 import { printLeak, printStep, slug } from "./output.mjs";
 import { allocSummary, cpuSummary } from "./profile.mjs";
-import { round, sec, sleep } from "./util.mjs";
-
-// Two frames so rendering caused by the action lands in the window. Raced
-// against a timeout because rAF stalls in hidden tabs; the loser is
-// cancelled so nothing lingers into the retained-memory sample.
-const TWO_FRAMES = `new Promise(r => {
-  let id;
-  const t = setTimeout(() => { cancelAnimationFrame(id); r(); }, 1000);
-  id = requestAnimationFrame(() => { id = requestAnimationFrame(() => { clearTimeout(t); r(); }); });
-})`;
+import { ActionTimeout, RunAborted, round, sec, sleep } from "./util.mjs";
 
 // Long tasks come from a trace, not a PerformanceObserver: a task that runs
 // while a same-process navigation commits (parsing the new page's first
 // chunk, its inline scripts) is attributed to the outgoing document, so no
 // observer ever sees it. This category carries RunTask for every task plus
-// the frame-to-process events that tie renderer threads to this page.
+// the frame-to-process events that say which renderers host this page.
 const LONG_TASK_CATEGORIES = ["-*", "disabled-by-default-devtools.timeline"];
 // --trace: what the Performance panel records, JS samples included.
 const TRACE_CATEGORIES = [
@@ -43,16 +36,22 @@ const LONG_TASK_US = 50_000;
 // ---------- probes ----------
 // A probe records something between start() and stop(). Failures other
 // than a lost target leave { error } instead of a value; a lost target
-// ends the run.
+// ends the run. dispose() releases local resources (listeners, files)
+// whether or not start succeeded.
 
-function probe(start, stop) {
+function probe(start, stop, dispose = () => {}) {
   let on = false, error = null, value = null;
   const guard = async (fn) => {
     try { return await fn(); } catch (e) { if (e instanceof TargetLost) throw e; error = e.message; }
   };
   return {
-    start: () => guard(async () => { await start(); on = true; }),
-    stop: () => (on ? guard(async () => { on = false; value = await stop(); }) : undefined),
+    start: () => guard(async () => {
+      try { await start(); on = true; } catch (e) { dispose(); throw e; }
+    }),
+    stop: () => (on ? guard(async () => {
+      on = false;
+      try { value = await stop(); } finally { dispose(); }
+    }) : undefined),
     get result() { return error ? { error } : value; },
   };
 }
@@ -86,10 +85,8 @@ function networkProbe(page) {
         }),
       ];
     },
-    async () => {
-      offs.forEach((off) => off());
-      return [...reqs.values()].map(({ start, ...r }) => r);
-    },
+    async () => [...reqs.values()].map(({ start, ...r }) => r),
+    () => offs.forEach((off) => off()),
   );
 }
 
@@ -105,7 +102,8 @@ function navProbe(page) {
         page.on("Page.frameStoppedLoading", (e) => { if (e.frameId === page.mainFrameId) loading = false; }),
       ];
     },
-    async () => { offs.forEach((off) => off()); return count; },
+    async () => count,
+    () => offs.forEach((off) => off()),
   );
   p.untilLoaded = async (ms) => {
     if (!loading) return;
@@ -116,12 +114,14 @@ function navProbe(page) {
   return p;
 }
 
-// Records the page's trace for the step. Returns long tasks: tasks of 50ms
-// or more on the main thread of any renderer that hosted one of the page's
-// frames. With file set, also streams every event there (--trace).
+// Records the page's trace for the step: long tasks (50ms or more on the
+// main thread of any renderer that hosted one of the page's frames) and
+// those renderers' pids. With file set, also streams every event there
+// (--trace). end() stops recording at the measurement boundary; events
+// still arrive until drain() has seen Tracing.tracingComplete.
 function traceProbe(page, file) {
   const threads = new Map(), pids = new Set(), pending = new Set(), tasks = [];
-  let off, fd, sep = "";
+  let off = null, fd, sep = "", on = false, done = null, error = null, dataLoss = false;
   const see = (e) => {
     const d = e.args?.data;
     if (e.ph === "M" && e.name === "thread_name") threads.set(`${e.pid}:${e.tid}`, e.args.name);
@@ -130,29 +130,61 @@ function traceProbe(page, file) {
     else if (e.name === "ProcessReadyInBrowser") { if (pending.has(d?.processPseudoId)) pids.add(d.processId); }
     else if (e.ph === "X" && e.name === "RunTask" && e.dur >= LONG_TASK_US) tasks.push(e);
   };
-  return probe(
-    async () => {
-      if (file) { fd = openSync(file, "w"); writeSync(fd, '{"traceEvents":[\n'); }
-      off = page.on("Tracing.dataCollected", ({ value }) => {
-        for (const e of value) see(e);
-        if (fd !== undefined) { writeSync(fd, sep + value.map((e) => JSON.stringify(e)).join(",\n")); if (value.length) sep = ",\n"; }
-      });
-      await page.send("Tracing.start", { traceConfig: { includedCategories: file ? TRACE_CATEGORIES : LONG_TASK_CATEGORIES }, transferMode: "ReportEvents" });
+  // Local resources only; never ends a recording this probe did not start.
+  const dispose = () => {
+    off?.();
+    off = null;
+    if (fd !== undefined) { writeSync(fd, "\n]}\n"); closeSync(fd); fd = undefined; }
+  };
+  const fail = (e) => { if (e instanceof TargetLost) throw e; error = e.message; };
+  return {
+    async start() {
+      try {
+        if (file) { fd = openSync(file, "w"); writeSync(fd, '{"traceEvents":[\n'); }
+        off = page.on("Tracing.dataCollected", ({ value }) => {
+          for (const e of value) see(e);
+          if (fd !== undefined) { writeSync(fd, sep + value.map((e) => JSON.stringify(e)).join(",\n")); if (value.length) sep = ",\n"; }
+        });
+        await page.send("Tracing.start", { traceConfig: { includedCategories: file ? TRACE_CATEGORIES : LONG_TASK_CATEGORIES }, transferMode: "ReportEvents" });
+        on = true;
+      } catch (e) {
+        dispose();
+        fail(e);
+      }
     },
-    async () => {
-      const done = page.waitFor("Tracing.tracingComplete", limits.cdpMs);
+    async end() {
+      if (!on) return;
+      on = false;
+      done = page.waitFor("Tracing.tracingComplete", limits.cdpMs, undefined, "--cdp-timeout");
       try {
         await page.send("Tracing.end");
-        await done.promise;
-      } finally {
-        off();
-        if (fd !== undefined) { writeSync(fd, "\n]}\n"); closeSync(fd); }
+      } catch (e) {
+        done.cancel();
+        done = null;
+        dispose();
+        fail(e);
       }
+    },
+    async drain() {
+      if (!done) return;
+      try {
+        dataLoss = !!(await done.promise).dataLossOccurred;
+      } catch (e) {
+        fail(e);
+      } finally {
+        done = null;
+        dispose();
+      }
+    },
+    get result() {
+      if (error) return { error };
       if (!pids.size) return { observed: false, reason: "the trace did not say which renderer hosts this page" };
       const main = tasks.filter((e) => pids.has(e.pid) && threads.get(`${e.pid}:${e.tid}`) === "CrRendererMain");
-      return { observed: true, longTasksMs: main.map((e) => Math.round(e.dur / 1000)) };
+      return { observed: true, dataLoss, longTasksMs: main.map((e) => Math.round(e.dur / 1000)) };
     },
-  );
+    // The page's renderer pids, or null when the trace could not say.
+    get pagePids() { return error || !pids.size ? null : pids; },
+  };
 }
 
 // ---------- samples ----------
@@ -198,14 +230,15 @@ export async function heapSnapshot(t, file) {
 const MAIN_THREAD = { taskMs: "TaskDuration", scriptMs: "ScriptDuration", layoutMs: "LayoutDuration", styleMs: "RecalcStyleDuration", layouts: "LayoutCount", styleRecalcs: "RecalcStyleCount" };
 const DOM = { nodes: "Nodes", listeners: "JSEventListeners", documents: "Documents", frames: "Frames" };
 
-function mainThread(a, b) {
+function mainThread(before, after) {
   // These counters restart with every new document (NavigationStart
   // changes; same-site navigations included), so after a navigation the
   // after values are the new document's whole cost so far.
-  const reset = b.m.NavigationStart !== a.m.NavigationStart || Object.values(MAIN_THREAD).some((k) => (b.m[k] ?? 0) < (a.m[k] ?? 0));
+  const reset = after.m.NavigationStart !== before.m.NavigationStart
+    || Object.values(MAIN_THREAD).some((k) => (after.m[k] ?? 0) < (before.m[k] ?? 0));
   const out = {};
   for (const [name, k] of Object.entries(MAIN_THREAD)) {
-    const v = (b.m[k] ?? 0) - (reset ? 0 : (a.m[k] ?? 0));
+    const v = (after.m[k] ?? 0) - (reset ? 0 : (before.m[k] ?? 0));
     out[name] = name.endsWith("Ms") ? sec(v) : v;
   }
   if (reset) out.countersReset = true;
@@ -213,35 +246,70 @@ function mainThread(a, b) {
 }
 
 // Per process id, so a process started mid-step (site isolation on
-// navigation) counts from zero and one that exited does not go negative.
-function processCpu(a, b) {
-  const cpu = {};
-  for (const [id, p] of Object.entries(b.cpu)) cpu[p.type] = (cpu[p.type] ?? 0) + p.s - (a.cpu[id]?.s ?? 0);
-  for (const k of Object.keys(cpu)) cpu[k] = sec(cpu[k]);
-  return cpu;
+// navigation) counts from zero. A renderer counts as this page's only if
+// the trace saw it host one of the page's frames; without the trace, all
+// renderers are summed and labelled so. A process that exited mid-step has
+// no final reading, so it is listed rather than counted.
+function processCpu(before, after, pagePids) {
+  const ms = {};
+  for (const [id, p] of Object.entries(after.cpu)) {
+    const type = p.type === "renderer" && pagePids && !pagePids.has(Number(id)) ? "other renderers" : p.type;
+    ms[type] = (ms[type] ?? 0) + p.s - (before.cpu[id]?.s ?? 0);
+  }
+  for (const k of Object.keys(ms)) ms[k] = sec(ms[k]);
+  const exited = Object.entries(before.cpu)
+    .filter(([id]) => !(id in after.cpu))
+    .map(([id, p]) => ({ pid: Number(id), type: p.type, ...(pagePids?.has(Number(id)) ? { thisPage: true } : {}) }));
+  return { ms, renderers: pagePids ? "this page" : "all", exited };
 }
 
 const pick = (m, keys) => Object.fromEntries(Object.entries(keys).map(([name, k]) => [name, m[k] ?? 0]));
 
+// A page's CPU and allocation sampling restarts when a new document's
+// inspector session takes over (cross-process navigations), and only the
+// last session's data comes back. A profile much shorter than the window
+// it should cover is partial.
+function partialProfile(profile, windowMs) {
+  if (!profile || profile.error) return null;
+  const spanMs = (profile.endTime - profile.startTime) / 1000;
+  return spanMs < windowMs - Math.max(20, windowMs * 0.02) ? { coveredMs: round(spanMs), windowMs: round(windowMs) } : null;
+}
+
 // ---------- step ----------
 
-async function summarise(cpu, alloc, filter) {
+async function summarise(cpu, alloc, filter, windowMs) {
   const out = {};
   if (cpu) out.cpu = cpu.result?.error ? cpu.result : cpu.result && (await cpuSummary(cpu.result, filter));
   if (alloc) out.alloc = alloc.result?.error ? alloc.result : alloc.result && (await allocSummary(alloc.result, filter));
+  const partial = partialProfile(cpu?.result, windowMs);
+  if (partial) out.partial = partial;
   return out;
+}
+
+const allocated = (prof) => (prof?.alloc && !prof.alloc.error ? prof.alloc.allocatedBytes : null);
+
+// Ends the run when an action timed out and may still be running: anything
+// measured after it would include its work.
+function checkStopped(e, label) {
+  if (e instanceof ActionTimeout && !e.stopped) {
+    throw new RunAborted(`step "${label}": ${e.message}. It may still be running and would be counted in later steps, so the run stops here`);
+  }
 }
 
 export async function measureStep(ctx, step, cfg, tag) {
   const { page, nodes } = ctx;
   const targets = [page, ...nodes].filter(Boolean);
-  const result = { label: step.label, action: step.action };
   const artifacts = {};
+  const result = { label: step.label, action: step.action, complete: false, artifacts };
   const art = (t, kind) => join(cfg.out, `${tag}.${t.kind === "page" ? "browser" : `node-${t.port}`}.${kind}`);
 
-  if (cfg.heapSnapshots) for (const t of targets) artifacts[`${t.name} heapBefore`] = await heapSnapshot(t, art(t, "before.heapsnapshot"));
-
   let act;
+  try {
+    if (cfg.heapSnapshots) for (const t of targets) artifacts[`${t.name} heapBefore`] = await heapSnapshot(t, art(t, "before.heapsnapshot"));
+  } catch (e) {
+    if (e instanceof TargetLost) throw e;
+    return { ...result, error: `heap snapshot before the step failed: ${e.message}` };
+  }
   try {
     act = await prepareAction(ctx, step.action);
   } catch (e) {
@@ -249,24 +317,23 @@ export async function measureStep(ctx, step, cfg, tag) {
     return { ...result, error: `could not prepare the action: ${e.message}` };
   }
 
-  await Promise.all(targets.map(gc));
-
   const cpu = new Map(cfg.profile ? targets.map((t) => [t, cpuProbe(t)]) : []);
   const alloc = new Map(cfg.profile ? targets.map((t) => [t, allocProbe(t)]) : []);
   const nav = page && navProbe(page);
   const network = page && networkProbe(page);
   const traceFile = cfg.trace && page && art(page, "trace.json");
-  const trace = page && (cfg.profile || cfg.trace) ? traceProbe(page, traceFile) : null;
-  const rest = [...cpu.values(), ...alloc.values(), nav, network].filter(Boolean);
-  const all = [...rest, trace].filter(Boolean);
+  const trace = page ? traceProbe(page, traceFile) : null;
+  const probes = [...cpu.values(), ...alloc.values(), nav, network].filter(Boolean);
 
-  let before, after, afterGc;
+  let before, after, windowMs;
   try {
-    // The trace starts last and stops first, so starting and stopping the
+    await Promise.all(targets.map(gc));
+    await Promise.all(probes.map((p) => p.start()));
+    // The trace starts last and ends first, so starting and stopping the
     // profilers (Profiler.stop serialises the whole profile on the main
     // thread) never shows up as a long task.
-    await Promise.all(rest.map((p) => p.start()));
     await trace?.start();
+    const tProbes = performance.now();
     before = await sampleAll(ctx);
     const t0 = performance.now();
     try {
@@ -275,80 +342,99 @@ export async function measureStep(ctx, step, cfg, tag) {
       if (step.action[0] === "eval") result.value = r;
     } catch (e) {
       if (e instanceof TargetLost) throw e;
+      checkStopped(e, step.label);
       result.error = e.message;
     }
     result.actionMs = round(performance.now() - t0);
     await sleep(cfg.settle);
     if (page) {
-      await nav.untilLoaded(limits.actionMs).catch((e) => { result.error ??= `navigation did not finish: ${e.message}`; });
+      await nav.untilLoaded(limits.actionMs).catch((e) => {
+        if (e instanceof ActionTimeout) throw new RunAborted(`step "${step.label}": the page was still loading ${limits.actionMs}ms after the action (raise --action-timeout); the load would be counted in later steps, so the run stops here`);
+        throw e;
+      });
       await evaluate(page, TWO_FRAMES).catch((e) => { if (e instanceof TargetLost) throw e; });
     }
+    // The measurement boundary.
     after = await sampleAll(ctx);
     result.wallMs = round(performance.now() - t0);
+    await trace?.end();
+    windowMs = performance.now() - tProbes;
+    await Promise.all(probes.map((p) => p.stop()));
+    await trace?.drain();
   } catch (e) {
-    await Promise.allSettled(all.map((p) => p.stop()));
-    if (e instanceof TargetLost) throw e;
+    await Promise.allSettled([...probes.map((p) => p.stop()), trace?.end().then(() => trace.drain())]);
+    if (e instanceof TargetLost || e instanceof RunAborted) throw e;
     return { ...result, error: `measurement failed: ${e.message}` };
   }
-  await trace?.stop();
-  await Promise.all(rest.map((p) => p.stop()));
-  await Promise.all(targets.map(gc));
-  afterGc = await sampleAll(ctx);
-  if (cfg.heapSnapshots) for (const t of targets) artifacts[`${t.name} heapAfter`] = await heapSnapshot(t, art(t, "after.heapsnapshot"));
 
   // Measurement is over; from here on, work on the targets cannot skew it.
-  for (const t of targets) {
-    const c = cpu.get(t)?.result, a = alloc.get(t)?.result;
-    if (c && !c.error) writeFileSync((artifacts[`${t.name} cpuprofile`] = art(t, "cpuprofile")), JSON.stringify(c));
-    if (a && !a.error) writeFileSync((artifacts[`${t.name} heapprofile`] = art(t, "heapprofile")), JSON.stringify(a));
-  }
-  if (traceFile) {
-    if (trace.result?.error) artifacts.traceError = trace.result.error;
-    else artifacts.trace = traceFile;
-  }
+  // A failure here still keeps the step and the run.
+  try {
+    await Promise.all(targets.map(gc));
+    const afterGc = await sampleAll(ctx);
+    if (cfg.heapSnapshots) for (const t of targets) artifacts[`${t.name} heapAfter`] = await heapSnapshot(t, art(t, "after.heapsnapshot"));
+    for (const t of targets) {
+      const c = cpu.get(t)?.result, a = alloc.get(t)?.result;
+      if (c && !c.error) writeFileSync((artifacts[`${t.name} cpuprofile`] = art(t, "cpuprofile")), JSON.stringify(c));
+      if (a && !a.error) writeFileSync((artifacts[`${t.name} heapprofile`] = art(t, "heapprofile")), JSON.stringify(a));
+    }
+    if (traceFile) {
+      if (trace.result?.error) artifacts.traceError = trace.result.error;
+      else artifacts.trace = traceFile;
+    }
 
-  if (page) {
-    const [b, a, g] = [before.page, after.page, afterGc.page];
-    const mt = mainThread(b, a);
-    const navigated = nav.result > 0 || !!mt.countersReset;
-    const prof = await summarise(cpu.get(page), alloc.get(page), cfg.filter);
-    result.browser = {
-      navigated,
-      mainThread: mt,
-      processCpuMs: processCpu(b, a),
-      heap: {
-        allocatedBytes: prof.alloc && !prof.alloc.error ? prof.alloc.allocatedBytes : null,
-        // After a navigation the before sample held the old document, so
-        // a difference is not this step's retention; report totals only.
-        retainedBytes: navigated ? null : g.m.JSHeapUsedSize - b.m.JSHeapUsedSize,
-        totalAfterGcBytes: g.m.JSHeapUsedSize,
-      },
-      dom: navigated ? null : Object.fromEntries(Object.entries(DOM).map(([name, k]) => [name, (g.m[k] ?? 0) - (b.m[k] ?? 0)])),
-      domTotalAfterGc: pick(g.m, DOM),
-      longTasks: trace ? trace.result : { observed: false, reason: "not recorded with --no-profile" },
-      requests: network.result ?? [],
-      profile: cfg.profile ? prof : null,
-    };
+    if (page) {
+      const [b, a, g] = [before.page, after.page, afterGc.page];
+      const mt = mainThread(b, a);
+      const navigated = nav.result > 0 || !!mt.countersReset;
+      const prof = cfg.profile ? await summarise(cpu.get(page), alloc.get(page), cfg.filter, windowMs) : null;
+      const proc = processCpu(b, a, trace.pagePids);
+      const lt = trace.result;
+      result.browser = {
+        navigated,
+        mainThread: mt,
+        processCpuMs: proc.ms,
+        processCpuRenderers: proc.renderers,
+        ...(proc.exited.length ? { processesExitedMidStep: proc.exited } : {}),
+        heap: {
+          allocatedBytes: allocated(prof),
+          ...(prof?.partial && allocated(prof) !== null ? { allocatedPartial: true } : {}),
+          // After a navigation the before sample held the old document, so
+          // a difference is not this step's retention; report totals only.
+          retainedBytes: navigated ? null : g.m.JSHeapUsedSize - b.m.JSHeapUsedSize,
+          totalAfterGcBytes: g.m.JSHeapUsedSize,
+        },
+        dom: navigated ? null : Object.fromEntries(Object.entries(DOM).map(([name, k]) => [name, (g.m[k] ?? 0) - (b.m[k] ?? 0)])),
+        domTotalAfterGc: pick(g.m, DOM),
+        longTasks: lt.observed ? { ...lt, withProfiler: cfg.profile, withTraceSampler: !!cfg.trace } : lt,
+        requests: network.result ?? [],
+        profile: prof,
+      };
+    }
+    result.servers = await Promise.all(nodes.map(async (t, i) => {
+      const [b, a, g] = [before.nodes[i], after.nodes[i], afterGc.nodes[i]];
+      const prof = cfg.profile ? await summarise(cpu.get(t), alloc.get(t), cfg.filter, windowMs) : null;
+      return {
+        name: t.name,
+        argv: t.argv,
+        cpuMs: { user: round((a.cpu.user - b.cpu.user) / 1000), system: round((a.cpu.system - b.cpu.system) / 1000) },
+        heap: {
+          allocatedBytes: allocated(prof),
+          ...(prof?.partial && allocated(prof) !== null ? { allocatedPartial: true } : {}),
+          retainedBytes: g.mem.heapUsed - b.mem.heapUsed,
+          totalAfterGcBytes: g.mem.heapUsed,
+        },
+        externalRetainedBytes: g.mem.external - b.mem.external,
+        rssBytes: g.mem.rss,
+        rssDeltaBytes: g.mem.rss - b.mem.rss,
+        profile: prof,
+      };
+    }));
+    result.complete = true;
+  } catch (e) {
+    if (e instanceof TargetLost) throw e;
+    result.error = [result.error, `after the measurement window: ${e.message}`].filter(Boolean).join("; ");
   }
-  result.servers = await Promise.all(nodes.map(async (t, i) => {
-    const [b, a, g] = [before.nodes[i], after.nodes[i], afterGc.nodes[i]];
-    const prof = await summarise(cpu.get(t), alloc.get(t), cfg.filter);
-    return {
-      name: t.name,
-      argv: t.argv,
-      cpuMs: { user: round((a.cpu.user - b.cpu.user) / 1000), system: round((a.cpu.system - b.cpu.system) / 1000) },
-      heap: {
-        allocatedBytes: prof.alloc && !prof.alloc.error ? prof.alloc.allocatedBytes : null,
-        retainedBytes: g.mem.heapUsed - b.mem.heapUsed,
-        totalAfterGcBytes: g.mem.heapUsed,
-      },
-      externalRetainedBytes: g.mem.external - b.mem.external,
-      rssBytes: g.mem.rss,
-      rssDeltaBytes: g.mem.rss - b.mem.rss,
-      profile: cfg.profile ? prof : null,
-    };
-  }));
-  result.artifacts = artifacts;
   return result;
 }
 
@@ -375,7 +461,7 @@ function series(vals) {
 
 export function leakVerdict(iterations) {
   const last = iterations.map((iter) => iter.at(-1));
-  if (last.some((r) => r.error && !r.servers)) return { error: "an iteration's last step failed, so there is no end-of-iteration total" };
+  if (last.some((r) => !r.complete)) return { error: "an iteration's last step did not finish, so there is no end-of-iteration total" };
   const out = {};
   if (last[0].browser) {
     out.browser = {
@@ -403,6 +489,7 @@ async function setupPage(page, cfg) {
   await page.send("Page.enable");
   await page.send("Performance.enable");
   await page.send("Network.enable");
+  await page.send("Inspector.enable"); // Inspector.targetCrashed ends the run
   await page.send("Page.bringToFront").catch(() => {});
   page.mainFrameId = (await page.send("Page.getFrameTree")).frameTree.frame.id;
   if (cfg.throttle) await page.send("Emulation.setCPUThrottlingRate", { rate: cfg.throttle });
@@ -432,7 +519,18 @@ export async function measure(opts, steps) {
   const log = opts.json ? (...a) => console.error(...a) : (...a) => console.log(...a);
   log(`cdt: results in ${cfg.out}`);
   if (cfg.profile) log("cdt: CPU and allocation profilers are on, so CPU figures include their overhead; rerun with --no-profile for clean CPU numbers");
+  if (cfg.trace) log("cdt: --trace records JS samples in the browser, so its CPU figures include that sampler's overhead");
 
+  const iterations = [];
+  const summary = () => ({
+    out: cfg.out,
+    page: page?.url,
+    servers: nodes.map((t) => ({ name: t.name, argv: t.argv })),
+    throttle: cfg.throttle ?? 1,
+    profilersOn: cfg.profile,
+    traceSamplerOn: cfg.trace,
+    steps: iterations.flat(),
+  });
   let teardown;
   let current;
   try {
@@ -445,9 +543,9 @@ export async function measure(opts, steps) {
     }
     if (page) teardown = await setupPage(page, cfg);
 
-    const iterations = [];
     for (let i = 0; i < repeat; i++) {
       const iter = [];
+      iterations.push(iter);
       for (const [j, step] of steps.entries()) {
         current = `${step.label}${repeat > 1 ? ` #${i + 1}` : ""}`;
         const tag = `${String(j + 1).padStart(2, "0")}-${slug(step.label)}${repeat > 1 ? `-r${i + 1}` : ""}`;
@@ -455,29 +553,21 @@ export async function measure(opts, steps) {
         if (repeat > 1) r.iteration = i + 1;
         iter.push(r);
         appendFileSync(join(cfg.out, "results.jsonl"), JSON.stringify(r) + "\n");
-        if (!opts.json) printStep(r, cfg);
+        if (!opts.json) printStep(r);
       }
-      iterations.push(iter);
     }
 
-    const out = {
-      out: cfg.out,
-      page: page?.url,
-      servers: nodes.map((t) => ({ name: t.name, argv: t.argv })),
-      throttle: cfg.throttle ?? 1,
-      profilersOn: cfg.profile,
-      steps: iterations.flat(),
-    };
+    const out = summary();
     if (repeat > 1) out.leak = leakVerdict(iterations);
     writeFileSync(join(cfg.out, "summary.json"), JSON.stringify(out, null, 2));
     if (opts.json) console.log(JSON.stringify(out, null, 2));
     else if (out.leak) printLeak(out.leak);
     if (out.steps.some((s) => s.error)) process.exitCode = 1;
   } catch (e) {
-    if (e instanceof TargetLost) {
-      throw new Error(`lost a target during step "${current}": ${e.message}. Steps finished before it are in ${join(cfg.out, "results.jsonl")}`);
-    }
-    throw e;
+    if (!(e instanceof TargetLost || e instanceof RunAborted)) throw e;
+    const why = e instanceof TargetLost ? `lost a target during step "${current}": ${e.message}` : e.message;
+    writeFileSync(join(cfg.out, "summary.json"), JSON.stringify({ ...summary(), aborted: why }, null, 2));
+    throw new Error(`${why}. Steps finished before it are in ${join(cfg.out, "summary.json")}`);
   } finally {
     await teardown?.().catch(() => {});
     page?.cdp.close();
