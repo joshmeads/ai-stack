@@ -38,6 +38,7 @@ skills = [
 [groups.tools]
 global = true
 skills = [
+    "devtools-perf",
     "feedback",
     "handoff",
     "host-static",
