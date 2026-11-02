@@ -87,6 +87,14 @@ async function readUrl(url) {
 
 const mapCache = new Map();
 
+// A map must come from where its script came from: same origin for http(s),
+// the local disk only for a local script. Inline data: maps are fine.
+function sameOrigin(scriptUrl, mapUrl) {
+  if (mapUrl.startsWith("data:")) return true;
+  const a = new URL(scriptUrl), b = new URL(mapUrl);
+  return a.protocol === b.protocol && (a.protocol === "file:" || a.origin === b.origin);
+}
+
 // Follows the script's own sourceMappingURL comment (bundlers such as
 // Turbopack name maps by content hash), falling back to <script>.map.
 // Returns { map } or { error } and caches either for the run.
@@ -100,10 +108,14 @@ export async function loadMap(url) {
       const code = await readUrl(scriptUrl);
       const ref = code.match(/\/\/[#@] sourceMappingURL=(\S+)\s*$/)?.[1];
       const mapUrl = ref ? new URL(ref, scriptUrl).href : `${scriptUrl.split("?")[0]}.map`;
-      try {
-        entry = { map: JSON.parse(await readUrl(mapUrl)) };
-      } catch (e) {
-        entry = { error: `${ref ? "map" : "no sourceMappingURL; guessed .map"}: ${e.message}` };
+      if (!sameOrigin(scriptUrl, mapUrl)) entry = { error: "map is not on the script's origin, so it was not read" };
+      else {
+        try {
+          entry = { map: JSON.parse(await readUrl(mapUrl)) };
+        } catch (e) {
+          const why = e instanceof SyntaxError ? "not valid JSON" : e.message;
+          entry = { error: `${ref ? "map" : "no sourceMappingURL; guessed .map"}: ${why}` };
+        }
       }
     } catch (e) {
       entry = { error: `script: ${e.name === "TimeoutError" ? "timed out" : e.message}` };

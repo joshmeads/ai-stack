@@ -1,6 +1,8 @@
 // Minimal Chrome DevTools Protocol client over the global WebSocket, plus
 // discovery of the browser page and Node inspectors we measure.
 
+import { ActionTimeout } from "./util.mjs";
+
 // Bounded waits on protocol replies and on actions. The entry point sets
 // them from --cdp-timeout and --action-timeout; 0 waits forever.
 export const limits = { cdpMs: 60_000, actionMs: 300_000 };
@@ -8,6 +10,9 @@ export const limits = { cdpMs: 60_000, actionMs: 300_000 };
 // The connection or session to a target is gone (process exited, tab
 // closed). A measurement cannot continue past this.
 export class TargetLost extends Error {}
+
+// A command got no reply within its limit.
+export class NoReply extends Error {}
 
 export class Cdp {
   constructor(ws, name) {
@@ -18,6 +23,7 @@ export class Cdp {
     this.listeners = new Set();
     this.closed = null;
     this.lostSessions = new Map();
+    this.lossWatchers = new Set();
     ws.addEventListener("message", (ev) => this.#onMessage(JSON.parse(ev.data)));
     ws.addEventListener("close", () => this.#lose(`connection to ${this.name} closed`));
     ws.addEventListener("error", () => this.#lose(`connection to ${this.name} failed`));
@@ -35,6 +41,10 @@ export class Cdp {
     }
     if (msg.method === "Target.detachedFromTarget") this.#loseSession(msg.params.sessionId, "page target detached (tab closed or crashed)");
     if (msg.method === "Inspector.detached") this.#lose(`${this.name} inspector detached: ${msg.params.reason}`);
+    if (msg.method === "Inspector.targetCrashed") {
+      if (msg.sessionId) this.#loseSession(msg.sessionId, "page crashed");
+      else this.#lose(`${this.name} crashed`);
+    }
     for (const l of this.listeners) l(msg);
   }
 
@@ -43,6 +53,7 @@ export class Cdp {
     this.closed = reason;
     for (const p of this.pending.values()) { clearTimeout(p.timer); p.rej(new TargetLost(`${p.method}: ${reason}`)); }
     this.pending.clear();
+    for (const w of [...this.lossWatchers]) w.fn(reason);
   }
 
   #loseSession(sessionId, reason) {
@@ -53,6 +64,17 @@ export class Cdp {
       clearTimeout(p.timer);
       p.rej(new TargetLost(`${p.method}: ${reason}`));
     }
+    for (const w of [...this.lossWatchers]) if (w.sessionId === sessionId) w.fn(reason);
+  }
+
+  // Calls fn(reason) once the connection, or the session if given, is
+  // lost (at once if it already is). Returns a function that unsubscribes.
+  watchLoss(sessionId, fn) {
+    const lost = this.closed ?? (sessionId && this.lostSessions.get(sessionId));
+    if (lost) { queueMicrotask(() => fn(lost)); return () => {}; }
+    const w = { sessionId, fn };
+    this.lossWatchers.add(w);
+    return () => this.lossWatchers.delete(w);
   }
 
   static connect(url, name) {
@@ -75,7 +97,7 @@ export class Cdp {
       const timer = timeoutMs > 0
         ? setTimeout(() => {
           this.pending.delete(id);
-          rej(new Error(`${method} on ${this.name}: no reply within ${timeoutMs}ms (raise --cdp-timeout, 0 waits forever)`));
+          rej(new NoReply(`${method} on ${this.name}: no reply within ${timeoutMs}ms (raise --cdp-timeout, 0 waits forever)`));
         }, timeoutMs)
         : undefined;
       this.pending.set(id, { res, rej, method, sessionId, timer });
@@ -101,15 +123,18 @@ export function makeTarget(kind, name, cdp, sessionId) {
     sessionId,
     send: (method, params, o) => cdp.send(method, params, { ...o, sessionId }),
     on: (method, fn) => cdp.on((msg) => { if (msg.method === method && msg.sessionId === sessionId) fn(msg.params); }),
-    // Resolves on the next matching event; rejects after timeoutMs (0 = never).
-    // cancel() drops the listener and timer without settling.
-    waitFor(method, timeoutMs = 0, pred = () => true) {
-      let off, timer;
+    // Resolves on the next matching event. Rejects with TargetLost when the
+    // target goes, and with ActionTimeout after timeoutMs (0 = never; flag
+    // names the limit). cancel() drops the listeners and timer without
+    // settling.
+    waitFor(method, timeoutMs = 0, pred = () => true, flag = "--action-timeout") {
+      let off, unwatch, timer;
       const promise = new Promise((res, rej) => {
         off = this.on(method, (p) => { if (pred(p)) { cancel(); res(p); } });
-        if (timeoutMs > 0) timer = setTimeout(() => { cancel(); rej(new Error(`no ${method} within ${timeoutMs}ms (raise --action-timeout)`)); }, timeoutMs);
+        unwatch = cdp.watchLoss(sessionId, (reason) => { cancel(); rej(new TargetLost(`waiting for ${method}: ${reason}`)); });
+        if (timeoutMs > 0) timer = setTimeout(() => { cancel(); rej(new ActionTimeout(`no ${method} within ${timeoutMs}ms (raise ${flag}, 0 waits forever)`)); }, timeoutMs);
       });
-      const cancel = () => { off(); clearTimeout(timer); };
+      const cancel = () => { off(); unwatch(); clearTimeout(timer); };
       promise.catch(() => {});
       return { promise, cancel };
     },
