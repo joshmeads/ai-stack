@@ -1,6 +1,6 @@
 ---
 name: tools-threejs-ui
-description: "Design premium Three.js game UI: HUDs, menus, overlays, pause/win/lose screens, settings, icon controls, touch UI, typography, responsive layout, safe areas, text fit, and UI/world cohesion."
+description: "Design premium Three.js game UI: HUDs, menus, overlays, pause/win/lose screens, settings, icon controls, touch UI, typography, responsive layout, safe areas, text fit, and UI/world cohesion. Use when building or fixing the HUD, menus, overlays or touch controls of a Three.js game."
 ---
 
 # Three.js Game UI Designer
