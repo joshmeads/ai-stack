@@ -29,10 +29,10 @@ Keep every round's composite. End with one final composite of all items beside t
 
 The critic sees only the reference images and the composite. It does not see source code, design notes or the author's reasoning, so it judges pixels, not effort.
 
-- Every round: spawn a read-only subagent on the review model named in the routing block of your global instructions (Claude Code: Opus 5.5 at xhigh; Codex: Sol 6.1 at xhigh). Give it only the image paths and the critic prompt below.
-- Final critique before calling the look done: also get the other provider's verdict through its CLI. Copy the reference and the composite into the working directory, and write the critic prompt to a prompt file.
-  - Claude lead: `codex exec --skip-git-repo-check --disable multi_agent -s read-only -m gpt-6.1-sol -c model_reasoning_effort=xhigh -i <reference> -i <composite> -o <report> - < <prompt file>`
-  - Codex lead: `claude -p --model claude-opus-5-5 --effort xhigh --permission-mode dontAsk --disallowedTools Edit,Write,NotebookEdit,Agent,Task < <prompt file> > <report>`. `claude -p` takes no image flag, so name the copied image files in the prompt file, reference first, and ask the critic to read them.
+- Every round: spawn a read-only subagent on the review model named in the routing block of your global instructions. Give it only the image paths and the critic prompt below.
+- Final critique before calling the look done: also get the other provider's verdict through its CLI. Take that lane's model and effort from the `interrogate reviewers` row of the model sheet (`pstack-models.md`), not from this file. Copy the reference and the composite into the working directory, and write the critic prompt to a prompt file.
+  - Claude lead: `codex exec --skip-git-repo-check --disable multi_agent -s read-only -m <codex model> -c model_reasoning_effort=<effort> -i <reference> -i <composite> -o <report> - < <prompt file>`
+  - Codex lead: `claude -p --model <claude model> --effort <effort> --permission-mode dontAsk --disallowedTools Edit,Write,NotebookEdit,Agent,Task < <prompt file> > <report>`. `claude -p` takes no image flag, so name the copied image files in the prompt file, reference first, and ask the critic to read them.
 
   The command may need the user's approval. If it is refused or cannot run, report the final critique as single-provider. The look is done when both critics pass it, or when the single available critic passes it and the report says so.
 
