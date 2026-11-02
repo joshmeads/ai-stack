@@ -35,6 +35,13 @@ skill is running: `game-mini-gdd` (GDD), `game-mvp` (MVP) or `game-final`
   locally. No CDNs.
 - Zero console errors on load and during play.
 
+## Harness
+
+The stage skills name two Codex tools: `image_gen` (the `imagegen` skill) and the `sites` skill for ChatGPT Sites. They may be missing in Claude Code. Check which tools the session has before relying on them.
+
+- Without `image_gen`, make assets with headless Blender, shaders, CC0 libraries and code, and note that in `ASSETS.md`.
+- Without the Sites tools, record the blocker in `DEPLOY.md`, tell the user, and finish everything else.
+
 ## Tools
 
 - The only AI permitted is Codex and its built-in tools (including built-in

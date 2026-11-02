@@ -53,7 +53,7 @@ Glow does not make primitives look AAA. Build authored forms first, then materia
 
 ## Asset sourcing
 
-Do not call external generation services (paid image, 3D or audio APIs). The tools available are headless Blender (`tools-blender-model` skill; Blender is installed), custom shaders, Codex's built-in `image_gen` (`imagegen` skill), CC0 libraries (Poly Haven, ambientCG, Kenney) and code. Use your judgement per surface and combine them; the table lists options that have worked, not rules.
+Do not call external generation services (paid image, 3D or audio APIs). The tools available are headless Blender (`tools-blender-model` skill; check with `blender --version`), custom shaders, Codex's built-in `image_gen` (`imagegen` skill, Codex only), CC0 libraries (Poly Haven, ambientCG, Kenney) and code. Use your judgement per surface and combine them; the table lists options that have worked, not rules.
 
 | Surface | Options that work well |
 | --- | --- |
