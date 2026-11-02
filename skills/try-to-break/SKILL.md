@@ -5,6 +5,8 @@ description: >
   fails, with evidence. Use when asked to try to break something, test
   adversarially, or look for logic, state or security failures before a merge
   or release. Any kind of app or game. Not a style or architecture review.
+  It runs the change; for a multi-model read of a diff use jm-stack:interrogate,
+  and for effects outside the diff use jm-stack:blast-radius.
 ---
 
 # Try to break it
