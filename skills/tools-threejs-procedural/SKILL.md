@@ -160,7 +160,6 @@ roughness and bump.
 ## Routing boundary
 
 This skill owns reusable mesh construction and geometry quality. Use
-`$threejs-procedural-materials` when surface identity is primary,
-`$threejs-procedural-architecture` for a building grammar, and
-`$threejs-procedural-vegetation` for a growth hierarchy; those subject skills
+`tools-threejs-materials` when surface identity is primary, and
+`tools-threejs-look` for art direction and the visual scorecard; those skills
 may then apply these geometry mechanisms.

@@ -106,8 +106,8 @@ depth must create readable highlights without bloom.
 
 ## Tree ring emission
 
-The `structured-ash-growth` example under `$threejs-procedural-vegetation`
-emits branches as oriented rings. Every branch section owns:
+A tree built from a growth hierarchy emits branches as oriented rings. Every
+branch section owns:
 
 ```text
 center
@@ -131,8 +131,7 @@ geometric face normals.
 
 ## Semantic mesh writer
 
-The `procedural-financial-tower` compiler under
-`$threejs-procedural-architecture` accumulates vertices and indices by
+A building compiler built on a grammar accumulates vertices and indices by
 material slot. Modules emit semantic geometry into a shared writer rather than
 constructing one `Mesh` each.
 
