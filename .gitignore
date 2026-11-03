@@ -1,18 +1,24 @@
 # Session-local Claude Code state — not part of the plugin
 .remember/
+.claude/worktrees/
+.claude/.cc-writes/
 
 # OS / editor
 .DS_Store
 *.swp
 *.swo
 
-# VS Code per-user (the .code-workspace file IS tracked)
+# VS Code per-user
 .vscode/
+
+# Python bytecode
+__pycache__/
 
 # bun deps for the vendored poteto-mode scripts (bootstrap.ts installs them on first run)
 plugins/pstack/skills/poteto-mode/scripts/node_modules/
 
-# Non-shipped repository verification helper dependencies
-
 # ai-stack skills staging
 .ai-stack/
+
+# cdt run artifacts (skills/devtools-perf)
+.cdt-runs/

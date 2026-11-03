@@ -36,6 +36,16 @@ impl Harness {
         }
     }
 
+    /// The user skill folder the harness loads standalone skills from, where ai-stack links
+    /// the global groups' skills. Codex also reads `$CODEX_HOME/skills`, but `~/.agents/skills`
+    /// is the folder shared with other agents (checked against codex-cli 0.160.0).
+    pub fn skill_folder(self, harness_home: &Path, user_home: &Path) -> PathBuf {
+        match self {
+            Harness::Claude => harness_home.join("skills"),
+            Harness::Codex => user_home.join(".agents/skills"),
+        }
+    }
+
     /// The harness-specific instructions source: `<stack>/instructions/<stem>.md`.
     pub fn instructions_stem(self) -> &'static str {
         match self {
@@ -227,7 +237,7 @@ const KEEP_SKILLS: [&str; 21] = [
     "gpt-taste", "high-end-visual-design", "image-to-code", "redesign-existing-projects", "full-output-enforcement",
     "make-interfaces-feel-better", "oklch-skill", "color-expert", "minimalist-ui", "cua-*", "gui-automation", "hatch-pet", "turborepo", "computer-use-linux",
 ];
-const KEEP_PLUGINS: [&str; 4] = ["jm-*@jm", "github@claude-plugins-official", "chrome-devtools-mcp@claude-plugins-official", "*@openai-*"];
+const KEEP_PLUGINS: [&str; 3] = ["github@claude-plugins-official", "chrome-devtools-mcp@claude-plugins-official", "*@openai-*"];
 
 fn default_remote() -> String {
     "origin".into()
@@ -552,7 +562,7 @@ mod tests {
         for moved in ["better", "how", "turborepo-extra", "xcua-driver"] {
             assert!(!clean.keeps_skill(moved), "{moved}");
         }
-        for kept in ["jm-stack@jm", "github@claude-plugins-official", "browser@openai-bundled", "pdf@openai-primary-runtime"] {
+        for kept in ["github@claude-plugins-official", "browser@openai-bundled", "pdf@openai-primary-runtime"] {
             assert!(clean.keeps_plugin(kept), "{kept}");
         }
         for removed in ["jm-stack@other", "expo@claude-plugins-official", "pdf-viewer@synced", "github@jm"] {

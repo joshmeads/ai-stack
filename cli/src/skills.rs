@@ -1,5 +1,5 @@
 //! `ai-stack skills`: vendor skills from external git repos into the stack, recorded in
-//! `manifest.toml`, and rebuild them when upstream moves.
+//! `stack.toml`, and rebuild them when upstream moves.
 
 use std::fs;
 use std::io::Write;
@@ -9,7 +9,7 @@ use std::path::{Path, PathBuf};
 use anyhow::{Context as _, Result, anyhow, bail, ensure};
 
 use crate::exec::{self, Exec, is_commit, one_line, short, strings};
-use crate::manifest::{self, Skill, Step, StepKind};
+use crate::stackfile::{self, Skill, SkillName, Step, StepKind};
 
 /// Staging and aside directories, on the same filesystem as every target.
 pub const STAGE: &str = ".ai-stack/stage";
@@ -20,14 +20,17 @@ pub struct Skills<'a> {
     pub prompt_runner: &'a [String],
 }
 
+/// A skill added to a group is a standalone skill, so it always goes into `skills/`. A
+/// `[[skill]]` with another `dest` is written by hand.
 pub struct Add {
     pub source: String,
     pub path: String,
     pub git_ref: String,
-    pub dest: String,
-    pub rename: Option<String>,
+    pub rename: Option<SkillName>,
     pub process: Vec<Step>,
-    pub name: Option<String>,
+    pub name: Option<SkillName>,
+    /// The existing group the new skill joins.
+    pub group: String,
 }
 
 pub struct Update<'n> {
@@ -45,36 +48,52 @@ impl Skills<'_> {
             Some(name) => name,
             None => Path::new(&add.path)
                 .file_name()
-                .map(|name| name.to_string_lossy().into_owned())
+                .and_then(|name| SkillName::try_from(name.to_string_lossy().as_ref()).ok())
                 .ok_or_else(|| anyhow!("cannot take a skill name from {:?}; pass --name", add.path))?,
         };
         let source = match fs::canonicalize(&add.source) {
             Ok(path) => path.to_string_lossy().into_owned(),
             Err(_) => add.source,
         };
-        let mut manifest = manifest::load(self.stack)?;
-        let commit = self.resolve(&source, &add.git_ref)?;
-        let skill = Skill { name, source, path: add.path, git_ref: add.git_ref, commit, dest: add.dest, rename: add.rename, process: add.process };
-        manifest.skills.push(skill.clone());
-        manifest.validate()?;
+        let mut file = stackfile::load(self.stack)?;
+        let group_name = stackfile::GroupName::try_from(add.group.as_str()).context("--group")?;
+        ensure!(file.groups.contains_key(&group_name), "no group {:?} in {}; add a [groups.{}] table first", add.group, self.stack.join(stackfile::FILE).display(), add.group);
+        // Every argument is checked, with a placeholder commit, before the network is used.
+        let mut skill = Skill { name, source, path: add.path, git_ref: add.git_ref, commit: "0".repeat(40), dest: stackfile::DEFAULT_DEST.into(), rename: add.rename, process: add.process };
+        let member = skill.installed_name().clone();
+        let group = file.groups.get_mut(&group_name).expect("checked above");
+        if !group.skills.contains(&member) {
+            group.skills.push(member.clone());
+        }
+        file.skills.push(skill.clone());
+        file.validate()?;
+        file.check_dests(self.stack)?;
         let target = self.stack.join(skill.target());
         ensure!(fs::symlink_metadata(&target).is_err(), "{} already exists; remove it first", target.display());
 
+        skill.commit = self.resolve(&skill.source, &skill.git_ref)?;
         self.install(&skill)?;
-        writeln!(out, "added {} -> {} at {}", skill.name, skill.target().display(), short(&skill.commit))?;
-        manifest::save(self.stack, &manifest)
+        // The target did not exist before, so a failed edit takes the new skill out again.
+        if let Err(err) = stackfile::edit(self.stack, &[stackfile::Op::AddMember { group: &group_name, skill: &member }, stackfile::Op::PushSkill(&skill)]) {
+            return Err(match fs::remove_dir_all(&target) {
+                Ok(()) => err.context(format!("{} was removed again", target.display())),
+                Err(remove) => err.context(format!("{} is installed but not recorded, and removing it failed: {remove}", target.display())),
+            });
+        }
+        writeln!(out, "added {} -> {} at {} in group {}", skill.name, skill.target().display(), short(&skill.commit), add.group)?;
+        Ok(())
     }
 
     /// Exit 0 when every entry is current, 1 otherwise.
     pub fn status(&self, out: &mut dyn Write) -> Result<i32> {
         self.clear_stage(out)?;
-        let manifest = manifest::load(self.stack)?;
-        if manifest.skills.is_empty() {
-            writeln!(out, "No skills in {}.", self.stack.join(manifest::FILE).display())?;
+        let file = stackfile::load(self.stack)?;
+        if file.skills.is_empty() {
+            writeln!(out, "No vendored skills in {}.", self.stack.join(stackfile::FILE).display())?;
             return Ok(0);
         }
         let mut current = true;
-        for skill in &manifest.skills {
+        for skill in &file.skills {
             let missing = fs::symlink_metadata(self.stack.join(skill.target())).is_err();
             let state = match self.resolve(&skill.source, &skill.git_ref) {
                 _ if missing => {
@@ -100,46 +119,48 @@ impl Skills<'_> {
     /// reported and the rest continue. Exit 1 when any failed.
     pub fn update(&self, update: Update, out: &mut dyn Write) -> Result<i32> {
         self.clear_stage(out)?;
-        let mut manifest = manifest::load(self.stack)?;
+        let file = stackfile::load(self.stack)?;
         if let Some(git_ref) = &update.git_ref {
             exec::check_ref(git_ref)?;
             ensure!(!update.names.is_empty(), "--ref retargets named entries; pass the skill names");
         }
         let selected: Vec<usize> = if update.names.is_empty() {
-            (0..manifest.skills.len()).collect()
+            (0..file.skills.len()).collect()
         } else {
             update
                 .names
                 .iter()
                 .map(|name| {
-                    manifest
+                    file
                         .skills
                         .iter()
-                        .position(|skill| skill.name == *name || skill.installed_name() == name)
-                        .ok_or_else(|| anyhow!("no manifest entry named {name:?}"))
+                        .position(|skill| skill.name.as_str() == name || skill.installed_name().as_str() == name)
+                        .ok_or_else(|| anyhow!("no vendored skill named {name:?}"))
                 })
                 .collect::<Result<_>>()?
         };
-        let (mut changed, mut failed) = (false, 0);
+        let (mut changed, mut failed) = (Vec::new(), 0);
         for index in selected {
-            let mut next = manifest.skills[index].clone();
+            let mut next = file.skills[index].clone();
             if let Some(git_ref) = &update.git_ref {
                 next.git_ref = git_ref.clone();
             }
-            match self.update_one(&manifest.skills[index], next, &update) {
+            match self.update_one(&file.skills[index], next, &update) {
                 Ok((next, message)) => {
                     writeln!(out, "{}: {message}", next.name)?;
-                    changed |= next != manifest.skills[index];
-                    manifest.skills[index] = next;
+                    if next != file.skills[index] {
+                        changed.push(next);
+                    }
                 }
                 Err(err) => {
                     failed += 1;
-                    writeln!(out, "{}: failed: {err:#}", manifest.skills[index].name)?;
+                    writeln!(out, "{}: failed: {err:#}", file.skills[index].name)?;
                 }
             }
         }
-        if changed {
-            manifest::save(self.stack, &manifest)?;
+        let ops: Vec<stackfile::Op> = changed.iter().map(|skill| stackfile::Op::SetSkill { name: &skill.name, git_ref: &skill.git_ref, commit: &skill.commit }).collect();
+        if !ops.is_empty() {
+            stackfile::edit(self.stack, &ops)?;
         }
         Ok(if failed > 0 { 1 } else { 0 })
     }
@@ -223,11 +244,18 @@ impl Skills<'_> {
         fs::set_permissions(stage.path(), fs::Permissions::from_mode(0o755))?;
         copy_contents(&source, stage.path())?;
         if let Some(rename) = &skill.rename {
-            rename_frontmatter(&stage.path().join("SKILL.md"), rename)?;
+            rename_frontmatter(&stage.path().join("SKILL.md"), rename.as_str())?;
         }
         for step in &skill.process {
             self.run_step(step, stage.path()).with_context(|| format!("process step {:?} {:?}", step.kind, step.input))?;
         }
+        let skill_md = stage.path().join("SKILL.md");
+        ensure!(
+            fs::symlink_metadata(&skill_md).is_ok_and(|meta| meta.is_file()),
+            "{} at {} has no SKILL.md file after its process steps, so it is not a skill; nothing was changed",
+            skill.source,
+            short(&skill.commit)
+        );
 
         if fs::symlink_metadata(&target).is_err() {
             fs::rename(stage.path(), &target).with_context(|| format!("cannot move the staged skill to {}", target.display()))?;
@@ -376,6 +404,7 @@ mod tests {
             git(&upstream, &["commit", "-qm", "v1"]);
             fs::create_dir_all(stack.join("scripts")).unwrap();
             fs::write(stack.join("scripts/strip.sh"), "find \"$1\" -name '*.md' -exec perl -pi -e 's/\\xe2\\x80\\x94/-/g' {} +\n").unwrap();
+            fs::write(stack.join(stackfile::FILE), "[groups.tools]\nglobal = true\nskills = []\n").unwrap();
             git(&stack, &["init", "-q"]);
             commit_all(&stack, "init");
             Fixture { _dir: dir, upstream, stack, runner: vec!["false".into()] }
@@ -390,10 +419,10 @@ mod tests {
                 source: format!("file://{}", self.upstream.display()),
                 path: "skills/grill-with-docs".into(),
                 git_ref: "main".into(),
-                dest: manifest::DEFAULT_DEST.into(),
-                rename: Some("grill-docs".into()),
+                rename: Some(SkillName::try_from("grill-docs").unwrap()),
                 process: vec![Step { kind: StepKind::Script, input: "scripts/strip.sh".into() }],
                 name: None,
+                group: "tools".into(),
             };
             self.skills().add(add, &mut Vec::new()).unwrap();
             commit_all(&self.stack, "add skill");
@@ -406,7 +435,7 @@ mod tests {
         }
 
         fn installed(&self) -> String {
-            fs::read_to_string(self.stack.join("plugins/jm-tools/skills/grill-docs/SKILL.md")).unwrap()
+            fs::read_to_string(self.stack.join("skills/grill-docs/SKILL.md")).unwrap()
         }
 
         fn update(&self, names: &[String], git_ref: Option<&str>, reprocess: bool, force: bool) -> (i32, String) {
@@ -431,9 +460,9 @@ mod tests {
         let installed = fx.installed();
         assert!(installed.contains("name: grill-docs\n"), "{installed}");
         assert!(!installed.contains('\u{2014}'), "{installed}");
-        assert!(fx.stack.join("plugins/jm-tools/skills/grill-docs/refs/notes.md").is_file());
-        let entry = &manifest::load(&fx.stack).unwrap().skills[0];
-        assert_eq!((entry.commit.as_str(), entry.installed_name()), (v1.as_str(), "grill-docs"));
+        assert!(fx.stack.join("skills/grill-docs/refs/notes.md").is_file());
+        let entry = &stackfile::load(&fx.stack).unwrap().skills[0];
+        assert_eq!((entry.commit.as_str(), entry.installed_name().as_str()), (v1.as_str(), "grill-docs"));
 
         let mut out = Vec::new();
         assert_eq!(fx.skills().status(&mut out).unwrap(), 0);
@@ -443,7 +472,7 @@ mod tests {
         let status = String::from_utf8(out).unwrap();
         assert!(status.contains(&format!("grill-with-docs  grill-docs  {}  behind: {}", &v1[..7], &v2[..7])), "{status}");
 
-        let skill_md = fx.stack.join("plugins/jm-tools/skills/grill-docs/SKILL.md");
+        let skill_md = fx.stack.join("skills/grill-docs/SKILL.md");
         fs::write(&skill_md, "local edit\n").unwrap();
         let (code, out) = fx.update(&[], None, false, false);
         assert_eq!(code, 1);
@@ -453,7 +482,7 @@ mod tests {
         git(&fx.stack, &["checkout", "--", "."]);
         fs::write(fx.stack.join(".gitignore"), "*.log\n").unwrap();
         commit_all(&fx.stack, "ignore logs");
-        let ignored = fx.stack.join("plugins/jm-tools/skills/grill-docs/.cache/run.log");
+        let ignored = fx.stack.join("skills/grill-docs/.cache/run.log");
         fs::create_dir_all(ignored.parent().unwrap()).unwrap();
         fs::write(&ignored, "x").unwrap();
         let (code, out) = fx.update(&[], None, false, false);
@@ -465,10 +494,10 @@ mod tests {
         let (code, out) = fx.update(&[], None, false, false);
         assert_eq!(code, 0, "{out}");
         assert!(fx.installed().contains("Body - v2"), "{}", fx.installed());
-        assert_eq!(manifest::load(&fx.stack).unwrap().skills[0].commit, v2);
+        assert_eq!(stackfile::load(&fx.stack).unwrap().skills[0].commit, v2);
         commit_all(&fx.stack, "v2");
 
-        fs::remove_dir_all(fx.stack.join("plugins/jm-tools/skills/grill-docs")).unwrap();
+        fs::remove_dir_all(fx.stack.join("skills/grill-docs")).unwrap();
         let mut out = Vec::new();
         assert_eq!(fx.skills().status(&mut out).unwrap(), 1);
         assert!(String::from_utf8(out).unwrap().contains("grill-with-docs  grill-docs  {}  missing".replace("{}", &v2[..7]).as_str()));
@@ -492,19 +521,75 @@ mod tests {
             source: fx.stack.join("../root-skill").to_string_lossy().into_owned(),
             path: ".".into(),
             git_ref: "main".into(),
-            dest: manifest::DEFAULT_DEST.into(),
             rename: None,
             process: Vec::new(),
-            name: Some("root".into()),
+            name: Some(SkillName::try_from("root").unwrap()),
+            group: "tools".into(),
         };
         fx.skills().add(add, &mut Vec::new()).unwrap();
 
-        let entry = &manifest::load(&fx.stack).unwrap().skills[0];
+        let entry = &stackfile::load(&fx.stack).unwrap().skills[0];
         assert_eq!(Path::new(&entry.source), fs::canonicalize(&root).unwrap());
-        let installed = fx.stack.join("plugins/jm-tools/skills/root");
+        let installed = fx.stack.join("skills/root");
         let mut names: Vec<_> = fs::read_dir(&installed).unwrap().map(|e| e.unwrap().file_name()).collect();
         names.sort();
         assert_eq!(names, ["SKILL.md"]);
+    }
+
+    #[test]
+    fn add_checks_every_argument_before_the_network() {
+        let fx = Fixture::new();
+        fs::create_dir_all(fx.stack.join("skills/taken")).unwrap();
+        fs::write(fx.stack.join("skills/taken/SKILL.md"), "---\nname: taken\n---\n").unwrap();
+        fs::write(fx.stack.join(stackfile::FILE), "[groups.tools]\nglobal = true\nskills = [\"taken\"]\n").unwrap();
+        let exec = crate::exec::fake::FakeExec::new(|line| panic!("ran {line}"));
+        let skills = Skills { exec: &exec, stack: &fx.stack, prompt_runner: &fx.runner };
+        let add = |group: &str, rename: Option<&str>, process: Vec<Step>| Add {
+            source: "https://example.com/skills".into(),
+            path: "skills/grill".into(),
+            git_ref: "main".into(),
+            rename: rename.map(|name| SkillName::try_from(name).unwrap()),
+            process,
+            name: None,
+            group: group.into(),
+        };
+        for (add, message) in [
+            (add("nope", None, Vec::new()), "no group \"nope\""),
+            (add("tools", None, vec![Step { kind: StepKind::Prompt, input: "-x".into() }]), "must not start with `-`"),
+            (add("tools", None, vec![Step { kind: StepKind::Script, input: "../s.sh".into() }]), "process script"),
+            (add("tools", Some("taken"), Vec::new()), "skills/taken already exists"),
+        ] {
+            let err = format!("{:#}", skills.add(add, &mut Vec::new()).unwrap_err());
+            assert!(err.contains(message), "{message}: {err}");
+        }
+        assert!(exec.calls.borrow().is_empty());
+    }
+
+    #[test]
+    fn a_tree_without_skill_md_is_refused_and_leaves_the_stack_unchanged() {
+        let fx = Fixture::new();
+        let readme = fx._dir.path().join("readme-only");
+        fs::create_dir_all(&readme).unwrap();
+        fs::write(readme.join("README.md"), "not a skill\n").unwrap();
+        git(&readme, &["init", "-q"]);
+        commit_all(&readme, "readme");
+        let before = fs::read_to_string(fx.stack.join(stackfile::FILE)).unwrap();
+        let add = Add { source: readme.to_string_lossy().into_owned(), path: ".".into(), git_ref: "main".into(), rename: None, process: Vec::new(), name: Some(SkillName::try_from("not-a-skill").unwrap()), group: "tools".into() };
+        let err = format!("{:#}", fx.skills().add(add, &mut Vec::new()).unwrap_err());
+        assert!(err.contains("has no SKILL.md file after its process steps"), "{err}");
+        assert_eq!(fs::read_to_string(fx.stack.join(stackfile::FILE)).unwrap(), before);
+        assert!(!fx.stack.join("skills/not-a-skill").exists());
+        assert!(stackfile::load(&fx.stack).is_ok());
+
+        // A process step that removes SKILL.md fails the update and keeps the installed skill.
+        fx.add();
+        let installed = fx.installed();
+        fs::write(fx.stack.join("scripts/strip.sh"), "rm \"$1/SKILL.md\"\n").unwrap();
+        commit_all(&fx.stack, "break the step");
+        let (code, out) = fx.update(&[], None, true, false);
+        assert_eq!(code, 1, "{out}");
+        assert!(out.contains("has no SKILL.md file"), "{out}");
+        assert_eq!(fx.installed(), installed);
     }
 
     #[test]
@@ -537,18 +622,18 @@ mod tests {
                 source: format!("file://{}", fx.upstream.display()),
                 path: path.into(),
                 git_ref: "main".into(),
-                dest: manifest::DEFAULT_DEST.into(),
-                rename: Some("renamed".into()),
+                rename: Some(SkillName::try_from("renamed").unwrap()),
                 process: Vec::new(),
                 name: None,
+                group: "tools".into(),
             };
             let err = format!("{:#}", fx.skills().add(add, &mut Vec::new()).unwrap_err());
             assert!(err.contains(link), "{err}");
-            assert!(!fx.stack.join("plugins/jm-tools/skills/renamed").exists());
+            assert!(!fx.stack.join("skills/renamed").exists());
         }
         assert_eq!(fs::read_to_string(outside.join("SKILL.md")).unwrap(), "---\nname: outside\n---\n");
         assert_eq!(fs::read_dir(&outside).unwrap().count(), 1);
-        assert!(manifest::load(&fx.stack).unwrap().skills.is_empty());
+        assert!(stackfile::load(&fx.stack).unwrap().skills.is_empty());
     }
 
     #[test]
@@ -563,7 +648,7 @@ mod tests {
         let (code, out) = fx.update(&names, Some("test"), false, false);
         assert_eq!(code, 0, "{out}");
         assert!(fx.installed().contains("Test branch"));
-        let entry = &manifest::load(&fx.stack).unwrap().skills[0];
+        let entry = &stackfile::load(&fx.stack).unwrap().skills[0];
         assert_eq!((entry.git_ref.as_str(), entry.commit.as_str()), ("test", on_test.as_str()));
         commit_all(&fx.stack, "retarget");
 
@@ -573,7 +658,7 @@ mod tests {
         assert_eq!(code, 1);
         assert!(out.contains("broken"), "{out}");
         assert_eq!(fx.installed(), before);
-        let leftovers: Vec<_> = fs::read_dir(fx.stack.join("plugins/jm-tools/skills")).unwrap().map(|e| e.unwrap().file_name()).collect();
+        let leftovers: Vec<_> = fs::read_dir(fx.stack.join("skills")).unwrap().map(|e| e.unwrap().file_name()).collect();
         assert_eq!(leftovers, ["grill-docs"]);
         let stage = fx.stack.join(STAGE);
         assert_eq!(fs::read_dir(&stage).unwrap().count(), 0);
@@ -583,5 +668,38 @@ mod tests {
         fx.skills().status(&mut out).unwrap();
         assert!(String::from_utf8(out).unwrap().starts_with("removed stale "));
         assert_eq!(fs::read_dir(&stage).unwrap().count(), 0);
+    }
+
+    #[test]
+    fn add_keeps_hand_edits_made_while_it_runs_and_takes_the_skill_out_when_the_edit_fails() {
+        let fx = Fixture::new();
+        let add = |script: &str| {
+            fs::write(fx.stack.join("scripts/edit.sh"), script).unwrap();
+            let add = Add {
+                source: format!("file://{}", fx.upstream.display()),
+                path: "skills/grill-with-docs".into(),
+                git_ref: "main".into(),
+                rename: None,
+                process: vec![Step { kind: StepKind::Script, input: "scripts/edit.sh".into() }],
+                name: None,
+                group: "tools".into(),
+            };
+            fx.skills().add(add, &mut Vec::new())
+        };
+        let toml = fx.stack.join(stackfile::FILE);
+        add(&format!("printf '\\n# later\\n[groups.later]\\nskills = []\\n' >> '{}'\n", toml.display())).unwrap();
+        assert_eq!(fs::read_to_string(&toml).unwrap(), concat!(
+            "[groups.tools]\nglobal = true\nskills = [\"grill-with-docs\"]\n",
+            "\n# later\n[groups.later]\nskills = []\n",
+            "\n[[skill]]\nname = \"grill-with-docs\"\nsource = \"file://SOURCE\"\npath = \"skills/grill-with-docs\"\nref = \"main\"\ncommit = \"COMMIT\"\nprocess = [{ type = \"script\", input = \"scripts/edit.sh\" }]\n",
+        ).replace("SOURCE", &fx.upstream.display().to_string()).replace("COMMIT", &git(&fx.upstream, &["rev-parse", "HEAD"])));
+
+        // A hand edit the operations cannot apply to: nothing is recorded and the skill is gone.
+        fs::remove_dir_all(fx.stack.join("skills/grill-with-docs")).unwrap();
+        fs::write(&toml, "[groups.tools]\nglobal = true\nskills = []\n").unwrap();
+        let err = format!("{:#}", add(&format!("printf '[groups.tools]\\nskills = \"x\"\\n' > '{}'\n", toml.display())).unwrap_err());
+        assert!(err.contains("skills is not an array") && err.contains("was removed again"), "{err}");
+        assert!(!fx.stack.join("skills/grill-with-docs").exists());
+        assert_eq!(fs::read_to_string(&toml).unwrap(), "[groups.tools]\nskills = \"x\"\n");
     }
 }

@@ -2,12 +2,14 @@
 
 [stack]
 # Checkout of joshmeads/ai-stack. ai-stack adds it to each harness as the
-# local `jm` plugin marketplace and installs jm-stack, jm-games and jm-tools.
+# local `jm` plugin marketplace, installs jm-stack, and links the skills of
+# the global groups in its stack.toml into each harness's user skill folder.
 path = "~/Documents/Projects/@joshmeads/ai-stack"
 remote = "origin"
 branch = "main"
 # Older checkout roots. Skill and agent links and settings hooks that point
-# into the stack or these roots are leftovers of older installs and are removed.
+# into the stack or these roots are ai-stack's: a skill link a global group
+# wants is kept or repointed, and the rest are removed.
 legacy_paths = ["~/.local/share/open-pstack"]
 
 [harness.claude]
@@ -49,7 +51,7 @@ claude = "opus@high"
 codex = "sol@high"
 
 # The review model in each harness, as "alias@effort". The routing block names
-# it, and jm-games' art-iteration critic uses it.
+# it, and the art-iteration skill's critic uses it.
 [review]
 claude = "opus@xhigh"
 codex = "sol@xhigh"
@@ -111,13 +113,14 @@ keep_skills = [
   "color-expert", "minimalist-ui", "cua-*", "gui-automation", "hatch-pet",
   "turborepo", "computer-use-linux",
 ]
-# Codex's built-in plugins come from `openai-*` marketplaces.
+# Codex's built-in plugins come from `openai-*` marketplaces. Clean never
+# touches a `jm` plugin: install owns that marketplace.
 keep_plugins = [
-  "jm-*@jm", "github@claude-plugins-official",
+  "github@claude-plugins-official",
   "chrome-devtools-mcp@claude-plugins-official", "*@openai-*",
 ]
 
-# `ai-stack skills add` and `skills update` run a manifest entry's
+# `ai-stack skills add` and `skills update` run a vendored skill's
 # `type = "prompt"` process steps with this argv, the prompt appended as the
 # last argument, in the staged skill directory. No shell is involved. The agent
 # edits files there by design, so pick a permission mode you trust.

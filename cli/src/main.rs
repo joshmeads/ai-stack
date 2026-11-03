@@ -4,14 +4,17 @@ mod config;
 mod drift;
 mod exec;
 mod fleet;
+mod groups;
 mod install;
-mod manifest;
+mod ledger;
+mod links;
 mod models;
 mod paths;
 mod plan;
 mod plugins;
 mod render;
 mod skills;
+mod stackfile;
 mod tui;
 
 use std::fs;
@@ -21,11 +24,14 @@ use std::path::{Path, PathBuf};
 use anyhow::{Context as _, Result, anyhow, bail};
 use clap::{Parser, Subcommand};
 
-use crate::config::{Config, Provider, Stack};
+use crate::config::{Config, Harness, Provider, Stack};
 use crate::install::Options;
 use crate::models::{ModelReport, Status};
 use crate::plan::Plan;
 use crate::plugins::SystemRunner;
+
+/// `update` pulled CLI changes and stopped before installing. Fleet preserves this signal.
+const REBUILD_NEEDED: i32 = 3;
 
 #[derive(Parser)]
 #[command(name = "ai-stack", version, about = "Install and update the jm:stack agent configuration")]
@@ -68,7 +74,8 @@ enum Commands {
         #[arg(long)]
         clean: bool,
     },
-    /// Count the skills and plugins that `--clean` would move or remove. Read-only, like `diff`.
+    /// Report the stray skills (what `--clean` moves and what sits where a skill link goes) and
+    /// the plugins `--clean` removes. Read-only, like `diff`.
     Stray {
         /// Print `{"skills":N,"plugins":M,"skill_names":[...],"plugin_ids":[...]}` on one line.
         #[arg(long)]
@@ -79,7 +86,8 @@ enum Commands {
         /// Apply without review.
         #[arg(long)]
         yes: bool,
-        /// Replace an unmanaged model sheet (backed up first).
+        /// Replace an unmanaged model sheet, and move a stray skill in a skill link's way, each
+        /// into the backup first.
         #[arg(long)]
         force: bool,
         /// Print the plan instead of opening the review screen.
@@ -91,6 +99,7 @@ enum Commands {
         clean: bool,
     },
     /// Pull the stack checkout (it must be on the branch pulled), check models, then install.
+    /// Exit 3 before checking models or installing if this pull changes cli/; rebuild and rerun.
     Update {
         /// Apply without review.
         #[arg(long)]
@@ -111,10 +120,17 @@ enum Commands {
         #[arg(long)]
         bump: bool,
     },
-    /// Skills vendored from external git repos, recorded in <stack>/manifest.toml.
+    /// Skills vendored from external git repos, recorded in <stack>/stack.toml.
     Skills {
         #[command(subcommand)]
         command: SkillsCommand,
+    },
+    /// Each skill group in <stack>/stack.toml: global or not, its skills after includes, and
+    /// an estimated token cost of their names and descriptions.
+    Groups {
+        /// Print the report as JSON.
+        #[arg(long)]
+        json: bool,
     },
     /// Machines in <config dir>/fleet.toml that stack updates are pushed to.
     Fleet {
@@ -165,7 +181,7 @@ enum FleetCommand {
     /// Print each machine's stack branch and commit against that branch's remote tip. Exit 0
     /// when every machine is current.
     Status,
-    /// Run `<bin> update --yes --plain --branch <B>` on every enabled machine.
+    /// Run `<bin> --stack <stack> update --yes --plain --branch <B>` on every enabled machine.
     Update {
         /// Run the commands; without it they are only printed.
         #[arg(long)]
@@ -187,7 +203,7 @@ enum FleetCommand {
 
 #[derive(Subcommand)]
 enum SkillsCommand {
-    /// Vendor a skill directory from a git repo and record it in the manifest.
+    /// Vendor a skill directory from a git repo into a group and record it in stack.toml.
     Add {
         /// Git URL or path of the upstream repo. A local path is stored as its absolute path.
         source: String,
@@ -195,23 +211,23 @@ enum SkillsCommand {
         path: String,
         /// Upstream branch or tag to track (or a 40-hex commit to pin). To test another
         /// upstream branch later, run `skills update --ref <branch> <name>`.
-        #[arg(long = "ref", value_name = "REF", default_value = manifest::DEFAULT_REF)]
+        #[arg(long = "ref", value_name = "REF", default_value = stackfile::DEFAULT_REF)]
         git_ref: String,
-        /// Parent directory inside the stack.
-        #[arg(long, value_name = "DIR", default_value = manifest::DEFAULT_DEST)]
-        dest: String,
+        /// Existing group in stack.toml that the skill joins.
+        #[arg(long, value_name = "GROUP")]
+        group: String,
         /// Install under this directory name and rewrite SKILL.md's `name:` to it.
-        #[arg(long = "move", value_name = "NAME")]
-        rename: Option<String>,
+        #[arg(long = "move", value_name = "NAME", value_parser = skill_name)]
+        rename: Option<stackfile::SkillName>,
         /// Script run as `sh <script> <staged skill dir>` on every pull.
         #[arg(long, value_name = "PATH", conflicts_with = "process_prompt")]
         process_script: Option<String>,
         /// Prompt run through [skills] prompt_runner in the staged skill dir on every pull.
         #[arg(long, value_name = "TEXT")]
         process_prompt: Option<String>,
-        /// Manifest name (default: the last component of PATH).
-        #[arg(long)]
-        name: Option<String>,
+        /// Entry name in stack.toml (default: the last component of PATH).
+        #[arg(long, value_parser = skill_name)]
+        name: Option<stackfile::SkillName>,
     },
     /// Compare each entry's commit with its upstream ref. Exit 0 when all are current.
     Status,
@@ -230,6 +246,10 @@ enum SkillsCommand {
         #[arg(long)]
         force: bool,
     },
+}
+
+fn skill_name(text: &str) -> Result<stackfile::SkillName> {
+    stackfile::SkillName::try_from(text)
 }
 
 /// Paths and overrides shared by every command.
@@ -263,10 +283,11 @@ fn main() -> Result<()> {
         Commands::Init { force } => cmd_init(&ctx, force)?,
         Commands::Diff { clean } => cmd_diff(&ctx, clean)?,
         Commands::Stray { json } => cmd_stray(&ctx, json)?,
-        Commands::Install { yes, force, plain, clean } => cmd_install(&ctx, yes, Options { force, clean }, plain)?,
+        Commands::Install { yes, force, plain, clean } => cmd_install(&ctx, yes, Options { force, clean, report: false }, plain)?,
         Commands::Update { yes, plain, bump_models, branch } => cmd_update(&ctx, yes, plain, bump_models, branch)?,
         Commands::Models { bump } => cmd_models(&ctx, bump)?,
         Commands::Skills { command } => cmd_skills(&ctx, command)?,
+        Commands::Groups { json } => cmd_groups(&ctx, json)?,
         Commands::Fleet { command } => cmd_fleet(&ctx, command)?,
     };
     io::stdout().flush()?;
@@ -318,9 +339,21 @@ fn write_config(flat: drift::Flat, json: bool, out: &mut dyn Write) -> Result<()
 }
 
 fn cmd_init(ctx: &Context, force: bool) -> Result<i32> {
-    init_at(&ctx.config_path, config::default_config_text(), force)?;
+    let detected = init_config_at(&ctx.config_path, force, &SystemRunner::detect())?;
     println!("Wrote {}", ctx.config_path.display());
+    for (harness, available) in detected {
+        let id = harness.as_str();
+        let status = if available { "found" } else { "not found" };
+        let suffix = if available { "" } else { "; it will be skipped until installed" };
+        println!("{}: `{id}` {status} on PATH{suffix}", harness.name());
+    }
     Ok(0)
+}
+
+fn init_config_at(path: &Path, force: bool, runner: &dyn plugins::Runner) -> Result<Vec<(Harness, bool)>> {
+    let detected: Vec<_> = Harness::ALL.into_iter().map(|harness| (harness, runner.available(harness))).collect();
+    init_at(path, config::default_config_text(), force)?;
+    Ok(detected)
 }
 
 /// Writes `text` to `path`, refusing to overwrite unless `force`.
@@ -336,14 +369,16 @@ fn init_at(path: &Path, text: &str, force: bool) -> Result<()> {
 
 fn cmd_diff(ctx: &Context, clean: bool) -> Result<i32> {
     let cfg = load_config(ctx)?;
-    let plan = install::plan(&cfg, Options { clean, ..Options::default() }, &SystemRunner)?;
+    let plan = install::plan(&cfg, Options { clean, ..Options::default() }, &SystemRunner::detect())?;
     print!("{}", plan.render_text(&ctx.home));
     Ok(if plan.is_empty() { 0 } else { 1 })
 }
 
 fn cmd_stray(ctx: &Context, json: bool) -> Result<i32> {
     let cfg = load_config(ctx)?;
-    let stray = install::plan(&cfg, Options { clean: true, ..Options::default() }, &SystemRunner)?.stray(&ctx.home);
+    let plan = install::plan(&cfg, Options { clean: true, report: true, ..Options::default() }, &SystemRunner::detect())?;
+    for warning in &plan.warnings { eprintln!("{warning}"); }
+    let stray = plan.stray(&ctx.home);
     if json {
         println!("{}", serde_json::to_string(&stray)?);
     } else {
@@ -366,7 +401,8 @@ fn install_flow(
     plain: bool,
     models: &[ModelReport],
 ) -> Result<i32> {
-    let plan = install::plan(cfg, opts, &SystemRunner)?;
+    let runner = SystemRunner::detect();
+    let plan = install::plan(cfg, opts, &runner)?;
     if plan.is_empty() {
         for warning in &plan.warnings { println!("{warning}"); }
         println!("Nothing to install.");
@@ -389,14 +425,14 @@ fn install_flow(
         confirm("Apply these changes? [y/N] ")?.then_some(plan)
     } else {
         // The review screen can toggle --clean, which re-plans.
-        let mut replan = |clean| install::plan(cfg, Options { clean, ..opts }, &SystemRunner);
+        let mut replan = |clean| install::plan(cfg, Options { clean, ..opts }, &runner);
         tui::review(plan, opts.clean, models, &ctx.home, &mut replan)?
     };
     let Some(plan) = approved else {
         println!("Not applied.");
         return Ok(1);
     };
-    apply_plan(ctx, &plan)
+    apply_plan(ctx, &plan, &runner)
 }
 
 fn confirm(prompt: &str) -> Result<bool> {
@@ -407,8 +443,8 @@ fn confirm(prompt: &str) -> Result<bool> {
     Ok(matches!(line.trim().to_ascii_lowercase().as_str(), "y" | "yes"))
 }
 
-fn apply_plan(ctx: &Context, plan: &Plan) -> Result<i32> {
-    let report = plan::apply(plan, &ctx.home.join(".local/state/ai-stack/backups"), &SystemRunner)?;
+fn apply_plan(ctx: &Context, plan: &Plan, runner: &dyn plugins::Runner) -> Result<i32> {
+    let report = plan::apply(plan, &ctx.home.join(".local/state/ai-stack/backups"), runner)?;
     println!("Applied {} change(s).", report.applied);
     if let Some(dir) = report.backup_dir {
         println!("Backups: {}", dir.display());
@@ -428,9 +464,10 @@ fn cmd_update(ctx: &Context, yes: bool, plain: bool, bump: bool, branch: Option<
     }
     if git_pull(&exec::SystemExec, &stack)? {
         println!(
-            "note: this pull changed files under cli/. The installed ai-stack binary is not rebuilt automatically; rebuild it with `cargo install --path {}`.",
-            cfg.stack.path.join("cli").display()
+            "note: this pull changed files under cli/. Nothing was installed. Rebuild with `cargo install --path {}`, then rerun the same command.",
+            exec::shell_quote(&cfg.stack.path.join("cli").to_string_lossy())
         );
+        return Ok(REBUILD_NEEDED);
     }
 
     let catalogs = fetch_catalogs();
@@ -487,18 +524,29 @@ fn cmd_skills(ctx: &Context, command: SkillsCommand) -> Result<i32> {
     let skills = skills::Skills { exec: &exec::SystemExec, stack: &cfg.stack.path, prompt_runner: &cfg.prompt_runner };
     let mut out = io::stdout();
     match command {
-        SkillsCommand::Add { source, path, git_ref, dest, rename, process_script, process_prompt, name } => {
+        SkillsCommand::Add { source, path, git_ref, group, rename, process_script, process_prompt, name } => {
             let process = match (process_script, process_prompt) {
-                (Some(input), _) => vec![manifest::Step { kind: manifest::StepKind::Script, input }],
-                (_, Some(input)) => vec![manifest::Step { kind: manifest::StepKind::Prompt, input }],
+                (Some(input), _) => vec![stackfile::Step { kind: stackfile::StepKind::Script, input }],
+                (_, Some(input)) => vec![stackfile::Step { kind: stackfile::StepKind::Prompt, input }],
                 _ => Vec::new(),
             };
-            skills.add(skills::Add { source, path, git_ref, dest, rename, process, name }, &mut out)?;
+            skills.add(skills::Add { source, path, git_ref, rename, process, name, group }, &mut out)?;
             Ok(0)
         }
         SkillsCommand::Status => skills.status(&mut out),
         SkillsCommand::Update { names, git_ref, reprocess, force } => skills.update(skills::Update { names: &names, git_ref, reprocess, force }, &mut out),
     }
+}
+
+fn cmd_groups(ctx: &Context, json: bool) -> Result<i32> {
+    let cfg = load_config(ctx)?;
+    let report = groups::report(&cfg.stack.path, &stackfile::load(&cfg.stack.path)?)?;
+    if json {
+        println!("{}", serde_json::to_string(&report)?);
+    } else {
+        print!("{}", report.text());
+    }
+    Ok(0)
 }
 
 fn cmd_fleet(ctx: &Context, command: FleetCommand) -> Result<i32> {
@@ -636,6 +684,30 @@ mod tests {
         let exec = FakeExec::new(|line| if line.contains("symbolic-ref") { ok("main\n") } else { ok("abc\n") });
         assert!(!git_pull(&exec, &stack).unwrap());
         assert!(exec.calls.borrow().contains(&"git -C /s pull --ff-only origin main".to_string()));
+    }
+
+    #[test]
+    fn init_keeps_defaults_reports_detection_and_preserves_existing_config() {
+        use crate::plugins::fake::FakeRunner;
+
+        for missing in [vec![], vec![Harness::Claude], vec![Harness::Codex], Harness::ALL.to_vec()] {
+            let dir = tempfile::tempdir().unwrap();
+            let path = dir.path().join("config.toml");
+            let runner = FakeRunner { missing: missing.iter().copied().collect(), ..FakeRunner::default() };
+            let detected = init_config_at(&path, false, &runner).unwrap();
+            let text = fs::read_to_string(&path).unwrap();
+            let cfg = config::from_str(&text, dir.path()).unwrap();
+            assert_eq!(text, config::default_config_text());
+            for (harness, available) in detected {
+                assert_eq!(available, !missing.contains(&harness));
+                assert!(cfg.harnesses.iter().any(|hc| hc.harness == harness));
+            }
+            fs::write(&path, "owner's config\n").unwrap();
+            assert!(init_config_at(&path, false, &runner).unwrap_err().to_string().contains("--force"));
+            assert_eq!(fs::read_to_string(&path).unwrap(), "owner's config\n");
+            init_config_at(&path, true, &runner).unwrap();
+            assert_eq!(fs::read_to_string(&path).unwrap(), text);
+        }
     }
 
     #[test]
