@@ -7,8 +7,10 @@ import { round } from "./util.mjs";
 const SKIP_FRAMES = new Set(["(idle)", "(root)"]);
 
 // Libraries, runtimes and cdt's own preloaded hook.
-const VENDOR = /node_modules|next-sourcemaps-hook\.cjs|next-guard\.cjs|^(node:|internal\/|evalmachine|(turbopack:\/\/\/)?\[(turbopack|externals)\])/;
-const BUNDLE_CHUNK = /\/_next\/|\.next\//;
+const VENDOR = /node_modules|next-sourcemaps-hook\.cjs|^(node:|internal\/|evalmachine|(turbopack:\/\/\/)?\[(turbopack|externals)\])/;
+// Generated bundles: served chunks, Next's default output, and cdt's
+// profiling build under any distDir.
+const BUNDLE_CHUNK = /\/_next\/|\.next\/|\/cdt-profile\//;
 
 const NAME_PATTERNS = [
   /function\*?\s+([\w$]+)/,
@@ -28,7 +30,8 @@ function guessName(text) {
 
 // Your code: the running file is not a dependency, and the original source
 // (when a map resolves it) is not one either. Unmapped bundle chunks
-// (/_next/, .next/) are unknown, so they stay out of the app lists.
+// (/_next/, .next/, cdt-profile/) are unknown, so they stay out of the app
+// lists.
 function isApp(url, source, mapped) {
   if (!source || VENDOR.test(url) || VENDOR.test(source)) return false;
   return mapped || !BUNDLE_CHUNK.test(url);
@@ -102,21 +105,42 @@ function attribute(weights, parent, frames, n, fmt) {
   return { self: top(self), appSelf: top(appSelf), appTotal: top(appTotal), coverage };
 }
 
+// Microseconds each sample stands for. As in DevTools, a sample covers the
+// time until the next one; the last covers the mean interval, cut at
+// endTime. Time before the first sample and after that is unsampled.
+function sampleWeights(profile) {
+  const samples = profile.samples ?? [];
+  const deltas = profile.timeDeltas;
+  if (!deltas) return samples.map(() => (profile.endTime - profile.startTime) / samples.length);
+  const at = [];
+  let t = profile.startTime;
+  for (const d of deltas) at.push((t += d));
+  const mean = samples.length > 1 ? (at.at(-1) - at[0]) / (samples.length - 1) : 0;
+  return at.map((ti, i) => Math.max(0, (i + 1 < at.length ? at[i + 1] : Math.min(ti + mean, profile.endTime)) - ti));
+}
+
 // self: time with the function at the top of the stack.
 // total: inclusive time, counted once per sample even under recursion.
+// sampledMs is all time the samples cover, idle included; profileMs the
+// profile's span.
 export async function cpuSummary(profile, filter, n = 8) {
   const samples = profile.samples ?? [];
   const nodes = new Map(profile.nodes.map((x) => [x.id, x]));
   const parent = new Map();
   for (const x of profile.nodes) for (const c of x.children ?? []) parent.set(c, x.id);
   const frames = await describeFrames(profile.nodes, filter);
-  const counts = new Map();
-  for (const leaf of samples) {
-    if (SKIP_FRAMES.has(nodes.get(leaf).callFrame.functionName)) continue;
-    counts.set(leaf, (counts.get(leaf) ?? 0) + 1);
-  }
-  const usPerSample = samples.length ? (profile.endTime - profile.startTime) / samples.length : 0;
-  return attribute(counts, parent, frames, n, (hits) => ({ ms: round((hits * usPerSample) / 1000) }));
+  const weights = new Map();
+  let sampledUs = 0;
+  sampleWeights(profile).forEach((w, i) => {
+    sampledUs += w;
+    const leaf = samples[i];
+    if (!SKIP_FRAMES.has(nodes.get(leaf).callFrame.functionName)) weights.set(leaf, (weights.get(leaf) ?? 0) + w);
+  });
+  return {
+    ...attribute(weights, parent, frames, n, (us) => ({ ms: round(us / 1000) })),
+    sampledMs: round(sampledUs / 1000),
+    profileMs: round((profile.endTime - profile.startTime) / 1000),
+  };
 }
 
 // Sampling heap profile (HeapProfiler.stopSampling, including objects
