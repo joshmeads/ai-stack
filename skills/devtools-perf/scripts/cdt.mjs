@@ -1,8 +1,7 @@
 #!/usr/bin/env node
 // cdt: per-action CPU and memory measurement for a browser page and Node
 // servers (Next.js and friends) over the Chrome DevTools Protocol.
-// Zero dependencies. Needs Node 22+ (global WebSocket and fetch); `cdt next`
-// needs 22.15+ or 23.5+.
+// Zero dependencies. Needs Node 22+ (global WebSocket and fetch).
 
 import { readFileSync, writeFileSync } from "node:fs";
 import { validateAction, goto } from "./lib/actions.mjs";
