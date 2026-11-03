@@ -1,73 +1,140 @@
-// The preloaded hook fails closed: it patches Next's config loader wherever
-// it is loaded from, and throws before Next can write when it cannot.
-// Run: node --test skills/devtools-perf/scripts/test/
+// `cdt next` against a fake Next installed as a symlink to a directory not
+// named "next": Next never writes the project's files, its dependency
+// installer is refused, the user's own distDir is refused at the filesystem
+// even when the config patch did not apply, and anything the hook does not
+// recognise stops the run before Next writes.
+// Run from skills/devtools-perf: node --test 'scripts/test/*.test.mjs'
 
 import assert from "node:assert/strict";
 import { spawnSync } from "node:child_process";
-import { mkdirSync, mkdtempSync, realpathSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
+import { existsSync, mkdirSync, mkdtempSync, readFileSync, realpathSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { test } from "node:test";
 import { fileURLToPath } from "node:url";
 import { CONFIG_JS, writeFakeNext } from "./fake-next.mjs";
 
+const CDT = fileURLToPath(new URL("../cdt.mjs", import.meta.url));
 const HOOK = fileURLToPath(new URL("../next-sourcemaps-hook.cjs", import.meta.url));
+const TSCONFIG = '{\n    "compilerOptions": {}\n}\n'; // a layout Next's rewrite changes
+const WATCHED = ["package.json", "tsconfig.json", "next-env.d.ts", ".next/BUILD_ID"];
 
-// A fake next under <root>/real/next, installed in <root>/app/node_modules
-// as a symlink (pnpm-style). `entry` is required from the app with the hook
-// preloaded; the script prints the config loadConfig resolves.
-function run(t, { overrides, entry = "next/dist/server/config.js", nodeArgs = [], userConfig = "{}" }) {
+// <root>/app, with its own build in .next and node_modules/next a symlink
+// to <root>/vendor/framework-16.
+function project(t, { overrides, userConfig = "{}" } = {}) {
   const root = realpathSync(mkdtempSync(join(tmpdir(), "cdt-hook-")));
   t.after(() => rmSync(root, { recursive: true, force: true }));
-  const real = join(root, "real", "next");
-  writeFakeNext(real, overrides);
+  const vendor = join(root, "vendor", "framework-16");
+  writeFakeNext(vendor, overrides);
   const app = join(root, "app");
   mkdirSync(join(app, "node_modules"), { recursive: true });
-  symlinkSync(real, join(app, "node_modules", "next"));
+  symlinkSync(vendor, join(app, "node_modules", "next"));
+  writeFileSync(join(app, "package.json"), '{ "name": "app" }\n');
   writeFileSync(join(app, "next.config.json"), userConfig);
+  writeFileSync(join(app, "tsconfig.json"), TSCONFIG);
+  mkdirSync(join(app, ".next"));
+  writeFileSync(join(app, ".next", "BUILD_ID"), "users-own-build");
+  return { root, app, vendor };
+}
+
+const files = (app) => Object.fromEntries(WATCHED.map((f) => [f, existsSync(join(app, f)) ? readFileSync(join(app, f), "utf8") : null]));
+
+function cdtBuild(app, { scenario = "", nodeOptions = "" } = {}) {
+  const r = spawnSync(process.execPath, [CDT, "next", "build", "--dir", app], {
+    encoding: "utf8",
+    env: { ...process.env, FAKE_SCENARIO: scenario, NODE_OPTIONS: nodeOptions },
+  });
+  return { ...r, text: r.stdout + r.stderr };
+}
+
+test("skips Next's writes to tsconfig and next-env.d.ts; matches Next by real path, with or without --preserve-symlinks", (t) => {
+  for (const nodeOptions of ["", "--preserve-symlinks"]) {
+    const { app } = project(t);
+    const before = files(app);
+    const r = cdtBuild(app, { nodeOptions });
+    assert.equal(r.status, 0, r.text);
+    assert.deepEqual(files(app), before, "project files and the user's BUILD_ID are byte-identical");
+    assert.ok(existsSync(join(app, ".next", "cdt-profile", "BUILD_ID")));
+    assert.match(r.text, /skipped Next's write to tsconfig\.json, left as is; Next wanted to add .*\.next\/cdt-profile\/types/);
+    assert.match(r.text, /skipped Next's write to next-env\.d\.ts: it would have created it/);
+  }
+});
+
+test("refuses Next's automatic dependency install", (t) => {
+  const { app } = project(t);
+  const before = files(app);
+  const r = cdtBuild(app, { scenario: "install" });
+  assert.notEqual(r.status, 0);
+  assert.match(r.text, /wanted to install missing TypeScript packages/);
+  assert.deepEqual(files(app), before);
+});
+
+test("refuses writes to the user's distDir at the filesystem when the config patch did not apply", (t) => {
+  const { root, app } = project(t);
+  // Wraps the compile step before the hook does, so it sees and strips the
+  // hook's patches: Next then runs with its own distDir, as if the patch
+  // had not matched.
+  const unpatch = join(root, "unpatch.cjs");
+  writeFileSync(unpatch, `if (process.env.CDT_NEXT_MODE) {
+  const M = require("node:module"), compile = M.prototype._compile;
+  M.prototype._compile = function (s, f, ...rest) {
+    if (f === ${JSON.stringify(HOOK)}) return compile.call(this, s, f, ...rest);
+    const cut = s.indexOf("\\n;{\\n  const __cdtLoadConfig");
+    return compile.call(this, (cut < 0 ? s : s.slice(0, cut)).replace(/\\n;globalThis\\.__cdtEntryLoaded\\(.*\\);\\n/, "\\n"), f, ...rest);
+  };
+  require(${JSON.stringify(HOOK)});
+}`);
+  const before = files(app);
+  const r = cdtBuild(app, { nodeOptions: `--require ${unpatch}` });
+  assert.notEqual(r.status, 0);
+  assert.match(r.text, /refused mkdir on \.next: it is inside your own build/);
+  assert.match(r.text, /the hook never patched Next's config/);
+  assert.deepEqual(files(app), before);
+});
+
+// Runs `require(entry)` in the app with the hook preloaded (start mode) and
+// prints what loadConfig resolved or threw.
+function hook(t, { overrides, userConfig, entry = "next/dist/server/config.js" }) {
+  const { root, app, vendor } = project(t, { overrides, userConfig });
+  const report = join(root, "report");
+  mkdirSync(report);
   const script = `const m = require(${JSON.stringify(entry)});
-    if (m.default && ${entry.endsWith("config.js")}) m.default("phase-production-build", process.cwd()).then((c) => console.log("distDir=" + c.distDir + " maps=" + c.productionBrowserSourceMaps), (e) => { console.log("ERR " + e.message); });`;
-  const r = spawnSync(process.execPath, [...nodeArgs, "--require", HOOK, "-e", script], {
+    if (${entry.endsWith("config.js")}) m.default("phase-production-server", process.cwd()).then(() => console.log("loaded"), (e) => console.log("ERR " + e.message));`;
+  const r = spawnSync(process.execPath, ["--require", HOOK, "-e", script], {
     cwd: app,
     encoding: "utf8",
     env: {
       ...process.env,
+      NODE_OPTIONS: "",
       CDT_NEXT_MODE: "start",
       CDT_NEXT_DIR: app,
-      CDT_NEXT_CONFIG_JS: join(real, "dist", "server", "config.js"),
-      CDT_NEXT_CONFIRM: join(root, "confirm.json"),
+      CDT_NEXT_CONFIG_JS: join(vendor, "dist", "server", "config.js"),
+      CDT_NEXT_ENTRIES: JSON.stringify(["build/index.js", "server/lib/start-server.js"].map((e) => join(vendor, "dist", e))),
+      CDT_NEXT_INSTALLER: join(vendor, "dist", "lib", "helpers", "install.js"),
+      CDT_NEXT_DIST: ".next",
+      CDT_NEXT_TSCONFIG: join(app, "tsconfig.json"),
+      CDT_NEXT_REPORT: report,
     },
   });
   return r.stdout + r.stderr;
 }
 
-test("patches the loader through a symlinked next, with or without --preserve-symlinks", (t) => {
-  // start mode wants a profiling build to exist; the error proves the
-  // redirect ran (distDir .next/cdt-profile) for both resolutions.
-  for (const nodeArgs of [[], ["--preserve-symlinks"]]) {
-    assert.match(run(t, { nodeArgs }), /ERR cdt next: no profiling build in .*\.next\/cdt-profile/);
-  }
-});
-
-test("refuses an unrecognised loader, a by-value export, and output: 'export'", (t) => {
-  assert.match(run(t, { overrides: { "dist/server/config.js": "exports.default = async () => ({});\n" } }), /config loader is not recognised/);
+test("refuses output: 'export', adapterPath, an unrecognised or by-value loader, and a second copy of it", (t) => {
+  assert.match(hook(t, { userConfig: '{"output":"export"}' }), /ERR cdt next: output: 'export'/);
+  assert.match(hook(t, { userConfig: '{"adapterPath":"./adapter.js"}' }), /ERR cdt next: adapterPath is set/);
+  assert.match(hook(t, { overrides: { "dist/server/config.js": "exports.default = async () => ({});\n" } }), /config loader is not recognised/);
   const byValue = CONFIG_JS.replace(/Object\.defineProperty\(exports, "default"[^\n]*\n/, "") + "exports.default = loadConfig;\n";
-  assert.match(run(t, { overrides: { "dist/server/config.js": byValue } }), /exports loadConfig by value/);
-  assert.match(run(t, { userConfig: '{"output":"export"}' }), /ERR cdt next: output: 'export'/);
-});
-
-test("refuses a second copy of Next's loader", (t) => {
-  // The app requires a config.js that is not the one cdt checked.
-  const out = run(t, { overrides: { "dist/other/next/dist/server/config.js": CONFIG_JS }, entry: "next/dist/other/next/dist/server/config.js" });
-  assert.match(out, /a second copy of Next's config loader/);
+  assert.match(hook(t, { overrides: { "dist/server/config.js": byValue } }), /exports loadConfig by value/);
+  const second = hook(t, { overrides: { "dist/other/next/dist/server/config.js": CONFIG_JS }, entry: "next/dist/other/next/dist/server/config.js" });
+  assert.match(second, /a second copy of Next's config loader/);
 });
 
 test("a build entry whose loader was not wrapped stops before running", (t) => {
-  // build/index.js that reaches the config through a path the hook does
+  // build/index.js that reaches the config through a module the hook does
   // not see as Next's loader.
   const overrides = {
     "dist/server/loader.js": CONFIG_JS,
-    "dist/build/index.js": 'const c = require("../server/loader.js");\nexports.default = async () => { require("fs").writeFileSync("WROTE", "x"); };\n',
+    "dist/build/index.js": 'const c = require("../server/loader.js");\nexports.default = async () => {};\n',
   };
-  assert.match(run(t, { overrides, entry: "next/dist/build/index.js" }), /loaded without cdt's wrapper/);
+  assert.match(hook(t, { overrides, entry: "next/dist/build/index.js" }), /loaded without cdt's wrapper/);
 });

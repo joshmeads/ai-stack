@@ -1,97 +1,112 @@
 // Preloaded by `cdt next` (node --require) into Next and every Node process
-// it spawns. Wraps Next's loadConfig in memory so the build and server use
-// source maps and the separate distDir <distDir>/cdt-profile; next.config is
-// never edited. Fails closed: anything that would let Next write to the
-// project's own build throws first.
+// it spawns. Three layers, each independent of the others:
 //
-// During `next build` it also records, for cdt to undo, the bytes Next
-// writes to the two project files it manages (see lib/next-guard.cjs).
-const { registerHooks } = require("node:module");
-const { createHash } = require("node:crypto");
+// 1. Wraps Next's loadConfig in memory: source maps on, distDir
+//    <distDir>/cdt-profile, type checking off. next.config is never edited.
+// 2. Next never writes the project's own files: its writes to tsconfig and
+//    next-env.d.ts are skipped (cdt reports what they would have changed),
+//    and its automatic TypeScript dependency install is refused.
+// 3. Fails closed at the filesystem: any Node fs call that would change
+//    something inside your own distDir but outside cdt-profile throws,
+//    whether or not layer 1 took. Turbopack's native writers do not go
+//    through Node's fs, which is why layer 1 also asserts it was applied.
+//
+// cdt resolves Next and reads its config before the run; everything below
+// comes from that, by real path, so a symlinked or renamed install is
+// matched by identity rather than by directory name.
+const Module = require("node:module");
 const fs = require("node:fs");
-const { dirname, join, resolve, sep } = require("node:path");
+const { basename, dirname, join, relative, resolve, sep } = require("node:path");
 const { fileURLToPath } = require("node:url");
-const guard = require("./lib/next-guard.cjs");
 
-const CONFIG_JS = process.env.CDT_NEXT_CONFIG_JS; // real path of the config loader cdt checked
-const PROJECT = process.env.CDT_NEXT_DIR; // real path of the app
-const CONFIRM = process.env.CDT_NEXT_CONFIRM; // this run's report back to cdt
-const MODE = process.env.CDT_NEXT_MODE; // build | start
-const GUARD = process.env.CDT_NEXT_GUARD; // build: where Next's writes are recorded
-if (!CONFIG_JS || !PROJECT || !CONFIRM || !MODE || (MODE === "build" && !GUARD)) {
+const env = process.env;
+const MODE = env.CDT_NEXT_MODE; // build | start
+const PROJECT = env.CDT_NEXT_DIR; // real path of the app
+const CONFIG_JS = env.CDT_NEXT_CONFIG_JS; // real path of the config loader cdt checked
+const ENTRIES = new Set(JSON.parse(env.CDT_NEXT_ENTRIES || "[]")); // real paths of the modules `next build|start` require first
+const INSTALLER = env.CDT_NEXT_INSTALLER; // real path of Next's package installer
+const USER_DIST = env.CDT_NEXT_DIST; // the app's distDir, as next.config sets it
+const TSCONFIG = env.CDT_NEXT_TSCONFIG; // absolute path Next resolves for tsconfig
+const REPORT = env.CDT_NEXT_REPORT; // directory for this run's reports back to cdt
+if (!MODE || !PROJECT || !CONFIG_JS || !ENTRIES.size || !INSTALLER || !USER_DIST || !TSCONFIG || !REPORT) {
   throw new Error("cdt: next-sourcemaps-hook.cjs only runs under `cdt next`");
 }
-if (typeof registerHooks !== "function") throw new Error(`cdt: Node ${process.version} lacks module.registerHooks; cdt next needs Node 22.15+ or 23.5+`);
 
-const { MARK } = guard;
+const MARK = "cdt-profile";
 const fail = (msg) => { throw new Error(`cdt next: ${msg}`); };
-const sha = (f) => { const b = guard.readOrNull(f); return b && createHash("sha256").update(b).digest("hex"); };
+const { appendFileSync, writeFileSync, existsSync } = fs; // before wrapping
+const realpath = fs.realpathSync.native;
+const inside = (f, d) => f === d || f.startsWith(d + sep);
 
-// ---------- the loadConfig wrapper ----------
+// Real path of p, also when p or its last parts do not exist yet.
+function real(p) {
+  let head = resolve(p);
+  const tail = [];
+  for (;;) {
+    try { return join(realpath(head), ...tail); } catch {}
+    const up = dirname(head);
+    if (up === head) return resolve(p);
+    tail.unshift(basename(head));
+    head = up;
+  }
+}
 
-let userDistDir = null; // the app's own distDir, from this process's first loadConfig
-let reported = false;
+const DIST = real(join(PROJECT, USER_DIST));
+const PROFILE = join(DIST, MARK);
+const TS_REAL = real(TSCONFIG);
+const MANAGED = new Set([TS_REAL, real(join(PROJECT, "next-env.d.ts"))]);
+const shown = (f) => relative(PROJECT, f) || f;
+
+// ---------- 1. the loadConfig wrapper ----------
+
+let confirmed = false;
 
 // Called by the patched loadConfig with each resolved (non-raw) config.
 globalThis.__cdtNextConfig = (config, dir) => {
   if (config.output === "export") fail("output: 'export' writes build artifacts to .next whatever distDir says, so cdt cannot keep your build untouched. Profile without output: 'export'.");
-  const real = fs.realpathSync(dir);
-  if (real !== PROJECT) fail(`Next was asked to use ${real}, but cdt guards ${PROJECT}. Pass the app folder with --dir, not as an argument after --.`);
+  if (config.adapterPath) fail("adapterPath is set: the adapter writes deployment output wherever it likes, outside cdt-profile. Profile without adapterPath.");
+  const dirReal = fs.realpathSync(dir);
+  if (dirReal !== PROJECT) fail(`Next was asked to use ${dirReal}, but cdt guards ${PROJECT}. Pass the app folder with --dir, not as an argument after --.`);
+  const distDir = join(USER_DIST, MARK);
   // loadConfig caches its result, so later calls may return the object
   // this already changed.
-  userDistDir ??= config.distDir ?? ".next";
-  const distDir = join(userDistDir, MARK);
-  if (config.distDir !== userDistDir && config.distDir !== distDir) fail(`Next's distDir changed between loads (${userDistDir}, then ${config.distDir})`);
+  if (config.distDir !== USER_DIST && config.distDir !== distDir) fail(`Next's distDir is ${config.distDir} here, but ${USER_DIST} when cdt read the config before the run`);
+  if (real(join(dirReal, config.typescript?.tsconfigPath || "tsconfig.json")) !== TS_REAL) fail("Next's typescript.tsconfigPath differs from the one cdt read before the run");
   config.productionBrowserSourceMaps = true;
   config.experimental = { ...config.experimental, serverSourceMaps: true };
+  // The profiling build only needs the bundles; without the type check it
+  // also has no reason to read the tsconfig include Next cannot write.
+  config.typescript = { ...config.typescript, ignoreBuildErrors: true };
   config.distDir = distDir;
-  if (config.distDir !== distDir || config.productionBrowserSourceMaps !== true || config.experimental.serverSourceMaps !== true) {
+  if (config.distDir !== distDir || config.productionBrowserSourceMaps !== true || config.experimental.serverSourceMaps !== true || config.typescript.ignoreBuildErrors !== true) {
     fail("Next's config object refused the overrides; stopping before it builds into your own distDir");
   }
-  if (reported) return;
-  reported = true;
-  // Next's own resolution (verify-typescript-setup, writeAppTypeDeclarations).
-  const tsconfig = join(real, config.typescript?.tsconfigPath || "tsconfig.json");
-  const nextEnv = join(real, "next-env.d.ts");
-  if (MODE === "build") {
-    for (const f of [tsconfig, nextEnv]) {
-      if (guard.hasBefore(GUARD, f)) continue; // another Next process got here first
-      const bytes = guard.readOrNull(f);
-      if (bytes?.includes(MARK)) {
-        fail(`${f} already mentions ${MARK}, left by an earlier profiling build cdt has no record of. Remove the ${MARK} entries (Next adds them for the profiling distDir), then rerun.`);
-      }
-      guard.recordBefore(GUARD, f, bytes);
-    }
-  }
-  if (MODE === "start" && !fs.existsSync(join(real, distDir, "BUILD_ID"))) {
-    fail(`no profiling build in ${join(real, distDir)}; run "cdt next build" first`);
-  }
+  if (MODE === "start" && !existsSync(join(PROFILE, "BUILD_ID"))) fail(`no profiling build in ${PROFILE}; run "cdt next build" first`);
+  if (confirmed) return;
+  confirmed = true;
   try {
-    fs.writeFileSync(CONFIRM, JSON.stringify({ pid: process.pid, dir: real, userDistDir, distDir, tsconfig, userBuildId: sha(join(real, userDistDir, "BUILD_ID")) }), { flag: "wx" });
+    writeFileSync(join(REPORT, "confirm.json"), JSON.stringify({ pid: process.pid, distDir }), { flag: "wx" });
   } catch (e) {
     if (e.code !== "EEXIST") throw e;
   }
 };
 
-// Config loaders patched in this process, by real path.
 const patched = new Set();
 globalThis.__cdtConfigPatched = (file) => patched.add(file);
 
-// Appended to the modules `next build` and `next start` run first. By the
-// end of their bodies they have required Next's config loader, so if it is
-// not wrapped here, nothing has been written yet and the build stops.
+// Appended to the modules `next build` and `next start` require first
+// (build/index.js, server/lib/start-server.js). By the end of their bodies
+// they have required Next's config loader, so if it is not wrapped here,
+// nothing has been written yet and the run stops.
 globalThis.__cdtEntryLoaded = (file) => {
-  const config = join(dirname(dirname(file)), "server", "config.js");
-  let real = config;
-  try { real = fs.realpathSync(config); } catch {}
-  if (!patched.has(real)) fail(`${file} loaded without cdt's wrapper on ${config}; stopping before Next writes anything`);
+  if (!patched.has(CONFIG_JS)) fail(`${file} loaded without cdt's wrapper on ${CONFIG_JS}; stopping before Next writes anything`);
 };
 
 // Appended to Next's server/config.js. rawConfig calls return the user's
 // module itself (Turbopack's config validation); those pass through.
 // The export check catches a Next that copies loadConfig into exports
 // instead of reading the binding live, which would bypass the wrapper.
-const patch = (file) => `
+const configPatch = `
 ;{
   const __cdtLoadConfig = loadConfig;
   loadConfig = async function (phase, dir, opts) {
@@ -101,96 +116,110 @@ const patch = (file) => `
     return config;
   };
   if (exports.default !== loadConfig) throw new Error("cdt next: this Next exports loadConfig by value, so the source-map wrapper cannot take effect");
-  globalThis.__cdtConfigPatched(${JSON.stringify(file)});
+  globalThis.__cdtConfigPatched(${JSON.stringify(CONFIG_JS)});
 }
 `;
 
-// Matched by path suffix on the loaded path and on its real path, so a
-// symlinked or aliased Next (pnpm, --preserve-symlinks) is still caught.
-const suffix = (rel) => sep + join("next", "dist", ...rel.split("/"));
-const CONFIG_SUFFIX = suffix("server/config.js");
-const ENTRY_SUFFIXES = ["build/index.js", "cli/next-build.js", "cli/next-start.js"].map(suffix);
+// Next's helpers/install.js runs npm/yarn/pnpm add, which edits
+// package.json and the lockfile.
+const installerPatch = `
+;install = function () {
+  throw new Error("cdt next: Next wanted to install missing TypeScript packages, which edits package.json and the lockfile. Install your project's dependencies first, then rerun.");
+};
+`;
 
-function classify(file) {
-  let real = file;
-  try { real = fs.realpathSync(file); } catch {}
-  for (const p of [file, real]) {
-    if (p.endsWith(CONFIG_SUFFIX)) return { kind: "config", real };
-    if (ENTRY_SUFFIXES.some((s) => p.endsWith(s))) return { kind: "entry", real };
+const SECOND_CONFIG = sep + join("next", "dist", "server", "config.js");
+
+// The source to compile for a CommonJS module: Next's own modules patched,
+// anything else unchanged.
+function patchSource(source, file) {
+  let r = file;
+  try { r = realpath(file); } catch {}
+  if (r === CONFIG_JS) {
+    if (!/\nasync function loadConfig\(/.test(source)) fail("this Next version's config loader is not recognised; stopping before it builds into your own distDir");
+    return source + configPatch;
+  }
+  if (ENTRIES.has(r)) return `${source}\n;globalThis.__cdtEntryLoaded(${JSON.stringify(r)});\n`;
+  if (r === INSTALLER) {
+    if (!/\nfunction install\(/.test(source)) fail("this Next version's package installer is not recognised");
+    return source + installerPatch;
+  }
+  if (file.endsWith(SECOND_CONFIG) || r.endsWith(SECOND_CONFIG)) fail(`a second copy of Next's config loader was loaded (${r}); cdt checked and patches only ${CONFIG_JS}`);
+  return source;
+}
+
+// Next's dist is CommonJS, so patching the CommonJS compile step sees every
+// module, however it is reached (require or import()). Not
+// module.registerHooks: on Node 22 any load hook breaks require() inside a
+// CommonJS module reached through import(), which is how bin/next loads
+// its commands.
+const compile = Module.prototype._compile;
+if (typeof compile !== "function") fail(`Node ${process.version} has no Module.prototype._compile to patch`);
+Module.prototype._compile = function (content, filename, ...rest) {
+  return compile.call(this, typeof content === "string" ? patchSource(content, filename) : content, filename, ...rest);
+};
+
+// ---------- 2 and 3. Node fs: skip project-file writes, refuse the user's distDir ----------
+
+// What a skipped write wanted, for cdt to report.
+function reportSkip(file, data, options) {
+  const enc = (typeof options === "string" ? options : options?.encoding) || "utf8";
+  const wanted = typeof data === "string" ? data : ArrayBuffer.isView(data) ? Buffer.from(data.buffer, data.byteOffset, data.byteLength).toString(enc) : String(data);
+  appendFileSync(join(REPORT, "skipped.jsonl"), JSON.stringify({ file, wanted }) + "\n");
+}
+
+const refusal = (op, file, why) => Object.assign(new Error(`cdt next: refused ${op} on ${shown(file)}: ${why}`), { code: "ECDTNEXT" });
+
+const pathOf = (p) => (typeof p === "string" ? p : p instanceof URL ? fileURLToPath(p) : Buffer.isBuffer(p) ? p.toString() : null);
+
+const WRITE_FLAGS = fs.constants.O_WRONLY | fs.constants.O_RDWR | fs.constants.O_CREAT | fs.constants.O_TRUNC | fs.constants.O_APPEND;
+const writesTo = (flags) => (typeof flags === "number" ? (flags & WRITE_FLAGS) !== 0 : /[wa+]/.test(String(flags ?? "r")));
+
+// op -> indexes of the path arguments it changes. rm, rmdir and rename
+// also take away everything under their path.
+const MUTATORS = {
+  writeFile: [0], appendFile: [0], truncate: [0], open: [0], mkdir: [0], mkdtemp: [0],
+  rm: [0], rmdir: [0], unlink: [0], rename: [0, 1], copyFile: [1], cp: [1], symlink: [1], link: [1],
+};
+const REMOVES = new Set(["rm", "rmdir", "rename"]);
+
+// "skip" for a project-file write, an Error to refuse, or null to proceed.
+function decide(op, args) {
+  if (op === "open" && !writesTo(args[1])) return null;
+  for (const i of MUTATORS[op]) {
+    const p = pathOf(args[i]);
+    if (p === null) continue; // a file descriptor
+    const t = real(p);
+    if (MANAGED.has(t)) {
+      if (op !== "writeFile") return refusal(op, t, "cdt never lets Next change this project file");
+      if (t === TS_REAL && !existsSync(t)) return refusal("writeFile", t, "Next wants to create it, and cdt never creates project files. Create a tsconfig.json (next build does) and rerun.");
+      reportSkip(t, args[1], args[2]);
+      return "skip";
+    }
+    if (inside(t, DIST) && !inside(t, PROFILE)) return refusal(op, t, `it is inside your own build (${shown(DIST)}), and the profiling build may only write ${shown(PROFILE)}. cdt's redirect did not take effect; nothing was changed.`);
+    if (REMOVES.has(op) && inside(DIST, t)) return refusal(op, t, `it holds your own build (${shown(DIST)})`);
   }
   return null;
 }
 
-registerHooks({
-  load(url, context, nextLoad) {
-    const result = nextLoad(url, context);
-    if (!url.startsWith("file:")) return result;
-    const hit = classify(fileURLToPath(url));
-    if (!hit) return result;
-    const source = String(result.source);
-    if (hit.kind === "entry") return { ...result, source: `${source}\n;globalThis.__cdtEntryLoaded(${JSON.stringify(hit.real)});\n` };
-    if (hit.real !== CONFIG_JS) fail(`a second copy of Next's config loader was loaded (${hit.real}); cdt checked and patches only ${CONFIG_JS}`);
-    if (!/\nasync function loadConfig\(/.test(source)) fail("this Next version's config loader is not recognised; stopping before it builds into your own distDir");
-    return { ...result, source: source + patch(hit.real) };
-  },
-});
-
-// ---------- recording Next's writes (build only) ----------
-
-if (MODE === "build") {
-  // Fixed once the first loadConfig has recorded both files.
-  let managed = null;
-  const isManaged = (p) => {
-    if (managed) return managed.has(p);
-    const now = guard.managedFiles(GUARD);
-    if (now.size >= 2) managed = now;
-    return now.has(p);
-  };
-  const pathOf = (file) => {
-    if (typeof file === "string") return resolve(file);
-    if (file instanceof URL) return fileURLToPath(file);
-    if (Buffer.isBuffer(file)) return resolve(file.toString());
-    return null; // a file descriptor or handle
-  };
-  // The bytes a write put on disk: from its arguments when they say,
-  // otherwise read back.
-  const bytesOf = (p, data, options) => {
-    const flag = typeof options === "object" ? options?.flag : undefined;
-    if (!(flag && String(flag).includes("a"))) {
-      if (typeof data === "string") return Buffer.from(data, (typeof options === "string" ? options : options?.encoding) || "utf8");
-      if (ArrayBuffer.isView(data)) return Buffer.from(data.buffer, data.byteOffset, data.byteLength);
-    }
-    return fs.readFileSync(p);
-  };
-  const note = (file, data, options) => {
-    const p = pathOf(file);
-    if (p && isManaged(p)) guard.recordWrite(GUARD, p, bytesOf(p, data, typeof options === "function" ? undefined : options));
-  };
-
-  const { writeFileSync, writeFile } = fs;
-  const { writeFile: writeFileP } = fs.promises;
-  fs.writeFileSync = function (file, data, options) {
-    const r = writeFileSync.apply(this, arguments);
-    note(file, data, options);
-    return r;
-  };
-  fs.writeFile = function (file, data, options) {
-    const args = [...arguments];
-    const i = args.findLastIndex((a) => typeof a === "function");
-    if (i > 0) {
-      const done = args[i];
-      args[i] = function (err) {
-        if (!err) {
-          try { note(file, data, options); } catch (e) { return done(e); }
-        }
-        return done.apply(this, arguments);
-      };
-    }
-    return writeFile.apply(this, args);
-  };
-  fs.promises.writeFile = async function (file, data, options) {
-    const r = await writeFileP.apply(this, arguments);
-    note(file, data, options);
-    return r;
+function wrap(obj, name, op, kind) {
+  const orig = obj[name];
+  if (typeof orig !== "function") return;
+  obj[name] = function (...args) {
+    const d = decide(op, args);
+    if (d === null) return orig.apply(this, args);
+    const err = d === "skip" ? null : d;
+    if (kind === "sync") { if (err) throw err; return undefined; }
+    if (kind === "promise") return err ? Promise.reject(err) : Promise.resolve();
+    const cb = args.findLast((a) => typeof a === "function");
+    if (!cb) { if (err) throw err; return undefined; }
+    process.nextTick(cb, err);
   };
 }
+
+for (const op of Object.keys(MUTATORS)) {
+  wrap(fs, op, op, "callback");
+  wrap(fs, `${op}Sync`, op, "sync");
+  wrap(fs.promises, op, op, "promise");
+}
+Module.syncBuiltinESMExports();
