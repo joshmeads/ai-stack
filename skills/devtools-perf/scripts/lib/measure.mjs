@@ -1,20 +1,21 @@
 // One measured step on every target (browser page and Node servers):
 //
 //   heap snapshots (opt) → prepare action → GC → start probes → sample
-//   → act → settle → sample → end the trace → stop the profilers
-//   → drain the trace → GC → sample → heap snapshots (opt) → symbolicate
-//   and write artifacts
+//   → act → settle → sample (the boundary) → end the trace and stop the
+//   profilers together → GC → sample → drain the trace → heap snapshots
+//   (opt) → symbolicate and write artifacts
 //
-// The CPU and allocation profilers stop right after the last sample, so
-// transferring the trace is in no profile. Nothing that costs CPU or
-// allocates on a target (fetching source maps from the server) runs before
-// the last sample.
+// The trace end and the profiler stops are sent together at the boundary,
+// so neither waits on the other, and the retained-memory sample is taken
+// before the trace is transferred. Nothing that costs CPU or allocates on a
+// target (fetching source maps from the server) runs before the last
+// sample.
 
 import { appendFileSync, closeSync, existsSync, mkdirSync, openSync, readdirSync, writeFileSync, writeSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join, resolve } from "node:path";
 import { PAGE_ACTIONS, TWO_FRAMES, prepareAction } from "./actions.mjs";
-import { TargetLost, connectNodes, connectPage, evaluate, limits } from "./cdp.mjs";
+import { NoReply, TargetLost, connectNodes, connectPage, evaluate, limits } from "./cdp.mjs";
 import { printLeak, printStep, slug } from "./output.mjs";
 import { allocSummary, cpuSummary } from "./profile.mjs";
 import { ActionTimeout, RunAborted, round, sec, sleep } from "./util.mjs";
@@ -117,8 +118,10 @@ function navProbe(page) {
 // Records the page's trace for the step: long tasks (50ms or more on the
 // main thread of any renderer that hosted one of the page's frames) and
 // those renderers' pids. With file set, also streams every event there
-// (--trace). end() stops recording at the measurement boundary; events
-// still arrive until drain() has seen Tracing.tracingComplete.
+// (--trace). end() asks Chrome to stop recording at the measurement
+// boundary; events still arrive until drain() has seen
+// Tracing.tracingComplete. Tasks that start after the boundary (stopping
+// the profilers, say) are left out of the result.
 function traceProbe(page, file) {
   const threads = new Map(), pids = new Set(), pending = new Set(), tasks = [];
   let off = null, fd, sep = "", on = false, done = null, error = null, dataLoss = false;
@@ -176,14 +179,17 @@ function traceProbe(page, file) {
         dispose();
       }
     },
-    get result() {
+    // untilUs: the boundary on the trace clock (Performance.getMetrics
+    // Timestamp, in microseconds).
+    result(untilUs = Infinity) {
       if (error) return { error };
       if (!pids.size) return { observed: false, reason: "the trace did not say which renderer hosts this page" };
-      const main = tasks.filter((e) => pids.has(e.pid) && threads.get(`${e.pid}:${e.tid}`) === "CrRendererMain");
+      const main = tasks.filter((e) => pids.has(e.pid) && threads.get(`${e.pid}:${e.tid}`) === "CrRendererMain" && e.ts < untilUs);
       return { observed: true, dataLoss, longTasksMs: main.map((e) => Math.round(e.dur / 1000)) };
     },
     // The page's renderer pids, or null when the trace could not say.
     get pagePids() { return error || !pids.size ? null : pids; },
+    get error() { return error; },
   };
 }
 
@@ -249,7 +255,9 @@ function mainThread(before, after) {
 // navigation) counts from zero. A renderer counts as this page's only if
 // the trace saw it host one of the page's frames; without the trace, all
 // renderers are summed and labelled so. A process that exited mid-step has
-// no final reading, so it is listed rather than counted.
+// no final reading, so it is listed rather than counted; so is a page
+// renderer that started and exited within the step, which neither sample
+// saw.
 function processCpu(before, after, pagePids) {
   const ms = {};
   for (const [id, p] of Object.entries(after.cpu)) {
@@ -260,6 +268,9 @@ function processCpu(before, after, pagePids) {
   const exited = Object.entries(before.cpu)
     .filter(([id]) => !(id in after.cpu))
     .map(([id, p]) => ({ pid: Number(id), type: p.type, ...(pagePids?.has(Number(id)) ? { thisPage: true } : {}) }));
+  for (const pid of pagePids ?? []) {
+    if (!(pid in before.cpu) && !(pid in after.cpu)) exited.push({ pid, type: "renderer", thisPage: true, startedMidStep: true });
+  }
   return { ms, renderers: pagePids ? "this page" : "all", exited };
 }
 
@@ -289,9 +300,10 @@ async function summarise(cpu, alloc, filter, windowMs) {
 const allocated = (prof) => (prof?.alloc && !prof.alloc.error ? prof.alloc.allocatedBytes : null);
 
 // Ends the run when an action timed out and may still be running: anything
-// measured after it would include its work.
+// measured after it would include its work. A command with no reply (a
+// click Chrome never acknowledged) was not cancelled either.
 function checkStopped(e, label) {
-  if (e instanceof ActionTimeout && !e.stopped) {
+  if ((e instanceof ActionTimeout && !e.stopped) || e instanceof NoReply) {
     throw new RunAborted(`step "${label}": ${e.message}. It may still be running and would be counted in later steps, so the run stops here`);
   }
 }
@@ -329,9 +341,10 @@ export async function measureStep(ctx, step, cfg, tag) {
   try {
     await Promise.all(targets.map(gc));
     await Promise.all(probes.map((p) => p.start()));
-    // The trace starts last and ends first, so starting and stopping the
-    // profilers (Profiler.stop serialises the whole profile on the main
-    // thread) never shows up as a long task.
+    // The trace starts after the profilers, and tasks after the boundary
+    // are dropped, so starting and stopping the profilers (Profiler.stop
+    // serialises the whole profile on the main thread) never shows up as a
+    // long task.
     await trace?.start();
     const tProbes = performance.now();
     before = await sampleAll(ctx);
@@ -357,10 +370,8 @@ export async function measureStep(ctx, step, cfg, tag) {
     // The measurement boundary.
     after = await sampleAll(ctx);
     result.wallMs = round(performance.now() - t0);
-    await trace?.end();
     windowMs = performance.now() - tProbes;
-    await Promise.all(probes.map((p) => p.stop()));
-    await trace?.drain();
+    await Promise.all([trace?.end(), ...probes.map((p) => p.stop())]);
   } catch (e) {
     await Promise.allSettled([...probes.map((p) => p.stop()), trace?.end().then(() => trace.drain())]);
     if (e instanceof TargetLost || e instanceof RunAborted) throw e;
@@ -370,8 +381,13 @@ export async function measureStep(ctx, step, cfg, tag) {
   // Measurement is over; from here on, work on the targets cannot skew it.
   // A failure here still keeps the step and the run.
   try {
-    await Promise.all(targets.map(gc));
-    const afterGc = await sampleAll(ctx);
+    let afterGc;
+    try {
+      await Promise.all(targets.map(gc));
+      afterGc = await sampleAll(ctx);
+    } finally {
+      await trace?.drain();
+    }
     if (cfg.heapSnapshots) for (const t of targets) artifacts[`${t.name} heapAfter`] = await heapSnapshot(t, art(t, "after.heapsnapshot"));
     for (const t of targets) {
       const c = cpu.get(t)?.result, a = alloc.get(t)?.result;
@@ -379,7 +395,7 @@ export async function measureStep(ctx, step, cfg, tag) {
       if (a && !a.error) writeFileSync((artifacts[`${t.name} heapprofile`] = art(t, "heapprofile")), JSON.stringify(a));
     }
     if (traceFile) {
-      if (trace.result?.error) artifacts.traceError = trace.result.error;
+      if (trace.error) artifacts.traceError = trace.error;
       else artifacts.trace = traceFile;
     }
 
@@ -389,7 +405,7 @@ export async function measureStep(ctx, step, cfg, tag) {
       const navigated = nav.result > 0 || !!mt.countersReset;
       const prof = cfg.profile ? await summarise(cpu.get(page), alloc.get(page), cfg.filter, windowMs) : null;
       const proc = processCpu(b, a, trace.pagePids);
-      const lt = trace.result;
+      const lt = trace.result(a.m.Timestamp === undefined ? Infinity : a.m.Timestamp * 1e6);
       result.browser = {
         navigated,
         mainThread: mt,
