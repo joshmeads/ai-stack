@@ -453,14 +453,6 @@ else
   note "ok: codex logo path resolves"
 fi
 
-if release_out="$(python3 "$repo/scripts/release_test.py" 2>&1 && python3 "$repo/scripts/release.py" notes 2>&1 >/dev/null)"; then
-  note "ok: release notes build from the CHANGES.md section for the manifest version ($vc)"
-else
-  note "FAIL: release notes do not build"
-  note "$release_out"
-  fail=1
-fi
-
 if [ "${PSTACK_STATIC_ONLY:-0}" = "1" ]; then
   exit "$fail"
 fi

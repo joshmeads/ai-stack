@@ -1,0 +1,7 @@
+## Standing rules
+
+- **No time estimates.** Never put durations, agent-days, weeks or delivery dates in plans, work packages or reports. Size work XS/S/M/L/XL by relative complexity, and split anything XL. Model time estimates have been wrong by orders of magnitude. Dependencies, critical paths and compute budgets are fine.
+- **Few, high-value tests.** Write one focused suite per subsystem, covering behavior that can break: state machines, transactions, reconciliation. Skip literal and token assertions, per-variant files, snapshot ceremony and duplicate contract runs. State this cap in worker briefs. Tests guard real logic and keep shipping fast.
+- **Clean up only what this project created.** Delete the build dirs, caches and scratch files your own work made. List shared caches (Homebrew, global package caches) with sizes and ask first, because other projects pay to rebuild them.
+- **Ask through the question tool.** In grilling and interview rounds, put the questions through the harness's question tool (AskUserQuestion in Claude Code), up to four per call, with the recommended option first and marked "(Recommended)". Do not write numbered questions in the reply.
+- **One plain command per shell call.** No `&&` or `;` chains, pipes, loops, subshells or inline heredoc scripts. Put multi-step logic in a script file and run that. Prefer the read, search and edit tools over shell. Compound commands force a manual approval.

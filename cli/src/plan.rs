@@ -7,7 +7,7 @@ use std::path::{Component, Path, PathBuf};
 use std::time::{SystemTime, UNIX_EPOCH};
 use std::collections::BTreeSet;
 use std::os::unix::ffi::OsStrExt;
-use std::os::unix::fs::PermissionsExt;
+use std::os::unix::fs::{MetadataExt as _, PermissionsExt};
 
 use anyhow::{Context, Result, anyhow, bail};
 use similar::TextDiff;
@@ -19,14 +19,70 @@ pub enum Action {
     /// Create or overwrite a regular file. `before` is the current text, `None` when absent.
     Write { path: PathBuf, before: Option<String>, after: String },
     /// Delete a regular file whose current text is `before`.
-    Remove { path: PathBuf, before: String },
+    Remove { path: PathBuf, before: String, anchor: Anchor },
     /// Delete a symlink currently pointing at `target`.
-    Unlink { path: PathBuf, target: PathBuf },
+    Unlink { path: PathBuf, target: PathBuf, anchor: Anchor },
     /// Move whatever is at `path` (an unmanaged file or a symlink) into the backup and write `text`.
     ReplaceWithFile { path: PathBuf, text: String, fingerprint: u64 },
-    /// `--clean`: move a skill-root entry (directory, file or symlink, never followed) into the
-    /// backup. `fingerprint` is its lstat tree fingerprint at planning time.
-    MoveToBackup { path: PathBuf, fingerprint: u64 },
+    /// Move an entry (directory, file or symlink, never followed) into the backup.
+    /// `fingerprint` is its lstat tree fingerprint at planning time. `clean` marks a `--clean`
+    /// move of a stray skill; otherwise `--force` is moving a stray skill out of a link's way.
+    MoveToBackup { path: PathBuf, fingerprint: u64, clean: bool, anchor: Anchor },
+    /// Create a symlink at `path` pointing at `target`, after backing up what `displaces` names.
+    Link { path: PathBuf, target: PathBuf, displaces: Displaced, anchor: Anchor },
+}
+
+/// The skill folder a folder-entry action works in, as planning saw it: resolved, with its
+/// device and inode (`None` when it did not exist yet). Apply refuses the action when the
+/// folder now resolves elsewhere or is another directory.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct Anchor {
+    pub real: PathBuf,
+    pub id: Option<(u64, u64)>,
+}
+
+impl Anchor {
+    pub fn of(real: &Path) -> Anchor {
+        Anchor { real: real.to_path_buf(), id: fs::metadata(real).ok().map(|meta| (meta.dev(), meta.ino())) }
+    }
+
+    fn check(&self, path: &Path) -> Result<()> {
+        let parent = path.parent().ok_or_else(|| anyhow!("{} has no parent directory", path.display()))?;
+        let real = crate::paths::resolve(parent);
+        let id = fs::metadata(&real).ok().map(|meta| (meta.dev(), meta.ino()));
+        if real != self.real || self.id.is_some_and(|planned| id != Some(planned)) {
+            bail!("{} is no longer the folder the plan was made for (it was {}); run again", parent.display(), self.real.display());
+        }
+        Ok(())
+    }
+
+    /// The ledger key of the entry `name` in this folder.
+    fn key(&self, name: &std::ffi::OsStr) -> String {
+        self.real.join(name).to_string_lossy().into_owned()
+    }
+}
+
+/// What a `Link` takes the place of. Apply checks it is still there, then backs it up as part
+/// of the same action.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum Displaced {
+    /// `path` is free.
+    Nothing,
+    /// An ai-stack link at `entry` to this (wrong) target, copied into the backup and replaced.
+    /// `entry` is the on-disk name, which a case-insensitive disk may spell differently.
+    OwnLink { entry: PathBuf, target: PathBuf },
+    /// A stray skill at `entry` with this lstat tree fingerprint, moved into the backup under
+    /// its on-disk name. `clean` marks a `--clean` move; otherwise `--force` moves it.
+    Stray { entry: PathBuf, fingerprint: u64, clean: bool },
+}
+
+impl Displaced {
+    fn entry(&self) -> Option<&Path> {
+        match self {
+            Displaced::Nothing => None,
+            Displaced::OwnLink { entry, .. } | Displaced::Stray { entry, .. } => Some(entry),
+        }
+    }
 }
 
 impl Action {
@@ -36,7 +92,23 @@ impl Action {
             | Action::Remove { path, .. }
             | Action::Unlink { path, .. }
             | Action::ReplaceWithFile { path, .. }
-            | Action::MoveToBackup { path, .. } => path,
+            | Action::MoveToBackup { path, .. }
+            | Action::Link { path, .. } => path,
+        }
+    }
+
+    /// What applying it copies or moves into the backup, if anything.
+    fn backup_source(&self) -> Option<&Path> {
+        match self {
+            Action::Link { displaces, .. } => displaces.entry(),
+            _ => fs::symlink_metadata(self.path()).is_ok().then(|| self.path()),
+        }
+    }
+
+    fn anchor(&self) -> Option<&Anchor> {
+        match self {
+            Action::Remove { anchor, .. } | Action::Unlink { anchor, .. } | Action::MoveToBackup { anchor, .. } | Action::Link { anchor, .. } => Some(anchor),
+            Action::Write { .. } | Action::ReplaceWithFile { .. } => None,
         }
     }
 }
@@ -50,7 +122,15 @@ pub struct Plan {
     pub conflicts: Vec<String>,
     /// Informational lines, such as untouched extras. They never make a plan non-empty.
     pub warnings: Vec<String>,
+    /// Skill folder entries the stack does not own that `--clean` would move or that sit where
+    /// a skill link goes, whatever the options. `stray` reports these.
+    pub stray: Vec<PathBuf>,
     pub home: Option<PathBuf>,
+    /// The skill-link ledger (`ledger::FILE`) apply keeps in step with the links it changes.
+    pub ledger: Option<PathBuf>,
+    /// A read-only report (`stray`): stray moves are left out rather than fingerprinted, so
+    /// apply refuses it.
+    pub report: bool,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -102,12 +182,12 @@ impl Plan {
         self.actions.len() + self.commands.len()
     }
 
-    /// Whether the summary line at `index` belongs to `--clean`: a skill moved into the backup or
-    /// a plugin removal.
+    /// Whether the summary line at `index` belongs to `--clean`: a stray skill moved into the
+    /// backup (on its own or out of a link's way) or a plugin removal.
     pub fn is_clean(&self, index: usize) -> bool {
         match self.actions.get(index) {
-            Some(action) => matches!(action, Action::MoveToBackup { .. }),
-            None => self.commands.get(index - self.actions.len()).is_some_and(|command| command.undo.is_some()),
+            Some(action) => matches!(action, Action::MoveToBackup { clean: true, .. } | Action::Link { displaces: Displaced::Stray { clean: true, .. }, .. }),
+            None => self.commands.get(index - self.actions.len()).is_some_and(|command| command.clean),
         }
     }
 
@@ -115,16 +195,12 @@ impl Plan {
         (0..self.len()).filter(|&index| self.is_clean(index)).count()
     }
 
-    /// What the `--clean` lines alone would affect: skill-root entries moved into the backup
-    /// and plugins removed or disabled.
+    /// The stray skills the skill folders hold (`Plan::stray`), and the plugins the `--clean`
+    /// commands remove or disable.
     pub fn stray(&self, home: &Path) -> Stray {
-        let mut stray = Stray::default();
-        for index in (0..self.len()).filter(|&index| self.is_clean(index)) {
-            match self.actions.get(index) {
-                Some(action) => stray.skill_names.push(tilde(action.path(), home)),
-                None => stray.plugin_ids.extend(self.commands[index - self.actions.len()].args.last().cloned()),
-            }
-        }
+        let mut stray = Stray { skill_names: self.stray.iter().map(|path| tilde(path, home)).collect(), ..Stray::default() };
+        stray.skill_names.sort();
+        stray.plugin_ids = self.commands.iter().filter(|command| command.clean).filter_map(|command| command.args.last().cloned()).collect();
         stray.skills = stray.skill_names.len();
         stray.plugins = stray.plugin_ids.len();
         stray
@@ -146,20 +222,21 @@ impl Plan {
             Action::Write { path, before, after } => {
                 text_diff(before.as_deref().unwrap_or(""), after, path)
             }
-            Action::Remove { path, before } => text_diff(before, "", path),
-            Action::Unlink { path, target } => {
+            Action::Remove { path, before, .. } => text_diff(before, "", path),
+            Action::Unlink { path, target, .. } => {
                 format!("unlink {} (pointed at {})", path.display(), target.display())
             }
             Action::ReplaceWithFile { path, text, .. } => format!("Back up {} and replace with file\n{}", path.display(), text_diff(&fs::read_to_string(path).unwrap_or_default(), text, path)),
             Action::MoveToBackup { path, .. } => {
-                let kind = match fs::symlink_metadata(path) {
-                    Ok(meta) if meta.file_type().is_symlink() => format!("symlink to {}", fs::read_link(path).map(|t| t.display().to_string()).unwrap_or_default()),
-                    Ok(meta) if meta.is_dir() => "directory".to_string(),
-                    Ok(_) => "file".to_string(),
-                    Err(_) => "missing".to_string(),
-                };
-                format!("Move {} ({kind}) into the backup directory at the same relative path. Nothing is deleted.", path.display())
+                format!("Move {} ({}) into the backup directory at the same relative path. Nothing is deleted.", path.display(), entry_kind(path))
             }
+            Action::Link { path, target, displaces, .. } => match displaces {
+                Displaced::Nothing => format!("link {} -> {}", path.display(), target.display()),
+                Displaced::OwnLink { entry, target: before } if entry == path => format!("link {} -> {} (was {})", path.display(), target.display(), before.display()),
+                Displaced::OwnLink { entry, target: before } => format!("unlink {} (pointed at {}), then link {} -> {}", entry.display(), before.display(), path.display(), target.display()),
+                Displaced::Stray { entry, .. } if entry == path => format!("Move the stray skill {} ({}) into the backup directory at the same relative path, then link it -> {}. Nothing is deleted.", path.display(), entry_kind(path), target.display()),
+                Displaced::Stray { entry, .. } => format!("Move the stray skill {} ({}) into the backup directory at the same relative path, then link {} -> {}. Nothing is deleted.", entry.display(), entry_kind(entry), path.display(), target.display()),
+            },
         }
     }
 
@@ -216,6 +293,9 @@ pub fn apply(plan: &Plan, backup_root: &Path, runner: &dyn Runner) -> Result<App
             plan.conflicts.len()
         );
     }
+    if plan.report {
+        bail!("refusing to apply a read-only report");
+    }
     for action in &plan.actions {
         verify(action)?;
     }
@@ -226,7 +306,7 @@ pub fn apply(plan: &Plan, backup_root: &Path, runner: &dyn Runner) -> Result<App
     let mut backup_dir = backup_dir;
     let mut suffix = 1;
     let removals: Vec<&plugins::Command> = plan.commands.iter().filter(|command| command.undo.is_some()).collect();
-    let needs_backup = !removals.is_empty() || plan.actions.iter().any(|action| fs::symlink_metadata(action.path()).is_ok());
+    let needs_backup = !removals.is_empty() || plan.actions.iter().any(|action| action.backup_source().is_some());
     if needs_backup {
         fs::create_dir_all(backup_root)?;
         loop {
@@ -241,50 +321,36 @@ pub fn apply(plan: &Plan, backup_root: &Path, runner: &dyn Runner) -> Result<App
         }
     }
     let mut destinations = BTreeSet::new();
-    for action in &plan.actions {
-        if fs::symlink_metadata(action.path()).is_ok() {
-            let dest = backup_path(action.path(), &backup_dir, plan.home.as_deref())?;
-            if !destinations.insert(dest.clone()) {
-                bail!("refusing to apply: duplicate backup destination {}", dest.display());
-            }
-            vacant_backup(&dest)?;
+    for source in plan.actions.iter().filter_map(Action::backup_source) {
+        let dest = backup_path(source, &backup_dir, plan.home.as_deref())?;
+        if !destinations.insert(dest.clone()) {
+            bail!("refusing to apply: duplicate backup destination {}", dest.display());
         }
+        vacant_backup(&dest)?;
     }
     let mut backed_up = false;
-    for action in &plan.actions {
-        match action {
-            Action::Write { path, after, .. } => {
-                let permissions = file_permissions(path);
-                backed_up |= backup(path, &backup_dir, plan.home.as_deref())?;
-                write_atomic(path, after, permissions)?;
-            }
-            Action::Remove { path, .. } | Action::Unlink { path, .. } => {
-                backed_up |= backup(path, &backup_dir, plan.home.as_deref())?;
-                fs::remove_file(path).with_context(|| format!("removing {}", path.display()))?;
-            }
-            Action::ReplaceWithFile { path, text, .. } => {
-                let permissions = file_permissions(path);
-                move_to_backup(path, &backup_dir, plan.home.as_deref())?;
-                backed_up = true;
-                write_atomic(path, text, permissions)?;
-            }
-            Action::MoveToBackup { path, .. } => {
-                move_to_backup(path, &backup_dir, plan.home.as_deref())?;
-                backed_up = true;
-            }
-        }
-    }
+    let mut recorded = Vec::new();
+    let applied = apply_actions(plan, &backup_dir, &mut backed_up, &mut recorded);
+    let saved = plan.ledger.as_deref().map_or(Ok(()), |ledger| crate::ledger::update(ledger, &recorded));
+    applied?;
+    saved?;
 
     // Written before the removals run, so it exists even when one of them fails.
     let manifest = if removals.is_empty() {
         None
     } else {
-        let entries: Vec<serde_json::Value> = removals.iter().map(|command| serde_json::json!({
-            "harness": command.harness.as_str(),
-            "id": command.args.last(),
-            "removed_with": command.to_string(),
-            "reinstall": command.undo_command().map(|undo| undo.to_string()),
-        })).collect();
+        let entries: Vec<serde_json::Value> = removals.iter().map(|command| {
+            let mut entry = serde_json::json!({
+                "harness": command.harness.as_str(),
+                "id": command.args.last(),
+                "removed_with": command.to_string(),
+                "reinstall": command.undo_command().map(|undo| undo.to_string()),
+            });
+            if let Some(note) = command.undo_note() {
+                entry["note"] = note.into();
+            }
+            entry
+        }).collect();
         let path = backup_dir.join(MANIFEST);
         let text = serde_json::to_string_pretty(&serde_json::json!({ "plugins": entries }))?;
         fs::write(&path, format!("{text}\n")).with_context(|| format!("writing {}", path.display()))?;
@@ -309,6 +375,76 @@ pub fn apply(plan: &Plan, backup_root: &Path, runner: &dyn Runner) -> Result<App
     })
 }
 
+/// Applies the file actions in order, re-checking each folder-entry action's folder first.
+/// `recorded` collects the ledger changes of the links made and removed, also when an action
+/// fails part way.
+fn apply_actions(plan: &Plan, backup_dir: &Path, backed_up: &mut bool, recorded: &mut Vec<(String, Option<String>)>) -> Result<()> {
+    let home = plan.home.as_deref();
+    for action in &plan.actions {
+        if let Some(anchor) = action.anchor() {
+            anchor.check(action.path())?;
+        }
+        let name = || action.path().file_name().unwrap_or_default();
+        match action {
+            Action::Write { path, after, .. } => {
+                let permissions = file_permissions(path);
+                *backed_up |= backup(path, backup_dir, home)?;
+                write_atomic(path, after, permissions)?;
+            }
+            Action::Remove { path, .. } => {
+                *backed_up |= backup(path, backup_dir, home)?;
+                fs::remove_file(path).with_context(|| format!("removing {}", path.display()))?;
+            }
+            Action::Unlink { path, anchor, .. } => {
+                *backed_up |= backup(path, backup_dir, home)?;
+                fs::remove_file(path).with_context(|| format!("removing {}", path.display()))?;
+                recorded.push((anchor.key(name()), None));
+            }
+            Action::ReplaceWithFile { path, text, .. } => {
+                let permissions = file_permissions(path);
+                move_to_backup(path, backup_dir, home)?;
+                *backed_up = true;
+                write_atomic(path, text, permissions)?;
+            }
+            Action::MoveToBackup { path, anchor, .. } => {
+                move_to_backup(path, backup_dir, home)?;
+                *backed_up = true;
+                recorded.push((anchor.key(name()), None));
+            }
+            Action::Link { path, target, displaces, anchor } => {
+                match displaces {
+                    Displaced::Nothing => {}
+                    Displaced::OwnLink { entry, .. } => {
+                        *backed_up |= backup(entry, backup_dir, home)?;
+                        fs::remove_file(entry).with_context(|| format!("removing {}", entry.display()))?;
+                    }
+                    Displaced::Stray { entry, .. } => {
+                        move_to_backup(entry, backup_dir, home)?;
+                        *backed_up = true;
+                    }
+                }
+                if let Some(entry) = displaces.entry().and_then(Path::file_name).filter(|entry| *entry != name()) {
+                    recorded.push((anchor.key(entry), None));
+                }
+                create_parent(path)?;
+                symlink(target, path).with_context(|| format!("linking {} to {}", path.display(), target.display()))?;
+                recorded.push((anchor.key(name()), Some(target.to_string_lossy().into_owned())));
+            }
+        }
+    }
+    Ok(())
+}
+
+/// `directory`, `file`, `symlink to <target>` or `missing`, for a diff line.
+fn entry_kind(path: &Path) -> String {
+    match fs::symlink_metadata(path) {
+        Ok(meta) if meta.file_type().is_symlink() => format!("symlink to {}", fs::read_link(path).map(|t| t.display().to_string()).unwrap_or_default()),
+        Ok(meta) if meta.is_dir() => "directory".to_string(),
+        Ok(_) => "file".to_string(),
+        Err(_) => "missing".to_string(),
+    }
+}
+
 fn summary_line(action: &Action, home: &Path) -> String {
     match action {
         Action::Write { path, before: None, .. } => format!("create  {}", tilde(path, home)),
@@ -317,6 +453,8 @@ fn summary_line(action: &Action, home: &Path) -> String {
         Action::Unlink { path, .. } => format!("unlink  {}", tilde(path, home)),
         Action::ReplaceWithFile { path, .. } => format!("replace-file {}", tilde(path, home)),
         Action::MoveToBackup { path, .. } => format!("move    {} -> backup", tilde(path, home)),
+        Action::Link { path, displaces: Displaced::Stray { .. }, .. } => format!("link    {} (stray -> backup)", tilde(path, home)),
+        Action::Link { path, .. } => format!("link    {}", tilde(path, home)),
     }
 }
 
@@ -372,17 +510,27 @@ fn stale(path: &Path) -> anyhow::Error {
 fn verify(action: &Action) -> Result<()> {
     let matches = match action {
         Action::Write { path, before, .. } => (current_text(path)? == *before).then_some(()),
-        Action::Remove { path, before } => {
+        Action::Remove { path, before, .. } => {
             (current_text(path)?.as_deref() == Some(before.as_str())).then_some(())
         }
-        Action::Unlink { path, target } => {
+        Action::Unlink { path, target, .. } => {
             (current_link(path)? == Some(target.clone())).then_some(())
         }
-        Action::ReplaceWithFile { path, fingerprint: expected, .. } | Action::MoveToBackup { path, fingerprint: expected } => {
+        Action::Link { path, displaces: Displaced::Nothing, .. } => {
+            matches!(fs::symlink_metadata(path), Err(err) if err.kind() == io::ErrorKind::NotFound).then_some(())
+        }
+        Action::Link { displaces: Displaced::OwnLink { entry, target }, .. } => (current_link(entry)?.as_ref() == Some(target)).then_some(()),
+        Action::ReplaceWithFile { path, fingerprint: expected, .. }
+        | Action::MoveToBackup { path, fingerprint: expected, .. }
+        | Action::Link { displaces: Displaced::Stray { entry: path, fingerprint: expected, .. }, .. } => {
             (fingerprint(path).ok() == Some(*expected)).then_some(())
         }
     };
-    matches.ok_or_else(|| stale(action.path()))
+    matches.ok_or_else(|| stale(action.path()))?;
+    if let Some(anchor) = action.anchor() {
+        anchor.check(action.path())?;
+    }
+    Ok(())
 }
 
 /// Copies the current file or symlink at `path` into `dir`. Returns false when `path` is absent.
@@ -473,16 +621,16 @@ pub fn fingerprint(path: &Path) -> Result<u64> {
         }
     }
     fn visit(path: &Path, root: &Path, hash: &mut u64) -> Result<()> {
-        let meta = fs::symlink_metadata(path)?;
+        let meta = fs::symlink_metadata(path).with_context(|| format!("inspecting {}", path.display()))?;
         field(hash, path.strip_prefix(root)?.as_os_str().as_bytes());
         field(hash, if meta.file_type().is_symlink() { b"link" } else if meta.is_dir() { b"dir" } else if meta.is_file() { b"file" } else { b"other" });
         field(hash, &meta.len().to_le_bytes());
         let modified = meta.modified()?.duration_since(UNIX_EPOCH)?;
         field(hash, &modified.as_nanos().to_le_bytes());
         if meta.file_type().is_symlink() {
-            field(hash, fs::read_link(path)?.as_os_str().as_bytes());
+            field(hash, fs::read_link(path).with_context(|| format!("reading link {}", path.display()))?.as_os_str().as_bytes());
         } else if meta.is_dir() {
-            let mut children = fs::read_dir(path)?.map(|entry| entry.map(|e| e.path())).collect::<io::Result<Vec<_>>>()?;
+            let mut children = fs::read_dir(path).and_then(|listing| listing.map(|entry| entry.map(|e| e.path())).collect::<io::Result<Vec<_>>>()).with_context(|| format!("reading {}", path.display()))?;
             children.sort();
             for child in children { visit(&child, root, hash)?; }
         }
@@ -501,7 +649,7 @@ fn file_permissions(path: &Path) -> Option<fs::Permissions> {
 /// Writes `text` to a new, exclusively created temp file with an unpredictable name
 /// beside `path`, then renames it over `path`. The file gets `permissions` (the
 /// replaced file's mode) or, for a new file, the default mode under the umask.
-fn write_atomic(path: &Path, text: &str, permissions: Option<fs::Permissions>) -> Result<()> {
+pub(crate) fn write_atomic(path: &Path, text: &str, permissions: Option<fs::Permissions>) -> Result<()> {
     use std::io::Write as _;
     create_parent(path)?;
     let parent = path.parent().ok_or_else(|| anyhow!("{} has no parent directory", path.display()))?;
@@ -534,6 +682,8 @@ mod tests {
 
     struct NoCommands;
     impl Runner for NoCommands {
+        fn available(&self, _: crate::config::Harness) -> bool { true }
+
         fn run(&self, cmd: &plugins::Command) -> io::Result<plugins::Ran> {
             panic!("unexpected command {cmd}")
         }

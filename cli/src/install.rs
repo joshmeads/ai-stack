@@ -1,5 +1,5 @@
 //! Builds the install plan for every enabled harness: the model sheet, the instruction-file
-//! blocks, cleanup of what older installs left behind, and the plugin commands.
+//! blocks and settings hooks, then the skill folders (`links`) and the plugin commands.
 
 use std::fs;
 use std::io;
@@ -10,16 +10,16 @@ use serde_json::Value;
 
 use crate::blocks;
 use crate::config::{Config, Harness, HarnessConfig};
+use crate::links;
 use crate::paths;
 use crate::plan::{self, Action, Plan};
 use crate::plugins::{self, Runner};
 use crate::render;
+use crate::stackfile;
 
 const LEGACY_LOCAL_BEGIN: &str = "<!-- open-pstack:local:begin -->";
 const LEGACY_LOCAL_END: &str = "<!-- open-pstack:local:end -->";
 const ROUTING_BLOCK: &str = "routing";
-/// Claude only: the Anthropic prompting-guide bullets.
-const GUIDANCE_BLOCK: &str = "anthropic-guidance";
 /// Claude's `@` import of the sheet.
 const SHEET_BLOCK: &str = "pstack-models";
 /// The owner's global instructions from `<stack>/instructions/`, inlined for every harness.
@@ -31,25 +31,35 @@ const SED_SUFFIX: &str = " | sed 's/pstack://g'";
 
 #[derive(Debug, Clone, Copy, Default)]
 pub struct Options {
-    /// Replace an unmanaged model sheet, after backing it up.
+    /// Replace an unmanaged model sheet, and move a stray skill out of a skill link's way,
+    /// after backing them up.
     pub force: bool,
     /// Move every skill-root entry and remove every plugin that `[clean]` does not keep.
     pub clean: bool,
+    /// A read-only report (`stray`): nothing is fingerprinted and the plan cannot be applied.
+    pub report: bool,
 }
 
 pub fn plan(cfg: &Config, opts: Options, runner: &dyn Runner) -> Result<Plan> {
-    ensure!(cfg.stack.path.is_dir(), "stack path {} does not exist; set [stack] path in the config or pass --stack", cfg.stack.path.display());
-    let mut out = Plan { home: Some(cfg.home.clone()), ..Plan::default() };
-    for hc in &cfg.harnesses {
-        plan_sheet(cfg, hc, opts, &mut out)?;
-        plan_instructions(cfg, hc, &mut out)?;
-        if hc.harness == Harness::Claude {
-            plan_settings(cfg, hc, &mut out)?;
-        }
-        plan_leftover_links(cfg, hc, &mut out)?;
+    let mut out = Plan { home: Some(cfg.home.clone()), report: opts.report, ..Plan::default() };
+    let (active, skipped) = available_config(cfg, runner, &mut out);
+    if active.harnesses.is_empty() && !cfg.harnesses.is_empty() {
+        return Ok(out);
     }
+    let cfg = &active;
+    ensure!(cfg.stack.path.is_dir(), "stack path {} does not exist; set [stack] path in the config or pass --stack", cfg.stack.path.display());
+    let stack_file = stackfile::load(&cfg.stack.path)?;
+    let owner = links::Owner::new(cfg);
+    let folders = links::Index::new(cfg, &skipped);
+    for hc in &cfg.harnesses {
+        plan_sheet(cfg, &owner, hc, opts, &folders, &mut out)?;
+        plan_instructions(cfg, hc, &folders, &mut out)?;
+        if hc.harness == Harness::Claude {
+            plan_settings(cfg, hc, &folders, &mut out)?;
+        }
+    }
+    links::plan(cfg, &owner, &folders, &stack_file, opts, &mut out)?;
     if opts.clean {
-        plan_clean_skills(cfg, &mut out)?;
         // Removals run before the jm installs.
         for hc in &cfg.harnesses {
             plugins::plan_clean(cfg, hc, runner, &mut out)?;
@@ -61,24 +71,15 @@ pub fn plan(cfg: &Config, opts: Options, runner: &dyn Runner) -> Result<Plan> {
     Ok(out)
 }
 
-/// `--clean`: every entry of each skill root that `[clean]` does not keep moves into the backup.
-/// Entries an earlier action already handles (the leftover-link unlinks) are not planned again,
-/// and a root reached twice through a symlink is read once.
-fn plan_clean_skills(cfg: &Config, out: &mut Plan) -> Result<()> {
-    let mut seen = std::collections::BTreeSet::new();
-    for root in &cfg.clean.skill_roots {
-        if !seen.insert(fs::canonicalize(root).unwrap_or_else(|_| root.clone())) {
-            continue;
-        }
-        for path in entries(root)? {
-            let kept = path.file_name().is_some_and(|name| cfg.clean.keeps_skill(&name.to_string_lossy()));
-            if kept || out.actions.iter().any(|action| action.path() == path) {
-                continue;
-            }
-            out.actions.push(Action::MoveToBackup { fingerprint: plan::fingerprint(&path)?, path });
-        }
+fn available_config(cfg: &Config, runner: &dyn Runner, out: &mut Plan) -> (Config, Vec<HarnessConfig>) {
+    let mut active = cfg.clone();
+    let (available, skipped): (Vec<_>, Vec<_>) = cfg.harnesses.iter().cloned().partition(|hc| runner.available(hc.harness));
+    active.harnesses = available;
+    for hc in &skipped {
+        let id = hc.harness.as_str();
+        out.warnings.push(format!("skipping {}: `{id}` not found on PATH", hc.harness.name()));
     }
-    Ok(())
+    (active, skipped)
 }
 
 fn sheet_path(hc: &HarnessConfig) -> PathBuf {
@@ -87,8 +88,9 @@ fn sheet_path(hc: &HarnessConfig) -> PathBuf {
 
 /// `<home>/pstack-models.md`. An unmanaged sheet (for example one setup-stack wrote) is a
 /// conflict unless `--force`.
-fn plan_sheet(cfg: &Config, hc: &HarnessConfig, opts: Options, out: &mut Plan) -> Result<()> {
+fn plan_sheet(cfg: &Config, owner: &links::Owner, hc: &HarnessConfig, opts: Options, folders: &links::Index, out: &mut Plan) -> Result<()> {
     let path = sheet_path(hc);
+    if folders.blocks_write(&path, out) { return Ok(()); }
     let text = render::sheet(cfg, hc.harness);
     let replace = |out: &mut Plan| -> Result<()> {
         out.actions.push(Action::ReplaceWithFile { fingerprint: plan::fingerprint(&path)?, path: path.clone(), text: text.clone() });
@@ -99,7 +101,7 @@ fn plan_sheet(cfg: &Config, hc: &HarnessConfig, opts: Options, out: &mut Plan) -
         Some(meta) if meta.is_file() && first_line(&path)?.starts_with("<!-- Managed by ai-stack") => {
             out.actions.extend(plan::write_if_changed(&path, text.clone())?)
         }
-        Some(meta) if meta.file_type().is_symlink() && owned_link(&path, cfg)? => replace(out)?,
+        Some(meta) if meta.file_type().is_symlink() && owner.owns(&path)? => replace(out)?,
         Some(_) if opts.force => replace(out)?,
         Some(_) => out.conflicts.push(format!("{} exists and is not managed by ai-stack; move it or run with --force", path.display())),
     }
@@ -107,17 +109,17 @@ fn plan_sheet(cfg: &Config, hc: &HarnessConfig, opts: Options, out: &mut Plan) -
 }
 
 /// CLAUDE.md or AGENTS.md: drops leftover blocks, then upserts (or removes) the owner's
-/// instructions block, the routing block, the guidance
-/// block (Claude), and the sheet include (Claude) or mirror (Codex). User text outside the
-/// blocks is kept.
-fn plan_instructions(cfg: &Config, hc: &HarnessConfig, out: &mut Plan) -> Result<()> {
-    let path = write_through(&hc.home.join(hc.harness.instruction_file()))?;
+/// instructions block, the routing block, and the sheet include (Claude) or mirror (Codex).
+/// User text outside the blocks is kept.
+fn plan_instructions(cfg: &Config, hc: &HarnessConfig, folders: &links::Index, out: &mut Plan) -> Result<()> {
+    let requested = hc.home.join(hc.harness.instruction_file());
+    if folders.blocks_write(&requested, out) { return Ok(()); }
+    let path = paths::write_through(&requested)?;
     let original = read_optional(&path)?.unwrap_or_default();
     blocks::validate(&original).with_context(|| format!("checking managed markers in {}", path.display()))?;
     let mut text = blocks::remove_marked(&original, LEGACY_LOCAL_BEGIN, LEGACY_LOCAL_END)?;
     for name in blocks::block_names(&text) {
-        let guidance = hc.harness == Harness::Claude && name == GUIDANCE_BLOCK;
-        if ![ROUTING_BLOCK, SHEET_BLOCK, INSTRUCTIONS_BLOCK].contains(&name.as_str()) && !guidance {
+        if ![ROUTING_BLOCK, SHEET_BLOCK, INSTRUCTIONS_BLOCK].contains(&name.as_str()) {
             text = blocks::remove(&text, &name)?;
         }
     }
@@ -131,9 +133,6 @@ fn plan_instructions(cfg: &Config, hc: &HarnessConfig, out: &mut Plan) -> Result
     }
     let sheet = sheet_path(hc);
     text = blocks::upsert(&text, ROUTING_BLOCK, &render::routing(cfg, hc.harness, &sheet))?;
-    if hc.harness == Harness::Claude {
-        text = blocks::upsert(&text, GUIDANCE_BLOCK, render::ANTHROPIC_GUIDANCE)?;
-    }
     text = match hc.harness {
         Harness::Claude => blocks::upsert(&text, SHEET_BLOCK, &format!("@{}", sheet.display()))?,
         Harness::Codex => blocks::upsert_marked(&text, blocks::PSTACK_BEGIN, blocks::PSTACK_END, &render::sheet(cfg, hc.harness))?,
@@ -164,12 +163,12 @@ fn instructions_body(cfg: &Config, harness: Harness) -> Result<Result<Option<Str
 /// Drops `@...` import lines that load this harness's sheet, so the managed include is the
 /// only one (setup-stack refuses a file with more than one).
 fn remove_sheet_imports(text: &str, cfg: &Config, hc: &HarnessConfig) -> String {
-    let sheet = sheet_path(hc);
+    let sheet = paths::resolve(&sheet_path(hc));
     let imports_sheet = |line: &str| {
         let Some(target) = line.trim().strip_prefix('@') else { return false };
         let target = paths::expand(target, &cfg.home);
         let target = if target.is_absolute() { target } else { hc.home.join(target) };
-        paths::normalize(&target) == sheet
+        paths::resolve(&target) == sheet
     };
     let kept: String = text.split_inclusive('\n').filter(|line| !imports_sheet(line)).collect();
     if kept.len() == text.len() { kept } else { format!("{}\n", kept.trim_end()) }
@@ -177,8 +176,10 @@ fn remove_sheet_imports(text: &str, cfg: &Config, hc: &HarnessConfig) -> String 
 
 /// Removes hook commands older installs added to settings.json. Other commands in the same
 /// group stay; a group or event list is dropped only when ai-stack's commands were all it held.
-fn plan_settings(cfg: &Config, hc: &HarnessConfig, out: &mut Plan) -> Result<()> {
-    let path = write_through(&hc.home.join("settings.json"))?;
+fn plan_settings(cfg: &Config, hc: &HarnessConfig, folders: &links::Index, out: &mut Plan) -> Result<()> {
+    let requested = hc.home.join("settings.json");
+    if folders.blocks_write(&requested, out) { return Ok(()); }
+    let path = paths::write_through(&requested)?;
     let Some(text) = read_optional(&path)? else { return Ok(()) };
     let mut root: Value = match serde_json::from_str(&text) {
         Ok(root) => root,
@@ -228,50 +229,11 @@ fn owned_hook(command: &str, roots: &[&Path]) -> bool {
     let Some((program, arg)) = command.split_once(' ') else { return false };
     let arg = arg.trim();
     let script = arg.strip_prefix('\'').and_then(|arg| arg.strip_suffix('\'')).unwrap_or(arg);
-    OLD_HOOKS.iter().any(|(owner, relative)| *owner == program && roots.iter().any(|root| Path::new(script) == root.join(relative)))
-}
-
-/// Skill and agent links into the stack or a legacy root, and role agent files older ai-stack
-/// builds wrote. The jm plugins provide skills and agents now.
-fn plan_leftover_links(cfg: &Config, hc: &HarnessConfig, out: &mut Plan) -> Result<()> {
-    for dir in ["skills", "agents"] {
-        for path in entries(&hc.home.join(dir))? {
-            if path.file_name().is_some_and(|name| name.to_string_lossy().starts_with('.')) {
-                continue;
-            }
-            let meta = fs::symlink_metadata(&path)?;
-            if meta.file_type().is_symlink() {
-                if owned_link(&path, cfg)? {
-                    out.actions.push(Action::Unlink { target: fs::read_link(&path)?, path });
-                }
-            } else if dir == "agents" && meta.is_file() {
-                if let Ok(text) = fs::read_to_string(&path) {
-                    let managed = match hc.harness {
-                        Harness::Claude => text.contains(render::MANAGED_MD),
-                        Harness::Codex => text.lines().next() == Some(render::MANAGED_TOML),
-                    };
-                    if managed {
-                        out.actions.push(Action::Remove { path, before: text });
-                    }
-                }
-            }
-        }
+    if !Path::new(script).is_absolute() {
+        return false;
     }
-    Ok(())
-}
-
-/// The file a shared path writes to: the link's target when `path` is a symlink, so the link stays.
-fn write_through(path: &Path) -> Result<PathBuf> {
-    match metadata(path)? {
-        Some(meta) if meta.file_type().is_symlink() => Ok(match fs::canonicalize(path) {
-            Ok(target) => target,
-            Err(_) => {
-                let target = fs::read_link(path)?;
-                paths::normalize(&path.parent().expect("link has a parent").join(target))
-            }
-        }),
-        _ => Ok(path.to_path_buf()),
-    }
+    let script = paths::resolve(Path::new(script));
+    OLD_HOOKS.iter().any(|(owner, relative)| *owner == program && roots.iter().any(|root| script == paths::resolve(&root.join(relative))))
 }
 
 fn read_optional(path: &Path) -> Result<Option<String>> {
@@ -295,25 +257,8 @@ fn metadata(path: &Path) -> Result<Option<fs::Metadata>> {
     }
 }
 
-fn owned_link(path: &Path, cfg: &Config) -> Result<bool> {
-    let target = fs::read_link(path)?;
-    let resolved = paths::normalize(&if target.is_absolute() { target } else { path.parent().expect("entry parent").join(target) });
-    Ok(resolved.starts_with(&cfg.stack.path) || cfg.stack.legacy_paths.iter().any(|root| resolved.starts_with(root)))
-}
-
-fn entries(dir: &Path) -> Result<Vec<PathBuf>> {
-    let read = match fs::read_dir(dir) {
-        Ok(read) => read,
-        Err(err) if err.kind() == io::ErrorKind::NotFound => return Ok(Vec::new()),
-        Err(err) => return Err(err).with_context(|| format!("reading {}", dir.display())),
-    };
-    let mut paths = read.map(|e| e.map(|e| e.path())).collect::<io::Result<Vec<_>>>()?;
-    paths.sort();
-    Ok(paths)
-}
-
 #[cfg(test)]
-mod tests {
+pub(crate) mod tests {
     use std::fs;
     use std::os::unix::fs::{PermissionsExt, symlink};
     use std::path::{Path, PathBuf};
@@ -324,20 +269,23 @@ mod tests {
     use crate::config;
     use crate::plugins::fake::FakeRunner;
 
-    struct Fixture {
+    pub(crate) struct Fixture {
         _tmp: tempfile::TempDir,
-        root: PathBuf,
-        stack: PathBuf,
-        home: PathBuf,
-        cfg: Config,
-        runner: FakeRunner,
+        pub(crate) root: PathBuf,
+        pub(crate) stack: PathBuf,
+        pub(crate) home: PathBuf,
+        pub(crate) cfg: Config,
+        pub(crate) runner: FakeRunner,
     }
 
     impl Fixture {
-        fn plan(&self) -> Plan {
-            super::plan(&self.cfg, Options::default(), &self.runner).unwrap()
+        pub(crate) fn plan(&self) -> Plan {
+            self.plan_with(Options::default())
         }
-        fn apply(&self, plan: &Plan) {
+        pub(crate) fn plan_with(&self, opts: Options) -> Plan {
+            super::plan(&self.cfg, opts, &self.runner).unwrap()
+        }
+        pub(crate) fn apply(&self, plan: &Plan) {
             crate::plan::apply(plan, &self.root.join("backups"), &self.runner).unwrap();
         }
         fn read(&self, relative: &str) -> String {
@@ -345,30 +293,231 @@ mod tests {
         }
     }
 
-    fn put(path: &Path, text: &str) {
+    pub(crate) const STACK_TOML: &str = "[groups.tools]\nglobal = true\nskills = [\"handoff\", \"feedback\"]\n\n[groups.games]\nskills = [\"game-mvp\"]\n";
+
+    pub(crate) fn put(path: &Path, text: &str) {
         fs::create_dir_all(path.parent().unwrap()).unwrap();
         fs::write(path, text).unwrap();
     }
 
-    fn fixture() -> Fixture {
+    pub(crate) fn fixture() -> Fixture {
         let tmp = tempfile::tempdir().unwrap();
         let root = fs::canonicalize(tmp.path()).unwrap();
         let stack = root.join("stack");
         let home = root.join("home");
-        let sources = [("jm-stack", "plugins/pstack"), ("jm-games", "plugins/jm-games"), ("jm-tools", "plugins/jm-tools")];
+        let sources = [("jm-stack", "plugins/pstack")];
         let claude = sources.map(|(name, dir)| json!({"name": name, "source": format!("./{dir}")}));
         let codex = sources.map(|(name, dir)| json!({"name": name, "source": {"source": "local", "path": format!("./{dir}")}}));
         put(&stack.join(".claude-plugin/marketplace.json"), &json!({"name": "jm", "plugins": claude}).to_string());
         put(&stack.join(".agents/plugins/marketplace.json"), &json!({"name": "jm", "plugins": codex}).to_string());
         for (name, dir) in sources {
-            put(&stack.join(dir).join(".codex-plugin/plugin.json"), &json!({"name": name, "version": "1.0.0"}).to_string());
+            for manifest in [".claude-plugin/plugin.json", ".codex-plugin/plugin.json"] {
+                put(&stack.join(dir).join(manifest), &json!({"name": name, "version": "1.0.0"}).to_string());
+            }
         }
+        for skill in ["handoff", "feedback", "game-mvp"] {
+            put(&stack.join("skills").join(skill).join("SKILL.md"), &format!("---\nname: {skill}\ndescription: The {skill} skill.\n---\n"));
+        }
+        put(&stack.join("stack.toml"), STACK_TOML);
         let mut cfg = config::from_str(config::default_config_text(), &home).unwrap();
         cfg.stack.path = stack.clone();
         cfg.stack.legacy_paths = vec![root.join("legacy")];
         let runner = FakeRunner::default();
-        *runner.codex_version.borrow_mut() = "1.0.0".into();
         Fixture { _tmp: tmp, root, stack, home, cfg, runner }
+    }
+
+    #[test]
+    fn unavailable_harness_is_skipped_before_files_plugins_and_clean() {
+        for missing in Harness::ALL {
+            for existing in [false, true] {
+                let mut f = fixture();
+                f.runner.missing.insert(missing);
+                let hc = f.cfg.harnesses.iter().find(|hc| hc.harness == missing).unwrap().clone();
+                let skills = hc.harness.skill_folder(&hc.home, &f.home);
+                if existing {
+                    put(&hc.home.join(hc.harness.instruction_file()), "<!-- ai-stack:broken:begin -->");
+                    put(&hc.home.join("pstack-models.md"), "unmanaged");
+                    put(&skills.join("stray/SKILL.md"), "leave alone");
+                    put(&hc.home.join("agents/old.md"), render::MANAGED_MD);
+                }
+                let plan = f.plan_with(Options { clean: true, ..Options::default() });
+                assert!(plan.conflicts.is_empty(), "{:?}", plan.conflicts);
+                assert_eq!(plan.warnings.len(), 1);
+                assert!(plan.render_text(&f.home).contains(&format!("skipping {}:", missing.name())));
+                assert!(!plan.is_empty());
+                assert!(plan.commands.iter().all(|cmd| cmd.harness != missing));
+                assert!(plan.actions.iter().all(|action| !action.path().starts_with(&hc.home) && !action.path().starts_with(&skills)));
+                f.apply(&plan);
+                assert!(f.plan_with(Options { clean: true, ..Options::default() }).is_empty());
+                if existing {
+                    assert_eq!(fs::read_to_string(skills.join("stray/SKILL.md")).unwrap(), "leave alone");
+                } else {
+                    assert!(!hc.home.exists());
+                }
+            }
+        }
+    }
+
+    #[test]
+    fn both_missing_plan_nothing_even_with_clean() {
+        let mut f = fixture();
+        f.runner.missing.extend(Harness::ALL);
+        put(&f.home.join(".agents/skills/stray/SKILL.md"), "leave alone");
+        let plan = f.plan_with(Options { clean: true, ..Options::default() });
+        assert!(plan.is_empty(), "{plan:?}");
+        assert_eq!(plan.warnings.len(), 2);
+        assert!(plan.render_text(&f.home).ends_with("No changes.\n"));
+        f.apply(&plan);
+        assert!(!f.home.join(".claude").exists());
+        assert!(!f.home.join(".codex").exists());
+    }
+
+    #[test]
+    fn explicitly_disabled_harness_has_no_skip_notice() {
+        let mut f = fixture();
+        f.cfg.harnesses.retain(|hc| hc.harness != Harness::Claude);
+        f.runner.missing.insert(Harness::Claude);
+        let plan = f.plan();
+        assert!(plan.warnings.is_empty());
+        assert!(plan.conflicts.is_empty());
+        assert!(plan.commands.iter().all(|cmd| cmd.harness == Harness::Codex));
+        assert!(plan.actions.iter().all(|action| !action.path().starts_with(f.home.join(".claude"))));
+    }
+
+    #[test]
+    fn legacy_cleanup_alias_leaves_skipped_skill_links_alone() {
+        use std::os::unix::fs::symlink;
+
+        let mut f = fixture();
+        f.runner.missing.insert(Harness::Claude);
+        let claude_skills = f.home.join(".claude/skills");
+        fs::create_dir_all(&claude_skills).unwrap();
+        fs::create_dir_all(f.home.join(".codex")).unwrap();
+        symlink(f.stack.join("skills/handoff"), claude_skills.join("handoff")).unwrap();
+        symlink(&claude_skills, f.home.join(".codex/skills")).unwrap();
+        for clean in [false, true] {
+            let plan = f.plan_with(Options { clean, ..Options::default() });
+            assert!(plan.conflicts.is_empty(), "{:?}", plan.conflicts);
+            assert!(plan.actions.iter().all(|action| !action.path().starts_with(&claude_skills) && !action.path().starts_with(f.home.join(".codex/skills"))));
+            f.apply(&plan);
+            assert!(claude_skills.join("handoff").is_symlink());
+        }
+    }
+
+    #[test]
+    fn available_harness_keeps_a_shared_skill_folder() {
+        use std::os::unix::fs::symlink;
+
+        let mut f = fixture();
+        f.runner.missing.insert(Harness::Claude);
+        let shared = f.home.join(".agents/skills");
+        put(&shared.join("stray/SKILL.md"), "stray");
+        fs::create_dir_all(f.home.join(".claude")).unwrap();
+        symlink(&shared, f.home.join(".claude/skills")).unwrap();
+        let plan = f.plan_with(Options { clean: true, ..Options::default() });
+        assert!(plan.conflicts.is_empty(), "{:?}", plan.conflicts);
+        f.apply(&plan);
+        assert!(!shared.join("stray").exists());
+        assert!(shared.join("handoff").is_symlink());
+        assert!(!f.home.join(".claude/CLAUDE.md").exists());
+    }
+
+    #[test]
+    fn nested_skipped_skills_preserve_entries_and_keep_codex_links_active() {
+        for layout in ["nested", "shared-alias", "outgoing-alias", "wanted"] {
+            let mut f = fixture();
+            f.runner.missing.insert(Harness::Claude);
+            let shared = f.home.join(".agents/skills");
+            let claude = f.home.join(".claude/skills");
+            fs::create_dir_all(claude.parent().unwrap()).unwrap();
+            fs::create_dir_all(&shared).unwrap();
+            let target = shared.join(if layout == "wanted" { "handoff" } else { "claude" });
+            if layout == "shared-alias" {
+                symlink(".", &target).unwrap();
+            } else {
+                put(&target.join("mine/SKILL.md"), "leave alone");
+            }
+            symlink(&target, &claude).unwrap();
+            if layout == "outgoing-alias" {
+                symlink(&target, shared.join("outgoing")).unwrap();
+            }
+            put(&shared.join("stray/SKILL.md"), "clean me");
+            let plan = f.plan_with(Options { clean: true, force: true, ..Options::default() });
+            assert!(plan.conflicts.is_empty(), "{:?}", plan.conflicts);
+            assert!(plan.actions.iter().any(|action| matches!(action, Action::Link { path, .. } if *path == shared.join("feedback"))), "{}", plan.render_text(&f.home));
+            assert!(!plan.stray.iter().any(|path| path == &target || path == &shared.join("outgoing")));
+            assert!(plan.actions.iter().all(|action| !action.path().starts_with(&target) && action.path() != shared.join("outgoing")));
+            f.apply(&plan);
+            assert!(!shared.join("stray").exists());
+            assert!(shared.join("feedback").is_symlink());
+            assert!(claude.exists());
+            if layout != "shared-alias" {
+                assert_eq!(fs::read_to_string(claude.join("mine/SKILL.md")).unwrap(), "leave alone");
+            }
+            assert!(f.plan_with(Options { clean: true, force: true, ..Options::default() }).is_empty());
+        }
+    }
+
+    #[test]
+    fn absent_skipped_home_reserves_a_wanted_link_name() {
+        for name in ["handoff", "HANDOFF"] {
+            let mut f = fixture();
+            f.runner.missing.insert(Harness::Claude);
+            let skills = f.home.join(".agents/skills");
+            put(&skills.join("CaseProbe/SKILL.md"), "probe");
+            if name == "HANDOFF" && !skills.join("caseprobe").exists() { continue; }
+            let claude = skills.join(name);
+            f.cfg.harnesses[0].home = claude.clone();
+            let plan = f.plan_with(Options { clean: true, force: true, ..Options::default() });
+            assert!(plan.conflicts.is_empty(), "{:?}", plan.conflicts);
+            assert!(plan.actions.iter().all(|action| action.path() != skills.join("handoff")));
+            f.apply(&plan);
+            assert!(!claude.exists());
+            assert!(skills.join("feedback").is_symlink());
+        }
+    }
+
+    #[test]
+    fn clean_cannot_move_a_skipped_home_through_an_ancestor_or_alias() {
+        use std::os::unix::fs::symlink;
+
+        for layout in ["directory", "symlink", "chain", "case"] {
+            let mut f = fixture();
+            if layout == "case" {
+                fs::create_dir_all(f.home.join("Harnesses")).unwrap();
+                if !f.home.join("harnesses").is_dir() { continue; }
+            }
+            let claude = f.home.join(if layout == "chain" { "other/claude" } else { "harnesses/agents/claude" });
+            f.cfg.harnesses[0].home = claude.clone();
+            f.cfg.harnesses[1].home = f.home.join("harnesses");
+            f.runner.missing.insert(Harness::Claude);
+            let external = f.root.join("external-skills");
+            put(&external.join("stray/SKILL.md"), "leave alone");
+            if layout != "directory" {
+                let target = f.stack.join("skipped-home");
+                fs::create_dir_all(&target).unwrap();
+                fs::create_dir_all(claude.parent().unwrap()).unwrap();
+                if layout == "chain" {
+                    let bridge = f.home.join("harnesses/agents/bridge");
+                    fs::create_dir_all(bridge.parent().unwrap()).unwrap();
+                    fs::create_dir_all(target.join("profile")).unwrap();
+                    symlink(target, &bridge).unwrap();
+                    symlink(bridge.join("profile"), &claude).unwrap();
+                } else {
+                    symlink(target, &claude).unwrap();
+                }
+            } else {
+                fs::create_dir_all(&claude).unwrap();
+            }
+            symlink(&external, claude.join("skills")).unwrap();
+            f.cfg.clean.skill_roots.extend([f.home.join("harnesses"), f.home.join("harnesses/agents"), external.clone()]);
+            put(&f.home.join(".claude/skills/stray/SKILL.md"), "leave alone");
+            let plan = f.plan_with(Options { clean: true, ..Options::default() });
+            assert!(plan.conflicts.is_empty(), "{:?}", plan.conflicts);
+            assert!(plan.actions.iter().all(|action| !action.path().starts_with(&claude) && !action.path().starts_with(&external) && !action.path().starts_with(f.home.join(".claude"))));
+            f.apply(&plan);
+            assert!(claude.join("skills/stray/SKILL.md").exists());
+        }
     }
 
     #[test]
@@ -382,12 +531,8 @@ mod tests {
         assert_eq!(commands, [
             format!("{claude_env} claude plugin marketplace add {stack}"),
             format!("{claude_env} claude plugin install jm-stack@jm"),
-            format!("{claude_env} claude plugin install jm-games@jm"),
-            format!("{claude_env} claude plugin install jm-tools@jm"),
             format!("{codex_env} codex plugin marketplace add {stack}"),
             format!("{codex_env} codex plugin add jm-stack@jm"),
-            format!("{codex_env} codex plugin add jm-games@jm"),
-            format!("{codex_env} codex plugin add jm-tools@jm"),
         ]);
         assert!(f.runner.ran.borrow().is_empty(), "planning must not run install commands");
         f.apply(&first);
@@ -435,8 +580,7 @@ mod tests {
         let claude = f.read(".claude/CLAUDE.md");
         let routing = render::routing(&f.cfg, Harness::Claude, &f.home.join(".claude/pstack-models.md"));
         assert_eq!(claude, format!(
-            "<!-- ai-stack:routing:begin -->\n{routing}\n<!-- ai-stack:routing:end -->\n\n<!-- ai-stack:anthropic-guidance:begin -->\n{}\n<!-- ai-stack:anthropic-guidance:end -->\n\n<!-- ai-stack:pstack-models:begin -->\n@{}/.claude/pstack-models.md\n<!-- ai-stack:pstack-models:end -->\n",
-            render::ANTHROPIC_GUIDANCE,
+            "<!-- ai-stack:routing:begin -->\n{routing}\n<!-- ai-stack:routing:end -->\n\n<!-- ai-stack:pstack-models:begin -->\n@{}/.claude/pstack-models.md\n<!-- ai-stack:pstack-models:end -->\n",
             f.home.display()
         ));
         let codex = f.read(".codex/AGENTS.md");
@@ -445,10 +589,19 @@ mod tests {
 
         assert!(f.plan().is_empty(), "{}", f.plan().render_text(&f.home));
 
-        // A new plugin version in the checkout reinstalls it in Codex only.
-        put(&f.stack.join("plugins/jm-games/.codex-plugin/plugin.json"), &json!({"name": "jm-games", "version": "1.1.0"}).to_string());
-        let bumped: Vec<String> = f.plan().commands.iter().map(ToString::to_string).collect();
-        assert_eq!(bumped, [format!("{codex_env} codex plugin add jm-games@jm")]);
+        // Both harnesses refresh copied plugins when the checkout version changes.
+        for manifest in [".claude-plugin/plugin.json", ".codex-plugin/plugin.json"] {
+            put(&f.stack.join("plugins/pstack").join(manifest), &json!({"name": "jm-stack", "version": "1.1.0"}).to_string());
+        }
+        f.runner.claude.borrow_mut().disabled.insert("jm-stack@jm".into());
+        let bumped = f.plan();
+        assert_eq!(bumped.commands.iter().map(ToString::to_string).collect::<Vec<_>>(), [
+            format!("{claude_env} claude plugin update jm-stack@jm --scope user"),
+            format!("{codex_env} codex plugin add jm-stack@jm"),
+        ]);
+        f.apply(&bumped);
+        assert!(f.runner.claude.borrow().disabled.contains("jm-stack@jm"));
+        assert!(f.plan().is_empty(), "{}", f.plan().render_text(&f.home));
 
         // A `jm` marketplace from somewhere else is never replaced silently.
         f.runner.claude.borrow_mut().marketplaces.insert("jm".into(), "/elsewhere".into());
@@ -459,6 +612,8 @@ mod tests {
     #[test]
     fn migration_removes_old_links_blocks_hooks_and_agent_files_but_keeps_user_content() {
         let f = fixture();
+        let guidance = include_str!("../../instructions/claude.md").trim();
+        put(&f.stack.join("instructions/claude.md"), guidance);
         let legacy = f.root.join("legacy");
         let skills = f.home.join(".claude/skills");
         let agents = f.home.join(".claude/agents");
@@ -478,6 +633,8 @@ mod tests {
             "# My notes\n\nKeep this.\n\n",
             "<!-- ai-stack:task-discipline:begin -->\nold discipline\n<!-- ai-stack:task-discipline:end -->\n\n",
             "<!-- ai-stack:anthropic-guidance:begin -->\nold guidance\n<!-- ai-stack:anthropic-guidance:end -->\n\n",
+            "<!-- ai-stack:routing:begin -->\nold routing\n<!-- ai-stack:routing:end -->\n\n",
+            "<!-- ai-stack:pstack-models:begin -->\n@/old/sheet.md\n<!-- ai-stack:pstack-models:end -->\n\n",
             "@~/.claude/pstack-models.md\n",
             "<!-- ai-stack:stack-models:begin -->\n@/old/sheet.md\n<!-- ai-stack:stack-models:end -->\n",
         ));
@@ -514,10 +671,12 @@ mod tests {
         assert!(skills.join("own/SKILL.md").exists() && agents.join("haiku-worker.md").exists());
 
         let claude = f.read(".claude/CLAUDE.md");
-        // An existing guidance block is updated where it stands.
-        assert!(claude.starts_with("# My notes\n\nKeep this.\n\n<!-- ai-stack:anthropic-guidance:begin -->"), "{claude}");
-        assert_eq!(blocks::block_names(&claude), ["anthropic-guidance", "routing", "pstack-models"]);
-        assert!(claude.contains(render::ANTHROPIC_GUIDANCE));
+        assert!(claude.starts_with("# My notes\n\nKeep this.\n\n<!-- ai-stack:routing:begin -->"), "{claude}");
+        // Migration appends the new instructions block after the existing routing and sheet.
+        assert_eq!(blocks::block_names(&claude), ["routing", "pstack-models", "instructions"]);
+        assert!(claude.ends_with(&format!("<!-- ai-stack:instructions:begin -->\n{guidance}\n<!-- ai-stack:instructions:end -->\n")));
+        assert!(!f.read(".codex/AGENTS.md").contains(guidance));
+        assert!(!claude.contains("anthropic-guidance"));
         for stale in ["open-pstack:local", "old rules", "old discipline", "old guidance", "@~/.claude/pstack-models.md", "/old/sheet.md"] {
             assert!(!claude.contains(stale), "{stale} in {claude}");
         }
@@ -557,16 +716,18 @@ mod tests {
             f.runner.codex.borrow_mut().installed.insert(id.into(), "1".into());
         }
 
+        let strays = ["~/.agents/skills/notes.txt", "~/.claude/skills/gone", "~/.claude/skills/linked", "~/.claude/skills/old-skill", "~/.codex/skills/codex-only"];
         let off = f.plan();
         assert_eq!(off.clean_count(), 0);
         assert!(!off.actions.iter().any(|a| matches!(a, Action::MoveToBackup { .. })));
-        assert_eq!(off.stray(&f.home), crate::plan::Stray::default());
+        // The strays are the same with clean off; only the moves wait for --clean.
+        assert_eq!(off.stray(&f.home).skill_names, strays);
 
-        let clean = |f: &Fixture| super::plan(&f.cfg, Options { clean: true, ..Options::default() }, &f.runner).unwrap();
+        let clean = |f: &Fixture| f.plan_with(Options { clean: true, ..Options::default() });
         let plan = clean(&f);
         assert!(plan.conflicts.is_empty(), "{:?}", plan.conflicts);
         let moved: Vec<PathBuf> = plan.actions.iter().filter(|a| matches!(a, Action::MoveToBackup { .. })).map(|a| a.path().to_path_buf()).collect();
-        assert_eq!(moved, [claude.join("gone"), claude.join("linked"), claude.join("old-skill"), codex.join("codex-only"), agents.join("notes.txt")]);
+        assert_eq!(moved, [claude.join("gone"), claude.join("linked"), claude.join("old-skill"), agents.join("notes.txt"), codex.join("codex-only")]);
         assert_eq!(plan.actions.iter().filter(|a| a.path() == claude.join("how")).count(), 1);
         let (claude_env, codex_env) = (format!("CLAUDE_CONFIG_DIR={}/.claude", f.home.display()), format!("CODEX_HOME={}/.codex", f.home.display()));
         let commands: Vec<String> = plan.commands.iter().map(ToString::to_string).collect();
@@ -581,10 +742,10 @@ mod tests {
         assert_eq!(serde_json::to_string(&stray).unwrap(), json!({
             "skills": 5,
             "plugins": 3,
-            "skill_names": ["~/.claude/skills/gone", "~/.claude/skills/linked", "~/.claude/skills/old-skill", "~/.codex/skills/codex-only", "~/.agents/skills/notes.txt"],
+            "skill_names": strays,
             "plugin_ids": ["expo@claude-plugins-official", "pdf-viewer@synced", "old@market"],
         }).to_string());
-        assert!(stray.text().starts_with("skills: 5  plugins: 3\n  ~/.claude/skills/gone\n"), "{}", stray.text());
+        assert!(stray.text().starts_with("skills: 5  plugins: 3\n  ~/.agents/skills/notes.txt\n"), "{}", stray.text());
 
         let report = crate::plan::apply(&plan, &f.root.join("backups"), &f.runner).unwrap();
         let backup = report.backup_dir.unwrap().join("home");
@@ -611,10 +772,69 @@ mod tests {
         ]);
         assert_eq!(manifest["plugins"][2]["id"], "old@market");
         let installed: Vec<String> = f.runner.claude.borrow().installed.keys().cloned().collect();
-        assert_eq!(installed, ["github@claude-plugins-official", "jm-games@jm", "jm-stack@jm", "jm-tools@jm", "pdf-viewer@synced"]);
+        assert_eq!(installed, ["github@claude-plugins-official", "jm-stack@jm", "pdf-viewer@synced"]);
 
         let again = clean(&f);
         assert!(again.is_empty(), "{}", again.render_text(&f.home));
+    }
+
+    #[test]
+    fn a_jm_plugin_the_checkout_no_longer_lists_is_removed_by_a_normal_install() {
+        let f = fixture();
+        // The stack's history: jm-games listed, then retired.
+        let git = |args: &[&str]| {
+            let config = ["-c", "user.name=t", "-c", "user.email=t@t", "-c", "commit.gpgsign=false", "-c", "core.hooksPath=/dev/null"];
+            let output = std::process::Command::new("git").args(config).args(args).current_dir(&f.stack).output().unwrap();
+            assert!(output.status.success(), "git {args:?}: {}", String::from_utf8_lossy(&output.stderr));
+            String::from_utf8_lossy(&output.stdout).trim().to_string()
+        };
+        let manifests = [".claude-plugin/marketplace.json", ".agents/plugins/marketplace.json"];
+        let current: Vec<String> = manifests.iter().map(|path| fs::read_to_string(f.stack.join(path)).unwrap()).collect();
+        for (path, text) in manifests.iter().zip(&current) {
+            put(&f.stack.join(path), &text.replace("\"name\":\"jm-stack\"", "\"name\":\"jm-games\"},{\"name\":\"jm-stack\""));
+        }
+        let manifest_text: Vec<String> = manifests.iter().map(|path| fs::read_to_string(f.stack.join(path)).unwrap()).collect();
+        for (path, text) in manifests.iter().zip(&manifest_text) {
+            put(&f.stack.join(path), &text.replace("{\"name\":\"jm-games\"}", "{\"name\":\"jm-games\",\"source\":\"./plugins/jm-games\"}").replace("{\"name\":\"jm-games\",\"source\":\"./plugins/jm-games\"},{\"name\":\"jm-stack\",\"source\":{", "{\"name\":\"jm-games\",\"source\":{\"source\":\"local\",\"path\":\"./plugins/jm-games\"}},{\"name\":\"jm-stack\",\"source\":{"));
+        }
+        put(&f.stack.join("plugins/jm-games/skills/art/SKILL.md"), "---\nname: art\n---\n");
+        git(&["init", "-q"]);
+        git(&["add", "-A"]);
+        git(&["commit", "-qm", "with jm-games"]);
+        let listed = git(&["rev-parse", "HEAD"]);
+        // The skills move out one commit before the manifest drops the plugin.
+        fs::remove_dir_all(f.stack.join("plugins/jm-games/skills")).unwrap();
+        put(&f.stack.join("plugins/jm-games/README.md"), "moved\n");
+        git(&["add", "-A"]);
+        git(&["commit", "-qm", "move the jm-games skills out"]);
+        for (path, text) in manifests.iter().zip(&current) {
+            put(&f.stack.join(path), text);
+        }
+        git(&["commit", "-qam", "retire jm-games"]);
+
+        fs::create_dir_all(f.home.join(".claude")).unwrap();
+        fs::create_dir_all(f.home.join(".codex")).unwrap();
+        for state in [&f.runner.claude, &f.runner.codex] {
+            let mut state = state.borrow_mut();
+            state.marketplaces.insert("jm".into(), f.stack.display().to_string());
+            for id in ["jm-stack@jm", "jm-games@jm", "other@market"] {
+                state.installed.insert(id.into(), "1.0.0".into());
+            }
+        }
+        let plan = f.plan();
+        let commands: Vec<String> = plan.commands.iter().map(ToString::to_string).collect();
+        let (claude_env, codex_env) = (format!("CLAUDE_CONFIG_DIR={}/.claude", f.home.display()), format!("CODEX_HOME={}/.codex", f.home.display()));
+        assert_eq!(commands, [format!("{claude_env} claude plugin uninstall jm-games@jm"), format!("{codex_env} codex plugin remove jm-games@jm")]);
+        assert_eq!(plan.clean_count(), 0, "a jm plugin is the stack's, never stray");
+        assert_eq!(plan.stray(&f.home), crate::plan::Stray::default());
+        let report = crate::plan::apply(&plan, &f.root.join("backups"), &f.runner).unwrap();
+        let manifest: Value = serde_json::from_str(&fs::read_to_string(report.manifest.unwrap()).unwrap()).unwrap();
+        // No CLI can reinstall a plugin its marketplace dropped, so the record says where it is.
+        for (entry, path) in manifest["plugins"].as_array().unwrap().iter().zip(manifests) {
+            assert_eq!(entry["reinstall"], Value::Null);
+            assert_eq!(entry["note"], format!("jm-games was retired from the jm marketplace. Commit {listed} of the stack {} is the last that lists it in {path} with its skills; restore it from there.", f.stack.display()));
+        }
+        assert!(f.plan().is_empty(), "{}", f.plan().render_text(&f.home));
     }
 
     #[test]
@@ -688,6 +908,36 @@ mod tests {
     }
 
     #[test]
+    fn writes_through_aliases_into_skipped_routes_conflict() {
+        for missing in Harness::ALL {
+            for file in ["instructions", "sheet", "home", "settings"] {
+                if file == "settings" && missing == Harness::Claude { continue; }
+                let mut f = fixture();
+                f.runner.missing.insert(missing);
+                let skipped = f.cfg.harnesses.iter().find(|hc| hc.harness == missing).unwrap().clone();
+                let active = f.cfg.harnesses.iter().find(|hc| hc.harness != missing).unwrap().clone();
+                fs::create_dir_all(&skipped.home).unwrap();
+                let (source, target, original) = match file {
+                    "instructions" => (active.home.join(active.harness.instruction_file()), skipped.home.join(skipped.harness.instruction_file()), "# Shared instructions\n".to_string()),
+                    "sheet" => (active.home.join("pstack-models.md"), skipped.home.join("pstack-models.md"), format!("{}\nold sheet\n", render::MANAGED_MD)),
+                    "settings" => (active.home.join("settings.json"), skipped.home.join("settings.json"), "{}\n".to_string()),
+                    "home" => (active.home.clone(), skipped.home.clone(), String::new()),
+                    _ => unreachable!(),
+                };
+                fs::create_dir_all(source.parent().unwrap()).unwrap();
+                if file != "home" { put(&target, &original); }
+                symlink(&target, &source).unwrap();
+                let plan = f.plan_with(Options { force: true, ..Options::default() });
+                assert!(plan.conflicts.iter().any(|conflict| conflict.contains(&source.display().to_string()) && conflict.contains(&target.display().to_string()) && conflict.contains("skipped harness")), "{file}: {:?}", plan.conflicts);
+                assert!(plan.actions.iter().filter(|action| matches!(action, Action::Write { .. } | Action::ReplaceWithFile { .. })).all(|action| !paths::resolve(action.path()).starts_with(&skipped.home)));
+                assert!(crate::plan::apply(&plan, &f.root.join("backups"), &f.runner).is_err());
+                assert_eq!(fs::read_link(&source).unwrap(), target);
+                if file != "home" { assert_eq!(fs::read_to_string(&target).unwrap(), original); }
+            }
+        }
+    }
+
+    #[test]
     fn unmanaged_sheet_conflicts_unless_forced() {
         let f = fixture();
         let sheet = f.home.join(".claude/pstack-models.md");
@@ -699,5 +949,21 @@ mod tests {
         let report = crate::plan::apply(&forced, &f.root.join("backups"), &f.runner).unwrap();
         assert!(fs::read_to_string(&sheet).unwrap().starts_with(render::MANAGED_MD));
         assert_eq!(fs::read_to_string(report.backup_dir.unwrap().join("home/.claude/pstack-models.md")).unwrap(), "# pstack model configuration\n");
+    }
+
+    #[test]
+    fn sheet_imports_and_old_hooks_match_through_another_spelling_of_the_same_path() {
+        let f = fixture();
+        // `alias` is to the home and the stack what `/tmp` is to `/private/tmp`.
+        symlink(&f.root, f.root.join("alias")).unwrap();
+        let alias = f.root.join("alias");
+        put(&f.home.join(".claude/CLAUDE.md"), &format!("# Mine\n@{}/home/.claude/pstack-models.md\n", alias.display()));
+        let hook = format!("bash {}/stack/plugins/pstack/hooks/session-start", alias.display());
+        put(&f.home.join(".claude/settings.json"), &json!({"hooks": {"SessionStart": [{"hooks": [{"type": "command", "command": hook}]}]}}).to_string());
+        f.apply(&f.plan());
+        let claude = f.read(".claude/CLAUDE.md");
+        assert!(!claude.contains(&alias.display().to_string()), "{claude}");
+        let settings: Value = serde_json::from_str(&f.read(".claude/settings.json")).unwrap();
+        assert_eq!(settings, json!({"hooks": {}}));
     }
 }
