@@ -69,7 +69,7 @@ export function printStep(r) {
     if (b.navigated || mt.countersReset) console.log("  navigated: main-thread figures cover the new document only; heap and DOM are totals after GC, not deltas");
     console.log(`  browser main thread ${mt.taskMs}ms: script ${mt.scriptMs}, layout ${mt.layoutMs} (${mt.layouts}x), style ${mt.styleMs} (${mt.styleRecalcs}x)${procs ? ` | process cpu ms (${scope}): ${procs}` : ""}`);
     if (b.processesExitedMidStep) {
-      const gone = b.processesExitedMidStep.map((p) => `${p.thisPage ? "this page's " : ""}${p.type} pid ${p.pid}`).join(", ");
+      const gone = b.processesExitedMidStep.map((p) => `${p.thisPage ? "this page's " : ""}${p.type} pid ${p.pid}${p.startedMidStep ? " (started mid-step too)" : ""}`).join(", ");
       console.log(`  exited mid-step, CPU not counted: ${gone}`);
     }
     const dom = b.dom
