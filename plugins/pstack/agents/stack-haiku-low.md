@@ -3,7 +3,6 @@ name: stack-haiku-low
 description: Native Claude lane for jm:stack roles configured as claude:haiku@low.
 model: haiku
 effort: low
-background: true
 disallowedTools: Agent, Task
 ---
 

@@ -1,0 +1,11 @@
+{
+  "schema_version": "ATIF-v1.7",
+  "session_id": "fixture-session",
+  "agent": { "name": "devin", "version": "3000.11.3", "model_name": "SWE-2 Medium", "tool_definitions": [] },
+  "steps": [
+    { "step_id": 1, "timestamp": "2026-10-14T03:14:13.000000+00:00", "source": "user", "message": "Write a long essay about the history of rivers.", "extra": { "telemetry": { "source": "user", "operation": "unknown" } } },
+    { "step_id": 2, "timestamp": "2026-10-14T03:14:18.500000+00:00", "source": "agent", "model_name": "swe-2-medium", "message": "The history of rivers is, in a sense,", "tool_calls": [], "metrics": { "prompt_tokens": 23435, "completion_tokens": 299 }, "extra": { "generation_model": "swe-2-medium", "telemetry": { "source": "assistant", "operation": "inference" } } },
+    { "step_id": 3, "timestamp": "2026-10-14T03:14:18.986817+00:00", "source": "system", "message": "[Response interrupted by user]", "model_name": null, "extra": { "telemetry": { "source": "system", "operation": "unknown" } } }
+  ],
+  "final_metrics": { "total_prompt_tokens": 23435, "total_completion_tokens": 299, "total_cached_tokens": 640, "total_steps": 3 }
+}

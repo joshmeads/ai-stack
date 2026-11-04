@@ -4,7 +4,7 @@ This repository is the stack: the `jm` marketplace with one plugin (`jm-stack`),
 
 `plugins/pstack/` is Open Pstack renamed jm:stack. Read `UPSTREAM.md` before changing it, keep upstream behaviour unless a change is listed there as a divergence, and merge upstream updates explicitly. Keep one shared skill tree for Claude Code and Codex; adapt harness differences at the existing mapping boundaries instead of forking skills. The parent harness resolves model routing once. Children do not detect or reroute themselves.
 
-Claude Code runs a cached copy of the plugin, keyed by version, so an edit under `plugins/pstack/` reaches it only when the version changes. On every plugin edit, bump `version` in `plugins/pstack/.claude-plugin/plugin.json`, `plugins/pstack/.codex-plugin/plugin.json` and `.claude-plugin/marketplace.json`, and the `open-pstack version` row in `UPSTREAM.md`. The static test requires all four to match. Use a jm suffix such as `1.7.0+jm.1`, so the number stays tied to the Open Pstack release it came from. `ai-stack` only checks that the versions differ.
+Claude Code runs a cached copy of the plugin, keyed by version, so an edit under `plugins/pstack/` reaches it only when the version changes. On every plugin edit, bump `version` in `plugins/pstack/.claude-plugin/plugin.json`, `plugins/pstack/.codex-plugin/plugin.json` and `.claude-plugin/marketplace.json`, and the `open-pstack version` row in `UPSTREAM.md`. The static test requires all four to match. Use a jm suffix such as `1.16.0+jm.1`, so the number stays tied to the Open Pstack release it came from. `ai-stack` only checks that the versions differ.
 
 Before opening a pull request, run:
 

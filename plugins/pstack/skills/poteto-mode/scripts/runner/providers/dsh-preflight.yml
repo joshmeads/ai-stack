@@ -1,0 +1,9 @@
+# The dsh preflight turn, applied after the lane's patch: inference goes to a closed loopback port, so a stored
+# or exported key ends in TRANSPORT and a missing one in MISSING_CREDENTIAL. Retries are off, and the lane's
+# patch turns off the session title call and the session-log upload, so the turn ends in about a second and
+# sends nothing. Measured with dsh 0.2.0-rc.2.
+- id: llm-deepseek
+  config:
+    baseURL: http://127.0.0.1:1
+- id: llm-retry
+  disabled: true

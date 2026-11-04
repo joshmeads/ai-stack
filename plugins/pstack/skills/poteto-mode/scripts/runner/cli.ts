@@ -6,13 +6,16 @@ import { PARENTS, UsageError } from "./types.ts";
 
 const HELP = `Usage: pstack-runner --parent <${Object.keys(PARENTS).join("|")}> --provider <${REGISTRY.adapters.map((adapter) => adapter.id).join("|")}> \\
   --model <slug> --effort <level> --mode <read-only|isolated-write> \\
+  [--writer-sandbox <bounded|full-access>] \\
   --prompt <file> --cwd <dir> --output <file> --receipt <file> [--timeout <seconds>]
 
 Runs exactly one external model lane. Same-provider calls are rejected; use the
 parent harness's native subagent primitive for those lanes. Output and receipt
 paths must not already exist. There is no implicit timeout. Pass --timeout only
 when the user or task supplies a real deadline; it is one end-to-end launcher
-deadline shared by setup, preflight, and model execution.
+deadline shared by setup, preflight, and model execution. --writer-sandbox
+defaults to bounded; full-access applies only to an isolated-write lane on a
+provider that supports it, and only when the model sheet opts in.
 `;
 
 interface Io {
@@ -49,6 +52,7 @@ export function parseArgs(argv: readonly string[]): Lane | null {
         model: { type: "string" },
         effort: { type: "string" },
         mode: { type: "string" },
+        "writer-sandbox": { type: "string" },
         prompt: { type: "string" },
         cwd: { type: "string" },
         output: { type: "string" },
@@ -75,6 +79,7 @@ export function parseArgs(argv: readonly string[]): Lane | null {
     model: stringValue(parsed.values.model) ?? "",
     effort: stringValue(parsed.values.effort) ?? "",
     mode: stringValue(parsed.values.mode) ?? "",
+    writerSandbox: stringValue(parsed.values["writer-sandbox"]),
     promptPath: resolve(required("prompt", stringValue(parsed.values.prompt))),
     cwd: resolve(required("cwd", stringValue(parsed.values.cwd))),
     outputPath: resolve(required("output", stringValue(parsed.values.output))),

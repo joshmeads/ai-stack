@@ -1,0 +1,10 @@
+{
+  "schema_version": "ATIF-v1.7",
+  "session_id": "fixture-session",
+  "agent": { "name": "devin", "version": "3000.11.3", "model_name": "SWE-2 Medium", "tool_definitions": [] },
+  "steps": [
+    { "step_id": 1, "timestamp": "2026-10-14T03:15:04.000000+00:00", "source": "user", "message": "Create the file made.txt containing hello.", "extra": { "telemetry": { "source": "user", "operation": "unknown" } } },
+    { "step_id": 2, "timestamp": "2026-10-14T03:15:08.909512+00:00", "source": "agent", "model_name": "swe-2-medium", "message": "", "tool_calls": [{ "tool_call_id": "call_fixture", "function_name": "write", "arguments": { "file_path": "/tmp/worktree/made.txt", "content": "hello" } }], "observation": "{\"results\":[{\"source_call_id\":\"call_fixture\",\"content\":\"Tool execution was rejected by the user\"}]}", "metrics": { "prompt_tokens": 23455, "completion_tokens": 87 }, "extra": { "generation_model": "swe-2-medium", "telemetry": { "source": "assistant", "operation": "inference" } } }
+  ],
+  "final_metrics": { "total_prompt_tokens": 23455, "total_completion_tokens": 87, "total_cached_tokens": 0, "total_steps": 2 }
+}

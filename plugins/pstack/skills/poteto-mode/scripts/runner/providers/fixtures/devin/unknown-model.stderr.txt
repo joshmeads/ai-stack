@@ -1,0 +1,2 @@
+Error: Unknown model: 'swe-2-nonexistent'
+Available: adaptive, swe-2, swe-1.7-lightning, swe-1.7, swe-1.6, swe-1.6-fast

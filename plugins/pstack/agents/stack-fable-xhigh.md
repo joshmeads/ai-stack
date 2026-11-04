@@ -3,7 +3,6 @@ name: stack-fable-xhigh
 description: Native Claude lane for jm:stack roles configured as claude:fable@xhigh.
 model: fable
 effort: xhigh
-background: true
 disallowedTools: Agent, Task
 ---
 
