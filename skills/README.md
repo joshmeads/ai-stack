@@ -50,9 +50,51 @@ The `art-iteration` critic runs on the review model named in the routing block o
 | `feedback` | Record the user's feedback on the current project in `FEEDBACK.md`, newest first. |
 | `codex-session-export` | Find and export the Codex sessions that contributed to a project, with their metadata. |
 
+## Engineering
+
+The `engineering` group is vendored from [mattpocock/skills](https://github.com/mattpocock/skills) and [t3dotgg/tstack](https://github.com/t3dotgg/tstack). `stack.toml` records the source and commit of each skill, and `ai-stack skills update` pulls newer commits. Run `setup-matt-pocock-skills` once in a repo before the ticket skills.
+
+| Skill | Use |
+| --- | --- |
+| `grilling` | Grill the user relentlessly about a plan, decision or idea. |
+| `grill-me` | A relentless interview to sharpen a plan or design. |
+| `grill-with-docs` | The same interview, writing ADRs and the glossary as it goes. |
+| `domain-modeling` | Build and sharpen the domain model, `GLOSSARY.md` and ADRs. |
+| `to-spec` | Turn the current conversation into a spec on the issue tracker, with no interview. |
+| `to-tickets` | Break a plan or spec into tracer-bullet tickets with blocking edges. |
+| `triage` | Move issues and external PRs through triage roles and write agent-ready briefs. |
+| `wayfinder` | Plan a very large piece of work as a map of decision tickets and resolve them one at a time. |
+| `to-questionnaire` | Turn a decision you cannot fully answer into a questionnaire for someone else. |
+| `wait-what` | Say that the last message did not land and have it re-pitched. |
+| `wizard` | Generate an interactive bash wizard for steps only a human can do. |
+| `writing-for-agents` | Reference for writing skills, `AGENTS.md` and `CLAUDE.md`. |
+| `improve-codebase-architecture` | Find deepening opportunities, show them as an HTML report, then grill through one. |
+| `codebase-design` | Shared vocabulary for deep modules, seams and adapters. |
+| `implement-spec` | Implement a spec and its tickets on an integration branch with fresh subagents. |
+| `setup-matt-pocock-skills` | Set up the issue tracker, triage labels and domain doc layout for a repo. |
+| `retro` | Run a retrospective on a coding session. |
+| `research` | Investigate a question against primary sources and save the findings as Markdown. |
+| `compact-handoff` | Compact the conversation into a handoff document (upstream `handoff`; `handoff` above is a different skill). |
+| `modernize` | Bring an old PR up to date, or recommend closing it. |
+| `takeover` | Take over a PR, branch or thread and finish it while keeping credit. |
+| `leaving-pr-comments` | Mark every comment posted on the user's behalf with an attribution note. |
+
+## Writing
+
+The `writing` group is vendored from [mattpocock/skills](https://github.com/mattpocock/skills).
+
+| Skill | Use |
+| --- | --- |
+| `writing-fragments` | Explore: mine raw fragments for a piece, with no structure yet. |
+| `writing-shape` | Exploit: shape the raw material into an article, paragraph by paragraph. |
+| `writing-beats` | Exploit: assemble the raw material into a journey of beats. |
+| `tutor` | Teach a topic over several sessions in a workspace (upstream `teach`; `jm-stack:teach` is a different skill). |
+
+`takeover`, `implement-spec`, `wayfinder` and `tutor` are patched by scripts in `scripts/skill-patches/`, so their edits survive `skills update`.
+
 ## Credits
 
-Several tool skills are adapted from third-party skills. Each keeps its licence file, and the skill names and cross-references were changed for this stack. [NOTICE.md](../NOTICE.md) has the details.
+Several tool skills are adapted from third-party skills. The tool skills below keep their licence files, and the skill names and cross-references were changed for this stack. [NOTICE.md](../NOTICE.md) has the details, including the sources, commits and licences of the engineering and writing skills.
 
 | Skill | Copyright | Licence |
 | --- | --- | --- |
