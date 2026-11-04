@@ -40,7 +40,7 @@ On a machine that already has an install, run these in order:
 4. `ai-stack install --force`
 5. Restart Claude Code and Codex sessions.
 
-The first install needs `--force` because an unmanaged `handoff` skill in `~/.claude/skills` and `~/.agents/skills` already holds the name, and `--force` moves it to the backup.
+The first install needs `--force`, because it moves any hand-installed copy of a stack skill to the backup.
 
 ## Models
 
