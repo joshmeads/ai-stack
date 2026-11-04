@@ -1,6 +1,3 @@
-//! `ai-stack skills`: vendor skills from external git repos into the stack, recorded in
-//! `stack.toml`, and rebuild them when upstream moves.
-
 use std::fs;
 use std::io::Write;
 use std::os::unix::fs::PermissionsExt as _;
@@ -11,7 +8,6 @@ use anyhow::{Context as _, Result, anyhow, bail, ensure};
 use crate::exec::{self, Exec, is_commit, one_line, short, strings};
 use crate::stackfile::{self, Skill, SkillName, Step, StepKind};
 
-/// Staging and aside directories, on the same filesystem as every target.
 pub const STAGE: &str = ".ai-stack/stage";
 
 pub struct Skills<'a> {
@@ -20,8 +16,6 @@ pub struct Skills<'a> {
     pub prompt_runner: &'a [String],
 }
 
-/// A skill added to a group is a standalone skill, so it always goes into `skills/`. A
-/// `[[skill]]` with another `dest` is written by hand.
 pub struct Add {
     pub source: String,
     pub path: String,
@@ -29,13 +23,11 @@ pub struct Add {
     pub rename: Option<SkillName>,
     pub process: Vec<Step>,
     pub name: Option<SkillName>,
-    /// The existing group the new skill joins.
     pub group: String,
 }
 
 pub struct Update<'n> {
     pub names: &'n [String],
-    /// Retarget the named entries to this branch or tag.
     pub git_ref: Option<String>,
     pub reprocess: bool,
     pub force: bool,
@@ -58,7 +50,6 @@ impl Skills<'_> {
         let mut file = stackfile::load(self.stack)?;
         let group_name = stackfile::GroupName::try_from(add.group.as_str()).context("--group")?;
         ensure!(file.groups.contains_key(&group_name), "no group {:?} in {}; add a [groups.{}] table first", add.group, self.stack.join(stackfile::FILE).display(), add.group);
-        // Every argument is checked, with a placeholder commit, before the network is used.
         let mut skill = Skill { name, source, path: add.path, git_ref: add.git_ref, commit: "0".repeat(40), dest: stackfile::DEFAULT_DEST.into(), rename: add.rename, process: add.process };
         let member = skill.installed_name().clone();
         let group = file.groups.get_mut(&group_name).expect("checked above");
@@ -73,7 +64,6 @@ impl Skills<'_> {
 
         skill.commit = self.resolve(&skill.source, &skill.git_ref)?;
         self.install(&skill)?;
-        // The target did not exist before, so a failed edit takes the new skill out again.
         if let Err(err) = stackfile::edit(self.stack, &[stackfile::Op::AddMember { group: &group_name, skill: &member }, stackfile::Op::PushSkill(&skill)]) {
             return Err(match fs::remove_dir_all(&target) {
                 Ok(()) => err.context(format!("{} was removed again", target.display())),
@@ -84,7 +74,6 @@ impl Skills<'_> {
         Ok(())
     }
 
-    /// Exit 0 when every entry is current, 1 otherwise.
     pub fn status(&self, out: &mut dyn Write) -> Result<i32> {
         self.clear_stage(out)?;
         let file = stackfile::load(self.stack)?;
@@ -115,8 +104,6 @@ impl Skills<'_> {
         Ok(if current { 0 } else { 1 })
     }
 
-    /// Rebuilds each selected entry whose upstream moved (all with `reprocess`). A failure is
-    /// reported and the rest continue. Exit 1 when any failed.
     pub fn update(&self, update: Update, out: &mut dyn Write) -> Result<i32> {
         self.clear_stage(out)?;
         let file = stackfile::load(self.stack)?;
@@ -196,7 +183,6 @@ impl Skills<'_> {
         Ok((next, message))
     }
 
-    /// The commit `git_ref` names in `source`. A 40-hex ref is already a commit.
     fn resolve(&self, source: &str, git_ref: &str) -> Result<String> {
         exec::check_ref(git_ref)?;
         ensure!(!source.is_empty() && !source.starts_with('-'), "invalid source {source:?}");
@@ -212,8 +198,6 @@ impl Skills<'_> {
             .ok_or_else(|| anyhow!("{source} has no ref {git_ref:?}"))
     }
 
-    /// Fetches `skill.commit`, stages the skill beside its target, applies `move` and the process
-    /// steps, then swaps it in. Any failure leaves the target as it was.
     fn install(&self, skill: &Skill) -> Result<()> {
         let checkout = tempfile::tempdir().context("creating a temp checkout")?;
         let repo = checkout.path();
@@ -262,7 +246,6 @@ impl Skills<'_> {
             let _ = stage.keep();
             return Ok(());
         }
-        // Renaming a directory onto an empty one replaces it, so the old tree gets a reserved name.
         let old = tempfile::Builder::new().prefix(&format!("{installed}.old.")).tempdir_in(&stage_root)?;
         fs::rename(&target, old.path()).with_context(|| format!("cannot move {} aside", target.display()))?;
         if let Err(err) = fs::rename(stage.path(), &target) {
@@ -280,7 +263,6 @@ impl Skills<'_> {
         Ok(())
     }
 
-    /// Removes what an interrupted run left in the staging area.
     fn clear_stage(&self, out: &mut dyn Write) -> Result<()> {
         let stage_root = self.stack.join(STAGE);
         let Ok(entries) = fs::read_dir(&stage_root) else { return Ok(()) };
@@ -309,7 +291,6 @@ impl Skills<'_> {
     }
 }
 
-/// The first symlink under `dir`, skipping `.git`.
 fn find_symlink(dir: &Path) -> Result<Option<PathBuf>> {
     for entry in fs::read_dir(dir)? {
         let entry = entry?;
@@ -329,7 +310,6 @@ fn find_symlink(dir: &Path) -> Result<Option<PathBuf>> {
     Ok(None)
 }
 
-/// Copies regular files and directories, never `.git`. Symlinks were refused before this runs.
 fn copy_contents(from: &Path, to: &Path) -> Result<()> {
     for entry in fs::read_dir(from)? {
         let entry = entry?;
@@ -350,7 +330,6 @@ fn copy_contents(from: &Path, to: &Path) -> Result<()> {
     Ok(())
 }
 
-/// Rewrites the `name:` line of the leading `---` frontmatter block.
 fn rename_frontmatter(path: &Path, name: &str) -> Result<()> {
     let meta = fs::symlink_metadata(path).with_context(|| format!("move needs {}", path.display()))?;
     ensure!(meta.is_file(), "{} is not a regular file", path.display());
@@ -581,7 +560,6 @@ mod tests {
         assert!(!fx.stack.join("skills/not-a-skill").exists());
         assert!(stackfile::load(&fx.stack).is_ok());
 
-        // A process step that removes SKILL.md fails the update and keeps the installed skill.
         fx.add();
         let installed = fx.installed();
         fs::write(fx.stack.join("scripts/strip.sh"), "rm \"$1/SKILL.md\"\n").unwrap();
@@ -694,7 +672,6 @@ mod tests {
             "\n[[skill]]\nname = \"grill-with-docs\"\nsource = \"file://SOURCE\"\npath = \"skills/grill-with-docs\"\nref = \"main\"\ncommit = \"COMMIT\"\nprocess = [{ type = \"script\", input = \"scripts/edit.sh\" }]\n",
         ).replace("SOURCE", &fx.upstream.display().to_string()).replace("COMMIT", &git(&fx.upstream, &["rev-parse", "HEAD"])));
 
-        // A hand edit the operations cannot apply to: nothing is recorded and the skill is gone.
         fs::remove_dir_all(fx.stack.join("skills/grill-with-docs")).unwrap();
         fs::write(&toml, "[groups.tools]\nglobal = true\nskills = []\n").unwrap();
         let err = format!("{:#}", add(&format!("printf '[groups.tools]\\nskills = \"x\"\\n' > '{}'\n", toml.display())).unwrap_err());

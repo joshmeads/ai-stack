@@ -30,7 +30,6 @@ use crate::models::{ModelReport, Status};
 use crate::plan::Plan;
 use crate::plugins::SystemRunner;
 
-/// `update` pulled CLI changes and stopped before installing. Fleet preserves this signal.
 const REBUILD_NEEDED: i32 = 3;
 
 #[derive(Parser)]
@@ -252,16 +251,13 @@ fn skill_name(text: &str) -> Result<stackfile::SkillName> {
     stackfile::SkillName::try_from(text)
 }
 
-/// Paths and overrides shared by every command.
 struct Context {
     home: PathBuf,
     config_path: PathBuf,
     stack_override: Option<PathBuf>,
-    /// The explicit `--config` / `--home` flags, for a local fleet machine.
     explicit_flags: Vec<String>,
 }
 
-/// Model catalogs fetched once per run. Errors are kept as text for the reports.
 struct Catalogs {
     openai: Result<Vec<String>, String>,
     anthropic: Result<Vec<String>, String>,
@@ -319,7 +315,6 @@ fn load_config(ctx: &Context) -> Result<Config> {
     if let Some(stack) = &ctx.stack_override {
         cfg.stack.configured = stack.to_string_lossy().into_owned();
         let configured = std::mem::replace(&mut cfg.stack.path, paths::absolute(&cfg.stack.configured, &ctx.home)?);
-        // Links and hooks into the configured checkout are still ours to remove.
         cfg.stack.legacy_paths.push(configured);
     }
     Ok(cfg)
@@ -356,7 +351,6 @@ fn init_config_at(path: &Path, force: bool, runner: &dyn plugins::Runner) -> Res
     Ok(detected)
 }
 
-/// Writes `text` to `path`, refusing to overwrite unless `force`.
 fn init_at(path: &Path, text: &str, force: bool) -> Result<()> {
     if path.exists() && !force {
         bail!("{} already exists; pass --force to overwrite it", path.display());
@@ -392,7 +386,6 @@ fn cmd_install(ctx: &Context, yes: bool, opts: Options, plain: bool) -> Result<i
     install_flow(ctx, &cfg, opts, yes, plain, &[])
 }
 
-/// Builds the plan, then reviews, confirms and applies it. Returns the exit code.
 fn install_flow(
     ctx: &Context,
     cfg: &Config,
@@ -424,7 +417,6 @@ fn install_flow(
         }
         confirm("Apply these changes? [y/N] ")?.then_some(plan)
     } else {
-        // The review screen can toggle --clean, which re-plans.
         let mut replan = |clean| install::plan(cfg, Options { clean, ..opts }, &runner);
         tui::review(plan, opts.clean, models, &ctx.home, &mut replan)?
     };
@@ -481,8 +473,6 @@ fn cmd_update(ctx: &Context, yes: bool, plain: bool, bump: bool, branch: Option<
     install_flow(ctx, &cfg, Options::default(), yes, plain, &reports)
 }
 
-/// Fast-forwards the stack checkout from its configured remote and branch, refusing when the
-/// checkout is on another branch. Returns whether the pull changed any file under `cli/`.
 fn git_pull(exec: &dyn exec::Exec, stack: &Stack) -> Result<bool> {
     let current = exec.run("git", &git_args(stack, &["symbolic-ref", "-q", "--short", "HEAD"]), None).map_err(|err| anyhow!("cannot run git: {err}"))?;
     let current = current.ok.then(|| current.stdout.trim().to_string()).filter(|branch| !branch.is_empty());
@@ -633,8 +623,6 @@ fn status_text(status: &Status) -> String {
     }
 }
 
-/// Rewrites every model with a newer version in the config file, in one write.
-/// Returns how many models were bumped.
 fn bump_models(config_path: &Path, reports: &[ModelReport]) -> Result<usize> {
     let newer: Vec<(&ModelReport, &str)> = reports
         .iter()

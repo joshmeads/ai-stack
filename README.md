@@ -28,6 +28,8 @@ ai-stack install
 
 It also removes what older ai-stack installs left behind. Every file it changes is backed up under `~/.local/state/ai-stack/backups/`. `ai-stack update` pulls this checkout and installs again. `ai-stack install --clean` (or `c` in the review screen) also moves every skill outside the `[clean] keep_skills` list into the backup and uninstalls every plugin outside `keep_plugins`, so only this install and the keep lists remain; preview it with `ai-stack diff --clean`. See [cli/README.md](cli/README.md) for the details.
 
+Claude Code leaves auto-update off for third-party marketplaces, so `jm-stack` stays on the installed version until `ai-stack install` or `ai-stack update` refreshes it. The refresh happens when the version in the checkout changes.
+
 ### Updating another machine
 
 On a machine that already has an install, run these in order:
@@ -42,7 +44,7 @@ The first install needs `--force` because an unmanaged `handoff` skill in `~/.cl
 
 ## Models
 
-Each harness stays on its own provider's models, except for major reviews.
+Each harness stays on its own provider's models, except for major reviews and the arena judge.
 
 | Work | Codex | Claude Code |
 | --- | --- | --- |
@@ -50,12 +52,15 @@ Each harness stays on its own provider's models, except for major reviews.
 | Implementation, explanation, swarm workers | Sol 6.1, medium | Opus 5.5, medium |
 | Hardest tasks | Sol 6.1, xhigh | Opus 5.5, high |
 | Exploration (`how`) | Luna, xhigh | Haiku 5.5, xhigh |
-| Judgment, judging, review | Sol 6.1, xhigh | Opus 5.5, xhigh |
+| Judgment, review | Sol 6.1, xhigh | Opus 5.5, xhigh |
+| Arena judge | Opus 5.5, xhigh | Sol 6.1, xhigh |
 | Major review (`interrogate`) | Sol 6.1 and Opus 5.5, xhigh | Opus 5.5 and Sol 6.1, xhigh |
 
-A major review happens after a design is settled and before a pull request. It pairs both providers, so in each harness one reviewer runs through the other provider's CLI, which may ask for your approval. Haiku is kept under 100k tokens of context, where its price is lowest; you set its compaction in Claude Code.
+A major review happens after a design is settled and before a pull request. It pairs both providers, so in each harness one reviewer runs through the other provider's CLI, which may ask for your approval. Arena's judge always comes from the other provider, and an arena skips its judge when that CLI cannot run. Haiku is kept under 100k tokens of context, where its price is lowest; you set its compaction in Claude Code.
 
 The choices come from Artificial Analysis's intelligence, cost, and time-per-task data, picking points on each provider's Pareto line. Change them in `~/.config/ai-stack/config.toml` and run `ai-stack install`.
+
+Fable and Sonnet stay selectable in those sheets, unused by default. The plugin also keeps read-only lanes on OpenCode, Amp, Cursor CLI, Devin, Antigravity and DeepSeek Harness. `setup-stack` and ai-stack sheets can select them for roles that do not write files, and no default uses them. The [model catalog](plugins/pstack/skills/poteto-mode/references/model-catalog.md) lists every choice.
 
 ## Upstream
 

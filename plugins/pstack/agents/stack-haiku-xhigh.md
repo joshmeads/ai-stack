@@ -3,7 +3,6 @@ name: stack-haiku-xhigh
 description: Native Claude lane for jm:stack roles configured as claude:haiku@xhigh.
 model: haiku
 effort: xhigh
-background: true
 disallowedTools: Agent, Task
 ---
 

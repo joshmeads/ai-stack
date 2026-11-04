@@ -1,7 +1,3 @@
-//! `<home>/.local/state/ai-stack/links.json`: every skill link ai-stack created, as link path
-//! (its folder resolved, its own name kept) to target text. A link the ledger records with the
-//! same target is ai-stack's even after the checkout it points into is gone.
-
 use std::collections::BTreeMap;
 use std::fs;
 use std::path::{Path, PathBuf};
@@ -21,13 +17,10 @@ struct Ledger {
     links: BTreeMap<String, String>,
 }
 
-/// The recorded links. A missing, unreadable or malformed ledger records nothing.
 pub fn load(path: &Path) -> BTreeMap<String, String> {
     fs::read_to_string(path).ok().and_then(|text| serde_json::from_str::<Ledger>(&text).ok()).map(|ledger| ledger.links).unwrap_or_default()
 }
 
-/// Applies `changes` (a target to record, or `None` to drop the path) to the ledger as it is on
-/// disk now, keeping every other entry, and writes it atomically.
 pub fn update(path: &Path, changes: &[(String, Option<String>)]) -> Result<()> {
     if changes.is_empty() {
         return Ok(());

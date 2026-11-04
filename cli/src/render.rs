@@ -1,17 +1,11 @@
-//! Renders the per-harness model sheet and the `ai-stack:routing` block.
-
 use std::path::Path;
 
 use crate::config::{Config, Harness, Route};
 
-/// First line of the managed model sheet. setup-stack treats a sheet whose first line starts
-/// with `<!-- Managed by ai-stack` as installer-owned and leaves it alone.
 pub const MANAGED_MD: &str = "<!-- Managed by ai-stack. Edit ~/.config/ai-stack/config.toml, then run `ai-stack install`. -->";
-/// First line of the Codex role files older ai-stack builds wrote; used only to remove them.
 pub const MANAGED_TOML: &str = "# Managed by ai-stack. Edit ~/.config/ai-stack/config.toml, then run `ai-stack install`.";
 const SHEET_PREAMBLE: &str = "Provider-qualified per-role choices. Read the installed jm:stack provider-dispatch reference before dispatching a configured role. `inherit-parent` and `auto` use the parent model natively and still count as one panel lane.";
 
-/// `<home>/pstack-models.md` for `harness`.
 pub fn sheet(cfg: &Config, harness: Harness) -> String {
     let mut text = format!("{MANAGED_MD}\n# jm:stack model sheet ({})\n\n{SHEET_PREAMBLE}\n\n", harness.name());
     for (label, lanes) in &cfg.sheets[&harness] {
@@ -20,7 +14,6 @@ pub fn sheet(cfg: &Config, harness: Harness) -> String {
     text
 }
 
-/// Body of the `ai-stack:routing` block for `harness`. `sheet_path` is the installed sheet.
 pub fn routing(cfg: &Config, harness: Harness, sheet_path: &Path) -> String {
     let lead = route_text(&cfg.leads[&harness]);
     let review = route_text(&cfg.review[&harness]);
@@ -65,7 +58,6 @@ fn route_text(route: &Route) -> String {
     }
 }
 
-/// `100000` as `100k`; other values as plain token counts.
 fn tokens_text(tokens: u64) -> String {
     if tokens % 1000 == 0 { format!("{}k", tokens / 1000) } else { tokens.to_string() }
 }

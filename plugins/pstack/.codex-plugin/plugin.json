@@ -1,6 +1,6 @@
 {
   "name": "jm-stack",
-  "version": "1.7.0",
+  "version": "1.16.0+jm.2",
   "description": "jm:stack: Lauren Tan's pstack for Claude Code and Codex with Josh Meads's model routing. Based on Open Pstack (ericlitman/open-pstack), which began from michael-denyer/pstack-claude and ports cursor/plugins/pstack. Skills are shared; tool names resolve via skills/poteto-mode/references/codex-tools.md.",
   "author": {
     "name": "Lauren Tan"

@@ -1,10 +1,3 @@
-// `cdt next build|start`: the project's own next with source maps forced on
-// and output redirected to <distDir>/cdt-profile, through a preloaded hook
-// (next-sourcemaps-hook.cjs) that wraps Next's loadConfig in memory, skips
-// Next's writes to the project's tsconfig and next-env.d.ts, and refuses any
-// Node fs change to the user's own distDir. Fails closed: if the redirect
-// cannot be confirmed, cdt exits non-zero.
-
 import { spawn, spawnSync } from "node:child_process";
 import { createHash } from "node:crypto";
 import { existsSync, mkdtempSync, readdirSync, readFileSync, realpathSync, rmSync, statSync, writeFileSync } from "node:fs";
@@ -30,8 +23,6 @@ function git(cwd, args) {
   return r.status === 0 ? { status: 0, out } : { status: r.status, out, error: r.stderr.toString().trim().split("\n")[0] || `git exited ${r.status}` };
 }
 
-// path -> "XY" status for what git reports under dir, outside skip (paths
-// only), or { error } when git cannot say.
 function gitStatus(dir, skip) {
   const top = git(dir, ["rev-parse", "--show-toplevel"]);
   if (top.error) return top;
@@ -42,16 +33,13 @@ function gitStatus(dir, skip) {
   for (let i = 0; i < parts.length; i++) {
     const e = parts[i];
     if (!e) continue;
-    if (e[0] === "R" || e[0] === "C") i++; // the rename's source follows
+    if (e[0] === "R" || e[0] === "C") i++;
     const f = join(top.out.trim(), e.slice(3));
     if (!inside(f, skip)) entries.set(f, e.slice(0, 2));
   }
   return { entries };
 }
 
-// The source the profiling build was made from: HEAD plus every file git
-// sees as changed (staged, unstaged, untracked or deleted) with a hash of
-// its content. Null outside git.
 function sourceState(dir, userDist) {
   const st = gitStatus(dir, userDist);
   if (st.error) return null;
@@ -60,13 +48,12 @@ function sourceState(dir, userDist) {
     head: head.error ? null : head.out.trim(),
     files: Object.fromEntries([...st.entries].map(([f, code]) => {
       let h;
-      try { h = sha(f) ?? "absent"; } catch { h = "unreadable"; } // a submodule directory, say
+      try { h = sha(f) ?? "absent"; } catch { h = "unreadable"; }
       return [rel(dir, f), `${code} ${h}`];
     })),
   };
 }
 
-// Why the profiling build may not match the source, or null.
 function staleness(dir, out, userDist) {
   let built;
   try { built = JSON.parse(readFileSync(join(out, BUILD_INFO), "utf8")); } catch { return "it has no build record from cdt"; }
@@ -78,9 +65,6 @@ function staleness(dir, out, userDist) {
   return `${changed.slice(0, 3).join(", ")}${changed.length > 3 ? ` (+${changed.length - 3} more)` : ""} changed since it was built`;
 }
 
-// The hook patches Next by text and matches its modules by real path;
-// refuse before running a Next whose modules do not look like the ones it
-// knows.
 function resolveNext(dir, sub) {
   const req = createRequire(join(dir, "package.json"));
   const at = (m) => realpathSync(req.resolve(`next/dist/${m}`));
@@ -89,8 +73,6 @@ function resolveNext(dir, sub) {
     next = {
       bin: req.resolve("next/dist/bin/next"),
       configJs: at("server/config.js"),
-      // Modules `next build|start` require before doing anything; by the
-      // end of their bodies Next's config loader is loaded.
       entries: [sub === "build" ? "build/index.js" : "server/lib/start-server.js"].map(at),
       installer: at("lib/helpers/install.js"),
     };
@@ -108,8 +90,6 @@ function resolveNext(dir, sub) {
   return next;
 }
 
-// The settings cdt must know before Next runs, read with Next's own loader
-// in a separate process (the hook then holds Next to the same values).
 function readConfig(dir, next, sub) {
   const phase = sub === "build" ? "phase-production-build" : "phase-production-server";
   const script = `require(${JSON.stringify(next.configJs)}).default(${JSON.stringify(phase)}, ${JSON.stringify(dir)}, { silent: true }).then((c) => {
@@ -125,8 +105,6 @@ function readConfig(dir, next, sub) {
   return { userDist: join(dir, c.distDir), distDir: c.distDir, tsconfig: join(dir, c.tsconfigPath) };
 }
 
-// Runs next with the hook preloaded. Signals to cdt are passed on, so the
-// child exits before cdt does.
 function runNext(sub, dir, next, cfg, args) {
   const report = mkdtempSync(join(tmpdir(), "cdt-next-"));
   const child = spawn(process.execPath, [next.bin, sub, ...args], {
@@ -158,9 +136,7 @@ function runNext(sub, dir, next, cfg, args) {
     child,
     exit,
     get exited() { return exited; },
-    // What the hook reported at Next's first loadConfig, or null.
     confirmed: () => { try { return JSON.parse(readFileSync(join(report, "confirm.json"), "utf8")); } catch { return null; } },
-    // The project-file writes the hook skipped: file -> what Next wanted.
     skipped: () => {
       const lines = readOrNull(join(report, "skipped.jsonl"))?.toString().split("\n").filter(Boolean) ?? [];
       return new Map(lines.map((l) => JSON.parse(l)).map(({ file, wanted }) => [file, wanted]));
@@ -169,7 +145,6 @@ function runNext(sub, dir, next, cfg, args) {
   };
 }
 
-// One line per file: what Next's skipped write would have changed.
 function printSkipped(dir, skipped) {
   for (const [file, wanted] of skipped) {
     const now = readOrNull(file)?.toString();
@@ -178,7 +153,6 @@ function printSkipped(dir, skipped) {
       console.log(`cdt: skipped Next's write to ${rel(dir, file)}: it would have created it (the profiling build does not need it)`);
       continue;
     }
-    // Lines that carry content, ignoring layout (indent, trailing commas, brackets).
     const lines = (s) => new Set(s.split(/\r?\n/).map((l) => l.trim().replace(/,$/, "")).filter((l) => !/^[[\]{}(),]*$/.test(l)));
     const [a, b] = [lines(now), lines(wanted)];
     const added = [...b].filter((l) => !a.has(l)), removed = [...a].filter((l) => !b.has(l));
@@ -188,8 +162,6 @@ function printSkipped(dir, skipped) {
   }
 }
 
-// Files Next would point at the profiling build, left by older cdt
-// versions that let Next write them.
 function refuseLeftovers(dir, cfg) {
   for (const f of [cfg.tsconfig, join(dir, "next-env.d.ts")]) {
     if (readOrNull(f)?.includes(MARK)) {
@@ -198,7 +170,6 @@ function refuseLeftovers(dir, cfg) {
   }
 }
 
-// Read-only: lists what git sees changed since the build started.
 function gitReport(dir, before, userDist) {
   if (before.error) return void console.log(`cdt: git status unavailable (${before.error.replace(/^fatal: /, "")}), so cdt cannot list other files changed during the build`);
   const after = gitStatus(dir, userDist);
@@ -258,9 +229,6 @@ async function start(opts, dir, args) {
   const cfg = readConfig(dir, next, "start");
   const userBuildId = sha(join(cfg.userDist, "BUILD_ID"));
   const run = runNext("start", dir, next, cfg, args.some((a) => a.startsWith("--inspect")) ? args : ["--inspect", ...args]);
-  // The server loads its config at startup. No confirmation means it is
-  // not serving the profiling build, so stop it rather than measure the
-  // wrong thing.
   for (let i = 0; i < 300 && !run.exited && !run.confirmed(); i++) await sleep(100);
   const info = run.confirmed();
   const problems = [];
@@ -285,9 +253,6 @@ async function start(opts, dir, args) {
 export async function nextWithSourceMaps(opts, pos) {
   const [sub, ...args] = pos;
   if (!["build", "start"].includes(sub)) throw new Error("usage: cdt next build|start [--dir app] [-- next args]");
-  // Next takes its project folder as a positional argument; cdt guards the
-  // one --dir names, so the two must not differ. (The hook also refuses a
-  // mismatch before Next writes anything.)
   const dirArg = args.find((a) => !a.startsWith("-") && existsSync(a) && statSync(a).isDirectory());
   if (dirArg) throw new Error(`pass the app folder as --dir ${dirArg}, not after --`);
   const dir = realpathSync(resolve(opts.dir ?? "."));

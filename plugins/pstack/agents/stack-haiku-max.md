@@ -3,7 +3,6 @@ name: stack-haiku-max
 description: Native Claude lane for jm:stack roles configured as claude:haiku@max.
 model: haiku
 effort: max
-background: true
 disallowedTools: Agent, Task
 ---
 

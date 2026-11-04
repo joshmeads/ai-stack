@@ -1,4 +1,4 @@
-import { adapter, type ParseResult } from "../registry/contract.ts";
+import { type Access, adapter, type ParseResult } from "../registry/contract.ts";
 import type { NormalizedUsage } from "../types.ts";
 import {
   effortArgs,
@@ -52,9 +52,15 @@ function parse(stdout: string): ParseResult {
   };
 }
 
+function sandbox(access: Access): string {
+  if (access.mode === "read-only") return "read-only";
+  return access.sandbox === "full-access" ? "danger-full-access" : "workspace-write";
+}
+
 export const codex = adapter({
   id: "codex",
   executable: "codex",
+  effortIn: "flag",
   preflight: {
     argv: () => ["login", "status"],
     retryAfterUnauthenticatedMs: null,
@@ -64,6 +70,8 @@ export const codex = adapter({
   },
   launch: {
     prompt: "stdin",
+    sidecar: null,
+    supports: ["read-only", "isolated-write", "isolated-write-full-access"],
     needsSharedGitDir: () => false,
     argv: (lane) => [
       "exec",
@@ -71,7 +79,7 @@ export const codex = adapter({
       lane.model,
       ...effortArgs(lane, ["--config", `model_reasoning_effort=${JSON.stringify(lane.effort)}`]),
       "--sandbox",
-      lane.access.mode === "read-only" ? "read-only" : "workspace-write",
+      sandbox(lane.access),
       "--cd",
       lane.cwd,
       "--skip-git-repo-check",
@@ -89,7 +97,12 @@ export const codex = adapter({
     ],
   },
   parse: (run) => parse(run.stdout),
-  // Codex never reports the served model, so the pinned argv is the evidence.
   proof: { report: "absent", matches: exactOrSuffixed },
   environment: () => ({ kind: "inherit", dropPrefixes: [] }),
+  docs: {
+    name: "Codex CLI",
+    hostPrerequisites: [],
+    statePaths: ["the Codex home (`CODEX_HOME`, else `~/.codex`)"],
+    notes: [],
+  },
 });

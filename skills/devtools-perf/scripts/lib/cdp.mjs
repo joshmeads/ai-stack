@@ -1,17 +1,9 @@
-// Minimal Chrome DevTools Protocol client over the global WebSocket, plus
-// discovery of the browser page and Node inspectors we measure.
-
 import { ActionTimeout } from "./util.mjs";
 
-// Bounded waits on protocol replies and on actions. The entry point sets
-// them from --cdp-timeout and --action-timeout; 0 waits forever.
 export const limits = { cdpMs: 60_000, actionMs: 300_000 };
 
-// The connection or session to a target is gone (process exited, tab
-// closed). A measurement cannot continue past this.
 export class TargetLost extends Error {}
 
-// A command got no reply within its limit.
 export class NoReply extends Error {}
 
 export class Cdp {
@@ -67,8 +59,6 @@ export class Cdp {
     for (const w of [...this.lossWatchers]) if (w.sessionId === sessionId) w.fn(reason);
   }
 
-  // Calls fn(reason) once the connection, or the session if given, is
-  // lost (at once if it already is). Returns a function that unsubscribes.
   watchLoss(sessionId, fn) {
     const lost = this.closed ?? (sessionId && this.lostSessions.get(sessionId));
     if (lost) { queueMicrotask(() => fn(lost)); return () => {}; }
@@ -86,7 +76,6 @@ export class Cdp {
     });
   }
 
-  // timeoutMs: per-command reply limit (defaults to --cdp-timeout; 0 = none).
   send(method, params = {}, { sessionId, timeoutMs = limits.cdpMs } = {}) {
     const lost = this.closed ?? (sessionId && this.lostSessions.get(sessionId));
     if (lost) return Promise.reject(new TargetLost(`${method}: ${lost}`));
@@ -113,8 +102,6 @@ export class Cdp {
   close() { this.ws.close(); }
 }
 
-// A Target is one JS heap we measure: the browser page (flat session on the
-// browser socket, so SystemInfo works too) or a Node inspector.
 export function makeTarget(kind, name, cdp, sessionId) {
   return {
     kind,
@@ -123,10 +110,6 @@ export function makeTarget(kind, name, cdp, sessionId) {
     sessionId,
     send: (method, params, o) => cdp.send(method, params, { ...o, sessionId }),
     on: (method, fn) => cdp.on((msg) => { if (msg.method === method && msg.sessionId === sessionId) fn(msg.params); }),
-    // Resolves on the next matching event. Rejects with TargetLost when the
-    // target goes, and with ActionTimeout after timeoutMs (0 = never; flag
-    // names the limit). cancel() drops the listeners and timer without
-    // settling.
     waitFor(method, timeoutMs = 0, pred = () => true, flag = "--action-timeout") {
       let off, unwatch, timer;
       const promise = new Promise((res, rej) => {

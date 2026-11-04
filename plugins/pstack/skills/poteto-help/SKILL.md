@@ -26,6 +26,7 @@ Check the state that changes the answer, and mention it only when it does:
 
 - No `pstack-models.md` in the active harness's config home means `/setup-stack` hasn't run for this user, so every role uses its default model. Resolve the config home per [`codex-tools.md`](../poteto-mode/references/codex-tools.md#harness-config-homes).
 - No `verify-*` skill or other app harness in the project means agents have no scripted way to drive the app. Mention `/create-verification-skill` when the question is about proving a change works.
+- No formal verification skill in the project means no property is checked past what tests reach. Mention `/create-formal-verification-skill` when the question is about a race, an invariant, or another case tests rarely hit. When one exists and the code it covers changed after the commit it records as last in sync, mention `/maintain-formal-verification-skill` if the question touches that code.
 
 When the model rule is missing and it matters, ask whether the user wants to pick a model for each role and a requested effort now. It matters when the user is new, the question is about setup or cost, or the answer depends on which models run. Ask at most once per chat. If the need is also unclear, ask both questions together. Offer two choices:
 
@@ -34,8 +35,8 @@ When the model rule is missing and it matters, ask whether the user wants to pic
 
 ## Get set up
 
-1. Install. In Claude Code, run `/plugin marketplace add joshmeads/ai-stack`, then `/plugin install jm-stack@jm`, then `/reload-plugins`. In Codex, run `codex plugin marketplace add joshmeads/ai-stack --ref main`, then `codex plugin add jm-stack@jm`, and turn on `multi_agent` per [`codex-tools.md`](../poteto-mode/references/codex-tools.md).
-2. Run [`/setup-stack`](../setup-stack/SKILL.md). It maps a model to each role, asks one requested effort for each model family it assigns, probes those models, and writes a model sheet. The sheet applies to new sessions.
+1. Install. In Claude Code, run `/plugin marketplace add joshmeads/ai-stack`, then `/plugin install jm-stack@jm`, then `/reload-plugins`. In Codex, run `codex plugin marketplace add joshmeads/ai-stack --ref main`, then `codex plugin add jm-stack@jm`, and turn on `multi_agent` per [`codex-tools.md`](../poteto-mode/references/codex-tools.md). Claude Code leaves auto-update off for third-party marketplaces, so update by hand with `claude plugin update jm-stack@jm`, or with `ai-stack update` when ai-stack manages the install.
+2. Run [`/setup-stack`](../setup-stack/SKILL.md). It maps a model to each role, asks one requested effort for each model family it assigns, probes those models, and writes a model sheet. A rerun that keeps a valid sheet and names no change asks none of these questions: it keeps the sheet's roles and efforts, probes them, and writes when every probe passes. The sheet applies to new sessions. Then it offers once each to generate a verification skill and a formal verification skill for the project, unless the project already has one. On a rerun that keeps the sheet, it mentions each offer in one line instead of asking.
 3. Start a real task with `/poteto-mode`, a goal, and a check that can pass or fail.
 
 In Claude Code, a typed skill carries the plugin prefix, as in `/jm-stack:poteto-mode`. In Codex, ask for a skill by name, as in "use jm-stack:poteto-mode". The [README](https://github.com/joshmeads/ai-stack#readme) and [guide page 1](https://github.com/cursor/plugins/blob/main/pstack/docs/guide/01-setup.md) have the details. Offer to word their first prompt with them, per [`references/prompting.md`](references/prompting.md).
@@ -54,7 +55,7 @@ Whether `/poteto-mode` stays on depends on the harness:
 - In Codex, ask for `jm-stack:poteto-mode` by name at the start of each task.
 - In both, start each new task with `/poteto-mode` when it matters.
 
-Mid-session, "new task" makes the mode match a fresh playbook. In Claude Code, `/poteto-mode` already uses `poteto-agent` for the subagents its playbook steps spawn. To get the same style from a subagent of your own, spawn it with `subagent_type: "poteto-agent"`. Codex has no `poteto-agent` type, so dispatch a `spawn_agent` whose instructions say to read the `poteto-mode` skill in full first.
+Mid-session, "new task" makes the mode match a fresh playbook. In Claude Code, `/poteto-mode` already uses `jm-stack:poteto-agent` for the subagents its playbook steps spawn. To get the same style from a subagent of your own, spawn it with `subagent_type: "jm-stack:poteto-agent"`. Codex has no `poteto-agent` type, so dispatch a `spawn_agent` whose instructions say to read the `poteto-mode` skill in full first.
 
 ## Pick a skill
 
@@ -63,11 +64,13 @@ The default answer is `/poteto-mode`, which runs most of the others when its ste
 | The user wants to | Skill |
 |---|---|
 | Do any non-trivial task with rigor | [`/poteto-mode`](../poteto-mode/SKILL.md) |
+| Check that the agent understood their goal and the problem before it starts | [`/in-your-own-words`](../in-your-own-words/SKILL.md) |
+| Get a prompt rewritten deeper, not bigger, before sending it: what a top professional would add, their raw material and methods, and an outside check. It returns the prompt and doesn't do the task | [`/sharpen`](../sharpen/SKILL.md) |
 | Know how code works now, or where new code should live | [`/how`](../how/SKILL.md) |
 | Know why code is shaped this way, or where a number came from | [`/why`](../why/SKILL.md) |
 | Understand a change or subsystem, explained plainly | [`/teach`](../teach/SKILL.md) |
 | Catch up on their own recent work on a topic | [`/recall`](../recall/SKILL.md) |
-| Catch up on everything in this chat since their last message, with enough context to decide each action item | [`/ketchup`](../ketchup/SKILL.md) |
+| Catch up on what changed in this chat since their last message, in plain words and small visuals, with every item waiting on them listed and decidable from the reply alone | [`/ketchup`](../ketchup/SKILL.md) |
 | Know what a small diff could break outside itself | [`/blast-radius`](../blast-radius/SKILL.md) |
 | Settle types and module shape before code that crosses a function boundary | [`/architect`](../architect/SKILL.md) |
 | Get several attempts at one brief, merged into the best one | [`/arena`](../arena/SKILL.md) |
@@ -81,6 +84,8 @@ The default answer is `/poteto-mode`, which runs most of the others when its ste
 | Hear the last reply again in plain words | [`/bro`](../bro/SKILL.md) |
 | Give agents a scripted way to drive the app and prove behavior | [`/create-verification-skill`](../create-verification-skill/SKILL.md) |
 | Bring a verification skill and its feature map back in line with the app | [`/maintain-verification-skill`](../maintain-verification-skill/SKILL.md) |
+| Formally verify a race, invariant, or other property that tests rarely reach | [`/create-formal-verification-skill`](../create-formal-verification-skill/SKILL.md) |
+| Bring a formal verification back in line after the code it covers changed, and learn whether a failure is drift or a bug | [`/maintain-formal-verification-skill`](../maintain-formal-verification-skill/SKILL.md) |
 | Vet a performance number before reporting or acting on it | [`/benchmark-checklist`](../benchmark-checklist/SKILL.md) |
 | Run a large or cross-cutting change, or one to review after stepping away | [`/figure-it-out`](../figure-it-out/SKILL.md) |
 | Keep a decision log during a run, and review it afterward | [`/show-me-your-work`](../show-me-your-work/SKILL.md) |
@@ -103,7 +108,7 @@ Close calls:
 
 Not in jm:stack:
 
-- `run` (CLIs and TUIs), `verify` (UIs), and `loop` are Claude Code built-ins. `plugin-dev:skill-development` ships in the separate `plugin-dev` plugin, which skill-authoring routes need. In Claude Code, install it with `/plugin marketplace add anthropics/claude-plugins-official`, then `/plugin install plugin-dev@claude-plugins-official`. [`codex-tools.md`](../poteto-mode/references/codex-tools.md) names the Codex equivalent of each.
+- `run` (CLIs and TUIs) and `loop` are Claude Code built-ins. For UIs, agents drive the real UI with whatever browser or GUI automation the session has. Skill authoring follows the [Authoring a skill playbook](../poteto-mode/playbooks/authoring-a-skill.md) and needs no other plugin. [`codex-tools.md`](../poteto-mode/references/codex-tools.md) names the Codex equivalent of each.
 - `/make-bot-ui` is not ported, because it depends on Cursor routines and webhooks.
 - jm:stack has no `/orchestrate` skill. Orchestrate is a `/poteto-mode` playbook. If the slash menu shows `/orchestrate`, another plugin provides it.
 
@@ -115,7 +120,7 @@ Playbooks are step lists inside `/poteto-mode`, not skills, so they have no slas
 - "land the stack" runs Shipping.
 - "take over this branch" runs Session pickup.
 - "pause safely" runs Pause safely.
-- "full autopilot on this queue" runs Autopilot-full. "stack them, don't ship" runs Autopilot-stack.
+- "full autopilot on this queue" runs Autopilot-full. "autopilot, don't merge" runs Autopilot-stack.
 - "run the eval playbook" runs Eval.
 
 Without `/poteto-mode`, a phrase such as "babysit this pr" can start the bundled `/babysit` skill for the same job instead. The Playbooks section of [`poteto-mode`](../poteto-mode/SKILL.md) lists every playbook and when it applies. [Guide page 6](https://github.com/cursor/plugins/blob/main/pstack/docs/guide/06-verify-and-ship.md) covers opening, babysitting, and landing a PR.
@@ -132,7 +137,7 @@ Principles are one-rule skills that `/poteto-mode` reads and cites in its replie
 | A question got treated as the next step of the last task | Say "new task", or say the turn doesn't need the mode. |
 | A new model choice had no effect | The model sheet from `/setup-stack` applies to new sessions. Start one. |
 | Runs cost more than expected | See the cost paragraph under Get set up. |
-| A skill didn't load on its own | `/poteto-help`, `/correct`, and `/ketchup` run only when typed. Others can load from the user's words, but only when the request matches their description, and `/poteto-mode` doesn't run every skill. |
+| A skill didn't load on its own | `/poteto-help` and `/correct` run only when typed. Others can load from the user's words, but only when the request matches their description, and `/poteto-mode` doesn't run every skill. |
 | Parallel agents overwrote each other | Give each agent its own worktree. |
 | An overnight run moved but finished nothing | `/loop` needs a check that can pass or fail, not a duration. See [guide page 7](https://github.com/cursor/plugins/blob/main/pstack/docs/guide/07-overnight.md). |
 | The reply claims success from a green build | Ask for the real command, flow, stored value, or profile. That's the prove-it-works principle. |
