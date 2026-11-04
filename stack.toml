@@ -12,6 +12,18 @@ skills = ["grilling", "grill-me", "grill-with-docs", "domain-modeling", "to-spec
 global = true
 skills = ["writing-beats", "writing-fragments", "writing-shape", "tutor"]
 
+[groups.design]
+global = true
+skills = ["better-accessibility", "better-colors", "better-interface", "better-layout", "better-typography", "better-ui", "better-writing", "break", "explain-interface", "interface-review", "variant", "brandkit"]
+
+[groups.diagrams]
+global = true
+skills = ["diagram-design"]
+
+[groups.cua]
+global = true
+skills = ["cua-driver", "cua-sandboxes", "cua-spaces", "cua-volume", "gui-automation"]
+
 [groups.games]
 global = true
 includes = ["threejs"]
@@ -172,6 +184,7 @@ source = "https://github.com/mattpocock/skills"
 path = "skills/productivity/handoff"
 commit = "4ae2317ddb22b046e26455e4f9c9b3aaaf62212d"
 move = "compact-handoff"
+process = [{ type = "script", input = "scripts/skill-patches/handoff.sh" }]
 
 [[skill]]
 name = "modernize"
@@ -217,3 +230,114 @@ path = "skills/productivity/teach"
 commit = "4ae2317ddb22b046e26455e4f9c9b3aaaf62212d"
 move = "tutor"
 process = [{ type = "script", input = "scripts/skill-patches/teach.sh" }]
+
+[[skill]]
+name = "better-accessibility"
+source = "https://github.com/jakubkrehel/skills"
+path = "skills/better-accessibility"
+commit = "60bf140e43c98b248e6594487384ec967e89d98a"
+
+[[skill]]
+name = "better-colors"
+source = "https://github.com/jakubkrehel/skills"
+path = "skills/better-colors"
+commit = "60bf140e43c98b248e6594487384ec967e89d98a"
+
+[[skill]]
+name = "better-interface"
+source = "https://github.com/jakubkrehel/skills"
+path = "skills/better-interface"
+commit = "60bf140e43c98b248e6594487384ec967e89d98a"
+
+[[skill]]
+name = "better-layout"
+source = "https://github.com/jakubkrehel/skills"
+path = "skills/better-layout"
+commit = "60bf140e43c98b248e6594487384ec967e89d98a"
+
+[[skill]]
+name = "better-typography"
+source = "https://github.com/jakubkrehel/skills"
+path = "skills/better-typography"
+commit = "60bf140e43c98b248e6594487384ec967e89d98a"
+
+[[skill]]
+name = "better-ui"
+source = "https://github.com/jakubkrehel/skills"
+path = "skills/better-ui"
+commit = "60bf140e43c98b248e6594487384ec967e89d98a"
+
+[[skill]]
+name = "better-writing"
+source = "https://github.com/jakubkrehel/skills"
+path = "skills/better-writing"
+commit = "60bf140e43c98b248e6594487384ec967e89d98a"
+
+[[skill]]
+name = "break"
+source = "https://github.com/jakubkrehel/skills"
+path = "skills/break"
+commit = "60bf140e43c98b248e6594487384ec967e89d98a"
+process = [{ type = "script", input = "scripts/skill-patches/break.sh" }]
+
+[[skill]]
+name = "explain-interface"
+source = "https://github.com/jakubkrehel/skills"
+path = "skills/explain-interface"
+commit = "60bf140e43c98b248e6594487384ec967e89d98a"
+
+[[skill]]
+name = "interface-review"
+source = "https://github.com/jakubkrehel/skills"
+path = "skills/interface-review"
+commit = "60bf140e43c98b248e6594487384ec967e89d98a"
+
+[[skill]]
+name = "variant"
+source = "https://github.com/jakubkrehel/skills"
+path = "skills/variant"
+commit = "60bf140e43c98b248e6594487384ec967e89d98a"
+process = [{ type = "script", input = "scripts/skill-patches/variant.sh" }]
+
+[[skill]]
+name = "brandkit"
+source = "https://github.com/Leonxlnx/imagegen-skills"
+path = "skills/brandkit"
+commit = "beb16b0d0f4dae9a6f5cb04ea41e97b93a54ab8e"
+
+[[skill]]
+name = "diagram-design"
+source = "https://github.com/cathrynlavery/diagram-design"
+path = "skills/diagram-design"
+commit = "f24d98b05e2d7a5e68c2dedfe46e5b7173f50118"
+process = [{ type = "script", input = "scripts/skill-patches/diagram-design.sh" }]
+
+[[skill]]
+name = "cua-driver"
+source = "https://github.com/trycua/cua"
+path = "libs/cua-driver/rust/Skills/cua-driver"
+commit = "e58d2eddd68402991afaf2f3fad357adf9fb31f7"
+
+[[skill]]
+name = "cua-sandboxes"
+source = "https://github.com/trycua/cua"
+path = "libs/cua/skills/cua-sandboxes"
+commit = "e58d2eddd68402991afaf2f3fad357adf9fb31f7"
+
+[[skill]]
+name = "cua-spaces"
+source = "https://github.com/trycua/cua"
+path = "libs/cua/skills/cua-spaces"
+commit = "e58d2eddd68402991afaf2f3fad357adf9fb31f7"
+
+[[skill]]
+name = "cua-volume"
+source = "https://github.com/trycua/cua"
+path = "libs/cua/skills/cua-volume"
+commit = "e58d2eddd68402991afaf2f3fad357adf9fb31f7"
+
+[[skill]]
+name = "gui-automation"
+source = "https://github.com/trycua/cua"
+path = "libs/cua/skills/gui-automation"
+commit = "e58d2eddd68402991afaf2f3fad357adf9fb31f7"

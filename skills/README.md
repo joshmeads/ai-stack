@@ -90,11 +90,50 @@ The `writing` group is vendored from [mattpocock/skills](https://github.com/matt
 | `writing-beats` | Exploit: assemble the raw material into a journey of beats. |
 | `tutor` | Teach a topic over several sessions in a workspace (upstream `teach`; `jm-stack:teach` is a different skill). |
 
-`takeover`, `implement-spec`, `wayfinder` and `tutor` are patched by scripts in `scripts/skill-patches/`, so their edits survive `skills update`.
+`takeover`, `implement-spec`, `wayfinder`, `tutor`, `compact-handoff`, `break`, `variant` and `diagram-design` are patched by scripts in `scripts/skill-patches/`, so their edits survive `skills update`.
+
+## Design
+
+The `design` group is vendored from [jakubkrehel/skills](https://github.com/jakubkrehel/skills) and [Leonxlnx/imagegen-skills](https://github.com/Leonxlnx/imagegen-skills). `better-interface` runs the other `better-*` skills as one review.
+
+| Skill | Use |
+| --- | --- |
+| `better-accessibility` | Check a project against accessibility standards and best practices. |
+| `better-colors` | Build a color system: palettes, semantic tokens, format conversion, contrast checks. |
+| `better-interface` | One review across accessibility, layout, writing, typography, color and UI polish. |
+| `better-layout` | Grouping, alignment, reading order, progressive disclosure. |
+| `better-typography` | Type scale, spacing, sizing, variable fonts, OpenType features, wrapping, truncation. |
+| `better-ui` | UI polish: concentric radius, optical alignment, surface depth, icons, hit areas. |
+| `better-writing` | Improve product copy. |
+| `break` | Stress a component or page with hostile content and states, and report what visibly broke. |
+| `explain-interface` | Explain how something on the web was built, layer by layer. |
+| `interface-review` | Review a change, pull request or branch against the `better-*` standards. |
+| `variant` | Produce design alternatives for a piece of UI without ranking them. |
+| `brandkit` | Generate brand-guidelines boards, logo systems and identity decks as images. |
+
+## Diagrams
+
+The `diagrams` group is vendored from [cathrynlavery/diagram-design](https://github.com/cathrynlavery/diagram-design).
+
+| Skill | Use |
+| --- | --- |
+| `diagram-design` | Branded diagrams and charts as HTML, SVG or PNG, with draw.io, Mermaid and Excalidraw import. |
+
+## Cua
+
+The `cua` group is vendored from [trycua/cua](https://github.com/trycua/cua).
+
+| Skill | Use |
+| --- | --- |
+| `cua-driver` | Drive a native GUI app on macOS, Windows or Linux through the `cua-driver` CLI or MCP server. |
+| `cua-sandboxes` | Create, use and clean up disposable Linux or macOS computers with the `cua` CLI or SDK. |
+| `cua-spaces` | Work inside Cua Spaces through the cua MCP server: run commands, move files, show windows. |
+| `cua-volume` | Use the Cua Volume shared by every Space and agent, for files that outlive a Space. |
+| `gui-automation` | Test, fill and screenshot a GUI through the `cua` CLI on VMs, containers and local machines. |
 
 ## Credits
 
-Several tool skills are adapted from third-party skills. The tool skills below keep their licence files, and the skill names and cross-references were changed for this stack. [NOTICE.md](../NOTICE.md) has the details, including the sources, commits and licences of the engineering and writing skills.
+Several tool skills are adapted from third-party skills. The tool skills below keep their licence files, and the skill names and cross-references were changed for this stack. [NOTICE.md](../NOTICE.md) has the details, including the sources, commits and licences of the engineering, writing, design, diagram and cua skills.
 
 | Skill | Copyright | Licence |
 | --- | --- | --- |
