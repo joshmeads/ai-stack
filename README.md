@@ -42,7 +42,7 @@ The first install needs `--force` because an unmanaged `handoff` skill in `~/.cl
 
 ## Models
 
-Each harness stays on its own provider's models, except for major reviews.
+Each harness stays on its own provider's models, except for major reviews and the arena judge.
 
 | Work | Codex | Claude Code |
 | --- | --- | --- |
@@ -50,10 +50,11 @@ Each harness stays on its own provider's models, except for major reviews.
 | Implementation, explanation, swarm workers | Sol 6.1, medium | Opus 5.5, medium |
 | Hardest tasks | Sol 6.1, xhigh | Opus 5.5, high |
 | Exploration (`how`) | Luna, xhigh | Haiku 5.5, xhigh |
-| Judgment, judging, review | Sol 6.1, xhigh | Opus 5.5, xhigh |
+| Judgment, review | Sol 6.1, xhigh | Opus 5.5, xhigh |
+| Arena judge | Opus 5.5, xhigh | Sol 6.1, xhigh |
 | Major review (`interrogate`) | Sol 6.1 and Opus 5.5, xhigh | Opus 5.5 and Sol 6.1, xhigh |
 
-A major review happens after a design is settled and before a pull request. It pairs both providers, so in each harness one reviewer runs through the other provider's CLI, which may ask for your approval. Haiku is kept under 100k tokens of context, where its price is lowest; you set its compaction in Claude Code.
+A major review happens after a design is settled and before a pull request. It pairs both providers, so in each harness one reviewer runs through the other provider's CLI, which may ask for your approval. Arena's judge always comes from the other provider, and an arena skips its judge when that CLI cannot run. Haiku is kept under 100k tokens of context, where its price is lowest; you set its compaction in Claude Code.
 
 The choices come from Artificial Analysis's intelligence, cost, and time-per-task data, picking points on each provider's Pareto line. Change them in `~/.config/ai-stack/config.toml` and run `ai-stack install`.
 
