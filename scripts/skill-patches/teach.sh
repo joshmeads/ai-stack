@@ -23,3 +23,6 @@ replace() {
 }
 
 replace 'from the directory `/teach` was run in' 'from the directory `/tutor` was run in'
+
+file=$1/agents/openai.yaml
+replace 'display_name: "Teach"' 'display_name: "Tutor"'
