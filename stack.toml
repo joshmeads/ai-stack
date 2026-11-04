@@ -14,11 +14,11 @@ skills = ["writing-beats", "writing-fragments", "writing-shape", "tutor"]
 
 [groups.design]
 global = true
-skills = ["better-accessibility", "better-colors", "better-interface", "better-layout", "better-typography", "better-ui", "better-writing", "break", "explain-interface", "interface-review", "variant", "brandkit"]
+skills = ["better-accessibility", "better-colors", "better-interface", "better-layout", "better-typography", "better-ui", "better-writing", "break", "explain-interface", "interface-review", "variant", "brandkit", "color-expert", "oklch-skill"]
 
 [groups.diagrams]
 global = true
-skills = ["diagram-design"]
+skills = ["diagram-design", "archify", "anatomy"]
 
 [groups.cua]
 global = true
@@ -367,3 +367,27 @@ name = "make-interfaces-feel-better"
 source = "https://github.com/jakubkrehel/make-interfaces-feel-better"
 path = "skills/make-interfaces-feel-better"
 commit = "35545ea1512ad59fa463e6b1f95ca9c052981fe6"
+
+[[skill]]
+name = "color-expert"
+source = "https://github.com/meodai/skill.color-expert"
+path = "."
+commit = "5bf7c7704d56bccc6aeea38c36bcf449abe56a6c"
+
+[[skill]]
+name = "archify"
+source = "https://github.com/tt-a1i/archify"
+path = "archify"
+commit = "a4065941f12be7967436261d9934784e381d423c"
+
+[[skill]]
+name = "anatomy"
+source = "https://github.com/wheresryan22/anatomy"
+path = "."
+commit = "1482e8469b0a9e0d8cc18ea2740a01423d29ae80"
+
+[[skill]]
+name = "oklch-skill"
+source = "https://github.com/jakubkrehel/oklch-skill"
+path = "skills/oklch-skill"
+commit = "0e81f040e16d48fcc61d3e1b7ea548542371321f"
