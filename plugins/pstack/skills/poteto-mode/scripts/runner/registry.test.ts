@@ -294,7 +294,7 @@ describe("hand-written dispatch and setup rules", () => {
   it("binds Claude-native dispatch to the generated agents", () => {
     const native = section(dispatch, "## Native lanes", "## External lanes");
     expect(native).toContain("match the descriptor's `(provider, model)` to one model-matrix row");
-    expect(native).toContain("`stack-<family>-<effort>`");
+    expect(native).toContain("`jm-stack:stack-<family>-<effort>`");
   });
 
   it("normalizes rolling-alias pins and keeps predecessors before any runtime route", () => {

@@ -74,7 +74,7 @@ export function renderCatalog(registry: Registry): GeneratedFile {
         family.model,
         family.defaultEffort,
         effortsOf(family).join(" "),
-        family.provider === "claude" ? code(`stack-${family.name}-<effort>`) : "-",
+        family.provider === "claude" ? code(`jm-stack:stack-${family.name}-<effort>`) : "-",
         named.has(family.name) ? "default" : "optional",
         family.upstream ?? "-",
       ])

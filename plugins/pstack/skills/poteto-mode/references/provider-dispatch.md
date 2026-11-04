@@ -40,7 +40,7 @@ The catalog's [route table](model-catalog.md#routes) gives each provider's route
 
 Native dispatch avoids a second CLI startup and its base context.
 
-- Claude Code: match the descriptor's `(provider, model)` to one model-matrix row, then dispatch it through `stack-<family>-<effort>` using that row's family and the descriptor's effort. Those definitions select the row's model and requested effort. `stack-opus-high` and `stack-haiku-high` are in that set. Pass the complete task, grounding paths, access mode, and unique output location in the `Agent` prompt. Dispatch and wait as [Waits on Claude Code](codex-tools.md#waits-on-claude-code) says.
+- Claude Code: match the descriptor's `(provider, model)` to one model-matrix row, then dispatch it through `jm-stack:stack-<family>-<effort>` using that row's family and the descriptor's effort. Claude Code registers plugin agents with the plugin prefix and refuses the bare name. Those definitions select the row's model and requested effort. `jm-stack:stack-opus-high` and `jm-stack:stack-haiku-high` are in that set. Pass the complete task, grounding paths, access mode, and unique output location in the `Agent` prompt. Dispatch and wait as [Waits on Claude Code](codex-tools.md#waits-on-claude-code) says.
 - Codex: call `spawn_agent` with the descriptor's model and `reasoning_effort`, the complete task, grounding paths, access mode, and unique output location. Use an isolated worktree for a writer. Codex subagents already run concurrently.
 
 Do not send a same-provider descriptor to the external runner. It rejects that call because the native route is cheaper and already available.

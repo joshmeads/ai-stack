@@ -152,6 +152,8 @@ Three rules stay stricter than upstream's text. An owner rewrites and merges onl
 
 - **`ketchup` is model-invocable**: upstream's `ketchup` carries `disable-model-invocation: true`, but Autopilot-full and Autopilot-stack route through it, and the flag blocks that route on Claude Code. The port drops the flag and shortens the description, since it now costs context. `tests/skill-collision-repro.sh` lists it in `routed_model_skills`. Keep both during syncs.
 
+- **Prefixed agent names on Claude Code**: Claude Code registers plugin agents as `jm-stack:<agent>` and refuses a bare name with "Agent type not found". Text that tells Claude Code to dispatch an agent uses the prefix (`jm-stack:stack-<family>-<effort>`, `jm-stack:poteto-agent`, `jm-stack:comment-sicko`), and `registry/render.ts` generates the catalog's column the same way. Agent file names and the `name` frontmatter stay bare, and Codex text keeps its own names. Apply the prefix to any upstream `subagent_type` or agent name a sync brings in.
+
 ## Check for changes
 
 The repository already names Cursor's repository as the `cursor` remote in the maintainer checkout. A fresh clone can add it once:

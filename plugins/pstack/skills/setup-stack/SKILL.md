@@ -74,7 +74,7 @@ If all chosen families are native, no external CLI permission check or probe is 
 
 Probe only the selected `provider:model@effort` pair of each assigned family. Run one probe per family in the role map, even when two families share a provider. Do not enumerate or offer older models as substitutes. A failed probe writes nothing: report the failing pair and provider, stop, and keep the active sheet plus parent integration bytes unchanged. A failed first run creates neither artifact.
 
-Find the family's provider in the [route table](../poteto-mode/references/model-catalog.md#routes). A native route gets a native one-turn probe: on Claude Code, the family's `stack-<family>-<effort>` agent; on Codex, `spawn_agent` with the descriptor's model and `reasoning_effort`. An external route gets one `pstack-runner` call with a tiny read-only probe prompt. The runner's preflight checks the CLI, the login and the model, and its receipt is the result.
+Find the family's provider in the [route table](../poteto-mode/references/model-catalog.md#routes). A native route gets a native one-turn probe: on Claude Code, the family's `jm-stack:stack-<family>-<effort>` agent; on Codex, `spawn_agent` with the descriptor's model and `reasoning_effort`. An external route gets one `pstack-runner` call with a tiny read-only probe prompt. The runner's preflight checks the CLI, the login and the model, and its receipt is the result.
 
 Use a tiny read-only probe that returns a unique marker. A login-status command alone proves credentials, not that the requested model and effort flags run. Record native and external results separately. Never call the external launcher for the parent's own provider.
 
