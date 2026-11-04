@@ -94,7 +94,7 @@ The `writing` group is vendored from [mattpocock/skills](https://github.com/matt
 
 ## Design
 
-The `design` group is vendored from [jakubkrehel/skills](https://github.com/jakubkrehel/skills) and [Leonxlnx/imagegen-skills](https://github.com/Leonxlnx/imagegen-skills). `better-interface` runs the other `better-*` skills as one review.
+The `design` group is vendored from [jakubkrehel/skills](https://github.com/jakubkrehel/skills), [Leonxlnx/imagegen-skills](https://github.com/Leonxlnx/imagegen-skills), [meodai/skill.color-expert](https://github.com/meodai/skill.color-expert), and [jakubkrehel/oklch-skill](https://github.com/jakubkrehel/oklch-skill). `better-interface` runs the other `better-*` skills as one review.
 
 | Skill | Use |
 | --- | --- |
@@ -110,6 +110,8 @@ The `design` group is vendored from [jakubkrehel/skills](https://github.com/jaku
 | `interface-review` | Review a change, pull request or branch against the `better-*` standards. |
 | `variant` | Produce design alternatives for a piece of UI without ranking them. |
 | `brandkit` | Generate brand-guidelines boards, logo systems and identity decks as images. |
+| `color-expert` | Color science, palette generation, naming, conversions, accessibility, and print or pigment color. |
+| `oklch-skill` | OKLCH colors for web projects, including palettes, contrast, gamut handling, and Tailwind themes. |
 
 ## Archived
 
@@ -123,11 +125,13 @@ The `archived` group is vendored but disabled: its skills aren't linked into any
 
 ## Diagrams
 
-The `diagrams` group is vendored from [cathrynlavery/diagram-design](https://github.com/cathrynlavery/diagram-design).
+The `diagrams` group is vendored from [cathrynlavery/diagram-design](https://github.com/cathrynlavery/diagram-design), [tt-a1i/archify](https://github.com/tt-a1i/archify), and [wheresryan22/anatomy](https://github.com/wheresryan22/anatomy).
 
 | Skill | Use |
 | --- | --- |
 | `diagram-design` | Branded diagrams and charts as HTML, SVG or PNG, with draw.io, Mermaid and Excalidraw import. |
+| `archify` | Validated interactive architecture, workflow, sequence, data, and timing diagrams as standalone HTML. |
+| `anatomy` | Interactive isometric SVG illustrations that explain technical ideas through physical objects. |
 
 ## Cua
 
@@ -153,4 +157,4 @@ Several tool skills are adapted from third-party skills. The tool skills below k
 | `tools-threejs-debug`, `tools-threejs-gameplay`, `tools-threejs-look`, `tools-threejs-ui` | 2026 Majid Manzarpour | MIT |
 | `tools-threejs-procedural` | 2026 Scott Sun | MIT |
 
-License: MIT, except the Apache-2.0 skills above (SPDX: `MIT AND Apache-2.0`).
+Original skills are MIT. Vendored skills retain their source licenses and notices; see [NOTICE.md](../NOTICE.md).
