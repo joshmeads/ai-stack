@@ -27,6 +27,15 @@ The `jm-stack` plugin ("jm:stack", in `plugins/pstack/`) is Josh Meads's distrib
 | `plugins/pstack/skills/` (0.15.18 to 0.15.20 changes: `ketchup` before-and-after visuals, prompt cuts in `how`, `why`, poteto-mode playbooks, and four principles, the `/poteto-mode` chat as the playbook runner, `create-verification-skill` usable readiness, plan-checker fences, `watch-pr` review-thread pagination, `worktree-audit.sh -b`), `plugins/pstack/agents/poteto-agent.md`, `README-UPSTREAM.md` | [cursor/plugins/pstack @ 1b6d44f](https://github.com/cursor/plugins/tree/1b6d44ff26d4e242f4e8f68c391e6d2f7ca16def/pstack) | (c) 2026 Lauren Tan | MIT | [LICENSE](LICENSE) |
 | `plugins/pstack/skills/` (0.15.21 to 0.15.25 changes: the `in-your-own-words` and `sharpen` skills, per-spawn effort in poteto-mode and the routed skills, one full swarm per PR in the autopilots and the multi-phase plan, the Graphite-free `orch` frontier, the `watch-pr` owner-approval gate, Origin PRs in `worktree-audit.sh`, `ketchup` visuals and length, restated principles, and prompt cuts), `plugins/pstack/agents/poteto-agent.md`, `README-UPSTREAM.md` | [cursor/plugins/pstack @ 99743e9](https://github.com/cursor/plugins/tree/99743e9c151c8537cbbf1f98bb38f34ef3368453/pstack) | (c) 2026 Lauren Tan | MIT | [LICENSE](LICENSE) |
 | `plugins/pstack/skills/` (0.15.26 to 0.15.29 changes: the `create-formal-verification-skill` and `maintain-formal-verification-skill` skills, setup's verification offers, `poteto-help` routing and recipes, the `sharpen` rewrite, `ketchup` waiting items, and the `typescript-best-practices` brand guard), `README-UPSTREAM.md` | [cursor/plugins/pstack @ 88d4751](https://github.com/cursor/plugins/tree/88d47514b82e7c44f00f2b2a72ff6dd12158038c/pstack) | (c) 2026 Lauren Tan | MIT | [LICENSE](LICENSE) |
+| `plugins/pstack/skills/` (0.15.30 to 0.15.36 changes: the adversarial `interrogate`, the arena judge rule, the agentic Orchestrate playbook, the autopilot blocking rule, reflect's cache rule, `watch-pr`, `check-plan` and `worktree-audit` fixes), `README-UPSTREAM.md` | [cursor/plugins/pstack @ c742dd6](https://github.com/cursor/plugins/tree/c742dd61706fbacc1b95f1a20b7b988cf096ce6c/pstack) | (c) 2026 Lauren Tan | MIT | [LICENSE](LICENSE) |
+
+## Ideas credited
+
+These passages take ideas, in our own words and without copied text, from this source. See `UPSTREAM.md`.
+
+| Component | Source | Author | License |
+| --- | --- | --- | --- |
+| `plugins/pstack/skills/interrogate/SKILL.md` (round budget, severities, ledger, score), `plugins/pstack/skills/poteto-mode/playbooks/opening-a-pr.md` (secret check, REST fallback), `plugins/pstack/skills/poteto-mode/playbooks/babysit.md` (T3 Code watcher, rate limits, review-loop growth) | [tstack](https://github.com/t3dotgg/tstack) at `1085050f3baed1ac724caa4a8166145fb2ac88af` | Theo Browne | MIT |
 
 ## Third-party standalone skills
 
