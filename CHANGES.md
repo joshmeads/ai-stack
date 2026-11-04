@@ -2,6 +2,18 @@
 
 This port applies the Cursor → Claude Code substitutions in skill bodies. Earlier drafts left them flagged; this revision resolves them. A later pass added a Codex build that shares the same skills; see [Codex port](#codex-port) below.
 
+## 1.16.0+jm.2 applies Cursor pstack 0.15.36 and takes ideas from tstack
+
+This distribution applies Cursor pstack 0.15.30 to 0.15.36 at `c742dd61706fbacc1b95f1a20b7b988cf096ce6c` on top of Open Pstack 1.16.0. `UPSTREAM.md` holds a decision for each commit.
+
+**Taken.** Interrogate's adversaries prove each finding with a run, and the lead keeps what a rerun confirms. Arena's judge never comes from the parent's provider, and an arena skips its judge when none can run. Orchestrate runs with the coordinator's own tools, and the `orch` scripts are gone. Autopilot blocks only on a problem it can show, and Autopilot-stack is Autopilot-full without the merge. The `watch-pr`, `check-plan`, `worktree-audit` and reflect fixes are in.
+
+**Changed for jm:stack.** Every family and first-run role defaults to `high`. The ai-stack CLI's default sheets list the other provider's judge first, keep their per-role efforts, and accept read-only providers on rows that do not write files. Code this repository owns carries no comments except those a tool or a user reads.
+
+**From tstack.** Interrogate has a round budget, severities with a scope rule and a ledger. Opening a PR checks for secrets and handles the GraphQL limit. Babysit uses T3 Code's PR watcher where it exists and declines review-loop growth in writing.
+
+**Left out.** Statechart, ketchup-video, the Cursor manifests and guide, and the fallback chains that would swap a model silently.
+
 ## 1.16.0+jm.1 merges Open Pstack 1.16.0
 
 This distribution merges Open Pstack 1.16.0 at `b4c5e3d`, which tracks Cursor pstack 0.15.29 at `88d47514b82e7c44f00f2b2a72ff6dd12158038c`. The sections below, from 1.16.0 down to 1.8.0, are Open Pstack's text. Where they name Grok, the `opus-5-5` and `haiku-5-5` pins, `pstack-*` agents, `setup-pstack`, Mergify, `verify-open-pstack` or three-model panels, jm:stack differs as `UPSTREAM.md` records.

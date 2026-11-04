@@ -28,6 +28,8 @@ ai-stack install
 
 It also removes what older ai-stack installs left behind. Every file it changes is backed up under `~/.local/state/ai-stack/backups/`. `ai-stack update` pulls this checkout and installs again. `ai-stack install --clean` (or `c` in the review screen) also moves every skill outside the `[clean] keep_skills` list into the backup and uninstalls every plugin outside `keep_plugins`, so only this install and the keep lists remain; preview it with `ai-stack diff --clean`. See [cli/README.md](cli/README.md) for the details.
 
+Claude Code leaves auto-update off for third-party marketplaces, so `jm-stack` stays on the installed version until `ai-stack install` or `ai-stack update` refreshes it. The refresh happens when the version in the checkout changes.
+
 ### Updating another machine
 
 On a machine that already has an install, run these in order:

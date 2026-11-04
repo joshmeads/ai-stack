@@ -8,12 +8,12 @@ open-pstack tracks [Cursor's pstack](https://github.com/cursor/plugins/tree/main
 | --- | --- |
 | Repository | `https://github.com/cursor/plugins.git` |
 | Path | `pstack/` |
-| Commit | `88d47514b82e7c44f00f2b2a72ff6dd12158038c` |
-| Upstream version | `0.15.29` |
-| open-pstack version | `1.16.0+jm.1` |
+| Commit | `c742dd61706fbacc1b95f1a20b7b988cf096ce6c` |
+| Upstream version | `0.15.36` |
+| open-pstack version | `1.16.0+jm.2` |
 | Open Pstack merge | `b4c5e3d` (1.16.0) |
 
-The table above is the current Cursor sync point and the Open Pstack release merged here. Open Pstack 1.16.0 imported this 0.15.29 sync. `README-UPSTREAM.md` preserves the upstream pstack README verbatim. `CHANGES.md` and `NOTICE.md` describe the adaptations and provenance.
+The table above is the current Cursor sync point and the Open Pstack release merged here. Open Pstack 1.16.0 imported the 0.15.29 sync at `88d47514b82e7c44f00f2b2a72ff6dd12158038c`, and [Cursor 0.15.30 to 0.15.36 sync](#cursor-01530-to-01536-sync) records what this repository applied on top. `README-UPSTREAM.md` preserves the upstream pstack README verbatim. `CHANGES.md` and `NOTICE.md` describe the adaptations and provenance.
 
 ## jm:stack divergence
 
@@ -22,16 +22,93 @@ This checkout publishes Open Pstack as jm:stack in the `jm` marketplace. It also
 - **Rename.** The plugin is `jm-stack` with display name "jm:stack" in both plugin manifests, so skills are namespaced `jm-stack:<skill>`. `setup-pstack` is `setup-stack`, and the native Claude agents are `stack-<family>-<effort>`, which `registry/render.ts` generates. The SessionStart text, `poteto-agent`'s preload, `poteto-help`, `codex-tools.md`, `docs/reference.md`, and the tests use these names. Other skill names stay upstream's. Internal names stay: the `plugins/pstack/` directory, `pstack-models.md`, the `pstack:models` markers, the sheet heading, and `pstack-runner`.
 - **Models.** The Grok family and the runner's Grok adapter are removed, with their matrix row, defaults, docs, and tests. The selectable Claude and Codex families are `fable`, `sol`, `luna`, `opus`, `haiku` and `sonnet`. `haiku` is `claude:haiku`, a rolling alias normalized and verified like Fable, Opus and Sonnet, with native agents `stack-haiku-<effort>`. Upstream registers no `haiku` alias, because Claude Code resolves it to Haiku 4.5, which has no effort setting, on Bedrock, Vertex and Foundry (#223); jm:stack keeps the alias by the owner's decision, so a lane on those hosts gets that older model. Every first-run role and every skill's built-in default uses Opus or Sol, and the panels are Opus then Sol. Every family defaults to `high` by the owner's ruling, which also sets each first-run role default and panel to `high`. SWE-1.6, Composer 2.5 and Amp's DeepSeek V4.1 Flash offer only `default`, their nearest listed effort, so they stay on it. `tests/skill-collision-repro.sh` holds this, so a merge that changes a default effort restates it as `high`. The ai-stack CLI's `[sheet.*]` rows are the owner's explicit per-role choices, not defaults, and keep their own efforts. The ai-stack CLI's per-harness sheets assign Luna or Haiku to `how explorer`.
 - **Exact Claude pins.** Upstream's `opus-5-5` and `haiku-5-5` families and their `pstack-*-5-5-*` agents are not kept, and neither are their released pairs. With them registered, a sheet line such as `claude:<concrete revision>@high` would stay pinned instead of normalizing to its alias, and the ai-stack CLI writes and accepts only rolling aliases. So every `claude-<family>-<revision>` stays a version pin that read-time normalization rewrites and the runner rejects. Keep them out on a merge that changes them, and drop any new upstream pin the same way.
-- **Read-only providers.** OpenCode, Amp, Cursor CLI, Devin, Antigravity (`agy`) and DeepSeek Harness (`dsh`) are kept, with their fixtures and tests, as selectable only. No role default or panel may use them. A sheet that `/setup-stack` writes can select one for a role that does not write files. The ai-stack CLI's sheet validator accepts only the Claude and Codex rows.
+- **Read-only providers.** OpenCode, Amp, Cursor CLI, Devin, Antigravity (`agy`) and DeepSeek Harness (`dsh`) are kept, with their fixtures and tests, as selectable only. No role default or panel may use them. A sheet that `/setup-stack` or the ai-stack CLI writes can select one for a role that does not write files, and both refuse one on a role that writes. `registry.test.ts` holds the CLI's matrix and writer rows to the registry and to `/setup-stack`.
 - **Marketplace.** Both marketplace manifests are named `jm` and list only `jm-stack` (`./plugins/pstack`). The repo's other skills are standalone skills in `skills/`.
 - **Maintainer process.** Open Pstack's own process files are removed: the `verify-open-pstack` project skill and its static check, `REVIEW.md`, `.mergify.yml`, `.github/unfret.json`, `.github/workflows/unfret-threads.yml`, `.github/workflows/windows-hooks.yml`, the `live-gate` pull request template, `.agents/babysit-pr.md`, `.agents/run-these.md`, `.agents/triage-backlog.md`, the root `package.json`, `open-pstack.code-workspace`, `README-OPEN-PSTACK.md`, and `scripts/release.py` with `scripts/release_test.py`. When an Open Pstack merge changes them, keep them deleted. The fixes they exercised stay: `plugins/pstack/hooks/`, including the Windows SessionStart fix, is upstream's. This repository's `README.md`, `AGENTS.md`, `.gitignore` and `.github/workflows/ci.yml` stay its own, and take upstream changes only where they apply. `AGENTS.md` does not take upstream's waived-finding, live-gate or Mergify paragraphs. It takes upstream's owned-code comment rule, narrowed by the owner's ruling so that a comment stays only if a tool or a user reads it. That rule applies to `cli/` and `skills/devtools-perf/`, and vendored and third-party code stays as it came.
+- **Ideas from tstack.** These come from Theo Browne's MIT-licensed [tstack](https://github.com/t3dotgg/tstack) and are written in our own words; see `NOTICE.md`. `interrogate` has a round budget of 3, up to 5 for security, permissions, auth, data loss or state and concurrency while a real blocker stays open with evidence, and stops early when a round returns only nits. It also has blocker, should and nit severities with a scope rule, a ledger of findings and outcomes, "if review grew the diff, cut first", an optional per-adversary score in the PR description, and a budget end that is not approval. `opening-a-pr` checks for secrets and private details before submitting and opens through REST when GraphQL is used up. Babysit uses T3 Code's `watch_pull_request` and `unwatch_pull_request` where they exist, notes the GraphQL and REST limits, and declines review-loop growth with a written reason. Attacking the premise when one mechanism fails two rounds is this repository's own addition, from its own review history.
 
 When a Cursor or Open Pstack change touches Grok (runner adapter, preflight, environment allowlist, default descriptors), apply only the parts that are not Grok-specific and restate any changed default as Opus or Sol. The runner contract keeps the generic adapter features Grok used (`prompt: "file"`, the preflight retry, the environment allowlist) so Open Pstack merges stay small. The Cursor CLI fixtures keep the `grok-*` lines Cursor's own model list printed, because they are captured output.
 
-The 1.16.0 merge made two more hand resolutions. `swarm/SKILL.md` keeps Phase A's step 3 ("Set N"), which `d462f0a` removes while leaving the list numbered 1, 2, 4, 5. `provider-dispatch.md` keeps the Descriptor spelling section, restated without literal descriptors so the role-pointer scan passes.
+The 1.16.0 merge made two more hand resolutions. `swarm/SKILL.md` keeps Phase A's step 3 ("Set N"), which `d462f0a` removes while leaving the list numbered 1, 2, 4, 5, and which `e73df47` renumbers without restoring. `provider-dispatch.md` keeps the Descriptor spelling section, restated without literal descriptors so the role-pointer scan passes.
+
+## Cursor 0.15.30 to 0.15.36 sync
+
+jm:stack applies these commits on top of the Open Pstack 1.16.0 merge, directly from Cursor. Claude Code's `Agent`, Codex's `spawn_agent` and the other names map as `CHANGES.md` documents.
+
+| Commit | Decision | Reason |
+| --- | --- | --- |
+| `eb4db2b` | exclude | Adds the statechart skill. The owner may adopt it later. |
+| `7698375` | exclude | Statechart only. |
+| `4ec7ffa` | exclude | Statechart only. |
+| `076f4b2` | exclude | Statechart only. |
+| `642289e` | exclude | Version bump only. |
+| `00d5dec` | exclude | The paragraph in `create-formal-verification-skill` only points at `/statechart`, so it does not read sensibly without the skill. |
+| `3c0fdb4` | exclude | Adds the ketchup-video skill. |
+| `b1a1298` | exclude | Version bump only. |
+| `7054003` | adapt | Reflect edits stay out of the plugin cache. Destinations are Claude Code's and Codex's skill folders, and the user may name the plugin's own source file when the checkout is that repository. |
+| `96dec8e` | adopt | `watch-pr` no longer treats a fork head as a stack parent. |
+| `fe096ef` | adopt | `watch-pr` caps polling sleeps at the deadline. |
+| `86c2448` | adapt | `check-plan.mjs` takes the regular expression at the port's `toLines`. The tests use the port's `checkPlan` API. |
+| `3c596e7` | exclude | Fixes `orch`, which `c742dd6` deletes. |
+| `f83fbe6` | adopt | `worktree-audit.sh` picks GNU or BSD `stat` and `date` flags once. |
+| `a0b0ad9` | adapt | The note on auto-update for third-party marketplaces goes in `README.md` and `poteto-help` with jm's install commands. `README-UPSTREAM.md` takes upstream's text verbatim. |
+| `e73df47` | adapt | The port already numbers Swarm's Phase A 1 to 5 and keeps its step 3 "Set N", so only the Phase D wording, "a result table", applies. Phase B names no step number in the port. |
+| `34b1b7c` | exclude | Statechart only, apart from README text that `README-UPSTREAM.md` takes verbatim. |
+| `7c7bde7` | exclude | Version bump only. |
+| `740d2c0` | exclude | Statechart only. |
+| `164ced1` | exclude | Version bump only. |
+| `519d36a` | exclude | Statechart only. |
+| `ab1f702` | adapt | Decided per bullet below. |
+| `c742dd6` | adapt | Orchestrate is agentic and the `orch` scripts and their test entry are deleted. Mapping below. |
+
+`ab1f702`, per bullet of its message:
+
+| Bullet | Decision | Reason |
+| --- | --- | --- |
+| poteto-mode restates the user's goal | adopt | |
+| poteto-mode backgrounds steers and resumes | adapt | A Claude Code subagent still waits as Waits on Claude Code says. |
+| poteto-mode chains fallbacks when the `Task` tool rejects a slug | exclude | No silent substitution. The port has no slug rejection path, and an unavailable model stays a named dropout. |
+| poteto-mode applies Explain the Number before measuring | adopt | |
+| Autopilot blocks a PR only for a problem a run or a wrong doc line shows | adapt | Taken with its follow-up rule. Step 4 keeps one fix-forward to the owner and the one-writer rule. |
+| Autopilot pushes each finished unit | adopt | |
+| Wording-only changes get no verifier | adopt | Autopilot-full and the multi-phase plan. |
+| Autopilot-stack is Autopilot-full without the merge | adapt | Rules and reasons taken per #191, below. |
+| Interrogate adversaries prove findings with a run, and the lead keeps what a rerun confirms | adapt | Reviewers stay read-only against the repository, below. |
+| Interrogate drops the reviewer, rubric, lead-judgment and code-quality references | adopt | |
+| Arena drops or replaces a rejected runner seat | exclude | No silent substitution. A runner failure stays a dropout with N-1 candidates. |
+| Arena's judge comes from another family | adapt | Below. |
+| ketchup-video subtitles | exclude | The skill is excluded. |
+| principle-explain-the-number writes the decision before the run | adapt | The description keeps `user-invocable: false` and drops `disable-model-invocation`, as for every principle leaf. |
+| Orchestrate copies store files to local disk once | exclude | `c742dd6` removes the line, and the port's program directory is already local. |
+| Stacked PRs rebase onto their parent branch | adapt | Autopilot-stack's root rebases each link onto its parent's exact tip through step 2's guarded flow. |
+| Setup describes the cross-judge pool | adapt | Provider in place of family, as for Arena. |
+| The README and guide | adapt | `README-UPSTREAM.md` is verbatim. The guide is excluded. `poteto-help`'s statechart and ketchup-video rows stay out. |
+
+The same commit also drops `interrogate` from what a PR-opening subagent runs in `opening-a-pr.md`, and that hunk is taken: a subagent cannot fan out on Claude Code, and the lead runs the major review.
+
+**Interrogate.** The dispatch contract, read-only access, receipts and dropout rule stay. "Prove with a run" means a harness outside the repository, under `$TMPDIR`, or a command that writes nothing. A Codex read-only lane cannot write anywhere, so its brief lets it hand the lead a complete repro marked `not run`. The lead reruns each command in scratch or a fresh worktree after reading it. Upstream's per-adversary worktrees stay out, because a read-only lane reads the checkout as it is.
+
+**Arena.** A descriptor's family for the judge check is its provider, which is upstream's prefix rule in the port's terms: every Claude row is one family. So the second entry of each default sheet's pool never judges on its own harness. A failed entry is a named dropout and the next entry from another family runs. Upstream's walk to the default pool and its nearest-slug rule stay out, so a pool with no usable entry skips the judge. Upstream's unknown-parent branch stays out, because the parent always knows its provider. Phase A step 3 keeps the port's text.
+
+**Orchestrate.** `c742dd6`'s names map as follows.
+
+| Cursor | Claude Code and Codex |
+| --- | --- |
+| `Task` | Provider dispatch: `Agent` or `spawn_agent` natively, the launcher otherwise. |
+| Project tracker (`notes.md`) and Project store | `<config-home>/orchestrate/<project-slug>/notes.md`, with kickoffs and reports beside it. The todolist does not outlive a session. |
+| PR and CI event subscriptions | Neither harness has them. Each owner waits on its PR through Babysit, and its completion notice wakes the coordinator. T3 Code's watcher applies where Babysit step 6 says. The Autopilot-full audit tick covers an agent that never reports. |
+| Cloud VMs (`environment: "cloud"`) | Background subagents and launcher processes on this machine, one worktree per writer. |
+| Fork | Poteto-mode's Fresh subagents rule: reuse a worker only for state it holds. |
+| `control-ui`, `control-cli` | `verify`, `run`. |
+
+Three rules stay stricter than upstream's text. An owner rewrites and merges only through Autopilot-full step 2 and Shipping step 5. A worker is stopped only on affirmative failure evidence, per the existing stuck-agent exclusion, so "no activity" is drift. A retry after a tool error names another configured role's model in the report, and an unavailable model stays a dropout. The port adds a session-restart rule, because local subagents die with the session and Cursor's cloud workers do not.
+
+**Autopilot-stack (#191).** The header, step 1's stop at verified, the no-push-after-handoff rule, the tick prompt naming the file, and "a PR stacks only on a PR it builds on" come from `ab1f702`. Step 2 keeps the fork and topology rules, and the root stays the one writer of a chain's topology. So upstream's "each PR rebases onto its parent" is the root's job for a link, and an independent PR's owner rebases it through Autopilot-full step 2. Babysit step 4 says the same. The named landing invariants are unchanged.
 
 ## Upstream-only exclusions
 
+- Upstream's statechart skill (`eb4db2b`, `7698375`, `4ec7ffa`, `076f4b2`, `34b1b7c`, `740d2c0`, `519d36a`) and `00d5dec`'s pointer to it, and the ketchup-video skill (`3c0fdb4` and its `ab1f702` bullet), are not imported. `scripts/upstream-audit.py` lists them with `make-bot-ui` in `EXCLUDED_SKILLS`, so a merge leaves them unmapped. The owner may adopt statechart later.
+- The 0.15.30 to 0.15.36 Cursor manifest bumps and `pstack/docs/guide/` edits are not applied, as for the earlier bumps below.
 - Commits `799151d` and `6fecddb` add and relocate `make-bot-ui`, and `a968159` renames it after its folder. It depends on Cursor routines, webhook events, and UI primitives that Claude Code and Codex do not share. `a968159`'s other hunk names `poteto-mode` after its folder, which the port's `poteto-mode/SKILL.md` already does.
 - Four `disable-model-invocation: true` lines from `73f8be4` are not applied to `how`, `why`, `unslop`, or `typescript-best-practices`. Poteto-mode invokes those skills by name, and the flag blocks that route on Claude Code.
 - The default-model hunks for `bug-fix`, `perf-issue`, and `hillclimb` from `23a56e2`, `889ec4b`, and `70b2dc8` are not applied. Those frequent code-writing roles stay on Sol, `codex:gpt-6.1-sol@xhigh` in jm:stack.
@@ -83,8 +160,8 @@ Fetch and inspect only commits that touched pstack after the recorded sync point
 
 ```shell
 git fetch cursor main
-git log --oneline 88d47514b82e7c44f00f2b2a72ff6dd12158038c..cursor/main -- pstack
-git diff --stat 88d47514b82e7c44f00f2b2a72ff6dd12158038c..cursor/main -- pstack
+git log --oneline c742dd61706fbacc1b95f1a20b7b988cf096ce6c..cursor/main -- pstack
+git diff --stat c742dd61706fbacc1b95f1a20b7b988cf096ce6c..cursor/main -- pstack
 ```
 
 No output means the tracked pstack tree has not changed. This comparison does not need a polling service or generated mirror branch.
