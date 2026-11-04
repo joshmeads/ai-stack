@@ -84,6 +84,8 @@ Needs Node 22 or later. Chrome and the measured server must run outside the agen
 - When another tool drives the app (Playwright, a k6 script), use `run "<cmd>"` as the action so it is measured as one step.
 - `--filter STR` keeps only functions whose resolved source path contains STR, such as `app/dashboard` or `lib/db`, in the app lists. It does not change top self.
 
+- Before changing the scripts, read [`references/internals.md`](references/internals.md).
+
 ## Report
 
 For each action or route, state CPU (server and browser main thread) and long tasks from the `--no-profile` pass, allocated and retained memory, and the top 3 app functions, with the iteration count and whether the build was dev or prod. For a before and after comparison, run both on the same build mode, with the same `--repeat` and throttle, and quote the results directory.

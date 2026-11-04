@@ -170,6 +170,18 @@ OpenCode reads `~/.config/opencode/AGENTS.md`, so it can reuse the block writer 
 - **The jm marketplace is ai-stack's.** A `jm` plugin the checkout no longer lists is removed on every install. `removed-plugins.json` records `"reinstall": null` and a note naming the last stack commit that lists it. Plugins from other marketplaces are only removed with `--clean`.
 - **stack.toml is checked at the boundary.** Every command that reads it validates names, includes, membership and the `skills/` tree first, so a bad file plans nothing. `skills add` checks every argument before the network, and `add` and `update` write `stack.toml` only after a staged skill with a `SKILL.md` is in place, and `add` removes the new skill again when the write fails.
 
+## Constraints the code cannot state
+
+The code has no comments (see `AGENTS.md`), and no name, type or test holds these yet. Keep them when you change the code nearby.
+
+- **`groups --json` is a contract.** The Swift app reads it. A change to a field's meaning bumps `VERSION`; a new field does not.
+- **Commands run last in a plan.** The harness CLIs edit files that the plan's actions may touch, so commands run after those actions.
+- **`removed-plugins.json` is written before removals,** so the record survives a failed removal.
+- **A missing harness home skips the plugin queries.** Nothing is configured yet, and Codex refuses a `CODEX_HOME` that does not exist. The plan assumes nothing is installed, and its file actions create the home before its commands run.
+- **`plugin.json` decides the Claude plugin version.** When it and `.claude-plugin/marketplace.json` disagree, Claude Code reports `plugin.json`'s version (one-off probe). Bump both anyway, as `AGENTS.md` says.
+- **`~/.agents/skills` is the shared Codex skill folder.** Codex also reads `$CODEX_HOME/skills`, but the stack links into the shared folder (checked against codex-cli 0.160.0).
+- **A skill swap needs a reserved name for the old tree.** Renaming a directory onto an empty directory replaces it, so the old tree moves to a reserved name first.
+
 ## Modules (`src/`)
 
 - `main.rs`: CLI parsing, commands, `git pull`, model reports and bump.
