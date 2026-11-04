@@ -83,8 +83,11 @@ function parse(run: ModelRun): ParseResult {
   return { kind: "complete", text, metadata: found };
 }
 
-function vendorOf(lane: Lane): string {
-  return lane.cliModel.slice(OPENROUTER.length).replace(/^~/, "").split("/")[0]!;
+function servedBy(lane: Lane, reported: string): boolean {
+  const id = lane.cliModel.slice(OPENROUTER.length);
+  if (id.startsWith("openrouter/")) return true;
+  if (id.startsWith("~")) return reported.startsWith(`${id.slice(1).split("/")[0]!}/`);
+  return reported === id;
 }
 
 export const pi = adapter({
@@ -133,10 +136,7 @@ export const pi = adapter({
   parse: (run) => parse(run),
   proof: {
     report: "required",
-    matches(lane, reported) {
-      const vendor = vendorOf(lane);
-      return vendor === "openrouter" || reported.startsWith(`${vendor}/`);
-    },
+    matches: servedBy,
   },
   environment: () => ({
     kind: "allowlist",
@@ -162,7 +162,7 @@ export const pi = adapter({
       "The environment is an allowlist that adds `OPENROUTER_API_KEY` and `PI_CODING_AGENT_DIR`, and sets `PI_OFFLINE=1` and `PI_TELEMETRY=0`, which turn off pi's automatic network activity, such as the catalog refresh, and its telemetry and attribution headers. No other `PI_` name or provider key passes. A stored `auth.json` key takes precedence over the variable. Offline, the model list is the cached catalog, so run `pi update --models` when a new ID is missing from it.",
       "The preflight runs `pi --list-models <model>`, and it exits 0 in every measured case. A row whose `provider/model` equals the model passes, with the fixed evidence `model <id> listed; key not validated`. It proves that a key is present and the catalog lists the model, not that the key works or has credits: an invalid key passes. `No models available.` is `unauthenticated`/77. `No models matching` is `unavailable-model`/69, and that includes a host with another provider's login and no OpenRouter key. Any other output is `child-failed`/70. A model the catalog does not list is refused here, even though pi would send it as a custom ID.",
       "The reply, session ID, token usage and cost come from the `--mode json` stream on stdout. A lane is complete only when the stream has `agent_settled` and the last assistant `message_end` has `stopReason` `stop` and text; the reply is that message's text parts, without thinking parts. Usage and cost are summed over every assistant message. A provider error exits 0 with `stopReason` `error`, so an invalid key (`401`) or a model OpenRouter refuses (`400`) is `child-failed`/70 with its text. Running out of credits was not measured and takes the same path. No key at launch exits 1 with `No API key found` on stderr, and an empty prompt exits 0 with only the session header, and each ends without a complete reply. SIGTERM exits 143 and SIGINT exits 130, each `cancelled`/130 even when the stream looks finished.",
-      "The model proof is the stream's `responseModel`, such as `x-ai/...` for `~x-ai/grok-latest`. It must name the requested vendor, and the receipt keeps it as `reportedModel`, so a rolling ID's receipt says which model served it. The check stops at the vendor because a rolling ID never equals the model it resolves to. An `openrouter/openrouter/...` router ID can serve any vendor, so it accepts any report.",
+      "The model proof is the stream's `responseModel`, such as `x-ai/...` for `~x-ai/grok-latest`. The receipt keeps it as `reportedModel`, so a rolling ID's receipt says which model served it. A rolling `~vendor/...` ID must report that vendor, because it never equals the model it resolves to. An `openrouter/openrouter/...` router ID can serve any vendor, so it accepts any report. A concrete ID must equal the report exactly: no measured stream shows a variant suffix such as `:free` added or dropped, so none is allowed. A mismatch is `malformed-output`/65 with no output file.",
     ],
   },
 });

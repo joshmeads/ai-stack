@@ -2381,6 +2381,15 @@ emit({ type: "agent_settled", aborted: false });`);
     expect((await runLane(laneOf(wrong))).receipt).toMatchObject({ status: "malformed-output", modelVerified: false });
     expect(existsSync(wrong.outputPath)).toBe(false);
 
+    const concreteModel = "openrouter/x-ai/grok-4";
+    fakePi(`assistant({ stopReason: "stop", responseModel: "x-ai/grok-4.7", content: [{ type: "text", text: "hi" }] });
+emit({ type: "agent_settled", aborted: false });`, `provider    model       context  max-out  thinking  images\nopenrouter  x-ai/grok-4  1.0M     943.7K   yes       yes   \n`);
+    const concrete = piOptions("pi-wrong-concrete", { model: concreteModel });
+    const mismatch = await runLane(laneOf(concrete));
+    expect(mismatch.exitCode).toBe(65);
+    expect(mismatch.receipt).toMatchObject({ status: "malformed-output", modelVerified: false });
+    expect(existsSync(concrete.outputPath)).toBe(false);
+
     fakePi(`assistant({ stopReason: "error", errorMessage: "401: User not found.", content: [] });
 emit({ type: "agent_settled", aborted: false });`);
     const failed = piOptions("pi-provider-error");
