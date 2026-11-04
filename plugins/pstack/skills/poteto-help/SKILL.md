@@ -108,7 +108,7 @@ Close calls:
 
 Not in jm:stack:
 
-- `run` (CLIs and TUIs), `verify` (UIs), and `loop` are Claude Code built-ins. `plugin-dev:skill-development` ships in the separate `plugin-dev` plugin, which skill-authoring routes need. In Claude Code, install it with `/plugin marketplace add anthropics/claude-plugins-official`, then `/plugin install plugin-dev@claude-plugins-official`. [`codex-tools.md`](../poteto-mode/references/codex-tools.md) names the Codex equivalent of each.
+- `run` (CLIs and TUIs) and `loop` are Claude Code built-ins. For UIs, agents drive the real UI with whatever browser or GUI automation the session has. `plugin-dev:skill-development` ships in the separate `plugin-dev` plugin, which skill-authoring routes need. In Claude Code, install it with `/plugin marketplace add anthropics/claude-plugins-official`, then `/plugin install plugin-dev@claude-plugins-official`. [`codex-tools.md`](../poteto-mode/references/codex-tools.md) names the Codex equivalent of each.
 - `/make-bot-ui` is not ported, because it depends on Cursor routines and webhooks.
 - jm:stack has no `/orchestrate` skill. Orchestrate is a `/poteto-mode` playbook. If the slash menu shows `/orchestrate`, another plugin provides it.
 
