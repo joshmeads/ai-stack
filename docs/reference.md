@@ -160,7 +160,7 @@ The table uses the short upstream names. Claude Code exposes each native skill w
 | `/what-did-i-get-done` | summarize authored commits over a user-chosen period |
 | `/benchmark-checklist` | vet a measured performance number before reporting or acting on it |
 | `/correct` | turn mistakes agents keep repeating in a repo into checks that make them impossible (typed only) |
-| `/ketchup` | catch up on everything in this session since your last message (typed only) |
+| `/ketchup` | catch up on everything in this session since your last message |
 | `/poteto-help` | find the skill, playbook, or principle for a question about jm:stack (typed only) |
 | `/in-your-own-words` | play back your goal and the problem before work starts (typed only) |
 | `/sharpen` | rewrite a prompt deeper, not bigger, before you send it; returns the rewritten prompt and does not do the task (typed only) |
