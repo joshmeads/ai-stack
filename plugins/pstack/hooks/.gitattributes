@@ -1,0 +1,2 @@
+# Git for Windows checks out text as CRLF by default; bash and the polyglot run-hook.cmd need LF.
+* text eol=lf

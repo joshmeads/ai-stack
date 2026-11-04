@@ -3,7 +3,6 @@ name: stack-opus-medium
 description: Native Claude lane for jm:stack roles configured as claude:opus@medium.
 model: opus
 effort: medium
-background: true
 disallowedTools: Agent, Task
 ---
 

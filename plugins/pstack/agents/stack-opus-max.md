@@ -3,7 +3,6 @@ name: stack-opus-max
 description: Native Claude lane for jm:stack roles configured as claude:opus@max.
 model: opus
 effort: max
-background: true
 disallowedTools: Agent, Task
 ---
 

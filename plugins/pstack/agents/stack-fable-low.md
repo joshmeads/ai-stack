@@ -3,7 +3,6 @@ name: stack-fable-low
 description: Native Claude lane for jm:stack roles configured as claude:fable@low.
 model: fable
 effort: low
-background: true
 disallowedTools: Agent, Task
 ---
 

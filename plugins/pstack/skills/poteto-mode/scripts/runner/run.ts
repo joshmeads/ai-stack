@@ -5,12 +5,13 @@ import {
   openSync,
   readFileSync,
   realpathSync,
+  rmSync,
   statSync,
   unlinkSync,
   writeFileSync,
   writeSync,
 } from "node:fs";
-import { dirname, isAbsolute, relative, resolve, sep } from "node:path";
+import { dirname, isAbsolute, join, relative, resolve, sep } from "node:path";
 import type { Lane, LaunchFacts, ParseResult } from "./registry/index.ts";
 import {
   ERROR_EVIDENCE_LIMIT,
@@ -48,7 +49,6 @@ export interface RunResult {
   readonly receipt: RunnerReceipt;
 }
 
-// A provider's terminal event ends its stream, so malformed output keeps the tail.
 function trailingEvidence(value: string): string {
   return value.trim().slice(-ERROR_EVIDENCE_LIMIT);
 }
@@ -72,15 +72,36 @@ function modelStreamPaths(receiptPath: string): { stdoutPath: string; stderrPath
   return { stdoutPath: `${receiptPath}.stdout`, stderrPath: `${receiptPath}.stderr` };
 }
 
+interface ReservedSidecar {
+  readonly facts: NonNullable<LaunchFacts["providerSidecar"]>;
+  readonly configContent: string | null;
+}
+
+function providerSidecar(lane: Lane): ReservedSidecar | null {
+  const declared = lane.adapter.launch.sidecar;
+  if (declared === null) return null;
+  const directory = `${lane.receiptPath}.provider`;
+  return {
+    facts: {
+      directory,
+      output: declared.output === null ? null : join(directory, declared.output),
+      config: declared.config === null ? null : join(directory, declared.config.name),
+    },
+    configContent: declared.config?.content(lane) ?? null,
+  };
+}
+
 function reserveOutputs(lane: Lane): ModelStreams {
   const { stdoutPath, stderrPath } = modelStreamPaths(lane.receiptPath);
-  const paths = [lane.outputPath, lane.receiptPath, stdoutPath, stderrPath];
+  const sidecar = providerSidecar(lane);
+  const paths = [lane.outputPath, lane.receiptPath, stdoutPath, stderrPath, ...(sidecar === null ? [] : [sidecar.facts.directory])];
   const resolved = paths.map((path) => resolve(path));
   if (new Set(resolved).size !== paths.length || resolved.includes(resolve(lane.promptPath))) {
     throw new UsageError("prompt, output, receipt, and stream paths must be distinct");
   }
   const created: string[] = [];
   let stdout: number | null = null;
+  let stderr: number | null = null;
   try {
     for (const path of paths.slice(0, 2)) {
       reserve(path);
@@ -88,13 +109,27 @@ function reserveOutputs(lane: Lane): ModelStreams {
     }
     stdout = openSync(stdoutPath, "wx", 0o600);
     created.push(stdoutPath);
-    const stderr = openSync(stderrPath, "wx", 0o600);
+    stderr = openSync(stderrPath, "wx", 0o600);
+    created.push(stderrPath);
+    if (sidecar !== null) {
+      mkdirSync(sidecar.facts.directory, { mode: 0o700 });
+      created.push(sidecar.facts.directory);
+      if (sidecar.facts.config !== null && sidecar.configContent !== null) {
+        mkdirSync(dirname(sidecar.facts.config), { recursive: true, mode: 0o700 });
+        writeFileSync(sidecar.facts.config, sidecar.configContent, { encoding: "utf8", mode: 0o600, flag: "wx" });
+      }
+    }
     return { stdout, stderr };
   } catch (error) {
     if (stdout !== null) closeSync(stdout);
-    for (const path of created) removeIfExists(path);
+    if (stderr !== null) closeSync(stderr);
+    for (const path of created) rmSync(path, { recursive: true, force: true });
     throw error;
   }
+}
+
+function readIfPresent(path: string | null | undefined): string | null {
+  return path != null && existsSync(path) ? readFileSync(path, "utf8") : null;
 }
 
 function writeReceipt(path: string, receipt: RunnerReceipt): void {
@@ -134,17 +169,18 @@ function installRunCancellation(): RunCancellation {
   };
 }
 
-// The adapter's policy applies first; the parent's identity markers are always dropped, so the
-// child cannot detect a nested harness.
 export function childEnvironment(
   lane: Lane,
   source: NodeJS.ProcessEnv = process.env
 ): NodeJS.ProcessEnv {
-  const policy = lane.adapter.environment(lane.access);
+  const policy = lane.adapter.environment(lane.access, providerSidecar(lane)?.facts.directory ?? null);
   const keep = policy.kind === "allowlist"
     ? (key: string) => policy.names.includes(key) || policy.prefixes.some((prefix) => key.startsWith(prefix))
     : (key: string) => !policy.dropPrefixes.some((prefix) => key.startsWith(prefix));
-  const result = Object.fromEntries(Object.entries(source).filter(([key]) => keep(key)));
+  const result = {
+    ...Object.fromEntries(Object.entries(source).filter(([key]) => keep(key))),
+    ...(policy.kind === "allowlist" ? policy.set : undefined),
+  };
   for (const key of PARENTS[lane.parent].identity) delete result[key];
   return result;
 }
@@ -216,7 +252,6 @@ function captureStream(stream: ReadableStream<Uint8Array>, descriptor?: number):
       try {
         await reader.cancel();
       } catch {
-        // The stream may already be closed and its reader released.
       }
     },
   };
@@ -383,11 +418,6 @@ function within(parent: string, child: string): boolean {
   return path === "" || (path !== ".." && !path.startsWith(`..${sep}`) && !isAbsolute(path));
 }
 
-// A linked worktree keeps its refs, objects and index in a git directory outside the cwd. Git
-// itself finds that directory, from the cwd and with the writer's environment, so the deny matches
-// what the writer's own git will use. Returns null for a non-repository or a directory the cwd
-// contains, and refuses whatever cannot be denied literally: denyWrite entries are globs that
-// cannot be escaped, and Claude Code 2.1.288 on Linux drops entries containing * ? [ ].
 export async function discoverSharedGitDir(
   cwd: string,
   env: NodeJS.ProcessEnv,
@@ -541,7 +571,7 @@ function modelProof(
 
 function completeReceipt(
   lane: Lane,
-  partial: Omit<RunnerReceipt, "schemaVersion" | "parent" | "provider" | "model" | "effort" | "mode" | "cwd" | "promptPath" | "outputPath" | "stdoutPath" | "stderrPath">
+  partial: Omit<RunnerReceipt, "schemaVersion" | "parent" | "provider" | "model" | "effort" | "mode" | "writerSandbox" | "cwd" | "promptPath" | "outputPath" | "stdoutPath" | "stderrPath">
 ): RunnerReceipt {
   return {
     schemaVersion: 1,
@@ -550,6 +580,7 @@ function completeReceipt(
     model: lane.model,
     effort: lane.effort,
     mode: lane.access.mode,
+    writerSandbox: lane.access.mode === "read-only" ? null : lane.access.sandbox,
     cwd: lane.cwd,
     promptPath: lane.promptPath,
     outputPath: lane.outputPath,
@@ -710,13 +741,46 @@ async function executeLane(
       writeReceipt(lane.receiptPath, receipt);
       return { exitCode: statusExitCode(discovery.status), receipt };
     }
-    const facts: LaunchFacts = { sharedGitDir: discovery.sharedGitDir };
+    const facts: LaunchFacts = { sharedGitDir: discovery.sharedGitDir, providerSidecar: providerSidecar(lane)?.facts ?? null };
     launchArgs = adapter.launch.argv(lane, facts);
     progress.argv = [executable, ...launchArgs];
   }
 
   const preflight = adapter.preflight;
-  const preflightArgs = preflight.argv(lane);
+  if (preflight.guard !== undefined) {
+    const run = await runProcess(executable, preflight.guard.argv, lane.cwd, env, null, deadlineAt, cancellation);
+    if (run.cancelledBy !== null) return finishWithoutChild("cancelled", "during the pre-launch guard");
+    if (run.timedOut) return finishWithoutChild("timed-out", "during the pre-launch guard");
+    const refusal = preflight.guard.check(run);
+    if (refusal !== null) {
+      const completed = Date.now();
+      receipt = completeReceipt(lane, {
+        status: refusal.status,
+        startedAt,
+        completedAt: new Date(completed).toISOString(),
+        elapsedMs: completed - started,
+        executable,
+        preflight: preflightState,
+        argv: [executable, ...launchArgs],
+        exitCode: run.exitCode,
+        signal: run.signal,
+        reportedModel: null,
+        modelVerified: false,
+        modelEvidence: null,
+        sessionId: null,
+        usage: null,
+        costUsd: null,
+        error: {
+          message: refusal.message,
+          evidence: evidence(`${run.stdout}\n${run.stderr}`),
+        },
+      });
+      removeIfExists(lane.outputPath);
+      writeReceipt(lane.receiptPath, receipt);
+      return { exitCode: statusExitCode(receipt.status), receipt };
+    }
+  }
+  const preflightArgs = preflight.argv(lane, providerSidecar(lane)?.facts ?? null);
   const runPreflight = async () => {
     const run = await runProcess(executable, preflightArgs, lane.cwd, env, null, deadlineAt, cancellation);
     const verdict = preflight.classify(run, lane);
@@ -727,7 +791,6 @@ async function executeLane(
   let attempt = await runPreflight();
   let preflightEvidence = attempt.shown;
 
-  // The only retry an adapter can request is one more preflight after an "unauthenticated" verdict.
   if (
     preflight.retryAfterUnauthenticatedMs !== null &&
     attempt.verdict.kind === "unauthenticated" &&
@@ -785,7 +848,9 @@ async function executeLane(
         ? "timed-out"
         : attempt.verdict.kind === "unavailable-model"
           ? "unavailable-model"
-          : "unauthenticated";
+          : attempt.verdict.kind === "inconclusive"
+            ? "child-failed"
+            : "unauthenticated";
     receipt = completeReceipt(lane, {
       status,
       startedAt,
@@ -807,7 +872,9 @@ async function executeLane(
           ? `launcher received ${preflightResult.cancelledBy} during preflight`
           : preflightResult.timedOut
             ? "authentication preflight timed out"
-            : "authentication or model preflight failed",
+            : attempt.verdict.kind === "inconclusive"
+              ? "authentication preflight output was inconclusive"
+              : "authentication or model preflight failed",
         evidence: preflightEvidence,
       },
     });
@@ -828,7 +895,7 @@ async function executeLane(
     launchArgs,
     lane.cwd,
     env,
-    adapter.launch.prompt === "stdin" ? prompt : null,
+    adapter.launch.prompt === "stdin" ? adapter.launch.stdinEnvelope?.(prompt) ?? prompt : null,
     deadlineAt,
     cancellation,
     streamFiles
@@ -846,7 +913,7 @@ async function executeLane(
   } as const;
 
   const parsed: ParseResult | null = result.cancelledBy === null && !result.timedOut
-    ? adapter.parse(result, lane)
+    ? adapter.parse({ ...result, sidecar: readIfPresent(providerSidecar(lane)?.facts.output) }, lane)
     : null;
   const providerFailure = parsed?.kind === "provider-failure" ? parsed : null;
   const metadata = providerFailure?.metadata
@@ -941,11 +1008,11 @@ export async function runLane(
 ): Promise<RunResult> {
   validateLane(lane);
   const deadlineAt = lane.timeoutMs === null ? null : started + lane.timeoutMs;
-  const launchArgs = lane.adapter.launch.argv(lane, { sharedGitDir: null });
+  const launchArgs = lane.adapter.launch.argv(lane, { sharedGitDir: null, providerSidecar: providerSidecar(lane)?.facts ?? null });
   const progress: LaneProgress = {
     executable: null,
     preflight: {
-      argv: [lane.adapter.executable, ...lane.adapter.preflight.argv(lane)],
+      argv: [lane.adapter.executable, ...lane.adapter.preflight.argv(lane, providerSidecar(lane)?.facts ?? null)],
       status: "not-run",
       evidence: "",
     },

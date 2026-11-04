@@ -1,12 +1,12 @@
-import { ACCESS_MODES, EFFORTS, PARENTS, type Parent, UsageError } from "../types.ts";
-import { isRevision, type Lane, type ProviderAdapter } from "./contract.ts";
-import type { FamilyEntry, KeptPredecessor, ReleasedPair, RoleDefault } from "./family.ts";
+import { ACCESS_MODES, EFFORTS, PARENTS, type Parent, UsageError, WRITER_SANDBOXES } from "../types.ts";
+import { access, accessKind, isRevision, type Lane, type ProviderAdapter } from "./contract.ts";
+import { effortsOf, type FamilyEntry, type KeptPredecessor, modelIds, type ReleasedPair, type RoleDefault } from "./family.ts";
 import { FAMILIES, type FamilyName, RELEASED_PAIRS, ROLE_DEFAULTS } from "./models.ts";
 import { ADAPTERS } from "./providers.ts";
 
 export type { Lane, LaunchFacts, ParseResult } from "./contract.ts";
+export { effortsOf, modelIds } from "./family.ts";
 
-/** The only registry module code outside registry/ imports. */
 export interface Registry {
   readonly families: readonly FamilyEntry[];
   readonly adapters: readonly ProviderAdapter[];
@@ -20,13 +20,13 @@ export const REGISTRY: Registry = {
   releasedPairs: RELEASED_PAIRS,
 };
 
-/** Raw CLI strings. Path validation stays in run.ts; resolveLane does no filesystem access. */
 export interface LaneRequest {
   readonly parent: string;
   readonly provider: string;
   readonly model: string;
   readonly effort: string;
   readonly mode: string;
+  readonly writerSandbox?: string;
   readonly promptPath: string;
   readonly cwd: string;
   readonly outputPath: string;
@@ -37,11 +37,9 @@ export interface LaneRequest {
 export type ModelMatch =
   | { readonly kind: "current"; readonly family: FamilyEntry }
   | { readonly kind: "kept"; readonly family: FamilyEntry; readonly predecessor: KeptPredecessor }
-  | { readonly kind: "stale-revision"; readonly family: FamilyEntry } // the parent must normalize first
+  | { readonly kind: "stale-revision"; readonly family: FamilyEntry }
   | { readonly kind: "unregistered" };
 
-/** Precedence: an exact family model, then a kept predecessor, then a rolling revision pattern.
- *  A registered exact pin therefore wins over the pattern. */
 export function resolveModel(provider: string, model: string): ModelMatch {
   const families = REGISTRY.families.filter((entry) => entry.provider === provider);
   const current = families.find((entry) => entry.model === model);
@@ -61,9 +59,11 @@ function oneOf<T extends string>(name: string, value: string, choices: readonly 
   return value as T;
 }
 
-/** Raw request → Lane, or a UsageError. An unregistered pair runs unchanged. */
 export function resolveLane(request: LaneRequest): Lane {
-  const mode = oneOf("mode", request.mode, ACCESS_MODES);
+  const laneAccess = access(
+    oneOf("mode", request.mode, ACCESS_MODES),
+    request.writerSandbox === undefined ? undefined : oneOf("writer-sandbox", request.writerSandbox, WRITER_SANDBOXES)
+  );
   const parent = oneOf("parent", request.parent, Object.keys(PARENTS) as Parent[]);
   const adapter = REGISTRY.adapters.find((entry) => entry.id === request.provider);
   if (adapter === undefined) {
@@ -83,10 +83,20 @@ export function resolveLane(request: LaneRequest): Lane {
     );
   }
   const family = match.kind === "unregistered" ? null : match.family;
-  const offered = match.kind === "kept" ? match.predecessor.efforts : family?.efforts ?? EFFORTS;
+  const offered = match.kind === "kept"
+    ? match.predecessor.efforts
+    : family === null
+      ? adapter.effortIn === "model-id" ? ["default" as const] : EFFORTS
+      : effortsOf(family);
   if (!offered.includes(effort)) {
     throw new UsageError(
       `effort ${effort} is not offered for ${adapter.id}:${request.model}; choose one of: ${offered.join(", ")}`
+    );
+  }
+  const kind = accessKind(laneAccess);
+  if (!adapter.launch.supports.includes(kind)) {
+    throw new UsageError(
+      `provider ${adapter.id} does not support ${kind}; it supports only: ${adapter.launch.supports.join(", ")}`
     );
   }
   return {
@@ -99,8 +109,9 @@ export function resolveLane(request: LaneRequest): Lane {
       rolling: family.rolling ?? null,
     },
     model: request.model,
+    cliModel: (family === null ? undefined : modelIds(family)?.[effort]) ?? request.model,
     effort,
-    access: { mode },
+    access: laneAccess,
     promptPath: request.promptPath,
     cwd: request.cwd,
     outputPath: request.outputPath,
@@ -109,7 +120,6 @@ export function resolveLane(request: LaneRequest): Lane {
   } as Lane;
 }
 
-/** "provider:model@defaultEffort". */
 export function defaultDescriptor(family: FamilyEntry): string {
   return `${family.provider}:${family.model}@${family.defaultEffort}`;
 }

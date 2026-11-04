@@ -87,8 +87,8 @@ impl Effort {
 // ---- What the jm-stack plugin accepts in a model sheet ----
 //
 // Keep these in step with plugins/pstack/skills/poteto-mode/references/provider-dispatch.md
-// (descriptor grammar `<provider>:<model>@<effort>` and its model matrix) and with the role
-// rows that setup-stack writes.
+// (descriptor grammar `<provider>:<model>@<effort>`) and model-catalog.md (its Claude and
+// Codex matrix rows and role defaults). Its read-only providers stay out of ai-stack sheets.
 
 /// The 15 sheet rows, in file order.
 pub const SHEET_ROWS: [&str; 15] = [
@@ -106,10 +106,11 @@ const PARENT_LANES: [&str; 2] = ["inherit-parent", "auto"];
 const FIVE: &[&str] = &["low", "medium", "high", "xhigh", "max"];
 const SIX: &[&str] = &["low", "medium", "high", "xhigh", "max", "ultra"];
 /// (provider, model, selectable efforts) for every model-matrix row.
-const MATRIX: [(&str, &str, &[&str]); 5] = [
+const MATRIX: [(&str, &str, &[&str]); 6] = [
     ("claude", "fable", FIVE),
     ("claude", "opus", FIVE),
     ("claude", "haiku", FIVE),
+    ("claude", "sonnet", FIVE),
     ("codex", "gpt-6.1-sol", SIX),
     ("codex", "gpt-6-luna", FIVE),
 ];
@@ -591,6 +592,7 @@ mod tests {
             let msg = err_of(&text);
             assert!(msg.contains(message), "{message:?} not in {msg}");
         }
+        assert!(from_str(&base.replace(bug, "\"bug-fix\" = \"claude:sonnet@high\""), Path::new("/h")).is_ok());
         // Ultra is selectable for Sol only.
         assert!(from_str(&base.replace("\"bug-fix\" = \"codex:gpt-6.1-sol@medium\"", "\"bug-fix\" = \"codex:gpt-6.1-sol@ultra\""), Path::new("/h")).is_ok());
     }
