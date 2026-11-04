@@ -1,5 +1,3 @@
-//! Planned filesystem changes, their diffs, and applying them safely.
-
 use std::fs;
 use std::io;
 use std::os::unix::fs::symlink;
@@ -16,25 +14,14 @@ use crate::plugins::{self, Runner};
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum Action {
-    /// Create or overwrite a regular file. `before` is the current text, `None` when absent.
     Write { path: PathBuf, before: Option<String>, after: String },
-    /// Delete a regular file whose current text is `before`.
     Remove { path: PathBuf, before: String, anchor: Anchor },
-    /// Delete a symlink currently pointing at `target`.
     Unlink { path: PathBuf, target: PathBuf, anchor: Anchor },
-    /// Move whatever is at `path` (an unmanaged file or a symlink) into the backup and write `text`.
     ReplaceWithFile { path: PathBuf, text: String, fingerprint: u64 },
-    /// Move an entry (directory, file or symlink, never followed) into the backup.
-    /// `fingerprint` is its lstat tree fingerprint at planning time. `clean` marks a `--clean`
-    /// move of a stray skill; otherwise `--force` is moving a stray skill out of a link's way.
     MoveToBackup { path: PathBuf, fingerprint: u64, clean: bool, anchor: Anchor },
-    /// Create a symlink at `path` pointing at `target`, after backing up what `displaces` names.
     Link { path: PathBuf, target: PathBuf, displaces: Displaced, anchor: Anchor },
 }
 
-/// The skill folder a folder-entry action works in, as planning saw it: resolved, with its
-/// device and inode (`None` when it did not exist yet). Apply refuses the action when the
-/// folder now resolves elsewhere or is another directory.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Anchor {
     pub real: PathBuf,
@@ -56,23 +43,15 @@ impl Anchor {
         Ok(())
     }
 
-    /// The ledger key of the entry `name` in this folder.
     fn key(&self, name: &std::ffi::OsStr) -> String {
         self.real.join(name).to_string_lossy().into_owned()
     }
 }
 
-/// What a `Link` takes the place of. Apply checks it is still there, then backs it up as part
-/// of the same action.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum Displaced {
-    /// `path` is free.
     Nothing,
-    /// An ai-stack link at `entry` to this (wrong) target, copied into the backup and replaced.
-    /// `entry` is the on-disk name, which a case-insensitive disk may spell differently.
     OwnLink { entry: PathBuf, target: PathBuf },
-    /// A stray skill at `entry` with this lstat tree fingerprint, moved into the backup under
-    /// its on-disk name. `clean` marks a `--clean` move; otherwise `--force` moves it.
     Stray { entry: PathBuf, fingerprint: u64, clean: bool },
 }
 
@@ -97,7 +76,6 @@ impl Action {
         }
     }
 
-    /// What applying it copies or moves into the backup, if anything.
     fn backup_source(&self) -> Option<&Path> {
         match self {
             Action::Link { displaces, .. } => displaces.entry(),
@@ -116,20 +94,12 @@ impl Action {
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
 pub struct Plan {
     pub actions: Vec<Action>,
-    /// Harness CLI commands (plugin marketplace and installs), run after every file action.
     pub commands: Vec<plugins::Command>,
-    /// Problems that block applying, e.g. an unmanaged file in the way. Non-empty means apply must refuse.
     pub conflicts: Vec<String>,
-    /// Informational lines, such as untouched extras. They never make a plan non-empty.
     pub warnings: Vec<String>,
-    /// Skill folder entries the stack does not own that `--clean` would move or that sit where
-    /// a skill link goes, whatever the options. `stray` reports these.
     pub stray: Vec<PathBuf>,
     pub home: Option<PathBuf>,
-    /// The skill-link ledger (`ledger::FILE`) apply keeps in step with the links it changes.
     pub ledger: Option<PathBuf>,
-    /// A read-only report (`stray`): stray moves are left out rather than fingerprinted, so
-    /// apply refuses it.
     pub report: bool,
 }
 
@@ -137,18 +107,15 @@ pub struct Plan {
 pub struct ApplyReport {
     pub applied: usize,
     pub backup_dir: Option<PathBuf>,
-    /// `removed-plugins.json` in the backup dir, when the plan removed plugins.
     pub manifest: Option<PathBuf>,
 }
 
 pub const MANIFEST: &str = "removed-plugins.json";
 
-/// `ai-stack stray`: skills and plugins this stack does not track. `--json` prints it as is.
 #[derive(Debug, Clone, Default, PartialEq, Eq, serde::Serialize)]
 pub struct Stray {
     pub skills: usize,
     pub plugins: usize,
-    /// Home-relative paths (`~/.claude/skills/x`), since one name can sit in several roots.
     pub skill_names: Vec<String>,
     pub plugin_ids: Vec<String>,
 }
@@ -163,7 +130,6 @@ impl Stray {
     }
 }
 
-/// Returns a `Write` action when `path` does not already contain exactly `after`.
 pub fn write_if_changed(path: &Path, after: String) -> Result<Option<Action>> {
     let before = current_text(path)?;
     if before.as_deref() == Some(after.as_str()) {
@@ -177,13 +143,10 @@ impl Plan {
         self.actions.is_empty() && self.commands.is_empty() && self.conflicts.is_empty()
     }
 
-    /// Number of file actions plus commands.
     pub fn len(&self) -> usize {
         self.actions.len() + self.commands.len()
     }
 
-    /// Whether the summary line at `index` belongs to `--clean`: a stray skill moved into the
-    /// backup (on its own or out of a link's way) or a plugin removal.
     pub fn is_clean(&self, index: usize) -> bool {
         match self.actions.get(index) {
             Some(action) => matches!(action, Action::MoveToBackup { clean: true, .. } | Action::Link { displaces: Displaced::Stray { clean: true, .. }, .. }),
@@ -195,8 +158,6 @@ impl Plan {
         (0..self.len()).filter(|&index| self.is_clean(index)).count()
     }
 
-    /// The stray skills the skill folders hold (`Plan::stray`), and the plugins the `--clean`
-    /// commands remove or disable.
     pub fn stray(&self, home: &Path) -> Stray {
         let mut stray = Stray { skill_names: self.stray.iter().map(|path| tilde(path, home)).collect(), ..Stray::default() };
         stray.skill_names.sort();
@@ -206,14 +167,11 @@ impl Plan {
         stray
     }
 
-    /// One line per action, then one per command, e.g. `write   ~/.claude/CLAUDE.md`.
     pub fn summary_lines(&self, home: &Path) -> Vec<String> {
         let actions = self.actions.iter().map(|action| summary_line(action, home));
         actions.chain(self.commands.iter().map(|command| format!("run     {command}"))).collect()
     }
 
-    /// Unified diff for one file action, or a one-line description for an unlink. Empty for
-    /// indices past the file actions (the commands, whose summary line says everything).
     pub fn diff(&self, index: usize) -> String {
         let Some(action) = self.actions.get(index) else {
             return String::new();
@@ -240,8 +198,6 @@ impl Plan {
         }
     }
 
-    /// Full plain-text rendering: conflicts, then each summary line followed by its diff, with
-    /// the `--clean` lines in their own section.
     pub fn render_text(&self, home: &Path) -> String {
         let mut out: String = self.warnings.iter().map(|warning| format!("{warning}\n")).collect();
         if self.is_empty() {
@@ -280,12 +236,6 @@ impl Plan {
     }
 }
 
-/// Applies every file action, then runs every command through `runner`. Refuses when there
-/// are conflicts or when a target's current state no longer matches the action's `before`.
-/// Backs up every file or link it replaces or removes under `backup_root/<unix-seconds>/{home,abs}/`.
-/// A target path with `..` or other non-plain components is refused so no backup escapes that
-/// directory. Commands run last because the harness CLIs edit files the actions may touch.
-/// Plugin removals are recorded with their reinstall commands in `MANIFEST` in the backup dir.
 pub fn apply(plan: &Plan, backup_root: &Path, runner: &dyn Runner) -> Result<ApplyReport> {
     if !plan.conflicts.is_empty() {
         bail!(
@@ -302,7 +252,6 @@ pub fn apply(plan: &Plan, backup_root: &Path, runner: &dyn Runner) -> Result<App
 
     let stamp = SystemTime::now().duration_since(UNIX_EPOCH)?.as_secs();
     let backup_dir = backup_root.join(stamp.to_string());
-    // A second apply in the same second must not overwrite the first one's backups.
     let mut backup_dir = backup_dir;
     let mut suffix = 1;
     let removals: Vec<&plugins::Command> = plan.commands.iter().filter(|command| command.undo.is_some()).collect();
@@ -335,7 +284,6 @@ pub fn apply(plan: &Plan, backup_root: &Path, runner: &dyn Runner) -> Result<App
     applied?;
     saved?;
 
-    // Written before the removals run, so it exists even when one of them fails.
     let manifest = if removals.is_empty() {
         None
     } else {
@@ -375,9 +323,6 @@ pub fn apply(plan: &Plan, backup_root: &Path, runner: &dyn Runner) -> Result<App
     })
 }
 
-/// Applies the file actions in order, re-checking each folder-entry action's folder first.
-/// `recorded` collects the ledger changes of the links made and removed, also when an action
-/// fails part way.
 fn apply_actions(plan: &Plan, backup_dir: &Path, backed_up: &mut bool, recorded: &mut Vec<(String, Option<String>)>) -> Result<()> {
     let home = plan.home.as_deref();
     for action in &plan.actions {
@@ -435,7 +380,6 @@ fn apply_actions(plan: &Plan, backup_dir: &Path, backed_up: &mut bool, recorded:
     Ok(())
 }
 
-/// `directory`, `file`, `symlink to <target>` or `missing`, for a diff line.
 fn entry_kind(path: &Path) -> String {
     match fs::symlink_metadata(path) {
         Ok(meta) if meta.file_type().is_symlink() => format!("symlink to {}", fs::read_link(path).map(|t| t.display().to_string()).unwrap_or_default()),
@@ -474,7 +418,6 @@ fn text_diff(before: &str, after: &str, path: &Path) -> String {
         .to_string()
 }
 
-/// Current text of a regular file, `None` when absent. Symlinks and directories are errors.
 fn current_text(path: &Path) -> Result<Option<String>> {
     match fs::symlink_metadata(path) {
         Ok(meta) if meta.is_file() => {
@@ -488,7 +431,6 @@ fn current_text(path: &Path) -> Result<Option<String>> {
     }
 }
 
-/// Current target of a symlink, `None` when absent. Regular files and directories are errors.
 fn current_link(path: &Path) -> Result<Option<PathBuf>> {
     match fs::symlink_metadata(path) {
         Ok(meta) if meta.file_type().is_symlink() => {
@@ -506,7 +448,6 @@ fn stale(path: &Path) -> anyhow::Error {
     anyhow!("{} changed since the plan was made; run again", path.display())
 }
 
-/// Checks that the disk still matches the state the action was planned against.
 fn verify(action: &Action) -> Result<()> {
     let matches = match action {
         Action::Write { path, before, .. } => (current_text(path)? == *before).then_some(()),
@@ -533,7 +474,6 @@ fn verify(action: &Action) -> Result<()> {
     Ok(())
 }
 
-/// Copies the current file or symlink at `path` into `dir`. Returns false when `path` is absent.
 fn backup(path: &Path, dir: &Path, home: Option<&Path>) -> Result<bool> {
     let meta = match fs::symlink_metadata(path) {
         Ok(meta) => meta,
@@ -612,7 +552,6 @@ fn remove_tree(path: &Path) -> Result<()> {
     Ok(())
 }
 
-/// Stable FNV-1a over sorted relative paths and lstat metadata, never following links.
 pub fn fingerprint(path: &Path) -> Result<u64> {
     fn field(hash: &mut u64, bytes: &[u8]) {
         for byte in (bytes.len() as u64).to_le_bytes().iter().chain(bytes) {
@@ -641,14 +580,10 @@ pub fn fingerprint(path: &Path) -> Result<u64> {
     Ok(hash)
 }
 
-/// Permissions of the regular file at `path` (following links), if there is one.
 fn file_permissions(path: &Path) -> Option<fs::Permissions> {
     fs::metadata(path).ok().filter(|meta| meta.is_file()).map(|meta| meta.permissions())
 }
 
-/// Writes `text` to a new, exclusively created temp file with an unpredictable name
-/// beside `path`, then renames it over `path`. The file gets `permissions` (the
-/// replaced file's mode) or, for a new file, the default mode under the umask.
 pub(crate) fn write_atomic(path: &Path, text: &str, permissions: Option<fs::Permissions>) -> Result<()> {
     use std::io::Write as _;
     create_parent(path)?;

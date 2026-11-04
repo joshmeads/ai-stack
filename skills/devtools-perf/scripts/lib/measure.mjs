@@ -1,16 +1,3 @@
-// One measured step on every target (browser page and Node servers):
-//
-//   heap snapshots (opt) → prepare action → GC → start probes → sample
-//   → act → settle → sample (the boundary) → end the trace and stop the
-//   profilers together → GC → sample → drain the trace → heap snapshots
-//   (opt) → symbolicate and write artifacts
-//
-// The trace end and the profiler stops are sent together at the boundary,
-// so neither waits on the other, and the retained-memory sample is taken
-// before the trace is transferred. Nothing that costs CPU or allocates on a
-// target (fetching source maps from the server) runs before the last
-// sample.
-
 import { appendFileSync, closeSync, existsSync, mkdirSync, openSync, readdirSync, writeFileSync, writeSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join, resolve } from "node:path";
@@ -20,25 +7,13 @@ import { printLeak, printStep, slug } from "./output.mjs";
 import { allocSummary, cpuSummary } from "./profile.mjs";
 import { ActionTimeout, RunAborted, round, sec, sleep } from "./util.mjs";
 
-// Long tasks come from a trace, not a PerformanceObserver: a task that runs
-// while a same-process navigation commits (parsing the new page's first
-// chunk, its inline scripts) is attributed to the outgoing document, so no
-// observer ever sees it. This category carries RunTask for every task plus
-// the frame-to-process events that say which renderers host this page.
 const LONG_TASK_CATEGORIES = ["-*", "disabled-by-default-devtools.timeline"];
-// --trace: what the Performance panel records, JS samples included.
 const TRACE_CATEGORIES = [
   "-*", "devtools.timeline", "disabled-by-default-devtools.timeline", "disabled-by-default-devtools.timeline.frame",
   "disabled-by-default-devtools.timeline.stack", "v8.execute", "disabled-by-default-v8.cpu_profiler", "blink.user_timing",
   "loading", "latencyInfo", "gpu",
 ];
 const LONG_TASK_US = 50_000;
-
-// ---------- probes ----------
-// A probe records something between start() and stop(). Failures other
-// than a lost target leave { error } instead of a value; a lost target
-// ends the run. dispose() releases local resources (listeners, files)
-// whether or not start succeeded.
 
 function probe(start, stop, dispose = () => {}) {
   let on = false, error = null, value = null;
@@ -62,8 +37,6 @@ const cpuProbe = (t) => probe(
   async () => (await t.send("Profiler.stop")).profile,
 );
 
-// Sampled every 16KB on average (DevTools uses 32KB), so small steps still
-// get a usable estimate of bytes allocated, collected or not.
 const allocProbe = (t) => probe(
   () => t.send("HeapProfiler.startSampling", { samplingInterval: 16384, includeObjectsCollectedByMajorGC: true, includeObjectsCollectedByMinorGC: true }),
   async () => (await t.send("HeapProfiler.stopSampling")).profile,
@@ -91,8 +64,6 @@ function networkProbe(page) {
   );
 }
 
-// Counts cross-document main-frame navigations and tracks whether the main
-// frame is still loading, so settle can wait for a navigation to finish.
 function navProbe(page) {
   let count = 0, loading = false, offs = [];
   const p = probe(
@@ -115,13 +86,6 @@ function navProbe(page) {
   return p;
 }
 
-// Records the page's trace for the step: long tasks (50ms or more on the
-// main thread of any renderer that hosted one of the page's frames) and
-// those renderers' pids. With file set, also streams every event there
-// (--trace). end() asks Chrome to stop recording at the measurement
-// boundary; events still arrive until drain() has seen
-// Tracing.tracingComplete. Tasks that start after the boundary (stopping
-// the profilers, say) are left out of the result.
 function traceProbe(page, file) {
   const threads = new Map(), pids = new Set(), pending = new Set(), tasks = [];
   let off = null, fd, sep = "", on = false, done = null, error = null, dataLoss = false;
@@ -133,7 +97,6 @@ function traceProbe(page, file) {
     else if (e.name === "ProcessReadyInBrowser") { if (pending.has(d?.processPseudoId)) pids.add(d.processId); }
     else if (e.ph === "X" && e.name === "RunTask" && e.dur >= LONG_TASK_US) tasks.push(e);
   };
-  // Local resources only; never ends a recording this probe did not start.
   const dispose = () => {
     off?.();
     off = null;
@@ -179,21 +142,16 @@ function traceProbe(page, file) {
         dispose();
       }
     },
-    // untilUs: the boundary on the trace clock (Performance.getMetrics
-    // Timestamp, in microseconds).
     result(untilUs = Infinity) {
       if (error) return { error };
       if (!pids.size) return { observed: false, reason: "the trace did not say which renderer hosts this page" };
       const main = tasks.filter((e) => pids.has(e.pid) && threads.get(`${e.pid}:${e.tid}`) === "CrRendererMain" && e.ts < untilUs);
       return { observed: true, dataLoss, longTasksMs: main.map((e) => Math.round(e.dur / 1000)) };
     },
-    // The page's renderer pids, or null when the trace could not say.
     get pagePids() { return error || !pids.size ? null : pids; },
     get error() { return error; },
   };
 }
-
-// ---------- samples ----------
 
 async function samplePage(page) {
   const [{ metrics }, procs] = await Promise.all([
@@ -222,7 +180,6 @@ export async function heapSnapshot(t, file) {
   const fd = openSync(file, "w");
   const off = t.on("HeapProfiler.addHeapSnapshotChunk", (p) => writeSync(fd, p.chunk));
   try {
-    // No reply limit: snapshot time grows with the heap.
     await t.send("HeapProfiler.takeHeapSnapshot", { reportProgress: false }, { timeoutMs: 0 });
   } finally {
     off();
@@ -231,15 +188,10 @@ export async function heapSnapshot(t, file) {
   return file;
 }
 
-// ---------- diffs ----------
-
 const MAIN_THREAD = { taskMs: "TaskDuration", scriptMs: "ScriptDuration", layoutMs: "LayoutDuration", styleMs: "RecalcStyleDuration", layouts: "LayoutCount", styleRecalcs: "RecalcStyleCount" };
 const DOM = { nodes: "Nodes", listeners: "JSEventListeners", documents: "Documents", frames: "Frames" };
 
 function mainThread(before, after) {
-  // These counters restart with every new document (NavigationStart
-  // changes; same-site navigations included), so after a navigation the
-  // after values are the new document's whole cost so far.
   const reset = after.m.NavigationStart !== before.m.NavigationStart
     || Object.values(MAIN_THREAD).some((k) => (after.m[k] ?? 0) < (before.m[k] ?? 0));
   const out = {};
@@ -251,13 +203,6 @@ function mainThread(before, after) {
   return out;
 }
 
-// Per process id, so a process started mid-step (site isolation on
-// navigation) counts from zero. A renderer counts as this page's only if
-// the trace saw it host one of the page's frames; without the trace, all
-// renderers are summed and labelled so. A process that exited mid-step has
-// no final reading, so it is listed rather than counted; so is a page
-// renderer that started and exited within the step, which neither sample
-// saw.
 function processCpu(before, after, pagePids) {
   const ms = {};
   for (const [id, p] of Object.entries(after.cpu)) {
@@ -276,17 +221,11 @@ function processCpu(before, after, pagePids) {
 
 const pick = (m, keys) => Object.fromEntries(Object.entries(keys).map(([name, k]) => [name, m[k] ?? 0]));
 
-// A page's CPU and allocation sampling restarts when a new document's
-// inspector session takes over (cross-process navigations), and only the
-// last session's data comes back. A profile much shorter than the window
-// it should cover is partial.
 function partialProfile(profile, windowMs) {
   if (!profile || profile.error) return null;
   const spanMs = (profile.endTime - profile.startTime) / 1000;
   return spanMs < windowMs - Math.max(20, windowMs * 0.02) ? { coveredMs: round(spanMs), windowMs: round(windowMs) } : null;
 }
-
-// ---------- step ----------
 
 async function summarise(cpu, alloc, filter, windowMs) {
   const out = {};
@@ -299,9 +238,6 @@ async function summarise(cpu, alloc, filter, windowMs) {
 
 const allocated = (prof) => (prof?.alloc && !prof.alloc.error ? prof.alloc.allocatedBytes : null);
 
-// Ends the run when an action timed out and may still be running: anything
-// measured after it would include its work. A command with no reply (a
-// click Chrome never acknowledged) was not cancelled either.
 function checkStopped(e, label) {
   if ((e instanceof ActionTimeout && !e.stopped) || e instanceof NoReply) {
     throw new RunAborted(`step "${label}": ${e.message}. It may still be running and would be counted in later steps, so the run stops here`);
@@ -341,10 +277,6 @@ export async function measureStep(ctx, step, cfg, tag) {
   try {
     await Promise.all(targets.map(gc));
     await Promise.all(probes.map((p) => p.start()));
-    // The trace starts after the profilers, and tasks after the boundary
-    // are dropped, so starting and stopping the profilers (Profiler.stop
-    // serialises the whole profile on the main thread) never shows up as a
-    // long task.
     await trace?.start();
     const tProbes = performance.now();
     before = await sampleAll(ctx);
@@ -367,7 +299,6 @@ export async function measureStep(ctx, step, cfg, tag) {
       });
       await evaluate(page, TWO_FRAMES).catch((e) => { if (e instanceof TargetLost) throw e; });
     }
-    // The measurement boundary.
     after = await sampleAll(ctx);
     result.wallMs = round(performance.now() - t0);
     windowMs = performance.now() - tProbes;
@@ -378,8 +309,6 @@ export async function measureStep(ctx, step, cfg, tag) {
     return { ...result, error: `measurement failed: ${e.message}` };
   }
 
-  // Measurement is over; from here on, work on the targets cannot skew it.
-  // A failure here still keeps the step and the run.
   try {
     let afterGc;
     try {
@@ -415,8 +344,6 @@ export async function measureStep(ctx, step, cfg, tag) {
         heap: {
           allocatedBytes: allocated(prof),
           ...(prof?.partial && allocated(prof) !== null ? { allocatedPartial: true } : {}),
-          // After a navigation the before sample held the old document, so
-          // a difference is not this step's retention; report totals only.
           retainedBytes: navigated ? null : g.m.JSHeapUsedSize - b.m.JSHeapUsedSize,
           totalAfterGcBytes: g.m.JSHeapUsedSize,
         },
@@ -454,9 +381,6 @@ export async function measureStep(ctx, step, cfg, tag) {
   return result;
 }
 
-// ---------- leak verdict ----------
-
-// Least-squares slope of ys against 0..n-1.
 function slope(ys) {
   const n = ys.length;
   const mx = (n - 1) / 2, my = ys.reduce((s, y) => s + y, 0) / n;
@@ -465,9 +389,6 @@ function slope(ys) {
   return num / den;
 }
 
-// Totals after GC at the end of each iteration. Iteration 1 warms caches
-// and lazy init, so the trend uses iterations 2 and later. Totals rather
-// than per-step deltas keep navigations from reading as leaks.
 function series(vals) {
   const steady = vals.slice(1);
   const out = { afterGc: vals, steadyGrowthPerIteration: steady.length >= 2 ? Math.round(slope(steady)) : null };
@@ -492,8 +413,6 @@ export function leakVerdict(iterations) {
   return out;
 }
 
-// ---------- run ----------
-
 function prepareOut(dir) {
   const out = resolve(dir ?? join(tmpdir(), "cdt-runs", new Date().toISOString().replace(/[:.]/g, "-")));
   if (existsSync(out) && readdirSync(out).length) throw new Error(`--out ${out} already has files; pass a new or empty directory`);
@@ -505,7 +424,7 @@ async function setupPage(page, cfg) {
   await page.send("Page.enable");
   await page.send("Performance.enable");
   await page.send("Network.enable");
-  await page.send("Inspector.enable"); // Inspector.targetCrashed ends the run
+  await page.send("Inspector.enable");
   await page.send("Page.bringToFront").catch(() => {});
   page.mainFrameId = (await page.send("Page.getFrameTree")).frameTree.frame.id;
   if (cfg.throttle) await page.send("Emulation.setCPUThrottlingRate", { rate: cfg.throttle });

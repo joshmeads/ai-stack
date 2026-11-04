@@ -1,6 +1,3 @@
-//! `ai-stack fleet`: the machines in `<config dir>/fleet.toml` that stack updates are pushed to,
-//! locally or over `ssh -o BatchMode=yes`.
-
 use std::collections::BTreeMap;
 use std::io::Write;
 use std::path::Path;
@@ -51,11 +48,8 @@ pub struct Machine {
     pub enabled: bool,
     pub drift_ignore: Vec<String>,
     pub name: String,
-    /// `None` runs on this machine.
     pub ssh: Option<String>,
-    /// Checkout path on that machine, unexpanded so `~` expands there.
     pub stack: String,
-    /// `None`: `ai-stack` over ssh, this binary locally.
     pub bin: Option<String>,
 }
 
@@ -63,7 +57,6 @@ pub fn default_text() -> &'static str {
     include_str!("../fleet.default.toml")
 }
 
-/// Enabled machines in name order. `default_stack` is this machine's `stack.path` as written.
 pub fn from_str(text: &str, default_stack: &str) -> Result<Vec<Machine>> {
     parse(text, default_stack, false)
 }
@@ -96,7 +89,6 @@ pub fn load(path: &Path, default_stack: &str, include_disabled: bool) -> Result<
     (if include_disabled { parse(&text, default_stack, true) } else { from_str(&text, default_stack) }).with_context(|| format!("invalid {}", path.display()))
 }
 
-/// A command word: a path on the target machine (`~` expands there) or a plain argument.
 enum Word<'a> {
     Path(&'a str),
     Arg(&'a str),
@@ -110,13 +102,10 @@ enum UpdateResult {
 pub struct Fleet<'a> {
     pub exec: &'a dyn Exec,
     pub home: &'a Path,
-    /// This machine's checkout, used for `ls-remote` and ancestry checks.
     pub local_stack: &'a Path,
     pub remote: &'a str,
     pub machines: Vec<Machine>,
-    /// This binary, for a local machine without `bin`.
     pub self_bin: &'a str,
-    /// The parent's explicit `--config` / `--home` flags, passed on to a local machine.
     pub local_flags: &'a [String],
 }
 
@@ -168,7 +157,6 @@ impl Fleet<'_> {
         std::iter::once(program).chain(flags.iter().map(|flag| Word::Arg(flag))).chain(args).collect()
     }
 
-    /// `--stack` makes the update pull the same checkout `status` and `switch` use.
     fn update_words<'w>(&'w self, machine: &'w Machine, branch: &'w str) -> Vec<Word<'w>> {
         let args = vec![Word::Arg("--stack"), Word::Path(&machine.stack), Word::Arg("update"), Word::Arg("--yes"), Word::Arg("--plain"), Word::Arg("--branch"), Word::Arg(branch)];
         self.ai_stack(machine, args)
@@ -183,8 +171,6 @@ impl Fleet<'_> {
         exec::finish(&command_line(&program, &args), ran).map(UpdateResult::Updated)
     }
 
-    /// Each machine's branch, commit and whether it matches the remote tip of its own branch.
-    /// Exit 0 when every machine is current.
     pub fn status(&self, out: &mut dyn Write) -> Result<i32> {
         let mut tips: BTreeMap<String, Result<Option<String>, String>> = BTreeMap::new();
         let mut current = true;
@@ -212,8 +198,6 @@ impl Fleet<'_> {
         Ok(if current { 0 } else { 1 })
     }
 
-    /// `<bin> stray --json` on the machine, as `N skills, M plugins`. Informational only: a
-    /// failure (for example an ai-stack that predates `stray`) never changes the status.
     fn stray(&self, machine: &Machine) -> String {
         #[derive(Deserialize)]
         struct Counts {
@@ -406,7 +390,6 @@ impl Fleet<'_> {
         }
     }
 
-    /// `None` when this machine's checkout lacks one of the commits (exit 128) or git fails otherwise.
     fn is_ancestor(&self, ancestor: &str, descendant: &str) -> Option<bool> {
         let args = ["-C", &self.local_stack.to_string_lossy(), "merge-base", "--is-ancestor", ancestor, descendant].map(String::from);
         match self.exec.run("git", &args, None).ok()?.code {
@@ -416,8 +399,6 @@ impl Fleet<'_> {
         }
     }
 
-    /// Runs `<bin> --stack <stack> update --yes --plain --branch <B>` on each machine, `B` being
-    /// `branch` or the machine's current branch. Without `yes`, prints commands and runs nothing.
     pub fn update(&self, branch: Option<&str>, yes: bool, out: &mut dyn Write) -> Result<i32> {
         if let Some(branch) = branch {
             exec::check_branch(branch)?;
@@ -462,8 +443,6 @@ impl Fleet<'_> {
         Ok(Some(branch))
     }
 
-    /// Fetches `branch`, checks it out (creating a tracking branch when needed) and updates, on
-    /// the named machines or all. Never forces: a dirty tree or failed checkout fails that machine.
     pub fn switch(&self, branch: &str, names: &[String], yes: bool, out: &mut dyn Write) -> Result<i32> {
         exec::check_branch(branch)?;
         let machines: Vec<&Machine> = if names.is_empty() {
@@ -532,7 +511,6 @@ impl Fleet<'_> {
     }
 }
 
-/// Quotes a path for the remote shell, leaving a leading `~/` bare so it expands there.
 fn remote_path(path: &str) -> String {
     match path.strip_prefix("~/") {
         Some(rest) => format!("~/{}", shell_quote(rest)),

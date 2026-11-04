@@ -1,15 +1,9 @@
-// Turns CPU profiles and sampling heap profiles into top-function lists,
-// resolving generated positions through source maps.
-
 import { loadMap, lookup, resolveSource } from "./sourcemap.mjs";
 import { round } from "./util.mjs";
 
 const SKIP_FRAMES = new Set(["(idle)", "(root)"]);
 
-// Libraries, runtimes and cdt's own preloaded hook.
 const VENDOR = /node_modules|next-sourcemaps-hook\.cjs|^(node:|internal\/|evalmachine|(turbopack:\/\/\/)?\[(turbopack|externals)\])/;
-// Generated bundles: served chunks, Next's default output, and cdt's
-// profiling build under any distDir.
 const BUNDLE_CHUNK = /\/_next\/|\.next\/|\/cdt-profile\//;
 
 const NAME_PATTERNS = [
@@ -28,16 +22,11 @@ function guessName(text) {
   return null;
 }
 
-// Your code: the running file is not a dependency, and the original source
-// (when a map resolves it) is not one either. Unmapped bundle chunks
-// (/_next/, .next/, cdt-profile/) are unknown, so they stay out of the app
-// lists.
 function isApp(url, source, mapped) {
   if (!source || VENDOR.test(url) || VENDOR.test(source)) return false;
   return mapped || !BUNDLE_CHUNK.test(url);
 }
 
-// nodes: [{ id, callFrame }]. Returns id -> frame description.
 async function describeFrames(nodes, filter) {
   const out = new Map();
   for (const x of nodes) {
@@ -59,8 +48,6 @@ async function describeFrames(nodes, filter) {
     out.set(x.id, {
       key: where ? `${name} ${where}` : name,
       app,
-      // Whether this frame is in a non-library script, and whether a map
-      // resolved it: the basis for the coverage line.
       own: !!url && !VENDOR.test(url),
       mapped: !!hit?.source,
       url,
@@ -70,10 +57,6 @@ async function describeFrames(nodes, filter) {
   return out;
 }
 
-// Attribution shared by CPU samples and allocation samples: weight lands on
-// the leaf (self), on the nearest app frame (appSelf: library time called
-// from your function counts as yours) and once on every app frame on the
-// stack (appTotal).
 function attribute(weights, parent, frames, n, fmt) {
   const self = new Map(), appSelf = new Map(), appTotal = new Map();
   const bump = (m, k, w) => m.set(k, (m.get(k) ?? 0) + w);
@@ -105,9 +88,6 @@ function attribute(weights, parent, frames, n, fmt) {
   return { self: top(self), appSelf: top(appSelf), appTotal: top(appTotal), coverage };
 }
 
-// Microseconds each sample stands for. As in DevTools, a sample covers the
-// time until the next one; the last covers the mean interval, cut at
-// endTime. Time before the first sample and after that is unsampled.
 function sampleWeights(profile) {
   const samples = profile.samples ?? [];
   const deltas = profile.timeDeltas;
@@ -119,10 +99,6 @@ function sampleWeights(profile) {
   return at.map((ti, i) => Math.max(0, (i + 1 < at.length ? at[i + 1] : Math.min(ti + mean, profile.endTime)) - ti));
 }
 
-// self: time with the function at the top of the stack.
-// total: inclusive time, counted once per sample even under recursion.
-// sampledMs is all time the samples cover, idle included; profileMs the
-// profile's span.
 export async function cpuSummary(profile, filter, n = 8) {
   const samples = profile.samples ?? [];
   const nodes = new Map(profile.nodes.map((x) => [x.id, x]));
@@ -143,8 +119,6 @@ export async function cpuSummary(profile, filter, n = 8) {
   };
 }
 
-// Sampling heap profile (HeapProfiler.stopSampling, including objects
-// already collected): bytes allocated during the window, per function.
 export async function allocSummary(profile, filter, n = 8) {
   const list = [];
   const parent = new Map();

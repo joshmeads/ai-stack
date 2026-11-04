@@ -1,10 +1,3 @@
-// `cdt next` against a fake Next installed as a symlink to a directory not
-// named "next": Next never writes the project's files, its dependency
-// installer is refused, the user's own distDir is refused at the filesystem
-// even when the config patch did not apply, and anything the hook does not
-// recognise stops the run before Next writes.
-// Run from skills/devtools-perf: node --test 'scripts/test/*.test.mjs'
-
 import assert from "node:assert/strict";
 import { spawnSync } from "node:child_process";
 import { existsSync, mkdirSync, mkdtempSync, readFileSync, realpathSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
@@ -16,11 +9,9 @@ import { CONFIG_JS, writeFakeNext } from "./fake-next.mjs";
 
 const CDT = fileURLToPath(new URL("../cdt.mjs", import.meta.url));
 const HOOK = fileURLToPath(new URL("../next-sourcemaps-hook.cjs", import.meta.url));
-const TSCONFIG = '{\n    "compilerOptions": {}\n}\n'; // a layout Next's rewrite changes
+const TSCONFIG = '{\n    "compilerOptions": {}\n}\n';
 const WATCHED = ["package.json", "tsconfig.json", "next-env.d.ts", ".next/BUILD_ID"];
 
-// <root>/app, with its own build in .next and node_modules/next a symlink
-// to <root>/vendor/framework-16.
 function project(t, { overrides, userConfig = "{}" } = {}) {
   const root = realpathSync(mkdtempSync(join(tmpdir(), "cdt-hook-")));
   t.after(() => rmSync(root, { recursive: true, force: true }));
@@ -71,9 +62,6 @@ test("refuses Next's automatic dependency install", (t) => {
 
 test("refuses writes to the user's distDir at the filesystem when the config patch did not apply", (t) => {
   const { root, app } = project(t);
-  // Wraps the compile step before the hook does, so it sees and strips the
-  // hook's patches: Next then runs with its own distDir, as if the patch
-  // had not matched.
   const unpatch = join(root, "unpatch.cjs");
   writeFileSync(unpatch, `if (process.env.CDT_NEXT_MODE) {
   const M = require("node:module"), compile = M.prototype._compile;
@@ -92,8 +80,6 @@ test("refuses writes to the user's distDir at the filesystem when the config pat
   assert.deepEqual(files(app), before);
 });
 
-// Runs `require(entry)` in the app with the hook preloaded (start mode) and
-// prints what loadConfig resolved or threw.
 function hook(t, { overrides, userConfig, entry = "next/dist/server/config.js" }) {
   const { root, app, vendor } = project(t, { overrides, userConfig });
   const report = join(root, "report");
@@ -130,8 +116,6 @@ test("refuses output: 'export', adapterPath, an unrecognised or by-value loader,
 });
 
 test("a build entry whose loader was not wrapped stops before running", (t) => {
-  // build/index.js that reaches the config through a module the hook does
-  // not see as Next's loader.
   const overrides = {
     "dist/server/loader.js": CONFIG_JS,
     "dist/build/index.js": 'const c = require("../server/loader.js");\nexports.default = async () => {};\n',

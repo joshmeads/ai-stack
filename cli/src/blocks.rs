@@ -1,9 +1,3 @@
-//! Marker-bounded blocks in text files.
-//!
-//! A block is `begin\nbody\nend`. `upsert` replaces an existing block in place or
-//! appends a new one after one blank line. Duplicate, reversed or unbalanced
-//! markers are errors, so a file never gains a second copy of a block.
-
 use anyhow::{bail, ensure, Result};
 
 const BLOCK_PREFIX: &str = "<!-- ai-stack:";
@@ -17,7 +11,6 @@ pub fn end_marker(name: &str) -> String {
     format!("<!-- ai-stack:{name}:end -->")
 }
 
-/// Inserts or replaces the `ai-stack:<name>` block. `body` is trimmed.
 pub fn upsert(text: &str, name: &str, body: &str) -> Result<String> {
     let begin = begin_marker(name);
     let end = end_marker(name);
@@ -36,8 +29,6 @@ pub fn upsert_marked(text: &str, begin: &str, end: &str, body: &str) -> Result<S
     }
 }
 
-/// Validates every managed marker: each `ai-stack:` block and the Codex model
-/// mirror appears at most once, balanced, in order, and without overlap.
 pub fn validate(text: &str) -> Result<()> {
     let mut names = std::collections::BTreeSet::new();
     for prefix in [BLOCK_PREFIX, "<!-- pstack:models:"] {
@@ -64,17 +55,14 @@ pub fn validate(text: &str) -> Result<()> {
     Ok(())
 }
 
-/// The first ai-stack, pstack or open-pstack marker prefix in `text`, if any.
 pub fn find_marker(text: &str) -> Option<&'static str> {
     [BLOCK_PREFIX, "<!-- pstack:", "<!-- open-pstack:"].into_iter().find(|prefix| text.contains(prefix))
 }
 
-/// Removes the `ai-stack:<name>` block and the blank line that separated it. No-op when absent.
 pub fn remove(text: &str, name: &str) -> Result<String> {
     remove_marked(text, &begin_marker(name), &end_marker(name))
 }
 
-/// Removes a block bounded by arbitrary markers (used for legacy `open-pstack:` blocks).
 pub fn remove_marked(text: &str, begin: &str, end: &str) -> Result<String> {
     let Some((start, stop)) = locate(text, begin, end)? else {
         return Ok(text.to_string());
@@ -84,7 +72,6 @@ pub fn remove_marked(text: &str, begin: &str, end: &str) -> Result<String> {
     let tail_start = rest.trim_start_matches(['\n', '\r']);
     let tail = tail_start.trim_end();
 
-    // Keep a blank line only where the removed block had one on either side.
     let gap_before = text[head.len()..start].matches('\n').count();
     let gap_after = rest[..rest.len() - tail_start.len()].matches('\n').count();
     let sep = if gap_before >= 2 || gap_after >= 2 {
@@ -105,7 +92,6 @@ pub fn remove_marked(text: &str, begin: &str, end: &str) -> Result<String> {
     }
 }
 
-/// Names of all `ai-stack:` blocks in order of appearance.
 pub fn block_names(text: &str) -> Vec<String> {
     let mut names = Vec::new();
     let mut rest = text;
@@ -129,8 +115,6 @@ fn is_block_name(candidate: &str) -> bool {
             .all(|c| c.is_ascii_alphanumeric() || c == '-' || c == '_')
 }
 
-/// Byte range `[start, stop)` of the block from its begin marker through its end marker.
-/// `None` when neither marker is present. Errors on duplicate, reversed or unbalanced markers.
 fn locate(text: &str, begin: &str, end: &str) -> Result<Option<(usize, usize)>> {
     let begins: Vec<usize> = text.match_indices(begin).map(|(i, _)| i).collect();
     let ends: Vec<usize> = text.match_indices(end).map(|(i, _)| i).collect();

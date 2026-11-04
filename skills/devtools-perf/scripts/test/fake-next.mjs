@@ -1,9 +1,3 @@
-// A minimal stand-in for the next package: the same module layout, the
-// loadConfig and installer shapes cdt's hook patches, and a build that
-// does to the filesystem what Next 16's does, in the same order: create
-// and clean distDir, write tsconfig and next-env.d.ts, write the output.
-// FAKE_SCENARIO=install makes the build run Next's dependency installer.
-
 import { mkdirSync, writeFileSync } from "node:fs";
 import { dirname, join } from "node:path";
 
@@ -51,7 +45,6 @@ const _install = require("./helpers/install");
 exports.installDependencies = async (dir, deps, dev) => _install.install(dir, deps.map((d) => d.pkg), { devDependencies: dev });
 `;
 
-// Stands in for npm install --save-dev: edits package.json.
 const INSTALL_JS = `"use strict";
 Object.defineProperty(exports, "install", { enumerable: true, get: function() { return install; } });
 function install(root, deps) {
@@ -72,7 +65,6 @@ const FILES = {
   "dist/lib/helpers/install.js": INSTALL_JS,
 };
 
-// Writes the package into <nextDir>; overrides replace files by relative path.
 export function writeFakeNext(nextDir, overrides = {}) {
   for (const [rel, text] of Object.entries({ ...FILES, ...overrides })) {
     const f = join(nextDir, rel);

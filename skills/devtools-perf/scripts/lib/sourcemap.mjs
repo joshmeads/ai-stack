@@ -1,15 +1,9 @@
-// Profiles report generated positions. Bundled, minified code (Next.js
-// production) is unreadable without mapping back to the original source.
-
 import { existsSync, readFileSync } from "node:fs";
 import { dirname, isAbsolute, relative, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 
 const B64 = Object.fromEntries([..."ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/"].map((c, i) => [c, i]));
 
-// One array of segments per generated line. A segment is
-// [col, src, srcLine, srcCol, name] or, for generated code that maps to
-// nothing (a one-field segment in the spec), just [col].
 export function decodeMappings(str) {
   const lines = [];
   let src = 0, sLine = 0, sCol = 0, name = 0;
@@ -49,14 +43,12 @@ function lookupFlat(map, line, col) {
     const mid = (lo + hi) >> 1;
     if (segs[mid][0] <= col) { hit = segs[mid]; lo = mid + 1; } else hi = mid - 1;
   }
-  // Before the first segment, or inside an unmapped region: no mapping.
   if (!hit || hit.length === 1) return null;
   const [, s, sl, , n] = hit;
   const text = map.sourcesContent?.[s]?.split("\n")[sl];
   return { source: map.sources[s], line: sl + 1, name: n >= 0 ? map.names[n] : null, text };
 }
 
-// Index maps (Turbopack) hold sections with their own offsets.
 export function lookup(map, line, col) {
   if (!map.sections) return lookupFlat(map, line, col);
   let section = null;
@@ -87,17 +79,12 @@ async function readUrl(url) {
 
 const mapCache = new Map();
 
-// A map must come from where its script came from: same origin for http(s),
-// the local disk only for a local script. Inline data: maps are fine.
 function sameOrigin(scriptUrl, mapUrl) {
   if (mapUrl.startsWith("data:")) return true;
   const a = new URL(scriptUrl), b = new URL(mapUrl);
   return a.protocol === b.protocol && (a.protocol === "file:" || a.origin === b.origin);
 }
 
-// Follows the script's own sourceMappingURL comment (bundlers such as
-// Turbopack name maps by content hash), falling back to <script>.map.
-// Returns { map } or { error } and caches either for the run.
 export async function loadMap(url) {
   if (mapCache.has(url)) return mapCache.get(url);
   let entry;
@@ -125,8 +112,6 @@ export async function loadMap(url) {
   return entry;
 }
 
-// Place the original source on disk where possible and show it relative to the
-// project (the dir above .next/, else cwd).
 export function resolveSource(generatedUrl, source) {
   const gen = generatedUrl.replace(/^file:\/\//, "");
   const root = gen.includes("/.next/") ? gen.slice(0, gen.indexOf("/.next/")) : process.cwd();

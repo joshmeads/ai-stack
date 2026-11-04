@@ -28,7 +28,6 @@ impl Harness {
         }
     }
 
-    /// The global instruction file in the harness home, which holds the managed blocks.
     pub fn instruction_file(self) -> &'static str {
         match self {
             Harness::Claude => "CLAUDE.md",
@@ -36,9 +35,6 @@ impl Harness {
         }
     }
 
-    /// The user skill folder the harness loads standalone skills from, where ai-stack links
-    /// the global groups' skills. Codex also reads `$CODEX_HOME/skills`, but `~/.agents/skills`
-    /// is the folder shared with other agents (checked against codex-cli 0.160.0).
     pub fn skill_folder(self, harness_home: &Path, user_home: &Path) -> PathBuf {
         match self {
             Harness::Claude => harness_home.join("skills"),
@@ -46,7 +42,6 @@ impl Harness {
         }
     }
 
-    /// The harness-specific instructions source: `<stack>/instructions/<stem>.md`.
     pub fn instructions_stem(self) -> &'static str {
         match self {
             Harness::Claude => "claude",
@@ -84,34 +79,22 @@ impl Effort {
     }
 }
 
-// ---- What the jm-stack plugin accepts in a model sheet ----
-//
-// Keep these in step with plugins/pstack/skills/poteto-mode/references/provider-dispatch.md
-// (descriptor grammar `<provider>:<model>@<effort>`) and model-catalog.md (its matrix rows).
-
-/// The 15 sheet rows, in file order.
 pub const SHEET_ROWS: [&str; 15] = [
     "feature, refactoring", "bug-fix", "perf-issue", "hillclimb", "judgment and prose",
     "hardest tasks", "how explorer", "how explainer", "why investigators, synthesizer",
     "reflect tooling, judgment, divergent, synthesizer", "arena runners",
     "arena cross-judge pool", "swarm workers", "architect runners", "interrogate reviewers",
 ];
-/// Rows that take more than one lane.
 const PANEL_ROWS: [&str; 4] = ["arena runners", "arena cross-judge pool", "architect runners", "interrogate reviewers"];
-/// Rows whose roles need the parent's MCP servers, so they run on the parent's model.
 const PARENT_ROWS: [&str; 2] = ["why investigators, synthesizer", "reflect tooling, judgment, divergent, synthesizer"];
-/// Lanes that run on the parent's own model.
 const PARENT_LANES: [&str; 2] = ["inherit-parent", "auto"];
-/// Rows whose lanes write files, as the setup-stack skill's step 2 lists them.
 const WRITER_ROWS: [&str; 8] = [
     "feature, refactoring", "bug-fix", "perf-issue", "hillclimb", "hardest tasks",
     "arena runners", "architect runners", "swarm workers",
 ];
-/// Providers whose runner lanes are read-only, so they cannot take a writer row.
 const READ_ONLY_PROVIDERS: [&str; 6] = ["devin", "opencode", "dsh", "amp", "agy", "cursor"];
 const FIVE: &[&str] = &["low", "medium", "high", "xhigh", "max"];
 const SIX: &[&str] = &["low", "medium", "high", "xhigh", "max", "ultra"];
-/// (provider, model, selectable efforts) for every model-matrix row.
 const MATRIX: [(&str, &str, &[&str]); 15] = [
     ("claude", "fable", FIVE),
     ("claude", "opus", FIVE),
@@ -130,8 +113,6 @@ const MATRIX: [(&str, &str, &[&str]); 15] = [
     ("cursor", "gemini-3.7-flash", &["low", "medium", "high"]),
 ];
 
-// ---- File schema (what config.toml contains) ----
-
 #[derive(Debug, Clone, Deserialize, Serialize)]
 #[serde(deny_unknown_fields)]
 struct ConfigFile {
@@ -142,7 +123,6 @@ struct ConfigFile {
     leads: PerHarness<String>,
     review: PerHarness<String>,
     sheet: PerHarness<BTreeMap<String, Lanes>>,
-    /// Absent in configs from before `--clean` existed; the defaults fill it in.
     #[serde(default)]
     clean: CleanSection,
     #[serde(default)]
@@ -271,16 +251,12 @@ fn default_codex() -> HarnessEntry {
     HarnessEntry { home: "~/.codex".into(), enabled: true }
 }
 
-// ---- Resolved config (what the rest of the program uses) ----
-
 #[derive(Debug, Clone, PartialEq, Eq, Serialize)]
 pub struct Model {
     pub alias: String,
     pub id: String,
     pub provider: Provider,
-    /// `None` allows all five efforts and lets a route omit its effort.
     pub efforts: Option<Vec<Effort>>,
-    /// Usable context in tokens; ai-stack only describes it.
     pub context: Option<u64>,
 }
 
@@ -293,7 +269,6 @@ pub struct Route {
 #[derive(Debug, Clone, PartialEq, Eq, Serialize)]
 pub struct Stack {
     pub path: PathBuf,
-    /// `path` as written, unexpanded, so a fleet machine can expand `~` itself.
     pub configured: String,
     pub remote: String,
     pub branch: String,
@@ -306,18 +281,14 @@ pub struct HarnessConfig {
     pub home: PathBuf,
 }
 
-/// What `--clean` leaves in place. Matching uses `*` and `?` globs.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize)]
 pub struct Clean {
     pub skill_roots: Vec<PathBuf>,
     pub keep_skills: Vec<String>,
-    /// Globs over `name@marketplace`.
     pub keep_plugins: Vec<String>,
 }
 
 impl Clean {
-    /// Dot entries (Codex's `.system`, `.DS_Store`) and the app-managed `synced` directory are
-    /// always kept.
     pub fn keeps_skill(&self, name: &str) -> bool {
         name.starts_with('.') || name == "synced" || self.keep_skills.iter().any(|pattern| glob(pattern, name))
     }
@@ -327,7 +298,6 @@ impl Clean {
     }
 }
 
-/// `*` matches any run of characters and `?` one character; everything else is literal.
 pub(crate) fn glob(pattern: &str, text: &str) -> bool {
     let (pattern, text): (Vec<char>, Vec<char>) = (pattern.chars().collect(), text.chars().collect());
     let (mut p, mut t) = (0, 0);
@@ -354,24 +324,19 @@ pub(crate) fn glob(pattern: &str, text: &str) -> bool {
 pub struct Config {
     pub home: PathBuf,
     pub stack: Stack,
-    /// Enabled harnesses only, in `Harness::ALL` order.
     pub harnesses: Vec<HarnessConfig>,
     pub models: BTreeMap<String, Model>,
     pub leads: BTreeMap<Harness, Route>,
     pub review: BTreeMap<Harness, Route>,
-    /// Per harness, each sheet row label with its lanes joined by ", ", in `SHEET_ROWS` order.
     pub sheets: BTreeMap<Harness, Vec<(String, String)>>,
     pub clean: Clean,
-    /// `[skills] prompt_runner`: argv for `type = "prompt"` process steps; the prompt is appended.
     pub prompt_runner: Vec<String>,
 }
 
-/// The reference config shipped with the CLI.
 pub fn default_config_text() -> &'static str {
     include_str!("../config.default.toml")
 }
 
-/// Parses `"alias"` or `"alias@effort"` against the resolved models.
 pub fn parse_route(text: &str, models: &BTreeMap<String, Model>) -> Result<Route> {
     let text = text.trim();
     let (alias, effort) = match text.split_once('@') {
@@ -412,8 +377,6 @@ pub fn parse_effort(token: &str) -> Option<Effort> {
     }
 }
 
-/// Checks one sheet lane against the jm-stack descriptor grammar and model matrix, and refuses a
-/// read-only provider on a row whose lanes write files.
 fn check_descriptor(label: &str, lane: &str) -> Result<()> {
     let (provider, rest) = lane.split_once(':').ok_or_else(|| anyhow!("lane {lane:?} is not `<provider>:<model>@<effort>`, inherit-parent or auto"))?;
     let (model, effort) = rest.split_once('@').ok_or_else(|| anyhow!("lane {lane:?} has no `@<effort>`"))?;
@@ -431,7 +394,6 @@ fn check_descriptor(label: &str, lane: &str) -> Result<()> {
     Ok(())
 }
 
-/// Resolves one harness's sheet table: all 15 rows, valid lanes, panels only where allowed.
 fn resolve_sheet(harness: Harness, rows: &BTreeMap<String, Lanes>) -> Result<Vec<(String, String)>> {
     let table = format!("[sheet.{}]", harness.as_str());
     for label in rows.keys() {
@@ -460,7 +422,6 @@ fn resolve_sheet(harness: Harness, rows: &BTreeMap<String, Lanes>) -> Result<Vec
     Ok(sheet)
 }
 
-/// Parses and validates config text. `home` expands `~` in paths.
 pub fn from_str(text: &str, home: &Path) -> Result<Config> {
     let table: toml::Table = toml::from_str(text)?;
     let older = table.contains_key("roles")
@@ -489,7 +450,6 @@ pub fn from_str(text: &str, home: &Path) -> Result<Config> {
     let harnesses = Harness::ALL
         .into_iter()
         .filter(|harness| harness_entry(&file.harness, *harness).enabled)
-        // Normalized so `..` never reaches backup paths derived from the home.
         .map(|harness| Ok(HarnessConfig { harness, home: crate::paths::absolute(&harness_entry(&file.harness, harness).home, home)? }))
         .collect::<std::io::Result<_>>()?;
 
@@ -566,7 +526,6 @@ mod tests {
         assert_eq!(cfg.models["haiku"].context, Some(100_000));
         assert_eq!(cfg.sheets[&Harness::Codex].len(), 15);
         assert_eq!(cfg.clean.skill_roots[2], PathBuf::from("/h/.agents/skills"));
-        // An older config without [clean] gets the same defaults init writes.
         let text = default_config_text();
         let older = from_str(&text[..text.find("[clean]").unwrap()], Path::new("/h")).unwrap();
         assert_eq!(older.clean, cfg.clean);
@@ -613,7 +572,6 @@ mod tests {
             assert!(msg.contains(message), "{message:?} not in {msg}");
         }
         assert!(from_str(&base.replace(bug, "\"bug-fix\" = \"claude:sonnet@high\""), Path::new("/h")).is_ok());
-        // Ultra is selectable for Sol only.
         assert!(from_str(&base.replace("\"bug-fix\" = \"codex:gpt-6.1-sol@medium\"", "\"bug-fix\" = \"codex:gpt-6.1-sol@ultra\""), Path::new("/h")).is_ok());
     }
 

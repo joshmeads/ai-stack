@@ -1,5 +1,3 @@
-//! Checks configured models against the providers' catalogs.
-
 use std::cmp::Ordering;
 use std::process::Command;
 
@@ -13,11 +11,8 @@ const ANTHROPIC_DOCS_URL: &str = "https://platform.claude.com/docs/en/about-clau
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum Status {
     Current,
-    /// A model in the same family with a higher version exists.
     Newer { latest: String },
-    /// The catalog was fetched but does not list this ID.
     Missing,
-    /// The catalog could not be fetched; the string says why.
     Unknown(String),
 }
 
@@ -29,7 +24,6 @@ pub struct ModelReport {
     pub status: Status,
 }
 
-/// Pure comparison. `None` for a provider means its catalog was unavailable (`reason`).
 pub fn check(
     cfg: &Config,
     openai: Result<&[String], &str>,
@@ -60,7 +54,6 @@ pub fn check(
         .collect()
 }
 
-/// The newest ID in `catalog` from the same family as `id` with a strictly higher version.
 pub fn newer_than(id: &str, catalog: &[String]) -> Option<String> {
     let (family, numbers, _) = parse_version(id)?;
     let mut best: Option<(Vec<u64>, Option<u64>, &String)> = None;
@@ -88,7 +81,6 @@ pub fn newer_than(id: &str, catalog: &[String]) -> Option<String> {
     best.map(|(_, _, latest)| latest.clone())
 }
 
-/// Listed (non-hidden) model slugs from `codex debug models`.
 pub fn openai_catalog() -> Result<Vec<String>> {
     let body = run_command("codex", &["debug", "models"])?;
     let value: Value =
@@ -107,7 +99,6 @@ pub fn openai_catalog() -> Result<Vec<String>> {
     Ok(slugs)
 }
 
-/// Anthropic model IDs: the Models API when `ANTHROPIC_API_KEY` is set, otherwise the public models docs page.
 pub fn anthropic_catalog() -> Result<Vec<String>> {
     let ids = match std::env::var("ANTHROPIC_API_KEY") {
         Ok(key) if !key.is_empty() => anthropic_api_ids(&key)?,
@@ -119,7 +110,6 @@ pub fn anthropic_catalog() -> Result<Vec<String>> {
     Ok(ids)
 }
 
-/// Rewrites `id = "..."` inside `[models.<alias>]` of the config text, preserving everything else.
 pub fn bump(config_text: &str, alias: &str, new_id: &str) -> Result<String> {
     if new_id.contains('"') {
         bail!("new id {new_id:?} contains a quote");
@@ -160,7 +150,6 @@ fn is_id_line(trimmed: &str) -> bool {
         .is_some_and(|rest| rest.trim_start().starts_with('='))
 }
 
-/// Replaces the first quoted value after `=` and keeps the text around it, including any comment.
 fn replace_quoted_value(line: &str, new_id: &str, alias: &str) -> Result<String> {
     let eq = line.find('=').context("id line has no =")?;
     let open = eq + line[eq..].find('"').with_context(|| {
@@ -172,7 +161,6 @@ fn replace_quoted_value(line: &str, new_id: &str, alias: &str) -> Result<String>
     Ok(format!("{}{}{}", &line[..=open], new_id, &line[close..]))
 }
 
-/// `(family, version numbers, date)` for a model ID, or `None` when the ID is not a recognized format.
 fn parse_version(id: &str) -> Option<(String, Vec<u64>, Option<u64>)> {
     if let Some(rest) = id.strip_prefix("gpt-") {
         let (ver, name) = match rest.split_once('-') {
@@ -215,7 +203,6 @@ fn parse_number(text: &str) -> Option<u64> {
     text.parse().ok()
 }
 
-/// Compares version numbers, treating missing trailing parts as zero.
 fn compare_versions(a: &[u64], b: &[u64]) -> Ordering {
     for i in 0..a.len().max(b.len()) {
         let x = a.get(i).copied().unwrap_or(0);
@@ -245,9 +232,10 @@ fn run_command(program: &str, args: &[&str]) -> Result<Vec<u8>> {
 }
 
 fn anthropic_api_ids(key: &str) -> Result<Vec<String>> {
-    // The key goes to curl as a config file on stdin so it never appears in argv or error text.
+    let config_from_stdin_keeps_the_key_out_of_argv = ["-fsS", "-K", "-"];
     let mut child = Command::new("curl")
-        .args(["-fsS", "-K", "-", "https://api.anthropic.com/v1/models?limit=1000"])
+        .args(config_from_stdin_keeps_the_key_out_of_argv)
+        .arg("https://api.anthropic.com/v1/models?limit=1000")
         .stdin(std::process::Stdio::piped())
         .stdout(std::process::Stdio::piped())
         .stderr(std::process::Stdio::piped())
@@ -286,7 +274,6 @@ fn anthropic_docs_ids() -> Result<Vec<String>> {
     Ok(ids)
 }
 
-/// Every `claude-<letters>-<digits>[-<digits>...]` token in `text`, in order of appearance.
 fn scan_model_ids(text: &str) -> Vec<String> {
     const PREFIX: &str = "claude-";
     let mut found = Vec::new();
@@ -306,7 +293,6 @@ fn scan_model_ids(text: &str) -> Vec<String> {
     found
 }
 
-/// Length of the model ID at the start of `s`, or 0 when `s` does not start with one.
 fn model_id_len(s: &str) -> usize {
     let bytes = s.as_bytes();
     let name_start = "claude-".len();
