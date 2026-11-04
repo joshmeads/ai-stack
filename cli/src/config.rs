@@ -381,12 +381,16 @@ pub fn parse_effort(token: &str) -> Option<Effort> {
     }
 }
 
+fn valid_openrouter_id(id: &str) -> bool {
+    !id.is_empty() && id.chars().all(|c| c.is_ascii_alphanumeric() || "._~:/-".contains(c))
+}
+
 fn check_descriptor(label: &str, lane: &str) -> Result<()> {
     let (provider, rest) = lane.split_once(':').ok_or_else(|| anyhow!("lane {lane:?} is not `<provider>:<model>@<effort>`, inherit-parent or auto"))?;
     let (model, effort) = rest.split_once('@').ok_or_else(|| anyhow!("lane {lane:?} has no `@<effort>`"))?;
     let rows: Vec<_> = MATRIX.iter().filter(|(p, _, _)| *p == provider).collect();
     ensure!(!rows.is_empty(), "lane {lane:?}: unknown provider {provider:?}; jm-stack accepts claude, codex and {}", READ_ONLY_PROVIDERS.join(", "));
-    let any_openrouter_model = provider == "pi" && model.strip_prefix("openrouter/").is_some_and(|id| !id.is_empty());
+    let any_openrouter_model = provider == "pi" && model.strip_prefix("openrouter/").is_some_and(valid_openrouter_id);
     let efforts: &[&str] = match rows.iter().find(|(_, m, _)| *m == model) {
         Some((_, _, efforts)) => efforts,
         None if any_openrouter_model => FIVE,
@@ -627,7 +631,11 @@ mod tests {
         let base = default_config_text();
         let seat = |lane: &str| base.replace("cursor:grok-4.7@high", lane);
         assert!(from_str(&seat("pi:openrouter/~moonshotai/kimi-latest@high"), Path::new("/h")).is_ok());
+        assert!(from_str(&seat("pi:openrouter/x-ai/grok_4.7:free@high"), Path::new("/h")).is_ok());
         assert!(err_of(&seat("pi:openrouter/@high")).contains("has no pi model"));
+        for unsafe_id in ["x\\nbug-fix: pi:openrouter/y", "x y", "x,y", "x\\u0007y", "x\\ty"] {
+            assert!(err_of(&seat(&format!("pi:openrouter/{unsafe_id}@high"))).contains("has no pi model"), "{unsafe_id}");
+        }
         assert!(err_of(&seat("pi:anthropic/claude@high")).contains("has no pi model"));
         assert!(err_of(&seat("pi:openrouter/~moonshotai/kimi-latest@ultra")).contains("effort \"ultra\" is not selectable"));
         let writer = base.replace("\"bug-fix\" = \"claude:opus@medium\"", "\"bug-fix\" = \"pi:openrouter/~moonshotai/kimi-latest@high\"");
