@@ -657,3 +657,20 @@ describe("check-plan fences", () => {
     expect(problems.some((problem) => problem.includes(STRAY_HEADING))).toBe(true);
   });
 });
+
+describe("check-plan inline code spans", () => {
+  const punctuation = (source: string): string[] =>
+    problemsOf(source).filter((problem) => /long dash|curly quote|mid-sentence colon/.test(problem));
+
+  it("ignores prose punctuation inside matching multi-backtick code spans", () => {
+    for (const count of [2, 3, 4]) {
+      const delimiter = "`".repeat(count);
+      expect(punctuation(`Use ${delimiter}echo \`x\`: “quoted” — example${delimiter}.\n`)).toEqual([]);
+    }
+  });
+
+  it("checks prose following a multi-backtick span and unmatched delimiters", () => {
+    expect(punctuation("Use ``echo `x`: y``. Bad: prose.\n").join("\n")).toContain("mid-sentence colon");
+    expect(punctuation("Use ``unclosed: bad` here.\n").join("\n")).toContain("mid-sentence colon");
+  });
+});
