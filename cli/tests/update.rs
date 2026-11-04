@@ -42,7 +42,6 @@ fn cli_changes_stop_update_before_models_or_installation() {
     let defaults = include_str!("../config.default.toml");
     fs::write(&config, defaults).unwrap();
 
-    // Only real git is on PATH: a regression cannot invoke a provider or curl.
     let output = Command::new(env!("CARGO_BIN_EXE_ai-stack"))
         .env_clear().env("HOME", &home).env("PATH", &bin)
         .env("GIT_CONFIG_NOSYSTEM", "1").env("GIT_CONFIG_GLOBAL", "/dev/null")

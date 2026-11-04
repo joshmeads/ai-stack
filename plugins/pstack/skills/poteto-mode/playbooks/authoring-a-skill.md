@@ -2,7 +2,7 @@
 
 **You own the skill's voice.**
 
-1. Use the **plugin-dev:skill-development** skill (Claude Code's skill for authoring SKILL.md files).
+1. Write the `SKILL.md`. Its frontmatter has `name` and `description`. The `description` says when to use the skill, front-loads the words a user would say, and stays one YAML scalar: quote it or use `description: >-` with indented continuation lines when punctuation or wrapping requires it. Keep the body short, and move long detail into `references/` files that the body links to.
 2. Validate the skill: frontmatter has `name` and `description`, referenced files exist, cross-skill links resolve.
 3. Test cases if structural. Skip if subjective.
 4. Run **Opening a PR**.

@@ -1,5 +1,3 @@
-//! ratatui review screen for an install plan.
-
 use std::io::{self, stdout};
 use std::path::Path;
 
@@ -22,8 +20,6 @@ use crate::plan::Plan;
 
 const PAGE: u16 = 10;
 
-/// Shows the plan and model statuses. `c` toggles `--clean` and calls `replan` with the new
-/// setting. Returns the plan to apply, or `None` when the user cancelled.
 pub fn review(
     plan: Plan,
     clean: bool,
@@ -54,24 +50,18 @@ pub fn review(
     Ok((app.outcome == Some(true)).then_some(plan))
 }
 
-/// One selectable line in the action list and the text shown beside it.
 struct Entry {
     summary: String,
     diff: String,
 }
 
-/// Pure review state. Rendering and key handling read and write only this.
 struct App {
-    /// Regular entries first, then the `--clean` entries from `clean_start` on.
     entries: Vec<Entry>,
     clean_start: usize,
-    /// File actions plus commands; zero means there is nothing to apply.
     changes: usize,
     conflicts: Vec<String>,
-    /// (alias, id, status text)
     models: Vec<(String, String, String)>,
     clean: bool,
-    /// Set by `c`; the run loop re-plans and clears it.
     toggle_clean: bool,
     status: Option<String>,
     selected: usize,
@@ -96,7 +86,6 @@ impl App {
         }
     }
 
-    /// Replaces the entries with `plan`'s: its regular lines and warnings, then its clean lines.
     fn load(&mut self, plan: &Plan, home: &Path, clean: bool) {
         let entry = |index: usize, summary: String| {
             let diff = match plan.diff(index) {
@@ -244,7 +233,6 @@ fn draw(frame: &mut Frame, app: &App) {
                 Line::styled(entry.summary.as_str(), style)
             })
             .collect();
-        // Keep the selected line in view.
         let visible = usize::from(area.height.saturating_sub(2)).max(1);
         let offset = if range.contains(&app.selected) { (app.selected - range.start + 1).saturating_sub(visible) } else { 0 };
         frame.render_widget(
@@ -310,7 +298,6 @@ fn on_key(app: &mut App, key: KeyEvent) {
     if key.kind != KeyEventKind::Press {
         return;
     }
-    // Raw mode disables SIGINT, so Ctrl-C must cancel explicitly or the user is trapped.
     if key.modifiers.contains(KeyModifiers::CONTROL) && key.code == KeyCode::Char('c') {
         app.outcome = Some(false);
         return;
@@ -328,7 +315,6 @@ fn setup_terminal() -> io::Result<DefaultTerminal> {
     Terminal::new(CrosstermBackend::new(out)).inspect_err(|_| restore_terminal())
 }
 
-/// Best effort: every step runs even if an earlier one fails.
 fn restore_terminal() {
     let _ = disable_raw_mode();
     let _ = execute!(stdout(), LeaveAlternateScreen, cursor::Show);
@@ -392,6 +378,13 @@ mod tests {
         let mut ready = app(1, Vec::new());
         ready.handle_key(KeyCode::Char('a'));
         assert_eq!(ready.outcome, Some(true));
+    }
+
+    #[test]
+    fn ctrl_c_cancels_because_raw_mode_turns_off_sigint() {
+        let mut app = app(1, Vec::new());
+        on_key(&mut app, KeyEvent::new(KeyCode::Char('c'), KeyModifiers::CONTROL));
+        assert_eq!(app.outcome, Some(false));
     }
 
     #[test]

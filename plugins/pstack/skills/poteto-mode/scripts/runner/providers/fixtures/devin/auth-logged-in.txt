@@ -1,0 +1,26 @@
+Logged in (via Devin).
+
+Credentials: <redacted>
+  File: <redacted>
+  API server: <redacted>
+  Devin webapp: <redacted>
+  Devin API: <redacted>
+
+User: <redacted>
+  Name: <redacted>
+  Email: <redacted>
+  User ID: <redacted>
+
+Account: <redacted>
+  Tier: <redacted>
+  Plan: <redacted>
+  Team ID: <redacted>
+  Team membership: <redacted>
+  Enterprise: <redacted>
+  Telemetry: <redacted>
+
+Team settings: <redacted>
+  Allowed models: <redacted>
+  MCP servers: <redacted>
+  Sandbox: <redacted>
+  Fetched at: <redacted>

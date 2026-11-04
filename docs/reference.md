@@ -2,7 +2,7 @@
 
 This page contains the full skill, dependency, runtime, and porting reference. For the plain-English introduction and quick start, see the [main README](../README.md).
 
-[Poteto](https://x.com/poteto)'s [pstack](https://github.com/cursor/plugins/tree/main/pstack), adapted to run in Claude Code and Codex without Cursor and published here as jm:stack (plugin `jm-stack`) with Josh Meads's model routing. One shared skill tree serves both harnesses. Version 1.7.0 is synced to Cursor pstack v0.15.20 at `1b6d44ff26d4e242f4e8f68c391e6d2f7ca16def`. See [UPSTREAM.md](../UPSTREAM.md) for the exact sync contract.
+[Poteto](https://x.com/poteto)'s [pstack](https://github.com/cursor/plugins/tree/main/pstack), adapted to run in Claude Code and Codex without Cursor and published here as jm:stack (plugin `jm-stack`) with Josh Meads's model routing. One shared skill tree serves both harnesses; lanes on six read-only providers can run through the bundled runner when a model sheet selects them. Version 1.16.0+jm.1 merges Open Pstack 1.16.0, which is synced to Cursor pstack v0.15.29 at `88d47514b82e7c44f00f2b2a72ff6dd12158038c`. See [UPSTREAM.md](../UPSTREAM.md) for the exact sync contract.
 
 Original by Lauren Tan. This distribution builds on Michael Denyer's [pstack-claude](https://github.com/michael-denyer/pstack-claude) port and retains its history and MIT attribution. It imports seven MIT-licensed skills from [cursor-team-kit](https://github.com/cursor/plugins/tree/main/cursor-team-kit): `deslop`, `thermo-nuclear-code-quality-review`, `make-pr-easy-to-review`, `fix-ci`, `fix-merge-conflicts`, `get-pr-comments`, `what-did-i-get-done`.
 
@@ -59,11 +59,11 @@ The marketplace install is the normal user path. Direct links are only for testi
 ├── plugins/pstack/                   # the jm-stack plugin (directory name kept for upstream merges)
 │   ├── .claude-plugin/plugin.json    # Claude Code manifest
 │   ├── .codex-plugin/plugin.json     # Codex manifest (skills: ./skills/)
-│   ├── skills/                       # 59 skills shared by Claude Code and Codex
+│   ├── skills/                       # 63 skills shared by Claude Code and Codex
 │   │   ├── poteto-mode/references/{codex-tools,provider-dispatch}.md  # tool + provider routing
-│   │   └── poteto-mode/scripts/      # bun/bash/node tooling: watch-pr, orch, runner, resolve-codex-transcript, check-plan.mjs, worktree-audit.sh
+│   │   └── poteto-mode/scripts/      # bun/bash/node tooling: watch-pr, runner, resolve-codex-transcript, check-plan.mjs, worktree-audit.sh
 │   ├── hooks/                        # SessionStart auto-fire: injects the poteto-mode mandate (Claude Code only)
-│   └── agents/                       # Claude subagents, including native Fable, Opus, and Haiku lanes at each selectable effort
+│   └── agents/                       # Claude subagents, including a native lane for each Claude family at each selectable effort
 ├── skills/                           # standalone skills, installed under their plain names
 ├── stack.toml                        # skill groups and vendored-skill pins
 ├── tests/skill-collision-repro.sh    # native-skill package invariants and Claude invocation checks
@@ -85,34 +85,27 @@ The Codex build shares one `skills/` tree with the Claude Code build. Nothing is
 
 - **Skill invocation.** Codex loads `SKILL.md` natively. There is no `Skill` tool. You invoke a skill by name (ask for it, or pick `jm-stack:poteto-mode` from the list).
 - **Package surface.** The native `skills/` tree is the only workflow source. The plugin ships no `commands/` layer and does not link prompts into `~/.codex/prompts/`. Codex would migrate such files into duplicate source-command skills while loading the native skill tree. The 24 `principle-*` leaves declare `user-invocable: false`. Claude keeps them out of its user picker; Codex 0.149.0 currently shows them despite that metadata ([#8](https://github.com/ericlitman/open-pstack/issues/8)).
-- **Tool and built-in mapping.** Claude tool names and built-in skills resolve through [`codex-tools.md`](../plugins/pstack/skills/poteto-mode/references/codex-tools.md). Model execution resolves separately through [`provider-dispatch.md`](../plugins/pstack/skills/poteto-mode/references/provider-dispatch.md), so Codex can keep Sol and Luna native while invoking Claude externally.
-- **Subagents.** The `Agent` tool maps to Codex `spawn_agent` / `wait_agent`, enabled by `multi_agent = true`. Parallel fan-out is multiple `spawn_agent` calls in one turn. If the native Codex lane is unavailable, record that lane as a dropout; external Claude lanes still run, and no provider is silently substituted. There is no `poteto-agent` subagent type on Codex; route ad-hoc subagents by dispatching a `spawn_agent` told to read `poteto-mode` first.
+- **Tool and built-in mapping.** Claude tool names and built-in skills resolve through [`codex-tools.md`](../plugins/pstack/skills/poteto-mode/references/codex-tools.md). Model execution resolves separately through [`provider-dispatch.md`](../plugins/pstack/skills/poteto-mode/references/provider-dispatch.md), so Codex models stay native while other providers run through the external runner.
+- **Subagents.** The `Agent` tool maps to Codex `spawn_agent` / `wait_agent`, enabled by `multi_agent = true`. Parallel fan-out is multiple `spawn_agent` calls in one turn. If the native Codex lane is unavailable, record that lane as a dropout; the configured external lanes still run, and no provider is silently substituted. There is no `poteto-agent` subagent type on Codex; route ad-hoc subagents by dispatching a `spawn_agent` told to read `poteto-mode` first.
 - **Auto-fire.** The `hooks/` SessionStart injection is Claude Code-only; Codex has no plugin hook runtime. Enter `jm-stack:poteto-mode` by name, or add a standing instruction to `~/.codex/AGENTS.md` if you want the same always-on routing.
-- **Models.** `/setup-stack` writes provider-qualified descriptors and asks one requested effort per assigned family (`low`, `medium`, `high`, `xhigh`, `max`, and `ultra` where the model's CLI lists it, today only Sol). The ai-stack CLI writes a per-harness sheet in the same grammar. The first-run panel is Opus xhigh and GPT-6.1 Sol xhigh; Fable, GPT-6 Luna, and Haiku stay selectable, and Fable and Haiku ship native agents. Fable, Opus, and Haiku use Claude's rolling aliases. Runtime dispatch normalizes older versioned descriptors in memory, so an installed sheet stops pinning immediately. A setup rerun persists that migration while keeping each role's family and effort. In Codex, Sol and Luna use native `spawn_agent`; Claude uses the deterministic external runner. In Claude Code, Fable, Opus, and Haiku use native agents; Sol and Luna use the runner. Children never detect the parent or reroute themselves. The single-lane code roles default to GPT-6.1 Sol xhigh instead of upstream's Grok 4.7 default.
+- **Models.** `/setup-stack` writes provider-qualified descriptors and asks one requested effort per assigned family (`low`, `medium`, `high`, `xhigh`, `max`, and `ultra` where the model's CLI lists it, today only Sol). The ai-stack CLI writes a per-harness sheet in the same grammar. The first-run sheet is the model catalog's [role defaults](../plugins/pstack/skills/poteto-mode/references/model-catalog.md#role-defaults), every lane on Opus or Sol at `high`, with a panel of Opus then Sol; Fable, Sonnet, Luna and Haiku stay selectable, and so do the six read-only providers. Fable, Opus, Haiku and Sonnet use Claude's rolling aliases. Runtime dispatch normalizes older versioned descriptors in memory, so an installed sheet stops pinning immediately. A setup rerun persists that migration while keeping each role's family and effort. In Codex, Codex families such as Sol and Luna use native `spawn_agent`; every other provider uses the deterministic external runner. In Claude Code, Claude families use native agents; every other provider uses the runner. A Codex writer that the runner launches stays in Codex's `workspace-write` sandbox unless the sheet opts in with the line `codex writer sandbox: full-access`, which setup asks about once. Full access lets the writer launch a browser and write dot-folders such as `.agents/`, and removes every sandbox limit. Children never detect the parent or reroute themselves. The single-lane code roles default to Sol.
 
 Verified in fresh installed Claude Code and Codex sessions: the user-facing skills are discovered and namespaced under the plugin name (`pstack` before the jm:stack rename); both parents fan out the configured panel through the documented native/external route table, retain long-running handles without a default timeout, and cross-judge only after every candidate is terminal. The `principle-*` leaves remain available for `poteto-mode` to read by path. Claude honors their `user-invocable: false` metadata; Codex 0.149.0 does not ([#8](https://github.com/ericlitman/open-pstack/issues/8)).
 
 ## Dependencies
 
-Nothing is declared in `plugin.json`. Install the one companion plugin yourself:
-
-- **`plugin-dev`** (from the `claude-plugins-official` marketplace) — the rewiring routes skill-authoring tasks (in `automate-me`, `reflect`, `poteto-mode`) to the `plugin-dev:skill-development` skill:
-
-  ```shell
-  /plugin marketplace add anthropics/claude-plugins-official
-  /plugin install plugin-dev@claude-plugins-official
-  ```
-
-  Until 0.9.2 this was a `dependencies` entry in `plugin.json`. The desktop app's `--plugin-dir` load mode can never resolve cross-marketplace dependencies and hard-disables the whole plugin, so 0.9.3 removed the declaration — full mechanism in the 0.9.3 entry of [CHANGES.md](../CHANGES.md). Without `plugin-dev` installed, only the skill-authoring routes degrade; everything else works.
+Nothing is declared in `plugin.json`, and no companion plugin is needed. Skill-authoring tasks (in `automate-me`, `reflect`, `poteto-mode`) follow the plugin's own [Authoring a skill playbook](../plugins/pstack/skills/poteto-mode/playbooks/authoring-a-skill.md).
 
 Not declared as deps, but referenced in skill bodies:
 
-- **`run`, `verify`, `loop`** — Claude Code CLI built-ins (ship with the binary, always available).
-- **`gh` (GitHub CLI).** This is the default forge for every stack playbook and a system-level requirement of the standalone `babysit` skill. Install it with [`brew install gh`](https://cli.github.com) and authenticate with `gh auth login`. If Origin's `origin` CLI is installed and can resolve the repository, the stack playbooks use it instead. Only the Orchestrate playbook and its `scripts/orch` frontier tooling still require `gt`.
-- **`bun`** — runs the vendored `skills/poteto-mode/scripts/` tooling (`watch-pr`, `orch`, `runner`) and the port-authored `resolve-codex-transcript` launcher. Install via [`brew install oven-sh/bun/bun`](https://bun.sh). `bootstrap.ts` installs dependencies for `watch-pr` and `orch`; the runner uses only Bun and Node built-ins, so it launches directly without an install/re-exec layer.
+- **`run`, `loop`** — Claude Code CLI built-ins (ship with the binary, always available). UI proof names no skill: agents drive the real UI with whatever browser or GUI automation the session has.
+- **`gh` (GitHub CLI).** This is the default forge for every stack playbook and a system-level requirement of the standalone `babysit` skill. Install it with [`brew install gh`](https://cli.github.com) and authenticate with `gh auth login`. If Origin's `origin` CLI is installed and can resolve the repository, the stack playbooks use it instead. No playbook requires Graphite (`gt`).
+- **`bun`** — runs the vendored `skills/poteto-mode/scripts/` tooling (`watch-pr`, `runner`) and the port-authored `resolve-codex-transcript` launcher. Install via [`brew install oven-sh/bun/bun`](https://bun.sh). `bootstrap.ts` installs dependencies for `watch-pr`; the runner uses only Bun and Node built-ins, so it launches directly without an install/re-exec layer.
 - **`git` 2.25 or later** — the runner asks `git rev-parse --git-common-dir` for a linked worktree's shared git directory, and `worktree-audit.sh` reads `git worktree list --porcelain`. Ubuntu 20.04 LTS ships 2.25; older git is unsupported.
+- **Bash on Windows** — the SessionStart hook runs through `hooks/run-hook.cmd`, which looks for Git for Windows' `bash.exe` in its standard system-wide and per-user locations, then for a `bash` on `PATH` (MSYS2, Cygwin). Without one, the hook exits 0 and skips the pstack startup context, as the superpowers wrapper it comes from does. Install [Git for Windows](https://git-scm.com/download/win) to get the context. In Codex, the hook starts `C:\Windows\System32\cmd.exe` by full path, because one command must work in both PowerShell and cmd. A Windows installed outside `C:\Windows` does not run the hook.
+- **macOS, Linux or WSL2 for Claude writer lanes** — Claude Code's sandbox does not run on native Windows, so a Claude writer lane needs one of these hosts.
 - **`node`** — runs `skills/poteto-mode/scripts/check-plan.mjs`. The checker uses only Node built-ins and does not need Bun.
-- **Claude Code and Codex CLIs** — the external runner uses the assigned subscribed CLI directly. Install and authenticate only the providers present in your model sheet. Same-provider work stays native; the runner refuses it.
+- **Provider CLIs** — the external runner uses the assigned subscribed CLI directly, one per provider in the [model catalog's route table](../plugins/pstack/skills/poteto-mode/references/model-catalog.md#routes). Install and authenticate only the providers present in your model sheet. Some providers run read-only lanes only. The catalog notes for OpenCode, Amp, Cursor, Devin, agy and dsh say what repository and host configuration their CLIs load into a lane. Same-provider work stays native; the runner refuses it.
 - **`jq` and `rg` (ripgrep)** — only for `scripts/worktree-audit.sh` (the Worktree cleanup playbook). Without them the audit still runs but blanks its PR and LAST_CHAT columns, so it warns on stderr rather than returning a table that looks complete.
 
 No third-party plugins. The harsher-critique escape hatch lives in the bundled `thermo-nuclear-code-quality-review` skill (imported from cursor-team-kit), not in an external plugin.
@@ -146,6 +139,8 @@ The table uses the short upstream names. Claude Code exposes each native skill w
 | `/no-comments` | strip comments before review via the `comment-sicko` subagent, then fix what it finds |
 | `/create-verification-skill` | generate a project-local verification skill and feature map |
 | `/maintain-verification-skill` | re-sync a drifted verification skill and its feature map |
+| `/create-formal-verification-skill` | generate a project-local skill that formally verifies a race, invariant, or other property tests rarely reach |
+| `/maintain-formal-verification-skill` | bring a formal verification back in line after the code it covers changed, and say whether each failure is drift or a bug (typed only) |
 | `/deslop` | deslop a diff before commit |
 | `/babysit` | monitor an open PR, fix CI/comments, keep it merge-ready |
 | `/thermo-nuclear-code-quality-review` | extremely strict maintainability audit |
@@ -156,16 +151,18 @@ The table uses the short upstream names. Claude Code exposes each native skill w
 | `/what-did-i-get-done` | summarize authored commits over a user-chosen period |
 | `/benchmark-checklist` | vet a measured performance number before reporting or acting on it |
 | `/correct` | turn mistakes agents keep repeating in a repo into checks that make them impossible (typed only) |
-| `/ketchup` | catch up on everything in this session since your last message (typed only) |
+| `/ketchup` | catch up on everything in this session since your last message |
 | `/poteto-help` | find the skill, playbook, or principle for a question about jm:stack (typed only) |
+| `/in-your-own-words` | play back your goal and the problem before work starts (typed only) |
+| `/sharpen` | rewrite a prompt deeper, not bigger, before you send it; returns the rewritten prompt and does not do the task (typed only) |
 
 ## Subagents
 
-`poteto-agent` keeps the upstream prompt and adds Claude Code `skills` frontmatter. The field preloads `jm-stack:poteto-mode` because Claude subagents do not inherit the parent's loaded skills. Spawn the agent from a parent with `subagent_type: "poteto-agent"`.
+`poteto-agent` keeps the upstream prompt and adds Claude Code `skills` frontmatter. The field preloads `jm-stack:poteto-mode` because Claude subagents do not inherit the parent's loaded skills. Spawn the agent from a parent with `subagent_type: "jm-stack:poteto-agent"`.
 
-`comment-sicko` is the read-only comment reviewer the `no-comments` skill spawns. Upstream names it `Comment Sicko`; the port renames it to `comment-sicko` so the name is a valid `subagent_type`. Invoke it through `/no-comments`, not directly.
+`comment-sicko` is the read-only comment reviewer the `no-comments` skill spawns. Upstream names it `Comment Sicko`; the port renames it to `comment-sicko` so the name is valid, and Claude Code registers it as `subagent_type: "jm-stack:comment-sicko"`. Invoke it through `/no-comments`, not directly.
 
-Fable, Opus, and Haiku each ship at `low`, `medium`, `high`, `xhigh`, and `max`. Names are `stack-<stem>-<effort>`, such as `stack-opus-xhigh` and `stack-haiku-xhigh`. Each file selects the rolling family alias and requested effort, runs in the background, and denies nested Agent/Task dispatch. jm:stack dispatches them from provider-qualified descriptors; they are not user-facing workflows.
+Each Claude family in the [model catalog](../plugins/pstack/skills/poteto-mode/references/model-catalog.md) ships a generated agent at each selectable effort. Claude Code registers them as `jm-stack:stack-<family>-<effort>`, such as `jm-stack:stack-opus-high` and `jm-stack:stack-haiku-high`. Each file selects the family's rolling alias and the requested effort, and denies nested Agent/Task dispatch. The caller chooses foreground or background as [Waits on Claude Code](../plugins/pstack/skills/poteto-mode/references/codex-tools.md#waits-on-claude-code) says. jm:stack dispatches them from provider-qualified descriptors; they are not user-facing workflows.
 
 ## Differences from upstream
 
@@ -190,20 +187,20 @@ The port is editorial, not mechanical. Anywhere upstream pstack assumed Cursor-s
 | `AskQuestion` tool | `AskUserQuestion` tool |
 | Cursor's built-in `/loop` | Claude Code's built-in `loop` skill |
 | Cursor's built-in `/babysit` | `babysit` skill bundled in this plugin. From v0.14.0 upstream routes PR-status requests inside poteto-mode to `playbooks/babysit.md` instead; the port does the same, and `/babysit` stays the standalone entry point |
-| Cursor's built-in `/create-skill` | `plugin-dev:skill-development` skill |
+| Cursor's built-in `/create-skill` | The Authoring a skill playbook |
 | `cursor-team-kit` `control-cli` (CLI/TUI driver) | Claude Code's `run` skill |
-| `cursor-team-kit` `control-ui` (browser/Electron driver) | Claude Code's `verify` skill |
-| Transcripts at `~/.cursor/projects/*/` or `agent-transcripts/` | `~/.claude/projects/<encoded-cwd>/*.jsonl` (where `<encoded-cwd>` is the workspace cwd with `/` → `-`) |
+| `cursor-team-kit` `control-ui` (browser/Electron driver) | Whatever browser or GUI automation the session has, driving the real UI. Claude Code's `verify` runs only when typed, so no playbook routes to it |
+| Transcripts at `~/.cursor/projects/*/` or `agent-transcripts/` | `~/.claude/projects/<encoded-cwd>/*.jsonl` (where `<encoded-cwd>` is the workspace path with each `/` and each `.` changed to `-`) |
 | Skill paths `.cursor/skills/`, `~/.cursor/plugins/` | `.claude/skills/`, `~/.claude/plugins/` |
 | MCP discovery via Cursor's `mcps/` directory | Tool list at top of system prompt (`mcp__<server>__<name>` entries), or `.mcp.json`, or `claude mcp list` |
 | Cursor cloud agents (`environment: "cloud"`, `cloud_base_branch`) | Local background subagents (`run_in_background: true`), isolated by git worktree |
 | The Cursor agent store (path in the system prompt) | `~/.claude/orchestrate/<project-slug>/`, which survives the session restarts a multi-day program expects |
 | Model rule `~/.cursor/rules/pstack-models.mdc` | Override sheet `~/.claude/pstack-models.md`, included from `CLAUDE.md` |
-| Multi-model panels (arena, architect, interrogate) | Provider dispatch runs a two-model panel: `claude:opus@xhigh`, `codex:gpt-6.1-sol@xhigh`. Same-provider lanes stay native; external lanes use the bundled runner. |
+| Multi-model panels (arena, architect, interrogate) | Provider dispatch runs a default two-model panel of Opus then Sol from the model catalog's [role defaults](../plugins/pstack/skills/poteto-mode/references/model-catalog.md#role-defaults). Same-provider lanes stay native; external lanes use the bundled runner. |
 
 ### Cross-vendor dispatch
 
-The earlier port collapsed panels to Claude-only models. The bundled runner restores upstream's cross-provider judgment signal without adding a daemon or model-router service. Claude Code shells out to Codex; Codex shells out to Claude. The top-level parent chooses every route and each external process receives a complete task directly, so there is no supervising model invocation and no child-side harness detection.
+The earlier port collapsed panels to Claude-only models. The bundled runner restores upstream's cross-provider judgment signal without adding a daemon or model-router service. Claude Code shells out to Codex and any selected read-only provider; Codex shells out to Claude and any selected read-only provider. The [route table](../plugins/pstack/skills/poteto-mode/references/model-catalog.md#routes) lists each provider. The top-level parent chooses every route and each external process receives a complete task directly, so there is no supervising model invocation and no child-side harness detection.
 
 ### What's deliberately kept
 
@@ -217,12 +214,12 @@ The earlier port collapsed panels to Claude-only models. The bundled runner rest
 - **`automations/benny/`** (upstream `0452e08`, the only pstack change between `e46364b` and v0.10.0) — a dormant Slack issue-triage and reproduce-and-fix automation pack built on Cursor's event-triggered automations. It registers no slash skills even upstream, so excluding it changes nothing about the ported plugin's behavior. Porting it would require Cursor's event-trigger runtime, Slack, and tracker plumbing that jm:stack does not provide.
 - **`docs/guide/`** (upstream `02c03a9`, `0b7ef5b`, `424829e`) — the ten-chapter usage tutorial and its six screenshots (2.3 MB). It teaches pstack through Cursor's UI, sticky mode, and cloud agents, so a faithful port would be a rewrite rather than a sync, and none of it ships as skill content. Read it upstream at [cursor/plugins/pstack/docs/guide](https://github.com/cursor/plugins/tree/main/pstack/docs/guide); the concepts map through the substitution table above.
 - **`make-bot-ui`** (upstream `799151d`, relocated by `6fecddb`) uses Cursor routines, webhook events, hosted bot state, and Cursor UI primitives that have no shared Claude Code and Codex mapping. A provider-specific rewrite would be a separate feature, not an upstream sync.
-- **Solo code defaults** (upstream `23a56e2` moved them to Fable; `889ec4b` and `70b2dc8` move them to Grok 4.7). jm:stack keeps `bug-fix`, `perf-issue`, and `hillclimb` on `codex:gpt-6.1-sol@xhigh`, and ships no Grok route.
-- **The Sol removal** (upstream `df58112`, pstack 0.15.15) drops Sol from every default and moves Opus to `xhigh`. jm:stack keeps Sol in its defaults and two-model panels, so that commit is not applied, although jm:stack's own defaults also run Opus at `xhigh`.
+- **Solo code defaults** (upstream `23a56e2` moved them to Fable; `889ec4b` and `70b2dc8` move them to Grok). jm:stack keeps `bug-fix`, `perf-issue`, and `hillclimb` on Sol, and ships no Grok route.
+- **The Sol removal** (upstream `df58112`, pstack 0.15.15) drops Sol from every default and moves Opus to `xhigh`. jm:stack keeps Sol in its defaults and two-model panels, so that commit is not applied. jm:stack's own defaults run both at `high`.
 - **Merging without a rebase after trunk moves** (upstream `23e4138`, pstack 0.15.6). Autopilot-full would merge a green head with an unchanged patch ID when `git merge-tree` is clean and trunk touched none of the PR's paths. Those checks miss a trunk change that breaks the PR's code from another file, so the port keeps re-verifying after any trunk move. `UPSTREAM.md` records the reason.
 - **Sticky mode** (upstream `#144`) — Cursor-only `mode`/`icon`/`color`/`reminder` frontmatter with no Claude Code equivalent. The port's 0.9.5 SessionStart hook is the analog and already carries the non-trivial / trivial / opt-out logic.
-- **`is_background: true` on `poteto-agent`** (upstream `99559f2`) — Cursor names this key differently. Claude-native frontier definitions use `background: true`; ad-hoc `poteto-agent` calls remain background dispatches at the call site.
-- **`cursor-team-kit` beyond the seven imported skills** — the rest either duplicate Claude Code built-ins (`verify-this` → the `verify` skill and built-in verification discipline; `check-compiler-errors` → LSP diagnostics; `control-cli`/`control-ui` → `run`/`verify`, already the substitution targets) or overlap skills this port ships (`loop-on-ci`, `review-and-ship`, `weekly-review` vs `babysit`, `fix-ci`, `make-pr-easy-to-review`, `what-did-i-get-done`). `pr-review-canvas` is Cursor-UI-specific.
+- **`is_background: true` on `poteto-agent`** (upstream `99559f2`) — Cursor names this key differently. No pstack agent definition sets `background`; callers choose foreground or background as [Waits on Claude Code](../plugins/pstack/skills/poteto-mode/references/codex-tools.md#waits-on-claude-code) says.
+- **`cursor-team-kit` beyond the seven imported skills** — the rest either duplicate Claude Code built-ins (`verify-this` → built-in verification discipline; `check-compiler-errors` → LSP diagnostics; `control-cli`/`control-ui` → `run` and the session's UI automation, already the substitution targets) or overlap skills this port ships (`loop-on-ci`, `review-and-ship`, `weekly-review` vs `babysit`, `fix-ci`, `make-pr-easy-to-review`, `what-did-i-get-done`). `pr-review-canvas` is Cursor-UI-specific.
 
 ### Forking note
 

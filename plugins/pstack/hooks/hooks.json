@@ -7,6 +7,7 @@
           {
             "type": "command",
             "command": "\"${CLAUDE_PLUGIN_ROOT}/hooks/run-hook.cmd\" session-start",
+            "commandWindows": "C:\\Windows\\System32\\cmd.exe /d /v:on /s /c \"\"!PLUGIN_ROOT!\\hooks\\run-hook.cmd\" session-start\"",
             "async": false
           }
         ]

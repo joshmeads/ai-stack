@@ -1,4 +1,5 @@
 import { describe, expect, it } from "bun:test";
+import { access } from "../registry/contract.ts";
 import type { LaneRequest } from "../registry/index.ts";
 import { adapterSuite, testLane } from "./adapter-suite.ts";
 import { claude } from "./claude.ts";
@@ -8,8 +9,8 @@ adapterSuite(claude);
 const lane = (request: Partial<LaneRequest> = {}) =>
   testLane({ provider: "claude", model: "fable", ...request });
 const argv = (request: Partial<LaneRequest> = {}, sharedGitDir: string | null = null) =>
-  claude.launch.argv(lane(request), { sharedGitDir });
-const parse = (stdout: string) => claude.parse({ exitCode: 0, stdout, stderr: "" }, lane());
+  claude.launch.argv(lane(request), { sharedGitDir, providerSidecar: null });
+const parse = (stdout: string) => claude.parse({ exitCode: 0, stdout, stderr: "", sidecar: null }, lane());
 
 describe("claude launch", () => {
   it("passes Claude model, effort, permissions, and no-recursion controls", () => {
@@ -75,8 +76,8 @@ describe("claude launch", () => {
   });
 
   it("asks run.ts for the shared git directory only for a writer", () => {
-    expect(claude.launch.needsSharedGitDir({ mode: "isolated-write" })).toBe(true);
-    expect(claude.launch.needsSharedGitDir({ mode: "read-only" })).toBe(false);
+    expect(claude.launch.needsSharedGitDir(access("isolated-write"))).toBe(true);
+    expect(claude.launch.needsSharedGitDir(access("read-only"))).toBe(false);
   });
 
   it("covers low, medium, and high", () => {
@@ -193,6 +194,12 @@ describe("claude model proof", () => {
     expect(claude.proof.matches(pinned, "claude-sonnet-x-20260101")).toBe(true);
     expect(claude.proof.matches(pinned, "claude-sonnet-y")).toBe(false);
   });
+
+  it("holds Sonnet to its own revisions", () => {
+    const sonnet = lane({ model: "sonnet" });
+    expect(claude.proof.matches(sonnet, "claude-sonnet-5-5")).toBe(true);
+    expect(claude.proof.matches(sonnet, "claude-opus-5-5")).toBe(false);
+  });
 });
 
 describe("claude preflight", () => {
@@ -204,7 +211,7 @@ describe("claude preflight", () => {
     expect(classify(0, JSON.stringify({ loggedIn: false }))).toEqual({ kind: "unauthenticated" });
     expect(classify(0, "[]")).toEqual({ kind: "unauthenticated" });
     expect(classify(0, "model claude-x is not supported")).toEqual({ kind: "unavailable-model" });
-    expect(claude.preflight.argv(lane())).toEqual(["auth", "status", "--json"]);
+    expect(claude.preflight.argv(lane(), null)).toEqual(["auth", "status", "--json"]);
     expect(claude.preflight.retryAfterUnauthenticatedMs).toBeNull();
   });
 });

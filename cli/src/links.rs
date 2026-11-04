@@ -1,12 +1,3 @@
-//! The skill folders: links from each harness's user skill folder to the global groups'
-//! skills, the links and agent files older installs left behind, and the stray skills
-//! `--clean` moves and `stray` reports.
-//!
-//! Every folder any of these touch is resolved once into a canonical index, so two spellings
-//! of one directory (a symlinked `~/.codex/skills`, a shared `~/.claude/skills`) are one folder.
-//! Every entry of every folder is classified once, and each action comes from that one
-//! classification, so no two passes can disagree about an entry.
-
 use std::collections::{BTreeMap, BTreeSet};
 use std::fs;
 use std::io;
@@ -23,8 +14,6 @@ use crate::plan::{self, Action, Anchor, Displaced, Plan};
 use crate::render;
 use crate::stackfile::{self, SkillName, StackFile};
 
-/// What counts as ai-stack's own: the stack and the legacy roots, resolved once, and the links
-/// the ledger records.
 pub struct Owner {
     stack: PathBuf,
     legacy: Vec<PathBuf>,
@@ -40,13 +29,11 @@ impl Owner {
         }
     }
 
-    /// Whether the symlink at `link` resolves into the stack or a legacy root.
     pub fn owns(&self, link: &Path) -> Result<bool> {
         let folder = paths::resolve(link.parent().unwrap_or(Path::new("/")));
         Ok(self.inside(&target_of(&folder, &read_link(link)?)))
     }
 
-    /// The stack and every legacy root: ai-stack never links, unlinks or moves anything in them.
     fn roots(&self) -> impl Iterator<Item = &PathBuf> {
         std::iter::once(&self.stack).chain(&self.legacy)
     }
@@ -55,8 +42,6 @@ impl Owner {
         self.roots().any(|root| real.starts_with(root))
     }
 
-    /// A link in a skill folder is ai-stack's when the ledger records it with this target, or
-    /// when its target resolves into the stack or a legacy root.
     fn owns_skill_link(&self, folder: &Path, name: &str, target: &Path, real: &Path) -> bool {
         let recorded = self.recorded.get(&*folder.join(name).to_string_lossy());
         recorded.is_some_and(|recorded| *recorded == *target.to_string_lossy()) || self.inside(real)
@@ -67,11 +52,6 @@ fn read_link(link: &Path) -> Result<PathBuf> {
     fs::read_link(link).with_context(|| format!("reading link {}", link.display()))
 }
 
-/// Where a link in the resolved `folder` with this target text points: the target's parent
-/// resolved through the filesystem, its last component kept as written. A link to
-/// `<stack>/skills/<name>` stays a link into the stack when that skill directory is itself a
-/// symlink elsewhere, and `..` after a symlinked directory leaves through that directory's
-/// target, dangling or not.
 pub fn target_of(folder: &Path, target: &Path) -> PathBuf {
     let joined = folder.join(target);
     match (joined.parent(), joined.file_name()) {
@@ -80,19 +60,13 @@ pub fn target_of(folder: &Path, target: &Path) -> PathBuf {
     }
 }
 
-/// One physical folder and every role it plays.
 #[derive(Debug, Default)]
 struct Folder {
-    /// The first spelling seen; actions use it.
     path: PathBuf,
     real: PathBuf,
-    /// A harness's user skill folder: the global groups' skills are linked here.
     links: bool,
-    /// `<harness home>/skills` or `/agents`: ai-stack's links here are removed unless wanted.
     leftover: bool,
-    /// `<harness home>/agents`: role agent files with the managed marker are removed.
     agents: bool,
-    /// A `[clean] skill_roots` entry.
     clean: bool,
     skipped: bool,
 }
@@ -131,7 +105,6 @@ impl Index {
             for path in [hc.harness.skill_folder(&hc.home, &cfg.home), hc.home.join("skills"), hc.home.join("agents"), hc.home.clone()] {
                 add(path, true, &|_| {});
             }
-            // Default clean roots still name this folder when a custom harness home is configured.
             add(cfg.home.join(format!(".{}", hc.harness.as_str())).join("skills"), true, &|_| {});
         }
         for root in &cfg.clean.skill_roots {
@@ -155,7 +128,6 @@ impl Index {
         }
         let entry = folder.real.join(name);
         paths::routes(&entry).iter().any(|route| self.skipped_routes.iter().any(|root| {
-            // An active links folder may share a skipped root; aliases leaving it stay protected.
             if folder.links && paths::starts_with(&folder.real, root) && paths::starts_with(route, &folder.real) {
                 return false;
             }
@@ -164,30 +136,21 @@ impl Index {
     }
 }
 
-/// What one folder entry is, decided once.
 enum Kind {
-    /// A symlink ai-stack made: its target as written and as `target_of` resolves it.
     Ours { target: PathBuf, real: PathBuf },
-    /// A role agent file an older ai-stack wrote.
     ManagedAgent { text: String },
-    /// A directory or file that holds the stack or a legacy root.
     Protected { root: PathBuf },
-    /// Anything else: a stray skill.
     Stray,
-    /// An entry that holds or routes into a skipped harness.
     Skipped,
 }
 
 struct Entry {
     path: PathBuf,
     name: String,
-    /// lstat device and inode, to find the entry a wanted name reaches on a case-insensitive disk.
     id: (u64, u64),
     kind: Kind,
 }
 
-/// Plans every skill folder: links for the global groups' skills, removal of ai-stack's
-/// leftovers, and the stray skills (`Plan::stray`, and `--clean` moves).
 pub fn plan(cfg: &Config, owner: &Owner, index: &Index, file: &StackFile, opts: Options, out: &mut Plan) -> Result<()> {
     let skills_dir = cfg.stack.path.join(stackfile::SKILLS_DIR);
     let mut wanted = BTreeSet::new();
@@ -224,14 +187,11 @@ pub fn plan(cfg: &Config, owner: &Owner, index: &Index, file: &StackFile, opts: 
     Ok(())
 }
 
-/// The stack's skills directory as configured and resolved.
 struct Skills<'a> {
     dir: &'a Path,
     real: PathBuf,
 }
 
-/// The first symlink among `path` and its ancestors whose target does not exist, when `path`
-/// itself does not exist.
 fn dangling(path: &Path) -> Option<(PathBuf, PathBuf)> {
     if fs::metadata(path).is_ok() {
         return None;
@@ -305,8 +265,6 @@ fn plan_folder(cfg: &Config, entries: &[Entry], folder: &Folder, wanted: &BTreeS
     Ok(())
 }
 
-/// The folder's entries, sorted and classified, without dot entries (Codex's `.system`,
-/// `.DS_Store`), which ai-stack never touches.
 fn read(owner: &Owner, folder: &Folder, index: &Index) -> Result<Vec<Entry>> {
     let listing = match fs::read_dir(&folder.path) {
         Ok(listing) => listing,
@@ -426,16 +384,13 @@ mod tests {
         let (claude, agents) = (f.home.join(".claude/skills"), f.home.join(".agents/skills"));
         let target = |name: &str| f.stack.join("skills").join(name);
         let first = f.plan();
-        // (a) A missing link is a Link in each harness's user skill folder.
         assert_eq!(link_actions(&first, &f.home), ["link ~/.claude/skills/feedback", "link ~/.claude/skills/handoff", "link ~/.agents/skills/feedback", "link ~/.agents/skills/handoff"]);
         f.apply(&first);
         let tools = vec![("feedback".to_string(), target("feedback")), ("handoff".to_string(), target("handoff"))];
         assert_eq!(links(&claude), tools);
         assert_eq!(links(&agents), tools);
-        // (b) Correct links are no action, and the leftover rule leaves them alone.
         assert!(f.plan().is_empty(), "{}", f.plan().render_text(&f.home));
 
-        // (c) Turning a group off unlinks its skills; turning one on links its skills.
         put(&f.stack.join("stack.toml"), &STACK_TOML.replace("[groups.tools]\nglobal = true", "[groups.tools]\nglobal = false").replace("[groups.games]\n", "[groups.games]\nglobal = true\n"));
         let switched = f.plan();
         assert_eq!(summary(&switched, &f.home), [
@@ -445,7 +400,6 @@ mod tests {
         f.apply(&switched);
         assert_eq!(links(&agents), [("game-mvp".to_string(), target("game-mvp"))]);
 
-        // An ai-stack link to the wrong place (a legacy root) is repointed.
         fs::remove_file(agents.join("game-mvp")).unwrap();
         symlink(f.root.join("legacy/skills/game-mvp"), agents.join("game-mvp")).unwrap();
         let repoint = f.plan();
@@ -467,23 +421,19 @@ mod tests {
         fs::remove_file(agents.join("handoff")).unwrap();
         put(&agents.join("handoff/SKILL.md"), "mine\n");
         put(&agents.join("other/SKILL.md"), "other\n");
-        // A link to somewhere else is not ours either, so it is in the way too.
         fs::remove_file(f.home.join(".claude/skills/feedback")).unwrap();
         symlink(f.root.join("elsewhere/feedback"), f.home.join(".claude/skills/feedback")).unwrap();
 
-        // (d) Without --force: a conflict naming the path, and nothing linked over it.
         let refused = f.plan();
         assert_eq!(refused.conflicts.len(), 2, "{:?}", refused.conflicts);
         assert!(refused.conflicts.iter().any(|c| c.starts_with(&format!("{} is a stray skill in the way", agents.join("handoff").display()))), "{:?}", refused.conflicts);
         assert!(refused.actions.is_empty(), "{}", refused.render_text(&f.home));
-        // stray reports what is in the way and what --clean moves, never our links.
         let strays = ["~/.agents/skills/handoff", "~/.agents/skills/other", "~/.claude/skills/feedback"];
         assert_eq!(refused.stray(&f.home).skill_names, strays);
         let cleaned = f.plan_with(clean());
         assert_eq!(cleaned.stray(&f.home).skill_names, strays);
         assert!(cleaned.conflicts.is_empty(), "{:?}", cleaned.conflicts);
 
-        // With --force: each stray moves into the backup as part of its link.
         let forced = f.plan_with(Options { force: true, ..Options::default() });
         assert!(forced.conflicts.is_empty(), "{:?}", forced.conflicts);
         assert_eq!(link_actions(&forced, &f.home), ["move+link ~/.claude/skills/feedback clean=false", "move+link ~/.agents/skills/handoff clean=false"]);
@@ -512,7 +462,6 @@ mod tests {
 
     #[test]
     fn a_codex_skills_alias_of_the_agents_folder_settles_in_both_directions() {
-        // ~/.codex/skills -> ../.agents/skills after an install.
         let f = fixture();
         f.apply(&f.plan());
         symlink("../.agents/skills", f.home.join(".codex/skills")).unwrap();
@@ -523,7 +472,6 @@ mod tests {
         }
         assert_eq!(links(&f.home.join(".agents/skills")).len(), 2);
 
-        // ~/.agents/skills -> ../.codex/skills before the first install.
         let g = fixture();
         fs::create_dir_all(g.home.join(".codex/skills")).unwrap();
         fs::create_dir_all(g.home.join(".agents")).unwrap();
@@ -566,14 +514,12 @@ mod tests {
         f.apply(&f.plan());
         let real = f.stack.clone();
 
-        // The same checkout through a symlink alias: nothing changes and nothing is stray.
         symlink(&real, f.root.join("alias")).unwrap();
         f.cfg.stack.path = f.root.join("alias");
         let aliased = f.plan_with(clean());
         assert!(aliased.is_empty(), "{}", aliased.render_text(&f.home));
         assert!(aliased.stray.is_empty());
 
-        // An install with --stack <other checkout>, then a plain one.
         let other = f.root.join("other");
         for file in ["stack.toml", ".claude-plugin/marketplace.json", ".agents/plugins/marketplace.json", "plugins/pstack/.codex-plugin/plugin.json"] {
             put(&other.join(file), &fs::read_to_string(real.join(file)).unwrap());
@@ -605,15 +551,12 @@ mod tests {
         put(&f.root.join("outside/handoff/SKILL.md"), "theirs\n");
         fs::create_dir_all(f.root.join("outside/nested")).unwrap();
         symlink(f.root.join("outside/nested"), f.stack.join("escape")).unwrap();
-        // `dangling` points at a directory that does not exist.
         symlink(f.root.join("outside/missing/deeper"), f.stack.join("dangling")).unwrap();
         let agents = f.home.join(".agents/skills");
         fs::create_dir_all(&agents).unwrap();
-        // Lexically these point into the stack; through `escape` and `dangling` they point outside it.
         symlink(f.stack.join("escape/../handoff"), agents.join("handoff")).unwrap();
         symlink(f.stack.join("escape/../gone"), agents.join("gone")).unwrap();
         symlink(f.stack.join("dangling/../mine"), agents.join("mine")).unwrap();
-        // Through an outside alias of the stack, a link to a missing skill is still ours.
         symlink(&f.stack, f.root.join("alias")).unwrap();
         symlink(f.root.join("alias/skills/retired"), agents.join("retired")).unwrap();
         let plan = f.plan();
@@ -677,11 +620,9 @@ mod tests {
         let recorded = ledger::load(&ledger::path(&f.home));
         assert_eq!(recorded.get(&*agents.join("handoff").to_string_lossy()), Some(&f.stack.join("skills/handoff").display().to_string()));
 
-        // A link the ledger records with another target is not ours.
         fs::remove_file(agents.join("handoff")).unwrap();
         symlink(f.root.join("mine/handoff"), agents.join("handoff")).unwrap();
         assert_eq!(f.plan().stray(&f.home).skill_names, ["~/.agents/skills/handoff"]);
-        // An unlink drops its entry.
         fs::remove_file(agents.join("handoff")).unwrap();
         symlink(f.stack.join("skills/handoff"), agents.join("handoff")).unwrap();
         put(&f.stack.join("stack.toml"), &STACK_TOML.replace("global = true", "global = false"));
@@ -721,7 +662,6 @@ mod tests {
 
     #[test]
     fn folders_holding_or_inside_a_checkout_are_conflicts() {
-        // The configured checkout is a legacy root during `--stack <other>`.
         let mut f = fixture();
         let configured = f.stack.clone();
         fs::create_dir_all(f.home.join(".claude")).unwrap();
@@ -739,7 +679,6 @@ mod tests {
         assert!(plan.conflicts.iter().any(|c| c.starts_with(&format!("{} resolves to {}, inside the stack checkout {}", f.home.join(".claude/skills").display(), configured.join("skills").display(), configured.display()))), "{:?}", plan.conflicts);
         assert!(plan.actions.iter().all(|action| !action.path().starts_with(f.home.join(".claude/skills"))), "{}", plan.render_text(&f.home));
 
-        // A checkout sitting in a skill folder, and a clean root that holds the checkout.
         let mut g = fixture();
         let checkout = g.home.join(".claude/skills/source");
         fs::create_dir_all(checkout.parent().unwrap()).unwrap();
@@ -777,7 +716,6 @@ mod tests {
         symlink(&first, &agents).unwrap();
         let plan = f.plan_with(Options { force: true, ..Options::default() });
         assert!(link_actions(&plan, &f.home).contains(&"move+link ~/.agents/skills/handoff clean=false".to_string()));
-        // The same entry (same fingerprint) in another folder, reached through the same spelling.
         fs::rename(first.join("handoff"), second.join("handoff")).unwrap();
         fs::remove_file(&agents).unwrap();
         symlink(&second, &agents).unwrap();
@@ -785,7 +723,6 @@ mod tests {
         assert!(err.to_string().contains("is no longer the folder the plan was made for"), "{err}");
         assert!(second.join("handoff/SKILL.md").is_file());
 
-        // The same path, but another directory.
         fs::remove_file(&agents).unwrap();
         fs::create_dir_all(&agents).unwrap();
         put(&agents.join("handoff/SKILL.md"), "mine\n");
@@ -803,7 +740,7 @@ mod tests {
         let agents = f.home.join(".agents/skills");
         put(&agents.join("HANDOFF/SKILL.md"), "mine\n");
         if fs::symlink_metadata(agents.join("handoff")).is_err() {
-            return; // A case-sensitive disk: the names are two entries.
+            return;
         }
         let plan = f.plan_with(Options { force: true, ..Options::default() });
         let index = plan.actions.iter().position(|action| matches!(action, Action::Link { displaces: Displaced::Stray { .. }, .. })).unwrap();

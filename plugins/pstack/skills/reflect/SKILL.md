@@ -17,7 +17,7 @@ Before fanning out, resolve and verify this conversation's transcript through th
 
 ## 2. Spawn three reviewers in parallel
 
-Start all three read-only lanes in one fan-out phase through provider dispatch. Reviewers need MCP access to look up the tickets, chat threads, and observability traces the transcript references, so keep them native to the parent. The prompt forbids file writes; the parent applies edits.
+Start all three read-only lanes in one fan-out phase through provider dispatch. Reviewers need MCP access to look up the tickets, chat threads, and observability traces the transcript references, so keep them native to the parent. The prompt forbids file writes; the parent applies edits. Pick each subagent's effort for the job, per the Subagents section of the **poteto-mode** skill.
 
 | Lens | Model descriptor | Prompt template |
 |---|---|---|
@@ -41,12 +41,14 @@ Present the synthesizer's full Accepted / Rejected / Backlog output and wait for
 
 File each Backlog item to your team's devex or backlog tracker without waiting. Only the Accepted list waits for approval.
 
+Never edit a skill under `plugins/cache/` in the [harness config home](../poteto-mode/references/codex-tools.md#harness-config-homes). Claude Code runs that cached copy, and the next install replaces it. Before approval, show its destination: on Claude Code, `.claude/skills/<skill>/` in the project or `<config-home>/skills/<skill>/`; on Codex, `.agents/skills/<skill>/` in the project or `$HOME/.agents/skills/<skill>/`. After approval, copy the skill folder there and edit the copy. When the current checkout is the plugin's own source repository, the user may instead name that source file as the destination, and that repository's rules for plugin edits apply. Never open a PR or push.
+
 Follow each approved row's Routing exactly:
 
 - Trivial existing-skill edit (a one-line bullet, a tightened sentence, a stale fact corrected): the parent does it directly.
-- Substantive existing-skill edit (a new section, a new pattern table, more than ~10 lines): hand to the **plugin-dev:skill-development** skill and run its draft / test / iterate loop.
-- `tune description: <skill path>` (the skill exists but didn't trigger when it should have): hand to `plugin-dev:skill-development` and run its description-optimization loop.
-- `new skill via plugin-dev:skill-development: <kebab-name>`: hand creation to `plugin-dev:skill-development`. Do not invent the shape ad hoc.
+- Substantive existing-skill edit (a new section, a new pattern table, more than ~10 lines): follow the [Authoring a skill playbook](../poteto-mode/playbooks/authoring-a-skill.md) and run its draft, validate and test steps.
+- `tune description: <skill path>` (the skill exists but didn't trigger when it should have): rewrite its `description` per that playbook, then check it against prompts that should and should not trigger it.
+- `new skill: <kebab-name>`: create it through that playbook. Do not invent the shape ad hoc.
 
 If your environment ships a SKILL.md validator, run it on every touched skill before declaring done.
 

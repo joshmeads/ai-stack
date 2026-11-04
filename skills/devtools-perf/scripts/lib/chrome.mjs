@@ -1,5 +1,3 @@
-// Launch a dedicated Chrome for measurement.
-
 import { spawn } from "node:child_process";
 import { existsSync } from "node:fs";
 import { tmpdir } from "node:os";
@@ -31,8 +29,6 @@ export async function launch(opts, url) {
   const args = [
     `--remote-debugging-port=${p}`, `--user-data-dir=${profile}`, "--no-first-run", "--no-default-browser-check",
     "--disable-background-timer-throttling", "--disable-renderer-backgrounding", "--disable-backgrounding-occluded-windows",
-    // A page kept in the back/forward cache stays in the renderer's heap
-    // and DOM counts after a navigation, which would read as a leak.
     "--disable-features=BackForwardCache",
     ...(opts.headless ? ["--headless=new"] : []),
     url ?? "about:blank",

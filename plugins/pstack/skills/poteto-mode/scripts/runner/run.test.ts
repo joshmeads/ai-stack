@@ -13,13 +13,17 @@ import {
   symlinkSync,
   writeFileSync,
 } from "node:fs";
-import { dirname, join } from "node:path";
+import { dirname, join, resolve } from "node:path";
 import { tmpdir } from "node:os";
 import { childEnvironment, discoverSharedGitDir, runLane } from "./run.ts";
 import { main } from "./cli.ts";
-import { type LaneRequest, resolveLane } from "./registry/index.ts";
+import { type LaneRequest, REGISTRY, resolveLane } from "./registry/index.ts";
+import { access, type Lane, type ProviderAdapter } from "./registry/contract.ts";
+import { devin } from "./providers/devin.ts";
+import { opencode } from "./providers/opencode.ts";
+import { BASE_ALLOWLIST, BASE_PREFIXES } from "./providers/shared.ts";
 import type { ProviderId } from "./registry/family.ts";
-import type { RunnerReceipt } from "./types.ts";
+import type { AccessKind, RunnerReceipt } from "./types.ts";
 
 let scratch = "";
 let bin = "";
@@ -146,8 +150,6 @@ function receipt(path: string): RunnerReceipt {
   return JSON.parse(readFileSync(path, "utf8")) as RunnerReceipt;
 }
 
-// Fixture git never sees the caller's GIT_* routing or hooks. A ceiling, when given, keeps
-// repositories above the fixture root out of discovery.
 function gitEnv(ceiling: string | null = null): NodeJS.ProcessEnv {
   const env = childEnvironment(laneOf({ ...options("claude"), mode: "isolated-write" }));
   return ceiling === null ? env : { ...env, GIT_CEILING_DIRECTORIES: ceiling };
@@ -543,7 +545,6 @@ describe("runLane", () => {
   for (const startup of ["dotenv", "bunfig", "bun-options", "node-options", "combined", "hostile-path", "bare-name"]) {
     it(`shipped launcher startup isolation: ${startup}`, async () => {
       const input = options("codex", startup);
-      // Exceed pipe capacity so the fake provider must consume stdin before exiting.
       writeFileSync(input.promptPath, "Return the marker.\n".repeat(100_000));
       const captured = join(scratch, "provider-env.txt");
       const capturedPrompt = join(scratch, "provider-prompt.txt");
@@ -644,6 +645,28 @@ printf '%s\\n' '{"type":"thread.started","thread_id":"isolated"}' '{"type":"item
       }
     });
   }
+
+  it("records the writer sandbox the lane ran with: none for a reader, bounded by default, and full access on opt-in", async () => {
+    const lanes = [
+      [options("codex", "sandbox-reader"), null, "read-only"],
+      [{ ...options("codex", "sandbox-bounded"), mode: "isolated-write" }, "bounded", "workspace-write"],
+      [{ ...options("codex", "sandbox-full"), mode: "isolated-write", writerSandbox: "full-access" }, "full-access", "danger-full-access"],
+    ] as const;
+    for (const [input, writerSandbox, sandbox] of lanes) {
+      expect((await runLane(laneOf(input))).exitCode).toBe(0);
+      const saved = receipt(input.receiptPath);
+      expect([saved.status, saved.writerSandbox]).toEqual(["complete", writerSandbox]);
+      expect(saved.argv.slice(saved.argv.indexOf("--sandbox"), saved.argv.indexOf("--sandbox") + 2)).toEqual(["--sandbox", sandbox]);
+    }
+  });
+
+  it("records the opted-in writer sandbox on a failure receipt", async () => {
+    process.env.PATH = join(scratch, "empty-bin");
+    mkdirSync(process.env.PATH);
+    const input = { ...options("codex", "sandbox-missing-cli"), mode: "isolated-write", writerSandbox: "full-access" };
+    expect((await runLane(laneOf(input))).exitCode).toBe(69);
+    expect(receipt(input.receiptPath)).toMatchObject({ status: "unavailable-cli", writerSandbox: "full-access" });
+  });
 
   it("records Codex's exact argv without fabricating a reported model", async () => {
     const input = options("codex");
@@ -1189,7 +1212,276 @@ process.exit(1);
   });
 });
 
+describe("devin lanes", () => {
+  const LOGGED_IN = "Logged in (via Devin).\n\nUser: <redacted>";
+  const DEVIN_VARIABLES = ["DEVIN_PERMISSION_MODE", "DEVIN_SANDBOX", "DEVIN_MODEL", "DEVIN_REFUSAL_FALLBACK"];
+
+  function fakeDevin(status: string, turn: string): void {
+    writeFileSync(join(bin, "devin"), `#!/usr/bin/env bun
+import { existsSync, readFileSync, statSync, writeFileSync } from "node:fs";
+import { dirname } from "node:path";
+const args = process.argv.slice(2);
+if (args[0] === "auth") {
+  console.log(${JSON.stringify(status)});
+  process.exit(0);
+}
+const at = (flag) => args[args.indexOf(flag) + 1];
+const exportPath = at("--export"), config = at("--config");
+${turn}
+`);
+    chmodSync(join(bin, "devin"), 0o755);
+  }
+
+  const OBSERVE = `const observed = {
+  model: at("--model"),
+  exportAbsent: !existsSync(exportPath),
+  dirMode: (statSync(dirname(config)).mode & 0o777).toString(8),
+  configMode: (statSync(config).mode & 0o777).toString(8),
+  subagents: JSON.parse(readFileSync(config, "utf8")).subagents_enabled,
+  devinVariables: Object.keys(process.env).filter((key) => key.startsWith("DEVIN_")),
+};
+console.log("Welcome to Devin CLI!\\nSTDOUT_IS_NOT_THE_REPLY");
+writeFileSync(exportPath, JSON.stringify({
+  session_id: "d1",
+  steps: [{ source: "agent", message: JSON.stringify(observed), extra: { generation_model: at("--model") } }],
+  final_metrics: { total_prompt_tokens: 5, total_completion_tokens: 2 },
+}));`;
+
+  function devinOptions(suffix: string, overrides: Partial<LaneRequest> = {}): LaneRequest {
+    return { ...options("devin", suffix), provider: "devin", model: "swe-2", effort: "max", ...overrides };
+  }
+
+  beforeEach(() => {
+    for (const name of DEVIN_VARIABLES) process.env[name] = `${name}-value`;
+  });
+  afterEach(() => {
+    for (const name of DEVIN_VARIABLES) delete process.env[name];
+  });
+
+  for (const [model, effort, cliModel] of [["swe-2", "max", "swe-2-max"], ["swe-1.6", "default", "swe-1-6"]] as const) {
+    it(`runs devin:${model}@${effort} as ${cliModel}, with the reply and proof from the export`, async () => {
+      fakeDevin(LOGGED_IN, OBSERVE);
+      const input = devinOptions(`devin-${model}`, { model, effort });
+      const result = await runLane(laneOf(input));
+      expect(result.exitCode).toBe(0);
+      const saved = receipt(input.receiptPath);
+      expect(saved).toMatchObject({
+        status: "complete",
+        provider: "devin",
+        model,
+        effort,
+        mode: "read-only",
+        reportedModel: cliModel,
+        modelVerified: true,
+        modelEvidence: "provider-report",
+        sessionId: "d1",
+        usage: { inputTokens: 5, outputTokens: 2 },
+        preflight: { status: "passed", evidence: "authenticated" },
+      });
+      const dir = `${input.receiptPath}.provider`;
+      expect(saved.argv.slice(1)).toEqual([
+        "-p", "--prompt-file", input.promptPath, "--model", cliModel, "--permission-mode", "auto",
+        "--respect-workspace-trust", "false", "--export", join(dir, "export.json"), "--config", join(dir, "lockdown.json"),
+      ]);
+      expect(JSON.parse(readFileSync(input.outputPath, "utf8"))).toEqual({
+        model: cliModel,
+        exportAbsent: true,
+        dirMode: "700",
+        configMode: "600",
+        subagents: false,
+        devinVariables: [],
+      });
+      expect(readFileSync(streamPath(saved.stdoutPath), "utf8")).toContain("STDOUT_IS_NOT_THE_REPLY");
+      expect(statSync(dir).mode & 0o777).toBe(0o700);
+    });
+  }
+
+  it("refuses an export whose generation model is not the CLI model ID", async () => {
+    fakeDevin(LOGGED_IN, `writeFileSync(exportPath, JSON.stringify({ steps: [{ source: "agent", message: "OK", extra: { generation_model: "swe-2" } }] }));`);
+    const input = devinOptions("devin-mismatch");
+    expect((await runLane(laneOf(input))).exitCode).toBe(65);
+    expect(receipt(input.receiptPath)).toMatchObject({
+      status: "malformed-output",
+      error: { message: "requested model swe-2 was not reported by devin" },
+    });
+    expect(existsSync(input.outputPath)).toBe(false);
+  });
+
+  for (const [name, status, exitCode, message] of [
+    ["logged out at exit 0", "Not logged in.\n  Credentials path: /home/fixture/.local/share/devin/credentials.toml", 77, "authentication or model preflight failed"],
+    ["an unknown status", "Welcome to Devin CLI!", 70, "authentication preflight output was inconclusive"],
+  ] as const) {
+    it(`classifies ${name} before any model call`, async () => {
+      const started = join(scratch, "devin-model.started");
+      fakeDevin(status, `writeFileSync(${JSON.stringify(started)}, "started");`);
+      const input = devinOptions(`devin-preflight-${exitCode}`);
+      const result = await runLane(laneOf(input));
+      expect(result.exitCode).toBe(exitCode);
+      expect(result.receipt).toMatchObject({
+        status: exitCode === 77 ? "unauthenticated" : "child-failed",
+        preflight: { status: "failed" },
+        error: { message },
+      });
+      expect(existsSync(started)).toBe(false);
+    });
+  }
+
+  it("classifies an unknown model, a rejected tool and SIGTERM from the captured shapes", async () => {
+    fakeDevin(LOGGED_IN, `console.error("Error: Unknown model: 'swe-2-max'\\nAvailable: adaptive, swe-2, swe-1.6");
+process.exit(1);`);
+    const unknown = devinOptions("devin-unknown-model");
+    expect((await runLane(laneOf(unknown))).receipt).toMatchObject({ status: "unavailable-model", exitCode: 1 });
+
+    fakeDevin(LOGGED_IN, `console.error("warning: rejected a tool call that requires confirmation.");
+writeFileSync(exportPath, JSON.stringify({ steps: [{ source: "agent", message: "", extra: { generation_model: at("--model") } }] }));`);
+    const rejected = devinOptions("devin-rejected");
+    const rejectedResult = await runLane(laneOf(rejected));
+    expect(rejectedResult.exitCode).toBe(70);
+    expect(rejectedResult.receipt).toMatchObject({
+      status: "child-failed",
+      exitCode: 0,
+      error: { message: "devin ended with an empty final message" },
+    });
+    expect(rejectedResult.receipt.error?.evidence).toContain("rejected a tool call");
+    expect(existsSync(rejected.outputPath)).toBe(false);
+
+    fakeDevin(LOGGED_IN, `process.stdout.write("partial reply");
+process.kill(process.pid, "SIGTERM");
+await Bun.sleep(5_000);`);
+    const terminated = devinOptions("devin-sigterm");
+    const terminatedResult = await runLane(laneOf(terminated));
+    expect(terminatedResult.exitCode).toBe(130);
+    expect(terminatedResult.receipt).toMatchObject({ status: "cancelled", exitCode: 143, signal: null });
+    expect(existsSync(terminated.outputPath)).toBe(false);
+  });
+
+  it("refuses a lane whose provider directory already exists and rolls back its reservations", async () => {
+    fakeDevin(LOGGED_IN, OBSERVE);
+    const input = devinOptions("devin-taken");
+    mkdirSync(`${input.receiptPath}.provider`);
+    await expect(runLane(laneOf(input))).rejects.toThrow();
+    for (const path of [input.outputPath, input.receiptPath, `${input.receiptPath}.stdout`, `${input.receiptPath}.stderr`]) {
+      expect([path, existsSync(path)]).toEqual([path, false]);
+    }
+  });
+
+  it("runs a Devin lane in a repository that holds .devin/", async () => {
+    fakeDevin(LOGGED_IN, OBSERVE);
+    const repo = join(scratch, "repo");
+    fs.mkdirSync(join(repo, ".git"), { recursive: true });
+    fs.mkdirSync(join(repo, ".devin"));
+    const input = devinOptions("devin-repo-config", { cwd: repo });
+    expect((await runLane(laneOf(input))).receipt).toMatchObject({ status: "complete", exitCode: 0 });
+  });
+
+  it("refuses an isolated-write Devin lane before launch", () => {
+    const input = devinOptions("devin-writer", { mode: "isolated-write" });
+    expect(() => laneOf(input)).toThrow("provider devin does not support isolated-write");
+    expect(existsSync(input.receiptPath)).toBe(false);
+  });
+});
+
+const STAND_IN_CONFIG = ".agents/agents/lane.md";
+const STAND_IN: ProviderAdapter = {
+  ...devin,
+  executable: "standin",
+  effortIn: "config",
+  preflight: {
+    argv: () => ["preflight"],
+    retryAfterUnauthenticatedMs: null,
+    classify: (run) => run.exitCode === 0 ? { kind: "passed", evidence: run.stdout.trim() } : { kind: "inconclusive" },
+  },
+  launch: {
+    prompt: "stdin",
+    sidecar: { output: null, config: { name: STAND_IN_CONFIG, content: (lane) => `effort: ${lane.effort}\n` } },
+    supports: ["read-only"],
+    stdinEnvelope: (prompt) => `${JSON.stringify({ event: "user", message: { role: "user", content: prompt } })}\n`,
+    needsSharedGitDir: () => false,
+    argv: () => ["run"],
+  },
+  parse: (run) => ({
+    kind: "complete",
+    text: run.stdout,
+    metadata: { reportedModel: null, sessionId: null, usage: null, costUsd: null },
+  }),
+  proof: { report: "absent", matches: () => false },
+  environment: (_access, sidecarDir) => ({
+    kind: "allowlist",
+    names: BASE_ALLOWLIST,
+    prefixes: BASE_PREFIXES,
+    set: { XDG_CONFIG_HOME: `${sidecarDir}`, STAND_IN_CONFIG: `${sidecarDir}/${STAND_IN_CONFIG}`, CODEX_THREAD_ID: "restored" },
+  }),
+};
+
+function standInLane(suffix: string, overrides: Partial<LaneRequest> = {}): Lane {
+  return { ...laneOf({ ...options("devin", suffix), provider: "devin", model: "swe-2", effort: "max", ...overrides }), adapter: STAND_IN };
+}
+
+describe("stand-in provider contract", () => {
+  let inherited: string | undefined;
+  beforeEach(() => {
+    writeFileSync(join(bin, "standin"), `#!/usr/bin/env bun
+import { readFileSync, statSync } from "node:fs";
+import { dirname } from "node:path";
+const mode = (path) => (statSync(path).mode & 0o777).toString(8);
+if (process.argv[2] === "preflight") {
+  const config = process.env.STAND_IN_CONFIG;
+  console.log(JSON.stringify({
+    xdg: process.env.XDG_CONFIG_HOME,
+    codexThread: process.env.CODEX_THREAD_ID ?? null,
+    config: readFileSync(config, "utf8"),
+    modes: [mode(dirname(dirname(config))), mode(dirname(config)), mode(config)],
+  }));
+  process.exit(0);
+}
+process.stdout.write(await Bun.stdin.text());
+`);
+    chmodSync(join(bin, "standin"), 0o755);
+    inherited = process.env.XDG_CONFIG_HOME;
+    process.env.XDG_CONFIG_HOME = "/inherited/config";
+  });
+  afterEach(() => {
+    if (inherited === undefined) delete process.env.XDG_CONFIG_HOME;
+    else process.env.XDG_CONFIG_HOME = inherited;
+  });
+
+  it("creates the nested config before the preflight, which sees the set environment, and sends the envelope", async () => {
+    const lane = standInLane("stand-in");
+    writeFileSync(lane.promptPath, "Return \"the\" marker.\n");
+    const result = await runLane(lane);
+    expect(result.exitCode).toBe(0);
+    const dir = `${lane.receiptPath}.provider`;
+    expect(result.receipt).toMatchObject({
+      status: "complete",
+      reportedModel: null,
+      modelVerified: false,
+      modelEvidence: "pinned-argv",
+      preflight: { status: "passed" },
+    });
+    expect(JSON.parse(result.receipt.preflight.evidence)).toEqual({
+      xdg: dir,
+      codexThread: null,
+      config: "effort: max\n",
+      modes: ["700", "700", "600"],
+    });
+    expect(readFileSync(lane.outputPath, "utf8"))
+      .toBe(`${JSON.stringify({ event: "user", message: { role: "user", content: "Return \"the\" marker.\n" } })}\n`);
+  });
+});
+
 describe("childEnvironment", () => {
+  it("applies an adapter's set values after filtering and drops the parent identity markers last", () => {
+    const lane = standInLane("stand-in-env");
+    const source = { PATH: "/bin", XDG_CONFIG_HOME: "/inherited", XDG_DATA_HOME: "/data", CODEX_THREAD_ID: "parent", GITHUB_TOKEN: "t" };
+    const dir = `${lane.receiptPath}.provider`;
+    expect(childEnvironment(lane, source)).toEqual({
+      PATH: "/bin",
+      XDG_CONFIG_HOME: dir,
+      XDG_DATA_HOME: "/data",
+      STAND_IN_CONFIG: `${dir}/${STAND_IN_CONFIG}`,
+    });
+  });
+
   it("removes only inherited runtime identity needed to avoid nested detection", () => {
     const source = {
       PATH: "/bin",
@@ -1211,6 +1503,71 @@ describe("childEnvironment", () => {
       CODEX_CI: "1",
       KEEP_ME: "yes",
     });
+  });
+
+  it("passes a Devin lane the shared base allowlist without any DEVIN_* variable", () => {
+    const cases: [name: string, kept: boolean][] = [
+      ["PATH", true],
+      ["HOME", true],
+      ["TZ", true],
+      ["LC_ALL", true],
+      ["XDG_DATA_HOME", true],
+      ["HTTPS_PROXY", true],
+      ["NODE_EXTRA_CA_CERTS", true],
+      ["DEVIN_PERMISSION_MODE", false],
+      ["DEVIN_SANDBOX", false],
+      ["DEVIN_MODEL", false],
+      ["DEVIN_REFUSAL_FALLBACK", false],
+      ["GITHUB_TOKEN", false],
+      ["CLAUDECODE", false],
+      ["CODEX_THREAD_ID", false],
+    ];
+    const source = Object.fromEntries(cases.map(([name]) => [name, `${name}-value`]));
+    const kept = Object.fromEntries(cases.filter(([, keep]) => keep).map(([name]) => [name, `${name}-value`]));
+    const devin = laneOf({ ...options("devin"), provider: "devin", model: "swe-2", effort: "max" });
+    expect(childEnvironment(devin, source)).toEqual(kept);
+  });
+
+  it("passes each allowlist adapter only its own provider credentials in every mode it supports", () => {
+    const source = {
+      AMP_API_KEY: "amp",
+      CURSOR_API_KEY: "cursor",
+      CURSOR_AUTH_TOKEN: "cursor-token",
+      DEEPSEEK_API_KEY: "deepseek",
+      OPENAI_API_KEY: "openai",
+      ANTHROPIC_API_KEY: "anthropic",
+      OPENROUTER_API_KEY: "openrouter",
+      GEMINI_API_KEY: "gemini",
+      UNRELATED_SECRET: "unrelated",
+    };
+    const expected: Record<string, Partial<Record<AccessKind, readonly string[]>>> = {
+      devin: { "read-only": [] },
+      opencode: { "read-only": [] },
+      dsh: { "read-only": ["DEEPSEEK_API_KEY"] },
+      amp: { "read-only": ["AMP_API_KEY"] },
+      agy: { "read-only": [] },
+      cursor: { "read-only": ["CURSOR_API_KEY", "CURSOR_AUTH_TOKEN"] },
+    };
+    const allowlisted = REGISTRY.adapters
+      .filter((adapter) => adapter.environment(access("read-only"), "/sidecar").kind === "allowlist");
+    expect(allowlisted.map((adapter) => adapter.id).sort()).toEqual(Object.keys(expected).sort());
+    for (const adapter of allowlisted) {
+      const family = REGISTRY.families.find((entry) => entry.provider === adapter.id)!;
+      expect(Object.keys(expected[adapter.id]!)).toEqual([...adapter.launch.supports]);
+      for (const kind of adapter.launch.supports) {
+        const lane = laneOf({
+          ...options("devin", `allowlist-${adapter.id}-${kind}`),
+          provider: adapter.id,
+          model: family.model,
+          effort: family.defaultEffort,
+          mode: kind === "read-only" ? "read-only" : "isolated-write",
+          ...(kind === "isolated-write-full-access" ? { writerSandbox: "full-access" } : {}),
+        });
+        const inherited = Object.keys(childEnvironment(lane, source)).filter((name) => name in source);
+        expect({ [`${adapter.id} ${kind}`]: inherited.sort() })
+          .toEqual({ [`${adapter.id} ${kind}`]: [...expected[adapter.id]![kind]!] });
+      }
+    }
   });
 
   it("drops GIT_* only for a Claude writer", () => {
@@ -1246,7 +1603,6 @@ describe("discoverSharedGitDir", () => {
       mkdirSync(join(linked, "sub", ".git"));
       expect(await discover(join(linked, "sub"))).toEqual(shared);
 
-      // The gitdir names the main repository through a symlink; the deny is the real directory.
       symlinkSync(main, join(root, "alias"));
       const aliased = join(root, "alias", ".git", "worktrees", "linked");
       writeFileSync(join(linked, ".git"), `gitdir: ${aliased}\n`);
@@ -1271,11 +1627,845 @@ describe("discoverSharedGitDir", () => {
         message: expect.stringContaining("contains a glob or control character"),
       });
 
-      // A .git file naming a missing directory is a broken repository, not a non-repository.
       writeFileSync(join(linked, ".git"), `gitdir: ${join(root, "missing")}\n`);
       expect(await discover(linked)).toMatchObject({ kind: "refused", status: "child-failed" });
     } finally {
       rmSync(root, { recursive: true, force: true });
     }
+  });
+});
+
+describe("opencode lanes", () => {
+  const MODEL = "opencode/deepseek-v4.1-flash-free";
+  const LISTED = `opencode/big-pickle\n${MODEL}\nopencode/nemotron-3-ultra-free`;
+  const INHERITED = ["OPENCODE_PERMISSION", "OPENCODE_CONFIG_CONTENT", "OPENROUTER_API_KEY"];
+  const event = (type: string, part: Record<string, unknown> = {}) => ({ type, timestamp: 1, sessionID: "ses_fixture", part });
+
+  function fakeOpencode(models: string, turn: string): void {
+    writeFileSync(join(bin, "opencode"), `#!/usr/bin/env bun
+import { appendFileSync, readFileSync, statSync, writeFileSync } from "node:fs";
+import { dirname, join } from "node:path";
+const args = process.argv.slice(2);
+const call = (kind) => {
+  appendFileSync(join(dirname(process.argv[1]), "opencode.calls"), kind + "\\n");
+  const context = { cwd: process.cwd(), env: process.env, config: readFileSync(process.env.OPENCODE_CONFIG, "utf8") };
+  appendFileSync(join(dirname(process.argv[1]), "opencode.contexts"), JSON.stringify(context) + "\\n");
+};
+if (args[0] === "models") {
+call("preflight");
+${models}
+}
+call("model");
+const prompt = await Bun.stdin.text();
+const emit = (value) => console.log(JSON.stringify(value));
+${turn}
+`);
+    chmodSync(join(bin, "opencode"), 0o755);
+  }
+
+  const LIST = `console.log(${JSON.stringify(LISTED)}); process.exit(0);`;
+  const OBSERVE = `const config = process.env.OPENCODE_CONFIG;
+const observed = {
+  args,
+  prompt,
+  xdg: process.env.XDG_CONFIG_HOME === dirname(config),
+  modes: [(statSync(dirname(config)).mode & 0o777).toString(8), (statSync(config).mode & 0o777).toString(8)],
+  permission: JSON.parse(readFileSync(config, "utf8")).permission["*"],
+  opencode: Object.keys(process.env).filter((key) => key.startsWith("OPENCODE_") || key.endsWith("_API_KEY")).sort(),
+};
+emit(${JSON.stringify(event("step_start"))});
+emit(${JSON.stringify(event("step_finish", { reason: "tool-calls", tokens: { total: 10, input: 6, output: 3, reasoning: 1, cache: { read: 2, write: 0 } }, cost: 0.5 }))});
+emit(${JSON.stringify(event("step_start"))});
+emit({ type: "text", timestamp: 2, sessionID: "ses_fixture", part: { type: "text", text: JSON.stringify(observed) } });
+emit(${JSON.stringify(event("step_finish", { reason: "stop", tokens: { total: 5, input: 4, output: 1, reasoning: 0, cache: { read: 0, write: 0 } }, cost: 0.25 }))});`;
+
+  function opencodeOptions(suffix: string, overrides: Partial<LaneRequest> = {}): LaneRequest {
+    return { ...options("devin", suffix), provider: "opencode", model: MODEL, effort: "max", ...overrides };
+  }
+
+  beforeEach(() => {
+    for (const name of INHERITED) process.env[name] = `${name}-value`;
+  });
+  afterEach(() => {
+    for (const name of INHERITED) delete process.env[name];
+  });
+
+  it("runs a read-only lane with the run-owned config, the prompt on stdin and the reply from the last step", async () => {
+    fakeOpencode(LIST, OBSERVE);
+    const input = opencodeOptions("opencode-complete");
+    const result = await runLane(laneOf(input));
+    expect(result.exitCode).toBe(0);
+    const saved = receipt(input.receiptPath);
+    expect(saved).toMatchObject({
+      status: "complete",
+      provider: "opencode",
+      model: MODEL,
+      effort: "max",
+      reportedModel: null,
+      modelVerified: false,
+      modelEvidence: "pinned-argv",
+      sessionId: "ses_fixture",
+      usage: { inputTokens: 10, cachedInputTokens: 2, cacheCreationInputTokens: 0, outputTokens: 4, reasoningTokens: 1, totalTokens: 15 },
+      costUsd: 0.75,
+      preflight: { status: "passed", evidence: `model ${MODEL} listed` },
+    });
+    const args = ["run", "--pure", "--agent", "build", "--format", "json", "--title", "pstack-lane", "--print-logs", "--log-level", "ERROR", "-m", MODEL, "--variant", "max"];
+    expect(saved.argv.slice(1)).toEqual(args);
+    expect(saved.preflight.argv.slice(1)).toEqual(["models", "opencode"]);
+    expect(JSON.parse(readFileSync(input.outputPath, "utf8"))).toEqual({
+      args,
+      prompt: "Return the marker.",
+      xdg: true,
+      modes: ["700", "600"],
+      permission: "deny",
+      opencode: [
+        "OPENCODE_CONFIG",
+        "OPENCODE_DISABLE_AUTOUPDATE",
+        "OPENCODE_DISABLE_CLAUDE_CODE",
+        "OPENCODE_DISABLE_EXTERNAL_SKILLS",
+        "OPENCODE_DISABLE_PROJECT_CONFIG",
+        "OPENCODE_TEST_HOME",
+      ],
+    });
+  });
+
+  it("runs the preflight and the model with one config, environment and cwd", async () => {
+    fakeOpencode(LIST, OBSERVE);
+    const input = opencodeOptions("opencode-one-context");
+    expect((await runLane(laneOf(input))).receipt.status).toBe("complete");
+    expect(readFileSync(join(bin, "opencode.calls"), "utf8")).toBe("preflight\nmodel\n");
+    const contexts = readFileSync(join(bin, "opencode.contexts"), "utf8").trim().split("\n").map((line) => JSON.parse(line));
+    expect(contexts).toHaveLength(2);
+    expect(JSON.parse(contexts[0].config).permission["*"]).toBe("deny");
+    expect(contexts[1]).toEqual(contexts[0]);
+  });
+
+  for (const [name, model, models, status, exitCode] of [
+    ["a provider with no login", "openrouter/deepseek/deepseek-v4-pro", `console.error("\\u001b[91m\\u001b[1mError: \\u001b[0mProvider not found: openrouter"); process.exit(1);`, "unauthenticated", 77],
+    ["an unlisted model", "opencode/deepseek-v4.1-flash", LIST, "unavailable-model", 69],
+  ] as const) {
+    it(`classifies ${name} before any model call`, async () => {
+      const started = join(scratch, "opencode-model.started");
+      fakeOpencode(models, `writeFileSync(${JSON.stringify(started)}, "started");`);
+      const input = opencodeOptions(`opencode-preflight-${exitCode}`, { model, effort: "default" });
+      const result = await runLane(laneOf(input));
+      expect(result.exitCode).toBe(exitCode);
+      expect(result.receipt).toMatchObject({ status, preflight: { status: "failed" }, error: { message: "authentication or model preflight failed" } });
+      expect(existsSync(started)).toBe(false);
+    });
+  }
+
+  it("classifies a rejected tool call, an error event and SIGTERM from the captured shapes", async () => {
+    fakeOpencode(LIST, `console.error("! permission requested: edit (created.txt); auto-rejecting");
+emit(${JSON.stringify(event("step_start"))});
+emit(${JSON.stringify(event("step_finish", { reason: "tool-calls" }))});`);
+    const rejected = opencodeOptions("opencode-rejected");
+    const rejectedResult = await runLane(laneOf(rejected));
+    expect(rejectedResult.exitCode).toBe(70);
+    expect(rejectedResult.receipt).toMatchObject({ status: "child-failed", exitCode: 0, error: { message: "opencode ended on a rejected tool call" } });
+    expect(rejectedResult.receipt.error?.evidence).toContain("auto-rejecting");
+    expect(existsSync(rejected.outputPath)).toBe(false);
+
+    fakeOpencode(LIST, `console.error('level=ERROR message=failed error="ProviderModelNotFoundError: Model not found"');
+emit({ type: "error", timestamp: 1, sessionID: "ses_fixture", error: { name: "UnknownError", data: { message: "Unexpected server error. Check server logs for details." } } });
+process.exit(1);`);
+    const failed = opencodeOptions("opencode-error");
+    const failedResult = await runLane(laneOf(failed));
+    expect(failedResult.exitCode).toBe(70);
+    expect(failedResult.receipt).toMatchObject({ status: "child-failed", exitCode: 1, error: { message: "opencode reported UnknownError: Unexpected server error. Check server logs for details." } });
+    expect(failedResult.receipt.error?.evidence).toContain("ProviderModelNotFoundError");
+
+    fakeOpencode(LIST, `emit(${JSON.stringify(event("step_start"))});
+process.kill(process.pid, "SIGTERM");
+await Bun.sleep(5_000);`);
+    const terminated = opencodeOptions("opencode-sigterm");
+    const terminatedResult = await runLane(laneOf(terminated));
+    expect(terminatedResult.exitCode).toBe(130);
+    expect(terminatedResult.receipt).toMatchObject({ status: "cancelled", exitCode: 143, signal: null });
+    expect(existsSync(terminated.outputPath)).toBe(false);
+  });
+
+  it("runs in a repository holding .opencode/ and an opencode.json, which the environment turns off", async () => {
+    fakeOpencode(LIST, OBSERVE);
+    const repo = join(scratch, "repo"), nested = join(repo, "src");
+    mkdirSync(join(repo, ".opencode", "plugins"), { recursive: true });
+    mkdirSync(nested);
+    writeFileSync(join(repo, "opencode.json"), "{\"permission\":{\"bash\":\"allow\"}}\n");
+    const input = opencodeOptions("opencode-project-config", { cwd: nested });
+    const result = await runLane(laneOf(input));
+    expect(result.exitCode).toBe(0);
+    expect(result.receipt).toMatchObject({ status: "complete", preflight: { status: "passed" } });
+    expect(JSON.parse(readFileSync(input.outputPath, "utf8")).permission).toBe("deny");
+  });
+
+  it("refuses an isolated-write OpenCode lane before launch", () => {
+    const input = opencodeOptions("opencode-writer", { mode: "isolated-write" });
+    expect(() => laneOf(input)).toThrow("provider opencode does not support isolated-write");
+    expect(existsSync(input.receiptPath)).toBe(false);
+  });
+});
+
+describe("dsh lanes", () => {
+  const DSH_VARIABLES = ["DSH_PERMISSION_MODE", "DSH_HOME", "DEEPSEEK_BASE_URL", "DEEPSEEK_API_KEY"];
+  const TRANSPORT = `{"type":"status","phase":"turn_end","turn":1,"reason":{"kind":"error","error":{"message":"DeepSeek Messages transport failed","code":"TRANSPORT"}}}`;
+  const MISSING = `{"type":"status","phase":"turn_end","turn":1,"reason":{"kind":"error","error":{"message":"llm-deepseek: no API key","code":"MISSING_CREDENTIAL"}}}`;
+
+  function fakeDsh(status: string, turn: string, version = "0.2.0-rc.2"): void {
+    writeFileSync(join(bin, "dsh"), `#!/usr/bin/env bun
+import { appendFileSync, readFileSync, statSync, writeFileSync } from "node:fs";
+import { dirname, join } from "node:path";
+const args = process.argv.slice(2);
+const call = (kind) => appendFileSync(join(dirname(process.argv[1]), "dsh.calls"), kind + "\\n");
+if (args[0] === "--version") {
+  call("version");
+  console.log(${JSON.stringify(version)});
+  process.exit(0);
+}
+const patch = args[args.indexOf("--patch") + 1];
+const emit = (event) => console.log(JSON.stringify(event));
+if (args.at(-1) === "preflight") {
+  call("preflight");
+  console.log(${JSON.stringify(status)});
+  process.exit(1);
+}
+call("model");
+const prompt = await Bun.stdin.text();
+emit({ type: "session", sessionId: "session-fixture", cwd: process.cwd() });
+${turn}
+`);
+    chmodSync(join(bin, "dsh"), 0o755);
+  }
+
+  const OBSERVE = `const observed = {
+  prompt,
+  patch: [["- id: sandbox-policy", 4], ["- id: credentials", 3], ["- id: agent-default-model", 5]].flatMap(([row, count]) => {
+    const lines = readFileSync(patch, "utf8").split("\\n");
+    return lines.slice(lines.indexOf(row), lines.indexOf(row) + count);
+  }),
+  home: process.env.DSH_HOME,
+  dirMode: (statSync(dirname(patch)).mode & 0o777).toString(8),
+  patchMode: (statSync(patch).mode & 0o777).toString(8),
+  variables: Object.keys(process.env).filter((key) => /^(DSH_|DEEPSEEK_)/.test(key)).sort(),
+};
+emit({ type: "status", phase: "step_end", turn: 1, step: 1, usage: { inputTokens: 5, outputTokens: 2, cacheReadTokens: 3, totalTokens: 10 } });
+emit({ type: "status", phase: "turn_end", turn: 1, reason: { kind: "completed" } });
+emit({ type: "final", text: JSON.stringify(observed) });`;
+
+  function dshOptions(suffix: string, overrides: Partial<LaneRequest> = {}): LaneRequest {
+    return { ...options("devin", suffix), provider: "dsh", model: "deepseek-flash", effort: "high", ...overrides };
+  }
+
+  beforeEach(() => {
+    for (const name of DSH_VARIABLES) process.env[name] = `${name}-value`;
+  });
+  afterEach(() => {
+    for (const name of DSH_VARIABLES) delete process.env[name];
+  });
+
+  it("runs a read-only lane with the run-owned patch, the prompt on stdin and the pinned-argv proof", async () => {
+    fakeDsh(TRANSPORT, OBSERVE);
+    const input = dshOptions("dsh-complete");
+    const result = await runLane(laneOf(input));
+    expect(result.exitCode).toBe(0);
+    const saved = receipt(input.receiptPath);
+    expect(saved).toMatchObject({
+      status: "complete",
+      provider: "dsh",
+      model: "deepseek-flash",
+      effort: "high",
+      mode: "read-only",
+      reportedModel: null,
+      modelVerified: false,
+      modelEvidence: "pinned-argv",
+      sessionId: "session-fixture",
+      usage: { inputTokens: 5, outputTokens: 2, cachedInputTokens: 3, totalTokens: 10 },
+      preflight: { status: "passed", evidence: "credential present; not validated" },
+    });
+    const dir = `${input.receiptPath}.provider`;
+    expect(saved.argv.slice(1)).toEqual(["--profile", "headless", "--patch", join(dir, "patch.yml"), "--json", "-"]);
+    expect(saved.preflight.argv.slice(1, 5)).toEqual(["--profile", "headless", "--patch", join(dir, "patch.yml")]);
+    expect(saved.preflight.argv.at(-1)).toBe("preflight");
+    expect(JSON.parse(readFileSync(input.outputPath, "utf8"))).toEqual({
+      prompt: "Return the marker.",
+      patch: [
+        "- id: sandbox-policy",
+        "  config:",
+        "    mode: read-only",
+        `    workspaceRoot: ${JSON.stringify(scratch)}`,
+        "- id: credentials",
+        "  config:",
+        `    path: ${JSON.stringify(join(resolve("DSH_HOME-value"), ".credentials.yaml"))}`,
+        "- id: agent-default-model",
+        "  config:",
+        "    provider: deepseek-official",
+        "    model: \"deepseek-flash\"",
+        "    reasoningEffort: \"high\"",
+      ],
+      dirMode: "700",
+      patchMode: "600",
+      home: dir,
+      variables: ["DEEPSEEK_API_KEY", "DSH_HOME"],
+    });
+    expect(statSync(dir).mode & 0o777).toBe(0o700);
+  });
+
+  for (const [name, status, exitCode, message] of [
+    ["a missing credential", MISSING, 77, "authentication or model preflight failed"],
+    ["an unknown status", "Welcome to dsh", 70, "authentication preflight output was inconclusive"],
+  ] as const) {
+    it(`classifies ${name} before any model call`, async () => {
+      const started = join(scratch, "dsh-model.started");
+      fakeDsh(status, `writeFileSync(${JSON.stringify(started)}, "started");`);
+      const input = dshOptions(`dsh-preflight-${exitCode}`);
+      const result = await runLane(laneOf(input));
+      expect(result.exitCode).toBe(exitCode);
+      expect(result.receipt).toMatchObject({
+        status: exitCode === 77 ? "unauthenticated" : "child-failed",
+        preflight: { status: "failed" },
+        error: { message },
+      });
+      expect(existsSync(started)).toBe(false);
+    });
+  }
+
+  it("never completes SIGTERM's exit 0 with a partial final", async () => {
+    fakeDsh(TRANSPORT, `emit({ type: "status", phase: "turn_start", turn: 1 });
+emit({ type: "final", text: "partial reply" });`);
+    const input = dshOptions("dsh-sigterm-shape");
+    const result = await runLane(laneOf(input));
+    expect(result.exitCode).toBe(65);
+    expect(result.receipt).toMatchObject({ status: "malformed-output", exitCode: 0, error: { message: "dsh ended without a completed turn" } });
+    expect(existsSync(input.outputPath)).toBe(false);
+  });
+
+  it("classifies a turn error, an unknown model and exit 130 from the captured shapes", async () => {
+    fakeDsh(TRANSPORT, `emit({ type: "status", phase: "turn_end", turn: 1, reason: { kind: "error", error: { message: "rate limited", code: "RATE_LIMIT" } } });
+emit({ type: "final", text: "" });
+console.error("dsh: RATE_LIMIT: rate limited");
+process.exit(1);`);
+    const failed = dshOptions("dsh-turn-error");
+    expect((await runLane(laneOf(failed))).receipt).toMatchObject({
+      status: "child-failed",
+      exitCode: 1,
+      sessionId: "session-fixture",
+      error: { message: "dsh turn failed: RATE_LIMIT: rate limited" },
+    });
+
+    fakeDsh(TRANSPORT, `emit({ type: "status", phase: "turn_end", turn: 1, reason: { kind: "error", error: { message: "The supported API model names are deepseek-flash, deepseek-v4-pro, but you passed deepseek-next.", code: "INVALID_REQUEST", status: 400 } } });
+console.error("dsh: INVALID_REQUEST: The supported API model names are deepseek-flash, deepseek-v4-pro, but you passed deepseek-next.");
+process.exit(1);`);
+    const unknown = dshOptions("dsh-unknown-model", { model: "deepseek-next" });
+    const unknownResult = await runLane(laneOf(unknown));
+    expect(unknownResult.exitCode).toBe(69);
+    expect(unknownResult.receipt).toMatchObject({ status: "unavailable-model", exitCode: 1 });
+
+    fakeDsh(TRANSPORT, `emit({ type: "final", text: "partial reply" });
+process.exit(130);`);
+    const interrupted = dshOptions("dsh-sigint");
+    expect((await runLane(laneOf(interrupted))).receipt).toMatchObject({ status: "cancelled", exitCode: 130, signal: null });
+    expect(existsSync(interrupted.outputPath)).toBe(false);
+  });
+
+  it("refuses a dsh other than the measured version before the preflight", async () => {
+    fakeDsh(TRANSPORT, OBSERVE, "0.3.0");
+    const input = dshOptions("dsh-version");
+    const result = await runLane(laneOf(input));
+    expect(result.exitCode).toBe(69);
+    expect(result.receipt).toMatchObject({
+      status: "unavailable-cli",
+      preflight: { status: "not-run" },
+      error: {
+        message: "dsh 0.3.0 is not the measured 0.2.0-rc.2; the adapter must be re-measured before it runs this version",
+        evidence: "0.3.0",
+      },
+    });
+    expect(readFileSync(join(bin, "dsh.calls"), "utf8")).toBe("version\n");
+    expect(existsSync(input.outputPath)).toBe(false);
+  });
+
+  it("checks the measured version, then runs the preflight and the model", async () => {
+    fakeDsh(TRANSPORT, OBSERVE);
+    const input = dshOptions("dsh-version-match");
+    expect((await runLane(laneOf(input))).receipt.status).toBe("complete");
+    expect(readFileSync(join(bin, "dsh.calls"), "utf8")).toBe("version\npreflight\nmodel\n");
+  });
+
+  it("runs a dsh lane whose cwd holds .env", async () => {
+    fakeDsh(TRANSPORT, OBSERVE);
+    const cwd = join(scratch, "env-repo");
+    fs.mkdirSync(join(cwd, ".git"), { recursive: true });
+    writeFileSync(join(cwd, ".env"), "PSTACK_FIXTURE=1\n");
+    const input = dshOptions("dsh-cwd-env", { cwd });
+    expect((await runLane(laneOf(input))).receipt).toMatchObject({ status: "complete", exitCode: 0 });
+  });
+
+  it("refuses an isolated-write dsh lane before launch", () => {
+    const input = dshOptions("dsh-writer", { mode: "isolated-write" });
+    expect(() => laneOf(input)).toThrow("provider dsh does not support isolated-write");
+    expect(existsSync(input.receiptPath)).toBe(false);
+  });
+});
+
+describe("amp lanes", () => {
+  const SIGNED_IN = "Signed in as <EMAIL>\n**Individual credits:** $<CREDITS> remaining";
+  const MISSING_KEY = "Error: Invalid or missing API key. Run 'amp login' to authenticate.";
+  const AMP_VARIABLES = ["AMP_API_KEY", "AMP_SETTINGS_FILE", "AMP_EXECUTOR", "AMP_INITIAL_AGENT_MODE_KEY", "AMP_URL"];
+
+  function fakeAmp(usage: string, turn: string, usageExit = 0): void {
+    writeFileSync(join(bin, "amp"), `#!/usr/bin/env bun
+import { existsSync, readFileSync, statSync, writeFileSync } from "node:fs";
+import { dirname } from "node:path";
+const args = process.argv.slice(2);
+if (args[0] === "usage") {
+  (${usageExit} === 0 ? console.log : console.error)(${JSON.stringify(usage)});
+  process.exit(${usageExit});
+}
+const at = (flag) => args[args.indexOf(flag) + 1];
+const settings = at("--settings-file");
+const prompt = await Bun.stdin.text();
+const emit = (event) => console.log(JSON.stringify({ ...event, session_id: "T-fixture" }));
+${turn}
+`);
+    chmodSync(join(bin, "amp"), 0o755);
+  }
+
+  const OBSERVE = `const observed = {
+  prompt,
+  mode: at("-m"),
+  dirMode: (statSync(dirname(settings)).mode & 0o777).toString(8),
+  settingsMode: (statSync(settings).mode & 0o777).toString(8),
+  tools: JSON.parse(readFileSync(settings, "utf8"))["amp.tools.enable"],
+  ampVariables: Object.fromEntries(Object.entries(process.env).filter(([key]) => key.startsWith("AMP_"))),
+};
+emit({ type: "system", subtype: "init", tools: ["Read"], agent_mode: "medium" });
+emit({ type: "assistant", message: { role: "assistant", content: [{ type: "text", text: "x" }], usage: { input_tokens: 3, cache_read_input_tokens: 4, output_tokens: 1 } } });
+emit({ type: "assistant", message: { role: "assistant", content: [{ type: "text", text: "y" }], usage: { input_tokens: 2, output_tokens: 5 } } });
+emit({ type: "result", subtype: "success", is_error: false, num_turns: 2, result: JSON.stringify(observed) });`;
+
+  function ampOptions(suffix: string, overrides: Partial<LaneRequest> = {}): LaneRequest {
+    return { ...options("devin", suffix), provider: "amp", model: "deepseek-v4.1-flash", effort: "default", ...overrides };
+  }
+
+  beforeEach(() => {
+    for (const name of AMP_VARIABLES) process.env[name] = `${name}-value`;
+  });
+  afterEach(() => {
+    for (const name of AMP_VARIABLES) delete process.env[name];
+  });
+
+  for (const parent of ["claude", "codex"] as const) {
+    it(`runs amp:deepseek-v4.1-flash from a ${parent} parent with the pinned mode, lockdown settings and prompt on stdin`, async () => {
+      fakeAmp(SIGNED_IN, OBSERVE);
+      const input = ampOptions(`amp-${parent}`, { parent });
+      const result = await runLane(laneOf(input));
+      expect(result.exitCode).toBe(0);
+      const saved = receipt(input.receiptPath);
+      expect(saved).toMatchObject({
+        status: "complete",
+        parent,
+        provider: "amp",
+        model: "deepseek-v4.1-flash",
+        effort: "default",
+        mode: "read-only",
+        reportedModel: null,
+        modelVerified: false,
+        modelEvidence: "pinned-argv",
+        sessionId: "T-fixture",
+        usage: { inputTokens: 5, cachedInputTokens: 4, outputTokens: 6 },
+        costUsd: null,
+        preflight: { status: "passed", evidence: "authenticated" },
+      });
+      const dir = `${input.receiptPath}.provider`;
+      expect(saved.argv.slice(1)).toEqual([
+        "-x", "--stream-json", "-m", "deepseek-v4.1-flash", "--settings-file", join(dir, "settings.json"),
+        "--visibility", "private", "--no-ide", "--no-notifications", "-l", "pstack-runner",
+      ]);
+      expect(saved.preflight.argv.slice(1)).toEqual(["usage"]);
+      expect(JSON.parse(readFileSync(input.outputPath, "utf8"))).toEqual({
+        prompt: "Return the marker.",
+        mode: "deepseek-v4.1-flash",
+        dirMode: "700",
+        settingsMode: "600",
+        tools: ["Read"],
+        ampVariables: { AMP_API_KEY: "AMP_API_KEY-value", AMP_IGNORE_GUIDANCE_FILES: "*" },
+      });
+      expect(statSync(dir).mode & 0o777).toBe(0o700);
+    });
+  }
+
+  for (const [name, usage, usageExit, exitCode, message] of [
+    ["a missing key", MISSING_KEY, 1, 77, "authentication or model preflight failed"],
+    ["a login prompt", "Would you like to log in to Amp? [(y)es, (n)o]", 0, 70, "authentication preflight output was inconclusive"],
+  ] as const) {
+    it(`classifies ${name} before any model call`, async () => {
+      const started = join(scratch, "amp-model.started");
+      fakeAmp(usage, `writeFileSync(${JSON.stringify(started)}, "started");`, usageExit);
+      const input = ampOptions(`amp-preflight-${exitCode}`);
+      const result = await runLane(laneOf(input));
+      expect(result.exitCode).toBe(exitCode);
+      expect(result.receipt).toMatchObject({
+        status: exitCode === 77 ? "unauthenticated" : "child-failed",
+        preflight: { status: "failed" },
+        error: { message },
+      });
+      expect(existsSync(started)).toBe(false);
+    });
+  }
+
+  it("reads exit-0 error and cancellation results, and an unknown mode's exit 1, as failures", async () => {
+    fakeAmp(SIGNED_IN, `emit({ type: "result", subtype: "error_during_execution", is_error: true, num_turns: 0, error: "Claude Usage is set to Subscription Only." });`);
+    const subscription = ampOptions("amp-subscription");
+    const subscriptionResult = await runLane(laneOf(subscription));
+    expect(subscriptionResult.exitCode).toBe(70);
+    expect(subscriptionResult.receipt).toMatchObject({
+      status: "child-failed",
+      exitCode: 0,
+      sessionId: "T-fixture",
+      error: { message: "Claude Usage is set to Subscription Only." },
+    });
+    expect(existsSync(subscription.outputPath)).toBe(false);
+
+    fakeAmp(SIGNED_IN, `emit({ type: "result", subtype: "error_during_execution", is_error: true, num_turns: 0, error: "User cancelled (SIGINT/SIGTERM)" });`);
+    const cancelled = ampOptions("amp-cancelled");
+    const cancelledResult = await runLane(laneOf(cancelled));
+    expect(cancelledResult.exitCode).toBe(130);
+    expect(cancelledResult.receipt).toMatchObject({ status: "cancelled", exitCode: 0, signal: null });
+    expect(existsSync(cancelled.outputPath)).toBe(false);
+
+    fakeAmp(SIGNED_IN, `console.error("Error: Unexpected error inside Amp CLI. Run with AMP_DEBUG=1 to see detailed logs.");
+process.exit(1);`);
+    const unknown = ampOptions("amp-unknown-mode", { model: "nonexistent-mode-xyz" });
+    expect((await runLane(laneOf(unknown))).receipt).toMatchObject({ status: "child-failed", exitCode: 1 });
+  });
+
+  it("runs an Amp lane whose workspace holds .amp", async () => {
+    fakeAmp(SIGNED_IN, OBSERVE);
+    const repo = join(scratch, "repo"), nested = join(repo, "src");
+    fs.mkdirSync(join(repo, ".amp/plugins"), { recursive: true });
+    fs.writeFileSync(join(repo, ".amp/settings.json"), "{}\n");
+    fs.mkdirSync(nested);
+    const input = ampOptions("amp-project-config", { cwd: nested });
+    expect((await runLane(laneOf(input))).exitCode).toBe(0);
+    expect(receipt(input.receiptPath)).toMatchObject({ status: "complete", preflight: { status: "passed" } });
+  });
+
+  it("refuses an isolated-write Amp lane before launch", () => {
+    const input = ampOptions("amp-writer", { mode: "isolated-write" });
+    expect(() => laneOf(input)).toThrow("provider amp does not support isolated-write");
+    expect(existsSync(input.receiptPath)).toBe(false);
+  });
+});
+
+
+describe("agy lanes", () => {
+  const MODELS = "gemini-3.8-flash-high\tGemini 3.8 Flash (High)\ngemini-3.8-flash-medium\tGemini 3.8 Flash (Medium)\ngemini-3.8-flash-low\tGemini 3.8 Flash (Low)\n";
+  const SIGN_IN = "Fetching available models...\nError: Please sign in to view available models. Launch the CLI without arguments to sign in.";
+
+  function fakeAgy(turn: string, models = MODELS, signIn = false): void {
+    writeFileSync(join(bin, "agy"), `#!/usr/bin/env bun
+import { existsSync, readFileSync, statSync, writeFileSync } from "node:fs";
+import { join } from "node:path";
+const args = process.argv.slice(2);
+if (args[0] === "models") {
+  if (${signIn}) {
+    console.error(${JSON.stringify(SIGN_IN)});
+    process.exit(1);
+  }
+  process.stdout.write(${JSON.stringify(models)});
+  process.exit(0);
+}
+const at = (flag) => args[args.indexOf(flag) + 1];
+const stdin = await Bun.stdin.text();
+const result = (body) => console.log(JSON.stringify({ event: "result", result: { conversation_id: "a1", status: "SUCCESS", response: "", usage: { input_tokens: 5, output_tokens: 2, thinking_tokens: 1, cache_read_tokens: 0, total_tokens: 7 }, ...body } }));
+${turn}
+`);
+    chmodSync(join(bin, "agy"), 0o755);
+  }
+
+  const OBSERVE = `const agent = join(at("--add-dir"), ".agents/agents", at("--agent") + ".md");
+if (!existsSync(agent)) {
+  console.error('error: unknown agent "' + at("--agent") + '"');
+  process.exit(1);
+}
+const mode = (path) => (statSync(path).mode & 0o777).toString(8);
+const observed = {
+  model: at("--model"),
+  stdin: JSON.parse(stdin),
+  stdinLines: stdin.split("\\n").length - 1,
+  tools: readFileSync(agent, "utf8").split("tools:\\n")[1].split("\\n")[0],
+  modes: [mode(at("--add-dir")), mode(agent)],
+  geminiVariables: Object.keys(process.env).filter((key) => key.startsWith("GEMINI_")),
+};
+console.log(JSON.stringify({ event: "init", init: { model: at("--model") } }));
+result({ response: JSON.stringify(observed) + "\\n" });`;
+
+  function agyOptions(suffix: string, overrides: Partial<LaneRequest> = {}): LaneRequest {
+    return { ...options("devin", suffix), provider: "agy", model: "gemini-3.8-flash", effort: "high", ...overrides };
+  }
+
+  beforeEach(() => {
+    process.env.GEMINI_API_KEY = "GEMINI_API_KEY-value";
+  });
+  afterEach(() => {
+    delete process.env.GEMINI_API_KEY;
+  });
+
+  for (const effort of ["low", "medium", "high"] as const) {
+    it(`runs agy:gemini-3.8-flash@${effort} with the envelope on stdin and the run-owned agent, on pinned argv`, async () => {
+      fakeAgy(OBSERVE);
+      const input = agyOptions(`agy-${effort}`, { effort });
+      writeFileSync(input.promptPath, "Read \"marker.txt\".\nReply with its contents.\n");
+      const result = await runLane(laneOf(input));
+      expect(result.exitCode).toBe(0);
+      const saved = receipt(input.receiptPath);
+      const cliModel = `gemini-3.8-flash-${effort}`;
+      expect(saved).toMatchObject({
+        status: "complete",
+        provider: "agy",
+        model: "gemini-3.8-flash",
+        effort,
+        mode: "read-only",
+        reportedModel: null,
+        modelVerified: false,
+        modelEvidence: "pinned-argv",
+        sessionId: "a1",
+        usage: { inputTokens: 5, cachedInputTokens: 0, outputTokens: 2, reasoningTokens: 1, totalTokens: 7 },
+        preflight: { argv: [saved.executable, "models"], status: "passed", evidence: `model ${cliModel} listed` },
+      });
+      const dir = `${input.receiptPath}.provider`;
+      expect(saved.argv.slice(1)).toEqual([
+        "--input-format", "stream-json", "--output-format", "stream-json", "--model", cliModel,
+        "--add-dir", dir, "--agent", "pstack-read-only",
+      ]);
+      expect(JSON.parse(readFileSync(input.outputPath, "utf8"))).toEqual({
+        model: cliModel,
+        stdin: { event: "user", message: { role: "user", content: "Read \"marker.txt\".\nReply with its contents.\n" } },
+        stdinLines: 1,
+        tools: "  - view_file",
+        modes: ["700", "600"],
+        geminiVariables: [],
+      });
+    });
+  }
+
+  for (const [name, signIn, models, status, exitCode] of [
+    ["a sign-in failure", true, MODELS, "unauthenticated", 77],
+    ["an unlisted variant", false, "gemini-3.8-flash-low\tGemini 3.8 Flash (Low)\n", "unavailable-model", 69],
+  ] as const) {
+    it(`classifies ${name} before any model call`, async () => {
+      const started = join(scratch, "agy-model.started");
+      fakeAgy(`writeFileSync(${JSON.stringify(started)}, "started");`, models, signIn);
+      const input = agyOptions(`agy-preflight-${exitCode}`);
+      const result = await runLane(laneOf(input));
+      expect(result.exitCode).toBe(exitCode);
+      expect(result.receipt).toMatchObject({ status, preflight: { status: "failed" } });
+      expect(existsSync(started)).toBe(false);
+    });
+  }
+
+  it("classifies an exit-0 denial, an unknown model, an interruption and a missing agent from the captured shapes", async () => {
+    fakeAgy(`console.error('jetski: no output produced — a tool required the "command" permission that headless mode cannot prompt for, so it was auto-denied.');
+result({ denied_actions: [{ action: "command", display_name: "RunCommand" }] });`);
+    const denied = agyOptions("agy-denied");
+    const deniedResult = await runLane(laneOf(denied));
+    expect(deniedResult.exitCode).toBe(70);
+    expect(deniedResult.receipt).toMatchObject({
+      status: "child-failed",
+      exitCode: 0,
+      sessionId: "a1",
+      error: { message: "agy denied a tool that needed approval" },
+    });
+    expect(deniedResult.receipt.error?.evidence).toContain("auto-denied");
+    expect(existsSync(denied.outputPath)).toBe(false);
+
+    fakeAgy(`console.error('error: invalid model selection (--model "' + at("--model") + '" --effort ""): model is not recognized as a known model');
+result({ conversation_id: "", status: "ERROR", error: 'invalid model selection (--model "' + at("--model") + '")' });
+process.exit(1);`);
+    const unknown = agyOptions("agy-unknown-model");
+    expect((await runLane(laneOf(unknown))).receipt).toMatchObject({ status: "unavailable-model", exitCode: 1, sessionId: null });
+
+    fakeAgy(`console.error("error: interrupted");
+result({ status: "ERROR", error: "interrupted" });
+process.exit(1);`);
+    const interrupted = agyOptions("agy-interrupted");
+    const interruptedResult = await runLane(laneOf(interrupted));
+    expect(interruptedResult.exitCode).toBe(130);
+    expect(interruptedResult.receipt).toMatchObject({ status: "cancelled", exitCode: 1, error: { message: "agy reported the turn was interrupted" } });
+
+    fakeAgy(`import { rmSync } from "node:fs";
+rmSync(join(at("--add-dir"), ".agents"), { recursive: true });
+${OBSERVE}`);
+    const missing = agyOptions("agy-missing-agent");
+    expect((await runLane(laneOf(missing))).receipt).toMatchObject({ status: "child-failed", exitCode: 1 });
+    expect(existsSync(missing.outputPath)).toBe(false);
+  });
+
+  it("runs an agy lane in a repository that holds .agents/", async () => {
+    fakeAgy(OBSERVE);
+    const repo = join(scratch, "repo");
+    fs.mkdirSync(join(repo, ".git"), { recursive: true });
+    fs.mkdirSync(join(repo, ".agents"));
+    const input = agyOptions("agy-repo-config", { cwd: repo });
+    expect((await runLane(laneOf(input))).receipt).toMatchObject({ status: "complete", exitCode: 0 });
+  });
+
+  it("refuses an isolated-write agy lane before launch", () => {
+    const input = agyOptions("agy-writer", { mode: "isolated-write" });
+    expect(() => laneOf(input)).toThrow("provider agy does not support isolated-write");
+    expect(existsSync(input.receiptPath)).toBe(false);
+  });
+});
+
+describe("cursor lanes", () => {
+  const MODELS = "Available models\n\nauto - Auto (current, default)\ncomposer-2.5 - Composer 2.5\ngemini-3.7-flash-high - Gemini 3.7 Flash\n";
+  const AUTH_REQUIRED = "Error: Authentication required. Run 'agent login', pass --api-key/--auth-token, or set CURSOR_API_KEY/CURSOR_AUTH_TOKEN.";
+  const CURSOR_VARIABLES = ["CURSOR_API_KEY", "CURSOR_AUTH_TOKEN", "CURSOR_API_ENDPOINT", "CURSOR_SANDBOX_POLICY_DIR", "CURSOR_CONFIG_DIR"];
+
+  function fakeCursor(turn: string, models = MODELS, loggedOut = false): void {
+    writeFileSync(join(bin, "cursor-agent"), `#!/usr/bin/env bun
+import { readFileSync, statSync, writeFileSync } from "node:fs";
+import { join } from "node:path";
+const args = process.argv.slice(2);
+if (args[0] === "models") {
+  if (${loggedOut}) {
+    console.error(${JSON.stringify(AUTH_REQUIRED)});
+    process.exit(1);
+  }
+  process.stdout.write(${JSON.stringify(models)});
+  process.exit(0);
+}
+const at = (flag) => args[args.indexOf(flag) + 1];
+const prompt = await Bun.stdin.text();
+const emit = (event) => console.log(JSON.stringify({ ...event, session_id: "c1" }));
+${turn}
+`);
+    chmodSync(join(bin, "cursor-agent"), 0o755);
+  }
+
+  const OBSERVE = `const dir = process.env.CURSOR_CONFIG_DIR;
+const config = join(dir, "cli-config.json");
+const observed = {
+  prompt,
+  model: at("--model"),
+  modes: [(statSync(dir).mode & 0o777).toString(8), (statSync(config).mode & 0o777).toString(8)],
+  deny: JSON.parse(readFileSync(config, "utf8")).permissions.deny,
+  cursorVariables: Object.keys(process.env).filter((key) => key.startsWith("CURSOR_")).sort(),
+};
+emit({ type: "system", subtype: "init", model: "Composer 2.5" });
+emit({ type: "assistant", message: { role: "assistant", content: [{ type: "text", text: "Reading the file.\\n" }] } });
+emit({ type: "assistant", message: { role: "assistant", content: [{ type: "text", text: JSON.stringify(observed) }] } });
+emit({ type: "result", subtype: "success", is_error: false, result: "Reading the file.\\n" + JSON.stringify(observed), usage: { inputTokens: 6, outputTokens: 2, cacheReadTokens: 4, cacheWriteTokens: 3 } });`;
+
+  function cursorOptions(suffix: string, overrides: Partial<LaneRequest> = {}): LaneRequest {
+    return { ...options("devin", suffix), provider: "cursor", model: "composer-2.5", effort: "default", ...overrides };
+  }
+
+  beforeEach(() => {
+    for (const name of CURSOR_VARIABLES) process.env[name] = `${name}-value`;
+  });
+  afterEach(() => {
+    for (const name of CURSOR_VARIABLES) delete process.env[name];
+  });
+
+  for (const [parent, model, effort, cliModel] of [
+    ["claude", "composer-2.5", "default", "composer-2.5"],
+    ["codex", "gemini-3.7-flash", "high", "gemini-3.7-flash-high"],
+  ] as const) {
+    it(`runs cursor:${model}@${effort} from a ${parent} parent in the run-owned config directory, on pinned argv`, async () => {
+      fakeCursor(OBSERVE);
+      const input = cursorOptions(`cursor-${parent}`, { parent, model, effort });
+      const result = await runLane(laneOf(input));
+      expect(result.exitCode).toBe(0);
+      const saved = receipt(input.receiptPath);
+      expect(saved).toMatchObject({
+        status: "complete",
+        parent,
+        provider: "cursor",
+        model,
+        effort,
+        mode: "read-only",
+        reportedModel: null,
+        modelVerified: false,
+        modelEvidence: "pinned-argv",
+        sessionId: "c1",
+        usage: { inputTokens: 6, cachedInputTokens: 4, cacheCreationInputTokens: 3, outputTokens: 2 },
+        costUsd: null,
+        preflight: { argv: [saved.executable, "models"], status: "passed", evidence: `model ${cliModel} listed` },
+      });
+      expect(saved.argv.slice(1)).toEqual([
+        "-p", "--output-format", "stream-json", "--model", cliModel, "--mode", "ask", "--sandbox", "enabled", "--trust",
+      ]);
+      expect(JSON.parse(readFileSync(input.outputPath, "utf8"))).toEqual({
+        prompt: "Return the marker.",
+        model: cliModel,
+        modes: ["700", "600"],
+        deny: ["Write(**)", "Shell(*)", "Mcp(*:*)"],
+        cursorVariables: ["CURSOR_API_KEY", "CURSOR_AUTH_TOKEN", "CURSOR_CONFIG_DIR"],
+      });
+    });
+  }
+
+  it("points CURSOR_CONFIG_DIR at the lane's provider directory, replacing an inherited value", async () => {
+    fakeCursor(`emit({ type: "assistant", message: { content: [{ type: "text", text: process.env.CURSOR_CONFIG_DIR }] } });
+emit({ type: "result", subtype: "success", is_error: false });`);
+    const input = cursorOptions("cursor-config-dir");
+    await runLane(laneOf(input));
+    expect(readFileSync(input.outputPath, "utf8")).toBe(`${input.receiptPath}.provider`);
+  });
+
+  for (const [name, loggedOut, models, status, exitCode] of [
+    ["an authentication failure", true, MODELS, "unauthenticated", 77],
+    ["an unlisted model", false, "Available models\n\ncomposer-2.5-fast - Composer 2.5 Fast\n", "unavailable-model", 69],
+    ["empty model-list output", false, "", "child-failed", 70],
+  ] as const) {
+    it(`classifies ${name} before any model call`, async () => {
+      const started = join(scratch, "cursor-model.started");
+      fakeCursor(`writeFileSync(${JSON.stringify(started)}, "started");`, models, loggedOut);
+      const input = cursorOptions(`cursor-preflight-${exitCode}`);
+      const result = await runLane(laneOf(input));
+      expect(result.exitCode).toBe(exitCode);
+      expect(result.receipt).toMatchObject({ status, preflight: { status: "failed" } });
+      expect(existsSync(started)).toBe(false);
+    });
+  }
+
+  it("reads an exit-0 error result, an unknown model and a signal exit as failures", async () => {
+    fakeCursor(`emit({ type: "result", subtype: "error", is_error: true, result: "Usage limit reached." });`);
+    const failed = cursorOptions("cursor-error-result");
+    const failedResult = await runLane(laneOf(failed));
+    expect(failedResult.exitCode).toBe(70);
+    expect(failedResult.receipt).toMatchObject({ status: "child-failed", exitCode: 0, sessionId: "c1", error: { message: "Usage limit reached." } });
+    expect(existsSync(failed.outputPath)).toBe(false);
+
+    fakeCursor(`console.error("Cannot use this model: " + at("--model") + ". Available models: auto, composer-2.5");
+process.exit(1);`, `${MODELS}claude-opus-9-9-max - Listed, then refused by the turn\n`);
+    const unknown = cursorOptions("cursor-unknown-model", { model: "claude-opus-9-9-max" });
+    expect((await runLane(laneOf(unknown))).receipt).toMatchObject({ status: "unavailable-model", exitCode: 1 });
+
+    fakeCursor(`emit({ type: "system", subtype: "init", model: "Composer 2.5" });
+console.error("\\nAborting operation...");
+process.exit(130);`);
+    const interrupted = cursorOptions("cursor-sigint");
+    expect((await runLane(laneOf(interrupted))).receipt).toMatchObject({ status: "child-failed", exitCode: 130 });
+    expect(existsSync(interrupted.outputPath)).toBe(false);
+  });
+
+  it("runs a Cursor lane in a workspace holding .cursor/ and .claude settings files", async () => {
+    const repo = join(scratch, "repo"), nested = join(repo, "src");
+    mkdirSync(join(repo, ".cursor"), { recursive: true });
+    mkdirSync(join(repo, ".claude"));
+    writeFileSync(join(repo, ".claude/settings.json"), "{}");
+    writeFileSync(join(repo, ".claude/settings.local.json"), "{}");
+    mkdirSync(nested);
+    fakeCursor(OBSERVE);
+    const input = cursorOptions("cursor-project-config", { cwd: nested });
+    expect((await runLane(laneOf(input))).exitCode).toBe(0);
+    expect(receipt(input.receiptPath)).toMatchObject({ status: "complete", preflight: { status: "passed" } });
+  });
+
+  it("refuses an isolated-write Cursor lane before launch", () => {
+    const input = cursorOptions("cursor-writer", { mode: "isolated-write" });
+    expect(() => laneOf(input)).toThrow("provider cursor does not support isolated-write");
+    expect(existsSync(input.receiptPath)).toBe(false);
   });
 });

@@ -3,7 +3,6 @@ name: stack-opus-high
 description: Native Claude lane for jm:stack roles configured as claude:opus@high.
 model: opus
 effort: high
-background: true
 disallowedTools: Agent, Task
 ---
 

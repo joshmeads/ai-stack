@@ -13,7 +13,6 @@ pub struct Provider {
     pub id: &'static str,
     pub name: &'static str,
     pub binary: &'static str,
-    /// The headless login argv, run as is.
     pub login: &'static [&'static str],
     pub status: &'static [&'static str],
     parser: fn(&Ran) -> State,

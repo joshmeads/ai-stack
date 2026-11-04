@@ -1,6 +1,3 @@
-//! `ai-stack groups`: each group's resolved skills and an estimate of what their names and
-//! descriptions cost in a harness's context.
-
 use std::collections::BTreeSet;
 use std::path::Path;
 
@@ -11,16 +8,12 @@ use crate::stackfile::{self, SkillName, StackFile};
 
 pub const VERSION: u32 = 1;
 
-/// About four characters per token, the usual rough rule for English text.
 const CHARS_PER_TOKEN: usize = 4;
 
-/// The `--json` shape, version `VERSION`. The Swift app reads it, so a change that alters an
-/// existing field's meaning bumps the version; new fields do not.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize)]
 pub struct Report {
     pub version: u32,
     pub groups: Vec<GroupReport>,
-    /// The union of the global groups, each skill counted once.
     pub global: Budget,
 }
 
@@ -29,10 +22,7 @@ pub struct GroupReport {
     pub name: String,
     pub global: bool,
     pub includes: Vec<String>,
-    /// Every skill the group turns on, after includes, sorted.
     pub skills: Vec<String>,
-    /// The vendored ones among `skills` that `skills update` has not built yet. They count no
-    /// tokens and install skips them.
     pub missing: Vec<String>,
     pub tokens: usize,
 }
@@ -44,7 +34,6 @@ pub struct Budget {
     pub tokens: usize,
 }
 
-/// Builds the report from the stack's `stack.toml` and each skill's `SKILL.md` frontmatter.
 pub fn report(stack: &Path, file: &StackFile) -> Result<Report> {
     let budget = |skills: BTreeSet<SkillName>| -> Result<Budget> {
         let mut chars = 0;
@@ -74,7 +63,6 @@ pub fn report(stack: &Path, file: &StackFile) -> Result<Report> {
 }
 
 impl Report {
-    /// One row per group, then the global total.
     pub fn text(&self) -> String {
         let width = self.groups.iter().map(|group| group.name.len()).chain(["global set".len()]).max().unwrap_or_default();
         let mut out = format!("{:<width$}  {:<6}  {:>6}  {:>6}  skills\n", "group", "global", "count", "tokens");
@@ -87,8 +75,6 @@ impl Report {
     }
 }
 
-/// Characters in the frontmatter `name` and `description` values. A missing file (a vendored
-/// skill not built yet) counts as zero.
 fn frontmatter_chars(path: &Path) -> Result<usize> {
     let text = match std::fs::read_to_string(path) {
         Ok(text) => text,
@@ -98,9 +84,6 @@ fn frontmatter_chars(path: &Path) -> Result<usize> {
     Ok(["name", "description"].iter().filter_map(|key| frontmatter_value(&text, key)).map(|value| value.chars().count()).sum())
 }
 
-/// The value of a top-level key in the leading `---` block: plain or quoted on one line, or a
-/// `>` / `|` block scalar whose indented lines are joined with spaces. Enough of YAML for
-/// skill frontmatter; anything else reads as absent.
 pub fn frontmatter_value(text: &str, key: &str) -> Option<String> {
     let mut lines = text.lines();
     if lines.next()?.trim_end() != "---" {
@@ -134,7 +117,6 @@ mod tests {
     fn budgets_count_each_skill_once_in_the_global_set() {
         let dir = tempfile::tempdir().unwrap();
         let stack = dir.path();
-        // 8 + 8, 4 + 12 and 4 + 0 characters.
         for (name, description) in [("aaaaaaaa", "bbbbbbbb"), ("cccc", "dddddddddddd"), ("eeee", "")] {
             std::fs::create_dir_all(stack.join("skills").join(name)).unwrap();
             std::fs::write(stack.join("skills").join(name).join("SKILL.md"), format!("---\nname: {name}\ndescription: {description}\n---\n")).unwrap();
@@ -146,7 +128,6 @@ mod tests {
             "[[skill]]\nname = \"grill\"\nsource = \"https://example.com/s\"\npath = \"grill\"\ncommit = \"0123456789abcdef0123456789abcdef01234567\"\n",
         )).unwrap();
         let report = report(stack, &stackfile::load(stack).unwrap()).unwrap();
-        // grill is vendored and not built yet: listed, missing, and zero tokens.
         assert_eq!(serde_json::to_value(&report).unwrap(), serde_json::json!({
             "version": 1,
             "groups": [

@@ -3,7 +3,6 @@ name: stack-fable-medium
 description: Native Claude lane for jm:stack roles configured as claude:fable@medium.
 model: fable
 effort: medium
-background: true
 disallowedTools: Agent, Task
 ---
 

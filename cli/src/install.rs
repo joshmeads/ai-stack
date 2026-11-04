@@ -1,6 +1,3 @@
-//! Builds the install plan for every enabled harness: the model sheet, the instruction-file
-//! blocks and settings hooks, then the skill folders (`links`) and the plugin commands.
-
 use std::fs;
 use std::io;
 use std::path::{Path, PathBuf};
@@ -20,23 +17,16 @@ use crate::stackfile;
 const LEGACY_LOCAL_BEGIN: &str = "<!-- open-pstack:local:begin -->";
 const LEGACY_LOCAL_END: &str = "<!-- open-pstack:local:end -->";
 const ROUTING_BLOCK: &str = "routing";
-/// Claude's `@` import of the sheet.
 const SHEET_BLOCK: &str = "pstack-models";
-/// The owner's global instructions from `<stack>/instructions/`, inlined for every harness.
 const INSTRUCTIONS_BLOCK: &str = "instructions";
-/// Hook commands older installs registered in Claude's settings.json: program and script
-/// path relative to the stack root. The script may be quoted and followed by `SED_SUFFIX`.
 const OLD_HOOKS: [(&str, &str); 2] = [("bash", "plugins/pstack/hooks/session-start"), ("python3", "scripts/task-context.py")];
 const SED_SUFFIX: &str = " | sed 's/pstack://g'";
+const ARENA_JUDGE_ROW: &str = "arena cross-judge pool";
 
 #[derive(Debug, Clone, Copy, Default)]
 pub struct Options {
-    /// Replace an unmanaged model sheet, and move a stray skill out of a skill link's way,
-    /// after backing them up.
     pub force: bool,
-    /// Move every skill-root entry and remove every plugin that `[clean]` does not keep.
     pub clean: bool,
-    /// A read-only report (`stray`): nothing is fingerprinted and the plan cannot be applied.
     pub report: bool,
 }
 
@@ -52,6 +42,7 @@ pub fn plan(cfg: &Config, opts: Options, runner: &dyn Runner) -> Result<Plan> {
     let owner = links::Owner::new(cfg);
     let folders = links::Index::new(cfg, &skipped);
     for hc in &cfg.harnesses {
+        warn_if_arena_judge_skipped(cfg, hc, &mut out);
         plan_sheet(cfg, &owner, hc, opts, &folders, &mut out)?;
         plan_instructions(cfg, hc, &folders, &mut out)?;
         if hc.harness == Harness::Claude {
@@ -60,7 +51,6 @@ pub fn plan(cfg: &Config, opts: Options, runner: &dyn Runner) -> Result<Plan> {
     }
     links::plan(cfg, &owner, &folders, &stack_file, opts, &mut out)?;
     if opts.clean {
-        // Removals run before the jm installs.
         for hc in &cfg.harnesses {
             plugins::plan_clean(cfg, hc, runner, &mut out)?;
         }
@@ -82,12 +72,22 @@ fn available_config(cfg: &Config, runner: &dyn Runner, out: &mut Plan) -> (Confi
     (active, skipped)
 }
 
+fn warn_if_arena_judge_skipped(cfg: &Config, hc: &HarnessConfig, out: &mut Plan) {
+    let id = hc.harness.as_str();
+    let pool = cfg.sheets[&hc.harness].iter().find(|(label, _)| label == ARENA_JUDGE_ROW).map_or("", |(_, lanes)| lanes);
+    let other_provider = pool.split(", ").any(|lane| lane.split_once(':').is_some_and(|(provider, _)| provider != id));
+    if !other_provider {
+        out.warnings.push(format!(
+            "note: {}'s `{ARENA_JUDGE_ROW}` has no entry from another provider, so arena will skip its judge; add one to that row in [sheet.{id}]",
+            hc.harness.name(),
+        ));
+    }
+}
+
 fn sheet_path(hc: &HarnessConfig) -> PathBuf {
     hc.home.join("pstack-models.md")
 }
 
-/// `<home>/pstack-models.md`. An unmanaged sheet (for example one setup-stack wrote) is a
-/// conflict unless `--force`.
 fn plan_sheet(cfg: &Config, owner: &links::Owner, hc: &HarnessConfig, opts: Options, folders: &links::Index, out: &mut Plan) -> Result<()> {
     let path = sheet_path(hc);
     if folders.blocks_write(&path, out) { return Ok(()); }
@@ -108,9 +108,6 @@ fn plan_sheet(cfg: &Config, owner: &links::Owner, hc: &HarnessConfig, opts: Opti
     Ok(())
 }
 
-/// CLAUDE.md or AGENTS.md: drops leftover blocks, then upserts (or removes) the owner's
-/// instructions block, the routing block, and the sheet include (Claude) or mirror (Codex).
-/// User text outside the blocks is kept.
 fn plan_instructions(cfg: &Config, hc: &HarnessConfig, folders: &links::Index, out: &mut Plan) -> Result<()> {
     let requested = hc.home.join(hc.harness.instruction_file());
     if folders.blocks_write(&requested, out) { return Ok(()); }
@@ -141,9 +138,6 @@ fn plan_instructions(cfg: &Config, hc: &HarnessConfig, folders: &links::Index, o
     Ok(())
 }
 
-/// The owner's global instructions for `harness`: `<stack>/instructions/common.md`, a blank
-/// line, then `<stem>.md`, each trimmed and skipped when absent or blank. `Ok(None)` when there
-/// is nothing to manage; the inner `Err` is a conflict for a source holding a block marker.
 fn instructions_body(cfg: &Config, harness: Harness) -> Result<Result<Option<String>, String>> {
     let dir = cfg.stack.path.join("instructions");
     let mut parts = Vec::new();
@@ -160,8 +154,6 @@ fn instructions_body(cfg: &Config, harness: Harness) -> Result<Result<Option<Str
     Ok(Ok((!parts.is_empty()).then(|| parts.join("\n\n"))))
 }
 
-/// Drops `@...` import lines that load this harness's sheet, so the managed include is the
-/// only one (setup-stack refuses a file with more than one).
 fn remove_sheet_imports(text: &str, cfg: &Config, hc: &HarnessConfig) -> String {
     let sheet = paths::resolve(&sheet_path(hc));
     let imports_sheet = |line: &str| {
@@ -174,8 +166,6 @@ fn remove_sheet_imports(text: &str, cfg: &Config, hc: &HarnessConfig) -> String 
     if kept.len() == text.len() { kept } else { format!("{}\n", kept.trim_end()) }
 }
 
-/// Removes hook commands older installs added to settings.json. Other commands in the same
-/// group stay; a group or event list is dropped only when ai-stack's commands were all it held.
 fn plan_settings(cfg: &Config, hc: &HarnessConfig, folders: &links::Index, out: &mut Plan) -> Result<()> {
     let requested = hc.home.join("settings.json");
     if folders.blocks_write(&requested, out) { return Ok(()); }
@@ -223,7 +213,6 @@ fn remove_owned_hooks(root: &mut Value, roots: &[&Path]) -> bool {
     changed
 }
 
-/// True only for the exact commands older installs wrote, pointing into one of `roots`.
 fn owned_hook(command: &str, roots: &[&Path]) -> bool {
     let command = command.strip_suffix(SED_SUFFIX).unwrap_or(command).trim();
     let Some((program, arg)) = command.split_once(' ') else { return false };
@@ -370,6 +359,21 @@ pub(crate) mod tests {
         f.apply(&plan);
         assert!(!f.home.join(".claude").exists());
         assert!(!f.home.join(".codex").exists());
+    }
+
+    #[test]
+    fn arena_pool_without_another_provider_warns_for_that_harness_only() {
+        let mut f = fixture();
+        let judge_warnings = |plan: &Plan| plan.warnings.iter().filter(|w| w.contains(ARENA_JUDGE_ROW) && w.contains("skip its judge")).count();
+        assert_eq!(judge_warnings(&f.plan()), 0);
+        for pool in ["claude:opus@xhigh", "claude:opus@xhigh, inherit-parent", "auto"] {
+            let rows = f.cfg.sheets.get_mut(&Harness::Claude).unwrap();
+            rows.iter_mut().find(|(label, _)| label == ARENA_JUDGE_ROW).unwrap().1 = pool.to_string();
+            let plan = f.plan();
+            assert_eq!(judge_warnings(&plan), 1, "{pool}");
+            let text = plan.render_text(&f.home);
+            assert!(text.contains("Claude Code's") && text.contains("[sheet.claude]"), "{text}");
+        }
     }
 
     #[test]
@@ -552,7 +556,7 @@ pub(crate) mod tests {
             "why investigators, synthesizer: inherit-parent\n",
             "reflect tooling, judgment, divergent, synthesizer: inherit-parent\n",
             "arena runners: claude:opus@medium, claude:opus@high\n",
-            "arena cross-judge pool: claude:opus@xhigh\n",
+            "arena cross-judge pool: codex:gpt-6.1-sol@xhigh, claude:opus@xhigh\n",
             "swarm workers: claude:opus@medium\n",
             "architect runners: claude:opus@high, claude:opus@medium\n",
             "interrogate reviewers: claude:opus@xhigh, codex:gpt-6.1-sol@xhigh\n",
@@ -569,7 +573,7 @@ pub(crate) mod tests {
             "why investigators, synthesizer: inherit-parent\n",
             "reflect tooling, judgment, divergent, synthesizer: inherit-parent\n",
             "arena runners: codex:gpt-6.1-sol@medium, codex:gpt-6.1-sol@xhigh\n",
-            "arena cross-judge pool: codex:gpt-6.1-sol@xhigh\n",
+            "arena cross-judge pool: claude:opus@xhigh, codex:gpt-6.1-sol@xhigh\n",
             "swarm workers: codex:gpt-6.1-sol@medium\n",
             "architect runners: codex:gpt-6.1-sol@xhigh, codex:gpt-6.1-sol@medium\n",
             "interrogate reviewers: codex:gpt-6.1-sol@xhigh, claude:opus@xhigh\n",
@@ -589,7 +593,6 @@ pub(crate) mod tests {
 
         assert!(f.plan().is_empty(), "{}", f.plan().render_text(&f.home));
 
-        // Both harnesses refresh copied plugins when the checkout version changes.
         for manifest in [".claude-plugin/plugin.json", ".codex-plugin/plugin.json"] {
             put(&f.stack.join("plugins/pstack").join(manifest), &json!({"name": "jm-stack", "version": "1.1.0"}).to_string());
         }
@@ -603,7 +606,6 @@ pub(crate) mod tests {
         assert!(f.runner.claude.borrow().disabled.contains("jm-stack@jm"));
         assert!(f.plan().is_empty(), "{}", f.plan().render_text(&f.home));
 
-        // A `jm` marketplace from somewhere else is never replaced silently.
         f.runner.claude.borrow_mut().marketplaces.insert("jm".into(), "/elsewhere".into());
         let conflicts = f.plan().conflicts;
         assert!(conflicts.iter().any(|c| c.contains("marketplace `jm` comes from directory /elsewhere")), "{conflicts:?}");
@@ -672,7 +674,6 @@ pub(crate) mod tests {
 
         let claude = f.read(".claude/CLAUDE.md");
         assert!(claude.starts_with("# My notes\n\nKeep this.\n\n<!-- ai-stack:routing:begin -->"), "{claude}");
-        // Migration appends the new instructions block after the existing routing and sheet.
         assert_eq!(blocks::block_names(&claude), ["routing", "pstack-models", "instructions"]);
         assert!(claude.ends_with(&format!("<!-- ai-stack:instructions:begin -->\n{guidance}\n<!-- ai-stack:instructions:end -->\n")));
         assert!(!f.read(".codex/AGENTS.md").contains(guidance));
@@ -707,7 +708,6 @@ pub(crate) mod tests {
         put(&f.root.join("elsewhere/linked/SKILL.md"), "target\n");
         symlink(f.root.join("elsewhere/linked"), claude.join("linked")).unwrap();
         symlink("/nonexistent/gone", claude.join("gone")).unwrap();
-        // A link into the stack is the migration's to unlink, never planned twice.
         symlink(f.stack.join("plugins/pstack/skills/how"), claude.join("how")).unwrap();
         for id in ["github@claude-plugins-official", "expo@claude-plugins-official", "pdf-viewer@synced"] {
             f.runner.claude.borrow_mut().installed.insert(id.into(), "1".into());
@@ -720,7 +720,6 @@ pub(crate) mod tests {
         let off = f.plan();
         assert_eq!(off.clean_count(), 0);
         assert!(!off.actions.iter().any(|a| matches!(a, Action::MoveToBackup { .. })));
-        // The strays are the same with clean off; only the moves wait for --clean.
         assert_eq!(off.stray(&f.home).skill_names, strays);
 
         let clean = |f: &Fixture| f.plan_with(Options { clean: true, ..Options::default() });
@@ -781,7 +780,6 @@ pub(crate) mod tests {
     #[test]
     fn a_jm_plugin_the_checkout_no_longer_lists_is_removed_by_a_normal_install() {
         let f = fixture();
-        // The stack's history: jm-games listed, then retired.
         let git = |args: &[&str]| {
             let config = ["-c", "user.name=t", "-c", "user.email=t@t", "-c", "commit.gpgsign=false", "-c", "core.hooksPath=/dev/null"];
             let output = std::process::Command::new("git").args(config).args(args).current_dir(&f.stack).output().unwrap();
@@ -802,7 +800,6 @@ pub(crate) mod tests {
         git(&["add", "-A"]);
         git(&["commit", "-qm", "with jm-games"]);
         let listed = git(&["rev-parse", "HEAD"]);
-        // The skills move out one commit before the manifest drops the plugin.
         fs::remove_dir_all(f.stack.join("plugins/jm-games/skills")).unwrap();
         put(&f.stack.join("plugins/jm-games/README.md"), "moved\n");
         git(&["add", "-A"]);
@@ -829,7 +826,6 @@ pub(crate) mod tests {
         assert_eq!(plan.stray(&f.home), crate::plan::Stray::default());
         let report = crate::plan::apply(&plan, &f.root.join("backups"), &f.runner).unwrap();
         let manifest: Value = serde_json::from_str(&fs::read_to_string(report.manifest.unwrap()).unwrap()).unwrap();
-        // No CLI can reinstall a plugin its marketplace dropped, so the record says where it is.
         for (entry, path) in manifest["plugins"].as_array().unwrap().iter().zip(manifests) {
             assert_eq!(entry["reinstall"], Value::Null);
             assert_eq!(entry["note"], format!("jm-games was retired from the jm marketplace. Commit {listed} of the stack {} is the last that lists it in {path} with its skills; restore it from there.", f.stack.display()));
@@ -954,7 +950,6 @@ pub(crate) mod tests {
     #[test]
     fn sheet_imports_and_old_hooks_match_through_another_spelling_of_the_same_path() {
         let f = fixture();
-        // `alias` is to the home and the stack what `/tmp` is to `/private/tmp`.
         symlink(&f.root, f.root.join("alias")).unwrap();
         let alias = f.root.join("alias");
         put(&f.home.join(".claude/CLAUDE.md"), &format!("# Mine\n@{}/home/.claude/pstack-models.md\n", alias.display()));

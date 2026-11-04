@@ -48,7 +48,6 @@ function loggedIn(stdout: string): boolean {
   }
 }
 
-// A rolling alias matches only a concrete revision of its own family.
 function matches(lane: Lane, reported: string): boolean {
   const rolling = lane.family?.rolling ?? null;
   return rolling === null ? exactOrSuffixed(lane, reported) : isRevision(rolling, reported);
@@ -93,6 +92,7 @@ function parse(stdout: string, lane: Lane): ParseResult {
 export const claude = adapter({
   id: "claude",
   executable: "claude",
+  effortIn: "flag",
   preflight: {
     argv: () => ["auth", "status", "--json"],
     retryAfterUnauthenticatedMs: null,
@@ -102,6 +102,8 @@ export const claude = adapter({
   },
   launch: {
     prompt: "stdin",
+    sidecar: null,
+    supports: ["read-only", "isolated-write"],
     needsSharedGitDir: (access) => access.mode === "isolated-write",
     argv: (lane, facts) => [
       "-p",
@@ -124,10 +126,14 @@ export const claude = adapter({
   },
   parse: (run, lane) => parse(run.stdout, lane),
   proof: { report: "required", matches },
-  // A writer's git must find its repository from the cwd, as discovery's git did, so an
-  // inherited GIT_DIR or GIT_COMMON_DIR cannot route it to an undenied git directory.
   environment: (access) => ({
     kind: "inherit",
     dropPrefixes: access.mode === "isolated-write" ? ["GIT_"] : [],
   }),
+  docs: {
+    name: "Claude Code CLI",
+    hostPrerequisites: [],
+    statePaths: ["the Claude config home (`CLAUDE_CONFIG_DIR`, else `~/.claude`)"],
+    notes: [],
+  },
 });

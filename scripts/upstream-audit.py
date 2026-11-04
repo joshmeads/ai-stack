@@ -23,10 +23,18 @@ def tree(ref, prefix):
     return entries
 
 
+# UPSTREAM.md records why each of these skills stays out of the port.
+EXCLUDED_SKILLS = ("skills/make-bot-ui/", "skills/statechart/", "skills/ketchup-video/")
+
+
 def port_path(path):
     relative = path.removeprefix("pstack/")
     if relative == "README.md":
         return "README-UPSTREAM.md"
+    if relative.startswith(EXCLUDED_SKILLS):
+        return None
+    if relative.startswith("skills/setup-pstack/"):
+        relative = relative.replace("skills/setup-pstack/", "skills/setup-stack/", 1)
     if relative.startswith(("skills/", "agents/", "assets/")):
         return "plugins/pstack/" + relative
     return None

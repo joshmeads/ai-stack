@@ -1,0 +1,1 @@
+dsh: INVALID_REQUEST: The supported API model names are deepseek-flash, deepseek-v4-pro, but you passed deepseek-nonexistent. (request_id: MARKER-FIXTURE)

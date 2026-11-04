@@ -3,7 +3,6 @@ name: stack-fable-max
 description: Native Claude lane for jm:stack roles configured as claude:fable@max.
 model: fable
 effort: max
-background: true
 disallowedTools: Agent, Task
 ---
 
