@@ -2,7 +2,7 @@
 
 This page contains the full skill, dependency, runtime, and porting reference. For the plain-English introduction and quick start, see the [main README](../README.md).
 
-[Poteto](https://x.com/poteto)'s [pstack](https://github.com/cursor/plugins/tree/main/pstack), adapted to run in Claude Code and Codex without Cursor and published here as jm:stack (plugin `jm-stack`) with Josh Meads's model routing. One shared skill tree serves both harnesses; lanes on seven read-only providers can run through the bundled runner when a model sheet selects them. Version 1.16.0+jm.1 merges Open Pstack 1.16.0, which is synced to Cursor pstack v0.15.29 at `88d47514b82e7c44f00f2b2a72ff6dd12158038c`. See [UPSTREAM.md](../UPSTREAM.md) for the exact sync contract.
+[Poteto](https://x.com/poteto)'s [pstack](https://github.com/cursor/plugins/tree/main/pstack), adapted to run in Claude Code and Codex without Cursor and published here as jm:stack (plugin `jm-stack`) with Josh Meads's model routing. One shared skill tree serves both harnesses; lanes on seven read-only providers can run through the bundled runner when a model sheet selects them. Version 1.16.0+jm.3 merges Open Pstack 1.16.0 and applies Cursor pstack changes through v0.15.36 at `c742dd6`. See [UPSTREAM.md](../UPSTREAM.md) for the exact sync contract.
 
 Original by Lauren Tan. This distribution builds on Michael Denyer's [pstack-claude](https://github.com/michael-denyer/pstack-claude) port and retains its history and MIT attribution. It imports seven MIT-licensed skills from [cursor-team-kit](https://github.com/cursor/plugins/tree/main/cursor-team-kit): `deslop`, `thermo-nuclear-code-quality-review`, `make-pr-easy-to-review`, `fix-ci`, `fix-merge-conflicts`, `get-pr-comments`, `what-did-i-get-done`.
 

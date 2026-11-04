@@ -130,4 +130,25 @@ describe("pi model proof", () => {
     expect(pi.proof.matches(concrete, served.metadata.reportedModel!)).toBe(false);
     expect(pi.proof.matches(concrete, "x-ai/grok-4:free")).toBe(false);
   });
+
+  it("reads the message's model when the stream has no responseModel, as OpenRouter does for a concrete ID", () => {
+    const withoutResponseModel = (model: string) => fixture("stream-complete-rolling-grok.jsonl").split("\n").map((line) => {
+      if (line.length === 0) return line;
+      const event = JSON.parse(line);
+      if (event.message) {
+        delete event.message.responseModel;
+        event.message.model = model;
+      }
+      return JSON.stringify(event);
+    }).join("\n");
+    const concrete = lane({ model: "openrouter/x-ai/grok-4.7" });
+    const parsed = pi.parse(run({ stdout: withoutResponseModel("x-ai/grok-4.7") }), concrete);
+    if (parsed.kind !== "complete") throw new Error("expected complete");
+    expect(parsed.metadata.reportedModel).toBe("x-ai/grok-4.7");
+    expect(pi.proof.matches(concrete, parsed.metadata.reportedModel!)).toBe(true);
+    const rolling = lane({ model: GROK });
+    const echoed = pi.parse(run({ stdout: withoutResponseModel("~x-ai/grok-latest") }), rolling);
+    if (echoed.kind !== "complete") throw new Error("expected complete");
+    expect(pi.proof.matches(rolling, echoed.metadata.reportedModel!)).toBe(false);
+  });
 });
