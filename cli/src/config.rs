@@ -386,10 +386,15 @@ fn check_descriptor(label: &str, lane: &str) -> Result<()> {
     let (model, effort) = rest.split_once('@').ok_or_else(|| anyhow!("lane {lane:?} has no `@<effort>`"))?;
     let rows: Vec<_> = MATRIX.iter().filter(|(p, _, _)| *p == provider).collect();
     ensure!(!rows.is_empty(), "lane {lane:?}: unknown provider {provider:?}; jm-stack accepts claude, codex and {}", READ_ONLY_PROVIDERS.join(", "));
-    let (_, _, efforts) = rows.iter().find(|(_, m, _)| *m == model).ok_or_else(|| {
-        let known: Vec<&str> = rows.iter().map(|(_, m, _)| *m).collect();
-        anyhow!("lane {lane:?}: jm-stack has no {provider} model {model:?}; known: {}", known.join(", "))
-    })?;
+    let any_openrouter_model = provider == "pi" && model.strip_prefix("openrouter/").is_some_and(|id| !id.is_empty());
+    let efforts: &[&str] = match rows.iter().find(|(_, m, _)| *m == model) {
+        Some((_, _, efforts)) => efforts,
+        None if any_openrouter_model => FIVE,
+        None => {
+            let known: Vec<&str> = rows.iter().map(|(_, m, _)| *m).collect();
+            anyhow::bail!("lane {lane:?}: jm-stack has no {provider} model {model:?}; known: {}", known.join(", "));
+        }
+    };
     ensure!(efforts.contains(&effort), "lane {lane:?}: effort {effort:?} is not selectable for {provider}:{model}; allowed: {}", efforts.join(", "));
     ensure!(
         !(WRITER_ROWS.contains(&label) && READ_ONLY_PROVIDERS.contains(&provider)),
@@ -615,6 +620,18 @@ mod tests {
         }
         assert!(err_of(&base.replace("cursor:grok-4.7@high", "cursor:grok-4.7@max")).contains("effort \"max\" is not selectable"));
         assert!(err_of(&base.replace("cursor:grok-4.7@high", "grok:grok-4.7@high")).contains("unknown provider \"grok\""));
+    }
+
+    #[test]
+    fn any_openrouter_model_fits_a_read_only_row_through_pi() {
+        let base = default_config_text();
+        let seat = |lane: &str| base.replace("cursor:grok-4.7@high", lane);
+        assert!(from_str(&seat("pi:openrouter/~moonshotai/kimi-latest@high"), Path::new("/h")).is_ok());
+        assert!(err_of(&seat("pi:openrouter/@high")).contains("has no pi model"));
+        assert!(err_of(&seat("pi:anthropic/claude@high")).contains("has no pi model"));
+        assert!(err_of(&seat("pi:openrouter/~moonshotai/kimi-latest@ultra")).contains("effort \"ultra\" is not selectable"));
+        let writer = base.replace("\"bug-fix\" = \"claude:opus@medium\"", "\"bug-fix\" = \"pi:openrouter/~moonshotai/kimi-latest@high\"");
+        assert!(err_of(&writer).contains("row \"bug-fix\" writes files, and pi lanes are read-only"));
     }
 
     #[test]
