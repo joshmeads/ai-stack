@@ -12,7 +12,7 @@
 
 **Verification.** Tests alone are not sufficient verification. A PR is verified only when its unit, live, and perf boxes are all checked (the **prove-it-works** principle skill). That sentence is the verification rule. Every verification block opens with it. The live block is mandatory. Ten lanes on the configured `swarm workers` role at the PR head drive the real surface through the driver skill, per the **swarm** skill. The role resolves once through [`../references/provider-dispatch.md`](../references/provider-dispatch.md) at execution time, and each lane's receipt records the selected provider, model, and effort. Each lane is one box with a concrete scenario, the screenshot it saves, and its pass predicate. One lane is the **Regression lane against trunk.** It runs the same load-bearing scenario on trunk and head. If trunk does not have the feature, the lane records that fact and gates the behavior the diff adds plus the end state the user waits for instead of inventing a trunk result. The perf gate is dual-sided. Trunk and head must both produce the named metric. If trunk lacks the feature, also isolate the work the diff adds and set an absolute budget for that work plus the end-to-end state the user waits for. Do not claim a ratio between unlike scenarios. The perf block names the metric, the interleaved probe, the trunk baseline measured first, and the rule with the number that fails. A PR that changes an interaction is review-gated. The operator reviews it in chat with screenshots and a video before merge. A PR that changes no interaction writes `**Review gate.** None. <PR id> is not review-gated.` and no boxes under it.
 
-**Driver skill.** Pick it by surface. Browser, Electron, and web UIs use Claude Code's **verify** skill. CLIs and TUIs use Claude Code's **run** skill. Native mobile uses whatever simulator-driving skill the repo has. On Codex, substitute per [`../references/codex-tools.md`](../references/codex-tools.md). A PR that touches two surfaces gets lanes on both. A surface with no driver skill is a risk in Appendix C, and its live block still names how each lane drives it.
+**Driver skill.** Pick it by surface. For browser, Electron, and web UIs, drive the real UI with whatever browser or GUI automation you have, and name it here. CLIs and TUIs use Claude Code's **run** skill. Native mobile uses whatever simulator-driving skill the repo has. On Codex, substitute per [`../references/codex-tools.md`](../references/codex-tools.md). A PR that touches two surfaces gets lanes on both. A surface with no driver is a risk in Appendix C, and its live block still names how each lane drives it.
 
 On Claude Code, arm the hourly audit tick as `/loop 1h` with the tick prompt. On Codex, arm the cadence per [`../references/codex-tools.md`](../references/codex-tools.md). Never leave the cadence to memory. Keep skill-relative links in this playbook body. Do not copy them into the plan file.
 
@@ -37,7 +37,7 @@ Tests alone are not sufficient verification. A PR is verified only when its unit
 - [ ] Read these from the installed plugin at program start. Re-read them at every tick.
   - [ ] `skills/poteto-mode/playbooks/<execution playbook>.md`
   - [ ] `skills/swarm/SKILL.md`
-  - [ ] `<driver skill path>`
+  - [ ] `<driver skill path or named UI automation>`
   - [ ] `skills/poteto-mode/playbooks/opening-a-pr.md`
   - [ ] `skills/<each other leaf skill the program uses>/SKILL.md`
 - [ ] On the operator's go, arm the hourly audit tick as a real cadence with the tick prompt below. Never leave the cadence to memory.
