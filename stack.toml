@@ -10,7 +10,7 @@ skills = ["grilling", "grill-me", "grill-with-docs", "domain-modeling", "to-spec
 
 [groups.writing]
 global = true
-skills = []
+skills = ["writing-beats", "writing-fragments", "writing-shape", "tutor"]
 
 [groups.games]
 global = true
@@ -191,3 +191,29 @@ name = "leaving-pr-comments"
 source = "https://github.com/t3dotgg/tstack"
 path = "skills/leaving-pr-comments"
 commit = "1085050f3baed1ac724caa4a8166145fb2ac88af"
+
+[[skill]]
+name = "writing-beats"
+source = "https://github.com/mattpocock/skills"
+path = "skills/in-progress/writing-beats"
+commit = "4ae2317ddb22b046e26455e4f9c9b3aaaf62212d"
+
+[[skill]]
+name = "writing-fragments"
+source = "https://github.com/mattpocock/skills"
+path = "skills/in-progress/writing-fragments"
+commit = "4ae2317ddb22b046e26455e4f9c9b3aaaf62212d"
+
+[[skill]]
+name = "writing-shape"
+source = "https://github.com/mattpocock/skills"
+path = "skills/in-progress/writing-shape"
+commit = "4ae2317ddb22b046e26455e4f9c9b3aaaf62212d"
+
+[[skill]]
+name = "teach"
+source = "https://github.com/mattpocock/skills"
+path = "skills/productivity/teach"
+commit = "4ae2317ddb22b046e26455e4f9c9b3aaaf62212d"
+move = "tutor"
+process = [{ type = "script", input = "scripts/skill-patches/teach.sh" }]
