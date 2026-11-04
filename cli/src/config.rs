@@ -88,14 +88,14 @@ pub const SHEET_ROWS: [&str; 15] = [
 const PANEL_ROWS: [&str; 4] = ["arena runners", "arena cross-judge pool", "architect runners", "interrogate reviewers"];
 const PARENT_ROWS: [&str; 2] = ["why investigators, synthesizer", "reflect tooling, judgment, divergent, synthesizer"];
 const PARENT_LANES: [&str; 2] = ["inherit-parent", "auto"];
-const WRITER_ROWS: [&str; 8] = [
+const WRITER_ROWS: [&str; 7] = [
     "feature, refactoring", "bug-fix", "perf-issue", "hillclimb", "hardest tasks",
-    "arena runners", "architect runners", "swarm workers",
+    "architect runners", "swarm workers",
 ];
-const READ_ONLY_PROVIDERS: [&str; 6] = ["devin", "opencode", "dsh", "amp", "agy", "cursor"];
+const READ_ONLY_PROVIDERS: [&str; 7] = ["devin", "opencode", "dsh", "amp", "agy", "cursor", "pi"];
 const FIVE: &[&str] = &["low", "medium", "high", "xhigh", "max"];
 const SIX: &[&str] = &["low", "medium", "high", "xhigh", "max", "ultra"];
-const MATRIX: [(&str, &str, &[&str]); 15] = [
+const MATRIX: [(&str, &str, &[&str]); 19] = [
     ("claude", "fable", FIVE),
     ("claude", "opus", FIVE),
     ("claude", "haiku", FIVE),
@@ -111,6 +111,10 @@ const MATRIX: [(&str, &str, &[&str]); 15] = [
     ("agy", "gemini-3.8-flash", &["low", "medium", "high"]),
     ("cursor", "composer-2.5", &["default"]),
     ("cursor", "gemini-3.7-flash", &["low", "medium", "high"]),
+    ("cursor", "grok-4.7", &["low", "medium", "high", "xhigh"]),
+    ("cursor", "gemini-4-argon", &["low", "medium", "high"]),
+    ("agy", "gemini-4-argon", &["low", "medium", "high"]),
+    ("pi", "openrouter/~google/gemini-pro-latest", FIVE),
 ];
 
 #[derive(Debug, Clone, Deserialize, Serialize)]
@@ -564,7 +568,7 @@ mod tests {
             (base.replace(bug, "\"unknown\" = \"claude:opus@high\""), "unknown jm:stack model row \"unknown\""),
             (base.replace(&format!("{bug}\n"), ""), "[sheet.claude]: missing jm:stack model row \"bug-fix\""),
             (base.replacen("\"why investigators, synthesizer\" = \"inherit-parent\"", "\"why investigators, synthesizer\" = \"claude:opus@high\"", 1), "needs the parent's MCP servers"),
-            (base.replace("[\"claude:opus@medium\", \"claude:opus@high\"]", "[]"), "is empty"),
+            (base.replace("[\"claude:opus@high\", \"claude:opus@medium\"]", "[]"), "is empty"),
             (format!("{base}\n[roles.worker]\nclaude = \"opus\"\n"), "older ai-stack"),
         ] {
             assert_ne!(text, base);
@@ -589,6 +593,28 @@ mod tests {
         assert!(msg.contains("row \"bug-fix\" writes files, and opencode lanes are read-only"), "{msg}");
         let effort = base.replace(judgment, "\"judgment and prose\" = \"agy:gemini-3.8-flash@xhigh\"");
         assert!(err_of(&effort).contains("effort \"xhigh\" is not selectable"));
+    }
+
+    #[test]
+    fn arena_seats_take_read_only_providers_and_the_other_writer_rows_refuse_them() {
+        let cfg = from_str(default_config_text(), Path::new("/h")).unwrap();
+        let arena = |harness: Harness| cfg.sheets[&harness].iter().find(|(label, _)| label == "arena runners").unwrap().1.clone();
+        assert_eq!(arena(Harness::Claude), "claude:opus@high, codex:gpt-6.1-sol@high, cursor:grok-4.7@high, agy:gemini-4-argon@high");
+        assert_eq!(arena(Harness::Codex), "codex:gpt-6.1-sol@high, claude:opus@high, cursor:grok-4.7@high, agy:gemini-4-argon@high");
+        let base = default_config_text();
+        let lane = "pi:openrouter/~google/gemini-pro-latest@high";
+        for (row, value) in [
+            ("architect runners", "[\"claude:opus@high\", \"claude:opus@medium\"]"),
+            ("swarm workers", "\"claude:opus@medium\""),
+            ("bug-fix", "\"claude:opus@medium\""),
+        ] {
+            let text = base.replacen(&format!("\"{row}\" = {value}"), &format!("\"{row}\" = \"{lane}\""), 1);
+            assert_ne!(text, base);
+            let msg = err_of(&text);
+            assert!(msg.contains(&format!("row \"{row}\" writes files, and pi lanes are read-only")), "{msg}");
+        }
+        assert!(err_of(&base.replace("cursor:grok-4.7@high", "cursor:grok-4.7@max")).contains("effort \"max\" is not selectable"));
+        assert!(err_of(&base.replace("cursor:grok-4.7@high", "grok:grok-4.7@high")).contains("unknown provider \"grok\""));
     }
 
     #[test]
