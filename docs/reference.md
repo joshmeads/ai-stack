@@ -61,7 +61,7 @@ The marketplace install is the normal user path. Direct links are only for testi
 │   ├── .codex-plugin/plugin.json     # Codex manifest (skills: ./skills/)
 │   ├── skills/                       # 63 skills shared by Claude Code and Codex
 │   │   ├── poteto-mode/references/{codex-tools,provider-dispatch}.md  # tool + provider routing
-│   │   └── poteto-mode/scripts/      # bun/bash/node tooling: watch-pr, orch, runner, resolve-codex-transcript, check-plan.mjs, worktree-audit.sh
+│   │   └── poteto-mode/scripts/      # bun/bash/node tooling: watch-pr, runner, resolve-codex-transcript, check-plan.mjs, worktree-audit.sh
 │   ├── hooks/                        # SessionStart auto-fire: injects the poteto-mode mandate (Claude Code only)
 │   └── agents/                       # Claude subagents, including a native lane for each Claude family at each selectable effort
 ├── skills/                           # standalone skills, installed under their plain names
@@ -108,8 +108,8 @@ Nothing is declared in `plugin.json`. Install the one companion plugin yourself:
 Not declared as deps, but referenced in skill bodies:
 
 - **`run`, `verify`, `loop`** — Claude Code CLI built-ins (ship with the binary, always available).
-- **`gh` (GitHub CLI).** This is the default forge for every stack playbook and a system-level requirement of the standalone `babysit` skill. Install it with [`brew install gh`](https://cli.github.com) and authenticate with `gh auth login`. If Origin's `origin` CLI is installed and can resolve the repository, the stack playbooks use it instead. No playbook requires Graphite (`gt`): Orchestrate's `orch frontier set` reads the PR base chain through `gh`, or through Origin with `--forge origin`.
-- **`bun`** — runs the vendored `skills/poteto-mode/scripts/` tooling (`watch-pr`, `orch`, `runner`) and the port-authored `resolve-codex-transcript` launcher. Install via [`brew install oven-sh/bun/bun`](https://bun.sh). `bootstrap.ts` installs dependencies for `watch-pr` and `orch`; the runner uses only Bun and Node built-ins, so it launches directly without an install/re-exec layer.
+- **`gh` (GitHub CLI).** This is the default forge for every stack playbook and a system-level requirement of the standalone `babysit` skill. Install it with [`brew install gh`](https://cli.github.com) and authenticate with `gh auth login`. If Origin's `origin` CLI is installed and can resolve the repository, the stack playbooks use it instead. No playbook requires Graphite (`gt`).
+- **`bun`** — runs the vendored `skills/poteto-mode/scripts/` tooling (`watch-pr`, `runner`) and the port-authored `resolve-codex-transcript` launcher. Install via [`brew install oven-sh/bun/bun`](https://bun.sh). `bootstrap.ts` installs dependencies for `watch-pr`; the runner uses only Bun and Node built-ins, so it launches directly without an install/re-exec layer.
 - **`git` 2.25 or later** — the runner asks `git rev-parse --git-common-dir` for a linked worktree's shared git directory, and `worktree-audit.sh` reads `git worktree list --porcelain`. Ubuntu 20.04 LTS ships 2.25; older git is unsupported.
 - **Bash on Windows** — the SessionStart hook runs through `hooks/run-hook.cmd`, which looks for Git for Windows' `bash.exe` in its standard system-wide and per-user locations, then for a `bash` on `PATH` (MSYS2, Cygwin). Without one, the hook exits 0 and skips the pstack startup context, as the superpowers wrapper it comes from does. Install [Git for Windows](https://git-scm.com/download/win) to get the context. In Codex, the hook starts `C:\Windows\System32\cmd.exe` by full path, because one command must work in both PowerShell and cmd. A Windows installed outside `C:\Windows` does not run the hook.
 - **macOS, Linux or WSL2 for Claude writer lanes** — Claude Code's sandbox does not run on native Windows, so a Claude writer lane needs one of these hosts.
