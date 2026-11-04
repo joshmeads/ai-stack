@@ -21,6 +21,7 @@ const SHEET_BLOCK: &str = "pstack-models";
 const INSTRUCTIONS_BLOCK: &str = "instructions";
 const OLD_HOOKS: [(&str, &str); 2] = [("bash", "plugins/pstack/hooks/session-start"), ("python3", "scripts/task-context.py")];
 const SED_SUFFIX: &str = " | sed 's/pstack://g'";
+const ARENA_JUDGE_ROW: &str = "arena cross-judge pool";
 
 #[derive(Debug, Clone, Copy, Default)]
 pub struct Options {
@@ -41,6 +42,7 @@ pub fn plan(cfg: &Config, opts: Options, runner: &dyn Runner) -> Result<Plan> {
     let owner = links::Owner::new(cfg);
     let folders = links::Index::new(cfg, &skipped);
     for hc in &cfg.harnesses {
+        warn_if_arena_judge_skipped(cfg, hc, &mut out);
         plan_sheet(cfg, &owner, hc, opts, &folders, &mut out)?;
         plan_instructions(cfg, hc, &folders, &mut out)?;
         if hc.harness == Harness::Claude {
@@ -68,6 +70,18 @@ fn available_config(cfg: &Config, runner: &dyn Runner, out: &mut Plan) -> (Confi
         out.warnings.push(format!("skipping {}: `{id}` not found on PATH", hc.harness.name()));
     }
     (active, skipped)
+}
+
+fn warn_if_arena_judge_skipped(cfg: &Config, hc: &HarnessConfig, out: &mut Plan) {
+    let id = hc.harness.as_str();
+    let pool = cfg.sheets[&hc.harness].iter().find(|(label, _)| label == ARENA_JUDGE_ROW).map_or("", |(_, lanes)| lanes);
+    let other_provider = pool.split(", ").any(|lane| lane.split_once(':').is_some_and(|(provider, _)| provider != id));
+    if !other_provider {
+        out.warnings.push(format!(
+            "note: {}'s `{ARENA_JUDGE_ROW}` has no entry from another provider, so arena will skip its judge; add one to that row in [sheet.{id}]",
+            hc.harness.name(),
+        ));
+    }
 }
 
 fn sheet_path(hc: &HarnessConfig) -> PathBuf {
@@ -345,6 +359,21 @@ pub(crate) mod tests {
         f.apply(&plan);
         assert!(!f.home.join(".claude").exists());
         assert!(!f.home.join(".codex").exists());
+    }
+
+    #[test]
+    fn arena_pool_without_another_provider_warns_for_that_harness_only() {
+        let mut f = fixture();
+        let judge_warnings = |plan: &Plan| plan.warnings.iter().filter(|w| w.contains(ARENA_JUDGE_ROW) && w.contains("skip its judge")).count();
+        assert_eq!(judge_warnings(&f.plan()), 0);
+        for pool in ["claude:opus@xhigh", "claude:opus@xhigh, inherit-parent", "auto"] {
+            let rows = f.cfg.sheets.get_mut(&Harness::Claude).unwrap();
+            rows.iter_mut().find(|(label, _)| label == ARENA_JUDGE_ROW).unwrap().1 = pool.to_string();
+            let plan = f.plan();
+            assert_eq!(judge_warnings(&plan), 1, "{pool}");
+            let text = plan.render_text(&f.home);
+            assert!(text.contains("Claude Code's") && text.contains("[sheet.claude]"), "{text}");
+        }
     }
 
     #[test]
