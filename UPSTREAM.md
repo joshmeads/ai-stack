@@ -154,6 +154,8 @@ Three rules stay stricter than upstream's text. An owner rewrites and merges onl
 
 - **Prefixed agent names on Claude Code**: Claude Code registers plugin agents as `jm-stack:<agent>` and refuses a bare name with "Agent type not found". Text that tells Claude Code to dispatch an agent uses the prefix (`jm-stack:stack-<family>-<effort>`, `jm-stack:poteto-agent`, `jm-stack:comment-sicko`), and `registry/render.ts` generates the catalog's column the same way. Agent file names and the `name` frontmatter stay bare, and Codex text keeps its own names. Apply the prefix to any upstream `subagent_type` or agent name a sync brings in.
 
+- **Skill authoring without `plugin-dev`**: Cursor routes authoring to `/create-skill`, which the port once mapped to `plugin-dev:skill-development`. That skill is in a separate plugin, so it is often not installed, and a plugin skill must not depend on it. `create-skill` now maps to `playbooks/authoring-a-skill.md`, whose step 1 states the frontmatter and body rules, and `poteto-mode`, `automate-me` and `reflect` point there. Reflect's routing label is `new skill: <kebab-name>`. Map any new `create-skill` line the same way.
+
 ## Check for changes
 
 The repository already names Cursor's repository as the `cursor` remote in the maintainer checkout. A fresh clone can add it once:

@@ -94,16 +94,7 @@ Verified in fresh installed Claude Code and Codex sessions: the user-facing skil
 
 ## Dependencies
 
-Nothing is declared in `plugin.json`. Install the one companion plugin yourself:
-
-- **`plugin-dev`** (from the `claude-plugins-official` marketplace) — the rewiring routes skill-authoring tasks (in `automate-me`, `reflect`, `poteto-mode`) to the `plugin-dev:skill-development` skill:
-
-  ```shell
-  /plugin marketplace add anthropics/claude-plugins-official
-  /plugin install plugin-dev@claude-plugins-official
-  ```
-
-  Until 0.9.2 this was a `dependencies` entry in `plugin.json`. The desktop app's `--plugin-dir` load mode can never resolve cross-marketplace dependencies and hard-disables the whole plugin, so 0.9.3 removed the declaration — full mechanism in the 0.9.3 entry of [CHANGES.md](../CHANGES.md). Without `plugin-dev` installed, only the skill-authoring routes degrade; everything else works.
+Nothing is declared in `plugin.json`, and no companion plugin is needed. Skill-authoring tasks (in `automate-me`, `reflect`, `poteto-mode`) follow the plugin's own [Authoring a skill playbook](../plugins/pstack/skills/poteto-mode/playbooks/authoring-a-skill.md).
 
 Not declared as deps, but referenced in skill bodies:
 
@@ -196,7 +187,7 @@ The port is editorial, not mechanical. Anywhere upstream pstack assumed Cursor-s
 | `AskQuestion` tool | `AskUserQuestion` tool |
 | Cursor's built-in `/loop` | Claude Code's built-in `loop` skill |
 | Cursor's built-in `/babysit` | `babysit` skill bundled in this plugin. From v0.14.0 upstream routes PR-status requests inside poteto-mode to `playbooks/babysit.md` instead; the port does the same, and `/babysit` stays the standalone entry point |
-| Cursor's built-in `/create-skill` | `plugin-dev:skill-development` skill |
+| Cursor's built-in `/create-skill` | The Authoring a skill playbook |
 | `cursor-team-kit` `control-cli` (CLI/TUI driver) | Claude Code's `run` skill |
 | `cursor-team-kit` `control-ui` (browser/Electron driver) | Whatever browser or GUI automation the session has, driving the real UI. Claude Code's `verify` runs only when typed, so no playbook routes to it |
 | Transcripts at `~/.cursor/projects/*/` or `agent-transcripts/` | `~/.claude/projects/<encoded-cwd>/*.jsonl` (where `<encoded-cwd>` is the workspace path with each `/` and each `.` changed to `-`) |
