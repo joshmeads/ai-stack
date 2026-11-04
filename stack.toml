@@ -4,6 +4,14 @@
 global = true
 skills = ["art-iteration"]
 
+[groups.engineering]
+global = true
+skills = ["grilling", "grill-me", "grill-with-docs", "domain-modeling", "to-spec", "to-tickets", "triage", "wayfinder", "to-questionnaire", "wait-what", "wizard", "writing-for-agents", "improve-codebase-architecture", "codebase-design", "implement-spec", "setup-matt-pocock-skills", "retro", "research", "compact-handoff"]
+
+[groups.writing]
+global = true
+skills = []
+
 [groups.games]
 global = true
 includes = ["threejs"]
@@ -47,3 +55,120 @@ skills = [
     "try-to-break",
     "visual-evidence",
 ]
+
+[[skill]]
+name = "grilling"
+source = "https://github.com/mattpocock/skills"
+path = "skills/productivity/grilling"
+commit = "4ae2317ddb22b046e26455e4f9c9b3aaaf62212d"
+
+[[skill]]
+name = "grill-me"
+source = "https://github.com/mattpocock/skills"
+path = "skills/productivity/grill-me"
+commit = "4ae2317ddb22b046e26455e4f9c9b3aaaf62212d"
+
+[[skill]]
+name = "grill-with-docs"
+source = "https://github.com/mattpocock/skills"
+path = "skills/engineering/grill-with-docs"
+commit = "4ae2317ddb22b046e26455e4f9c9b3aaaf62212d"
+
+[[skill]]
+name = "domain-modeling"
+source = "https://github.com/mattpocock/skills"
+path = "skills/engineering/domain-modeling"
+commit = "4ae2317ddb22b046e26455e4f9c9b3aaaf62212d"
+
+[[skill]]
+name = "to-spec"
+source = "https://github.com/mattpocock/skills"
+path = "skills/engineering/to-spec"
+commit = "4ae2317ddb22b046e26455e4f9c9b3aaaf62212d"
+
+[[skill]]
+name = "to-tickets"
+source = "https://github.com/mattpocock/skills"
+path = "skills/engineering/to-tickets"
+commit = "4ae2317ddb22b046e26455e4f9c9b3aaaf62212d"
+
+[[skill]]
+name = "triage"
+source = "https://github.com/mattpocock/skills"
+path = "skills/engineering/triage"
+commit = "4ae2317ddb22b046e26455e4f9c9b3aaaf62212d"
+
+[[skill]]
+name = "wayfinder"
+source = "https://github.com/mattpocock/skills"
+path = "skills/engineering/wayfinder"
+commit = "4ae2317ddb22b046e26455e4f9c9b3aaaf62212d"
+process = [{ type = "script", input = "scripts/skill-patches/wayfinder.sh" }]
+
+[[skill]]
+name = "to-questionnaire"
+source = "https://github.com/mattpocock/skills"
+path = "skills/productivity/to-questionnaire"
+commit = "4ae2317ddb22b046e26455e4f9c9b3aaaf62212d"
+
+[[skill]]
+name = "wait-what"
+source = "https://github.com/mattpocock/skills"
+path = "skills/productivity/wait-what"
+commit = "4ae2317ddb22b046e26455e4f9c9b3aaaf62212d"
+
+[[skill]]
+name = "wizard"
+source = "https://github.com/mattpocock/skills"
+path = "skills/engineering/wizard"
+commit = "4ae2317ddb22b046e26455e4f9c9b3aaaf62212d"
+
+[[skill]]
+name = "writing-for-agents"
+source = "https://github.com/mattpocock/skills"
+path = "skills/productivity/writing-for-agents"
+commit = "4ae2317ddb22b046e26455e4f9c9b3aaaf62212d"
+
+[[skill]]
+name = "improve-codebase-architecture"
+source = "https://github.com/mattpocock/skills"
+path = "skills/engineering/improve-codebase-architecture"
+commit = "4ae2317ddb22b046e26455e4f9c9b3aaaf62212d"
+
+[[skill]]
+name = "codebase-design"
+source = "https://github.com/mattpocock/skills"
+path = "skills/engineering/codebase-design"
+commit = "4ae2317ddb22b046e26455e4f9c9b3aaaf62212d"
+
+[[skill]]
+name = "implement-spec"
+source = "https://github.com/mattpocock/skills"
+path = "skills/engineering/implement-spec"
+commit = "4ae2317ddb22b046e26455e4f9c9b3aaaf62212d"
+process = [{ type = "script", input = "scripts/skill-patches/implement-spec.sh" }]
+
+[[skill]]
+name = "setup-matt-pocock-skills"
+source = "https://github.com/mattpocock/skills"
+path = "skills/engineering/setup-matt-pocock-skills"
+commit = "4ae2317ddb22b046e26455e4f9c9b3aaaf62212d"
+
+[[skill]]
+name = "retro"
+source = "https://github.com/mattpocock/skills"
+path = "skills/engineering/retro"
+commit = "4ae2317ddb22b046e26455e4f9c9b3aaaf62212d"
+
+[[skill]]
+name = "research"
+source = "https://github.com/mattpocock/skills"
+path = "skills/engineering/research"
+commit = "4ae2317ddb22b046e26455e4f9c9b3aaaf62212d"
+
+[[skill]]
+name = "handoff"
+source = "https://github.com/mattpocock/skills"
+path = "skills/productivity/handoff"
+commit = "4ae2317ddb22b046e26455e4f9c9b3aaaf62212d"
+move = "compact-handoff"
