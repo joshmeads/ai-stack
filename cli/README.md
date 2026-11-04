@@ -117,6 +117,8 @@ The provider owns credential storage. Login codes and tokens never pass through 
 
 A config from an older ai-stack (with `[roles]`, `[stack.models]` or `[install]`) is rejected with a message to run `ai-stack init --force` and re-apply your edits.
 
+Upgrade note: Arena's judge must come from a provider other than the harness running it, and your config overrides the default sheet. When a harness's `arena cross-judge pool` has no such entry (`inherit-parent` and `auto` do not count), Arena skips its judge, so `diff` and `install` print a note naming the row. Add a lane from the other provider to that row, such as `"arena cross-judge pool" = ["codex:gpt-6.1-sol@xhigh", "claude:opus@xhigh"]` in `[sheet.claude]`.
+
 ## Config drift
 
 `ai-stack config show` prints effective `config.toml` settings as sorted dotted keys with scalar or JSON-array values. `--json` prints one object. Defaults are filled in, including omitted `[clean]` settings, and disabled harness settings are included. Paths retain their spelling in the file (`~` is unexpanded). Only the config schema is included: this config holds no secrets, and credential files, harness configuration files and `fleet.toml` are never flattened. Nothing is written. The invocation's `--stack` override does not change this view of the stored config.
