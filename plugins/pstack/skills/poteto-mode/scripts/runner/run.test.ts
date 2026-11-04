@@ -1547,6 +1547,7 @@ describe("childEnvironment", () => {
       amp: { "read-only": ["AMP_API_KEY"] },
       agy: { "read-only": [] },
       cursor: { "read-only": ["CURSOR_API_KEY", "CURSOR_AUTH_TOKEN"] },
+      pi: { "read-only": ["OPENROUTER_API_KEY"] },
     };
     const allowlisted = REGISTRY.adapters
       .filter((adapter) => adapter.environment(access("read-only"), "/sidecar").kind === "allowlist");
@@ -2313,6 +2314,96 @@ ${OBSERVE}`);
     const input = agyOptions("agy-writer", { mode: "isolated-write" });
     expect(() => laneOf(input)).toThrow("provider agy does not support isolated-write");
     expect(existsSync(input.receiptPath)).toBe(false);
+  });
+});
+
+describe("pi lanes", () => {
+  const MODEL = "openrouter/~google/gemini-pro-latest";
+  const LIST = "provider    model                      context  max-out  thinking  images\nopenrouter  ~google/gemini-pro-latest  1.0M     943.7K   yes       yes   \n";
+  const VARIABLES = ["OPENROUTER_API_KEY", "PI_CODING_AGENT_DIR", "PI_PACKAGE_DIR", "XAI_API_KEY"];
+
+  function fakePi(turn: string, list = LIST): void {
+    writeFileSync(join(bin, "pi"), `#!/usr/bin/env bun
+const args = process.argv.slice(2);
+if (args[0] === "--list-models") {
+  process.stdout.write(${JSON.stringify(list)});
+  process.exit(0);
+}
+const prompt = await Bun.stdin.text();
+const emit = (event) => console.log(JSON.stringify(event));
+const assistant = (fields) => emit({ type: "message_end", message: { role: "assistant", ...fields } });
+emit({ type: "session", id: "p1" });
+${turn}
+`);
+    chmodSync(join(bin, "pi"), 0o755);
+  }
+
+  function piOptions(suffix: string, overrides: Partial<LaneRequest> = {}): LaneRequest {
+    return { ...options("devin", suffix), provider: "pi", model: MODEL, effort: "high", ...overrides };
+  }
+
+  beforeEach(() => {
+    for (const name of VARIABLES) process.env[name] = `${name}-value`;
+  });
+  afterEach(() => {
+    for (const name of VARIABLES) delete process.env[name];
+  });
+
+  it("completes on the provider's report of the served model, with the allowlisted environment", async () => {
+    fakePi(`const observed = { prompt, variables: Object.keys(process.env).filter((key) => /^PI_|_API_KEY$/.test(key)).sort() };
+assistant({ stopReason: "stop", responseModel: "google/gemini-4-argon", content: [{ type: "text", text: JSON.stringify(observed) }, { type: "thinking", thinking: "" }], usage: { input: 3, output: 2, cacheRead: 1, cacheWrite: 0, reasoning: 0, totalTokens: 6, cost: { total: 0.25 } } });
+emit({ type: "agent_settled", aborted: false });`);
+    const input = piOptions("pi-complete");
+    expect((await runLane(laneOf(input))).exitCode).toBe(0);
+    const saved = receipt(input.receiptPath);
+    expect(saved).toMatchObject({
+      status: "complete",
+      provider: "pi",
+      model: MODEL,
+      mode: "read-only",
+      reportedModel: "google/gemini-4-argon",
+      modelVerified: true,
+      modelEvidence: "provider-report",
+      sessionId: "p1",
+      costUsd: 0.25,
+      preflight: { argv: [saved.executable, "--list-models", MODEL], status: "passed", evidence: `model ${MODEL} listed; key not validated` },
+    });
+    expect(JSON.parse(readFileSync(input.outputPath, "utf8"))).toEqual({
+      prompt: "Return the marker.",
+      variables: ["OPENROUTER_API_KEY", "PI_CODING_AGENT_DIR", "PI_OFFLINE", "PI_TELEMETRY"],
+    });
+  });
+
+  it("fails a reply from another vendor and an exit-0 provider error, and keeps no output", async () => {
+    fakePi(`assistant({ stopReason: "stop", responseModel: "x-ai/grok-4.7", content: [{ type: "text", text: "hi" }] });
+emit({ type: "agent_settled", aborted: false });`);
+    const wrong = piOptions("pi-wrong-vendor");
+    expect((await runLane(laneOf(wrong))).receipt).toMatchObject({ status: "malformed-output", modelVerified: false });
+    expect(existsSync(wrong.outputPath)).toBe(false);
+
+    fakePi(`assistant({ stopReason: "error", errorMessage: "401: User not found.", content: [] });
+emit({ type: "agent_settled", aborted: false });`);
+    const failed = piOptions("pi-provider-error");
+    const result = await runLane(laneOf(failed));
+    expect(result.exitCode).toBe(70);
+    expect(result.receipt).toMatchObject({ status: "child-failed", exitCode: 0, sessionId: "p1", error: { message: "401: User not found." } });
+    expect(existsSync(failed.outputPath)).toBe(false);
+  });
+
+  it("classifies no login and an unlisted model before any model call", async () => {
+    const started = join(scratch, "pi-model.started");
+    const turn = `(await import("node:fs")).writeFileSync(${JSON.stringify(started)}, "started");`;
+    for (const [list, status, exitCode] of [
+      ["No models available. Use /login to log into a provider via OAuth or API key.\n", "unauthenticated", 77],
+      [`No models matching "${MODEL}"\n`, "unavailable-model", 69],
+    ] as const) {
+      fakePi(turn, list);
+      const input = piOptions(`pi-preflight-${exitCode}`);
+      const result = await runLane(laneOf(input));
+      expect(result.exitCode).toBe(exitCode);
+      expect(result.receipt).toMatchObject({ status, preflight: { status: "failed" } });
+    }
+    expect(existsSync(started)).toBe(false);
   });
 });
 
