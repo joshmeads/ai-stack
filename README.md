@@ -44,7 +44,7 @@ The first install needs `--force`, because it moves any hand-installed copy of a
 
 ## Models
 
-Each harness stays on its own provider's models, except for major reviews and the arena judge.
+First-run role defaults stay on Opus and Sol. In the shipped `ai-stack` sheet below, each harness stays on its own provider's models, except for major reviews, the arena judge and `arena runners`, which seats Opus and Sol and also Grok through Cursor and Gemini through agy.
 
 | Work | Codex | Claude Code |
 | --- | --- | --- |
@@ -60,7 +60,7 @@ A major review happens after a design is settled and before a pull request. It p
 
 The choices come from Artificial Analysis's intelligence, cost, and time-per-task data, picking points on each provider's Pareto line. Change them in `~/.config/ai-stack/config.toml` and run `ai-stack install`.
 
-Fable and Sonnet stay selectable in those sheets, unused by default. The plugin also keeps read-only lanes on OpenCode, Amp, Cursor CLI, Devin, Antigravity, DeepSeek Harness and `pi`, which reaches OpenRouter's models. `setup-stack` and ai-stack sheets can select them for roles that do not write files, including `arena runners`, where a read-only family returns its candidate to the parent. `read-only` limits the model's tools, not the CLI, so repository code may run in such a lane: each runs in its own throwaway worktree, and you should seat them only on repositories you trust. No first-run default uses them, and Grok is available only as a Cursor lane on a row you choose. The [model catalog](plugins/pstack/skills/poteto-mode/references/model-catalog.md) lists every choice.
+Fable and Sonnet stay selectable in those sheets, unused by default. The plugin also keeps read-only lanes on OpenCode, Amp, Cursor CLI, Devin, Antigravity, DeepSeek Harness and `pi`, which reaches OpenRouter's models. `setup-stack` and ai-stack sheets can select them for roles that do not write files, including `arena runners`, where a read-only family returns its candidate to the parent. `read-only` limits the model's tools, not the CLI, so repository code may run in such a lane: each runs in its own throwaway worktree, and you should seat them only on repositories you trust. No first-run default uses them, the shipped `ai-stack` sheet uses them only for the Grok and Gemini `arena runners` seats, and Grok is available only as a Cursor lane on a row you choose. The [model catalog](plugins/pstack/skills/poteto-mode/references/model-catalog.md) lists every choice.
 
 ## Upstream
 
