@@ -200,8 +200,8 @@ describe("ai-stack CLI matrix", () => {
     const named: Record<string, string> = { FIVE: constant("FIVE"), SIX: constant("SIX") };
     const rows = [...constant("MATRIX").matchAll(/\("([^"]+)", "([^"]+)", ([^)]+)\)/g)].map(([, provider, model, efforts]) =>
       [`${provider}:${model}`, [...(named[efforts!] ?? efforts!).matchAll(/"([^"]+)"/g)].map(([, effort]) => effort!)] as const);
-    const families = REGISTRY.families.map((entry) => [`${entry.provider}:${entry.model}`, [...effortsOf(entry)]] as const);
-    expect(new Map(rows)).toEqual(new Map(families));
+    const families = REGISTRY.families.map((entry): readonly [string, string[]] => [`${entry.provider}:${entry.model}`, [...effortsOf(entry)]]);
+    expect(new Map<string, string[]>(rows)).toEqual(new Map(families));
   });
 
   it("refuses read-only providers on the rows setup-stack names as writers", () => {
