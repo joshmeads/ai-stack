@@ -117,12 +117,17 @@ describe("pi parse", () => {
 });
 
 describe("pi model proof", () => {
-  it("requires a report from the requested vendor, and lets a router ID serve any vendor", () => {
+  it("matches a rolling ID on vendor, a router ID on anything, and a concrete ID exactly", () => {
     expect(pi.proof.report).toBe("required");
     expect(pi.proof.matches(lane({ model: GROK }), "x-ai/grok-4.7")).toBe(true);
     expect(pi.proof.matches(lane(), "google/gemini-4-argon")).toBe(true);
     expect(pi.proof.matches(lane(), "x-ai/grok-4.7")).toBe(false);
-    expect(pi.proof.matches(lane({ model: "openrouter/anthropic/claude-x" }), "anthropic/claude-x-20260101")).toBe(true);
     expect(pi.proof.matches(lane({ model: "openrouter/openrouter/free" }), "x-ai/grok-4.7")).toBe(true);
+    const concrete = lane({ model: "openrouter/x-ai/grok-4" });
+    expect(pi.proof.matches(concrete, "x-ai/grok-4")).toBe(true);
+    const served = pi.parse(run({ stdout: fixture("stream-complete-rolling-grok.jsonl") }), concrete);
+    if (served.kind !== "complete") throw new Error("expected complete");
+    expect(pi.proof.matches(concrete, served.metadata.reportedModel!)).toBe(false);
+    expect(pi.proof.matches(concrete, "x-ai/grok-4:free")).toBe(false);
   });
 });
