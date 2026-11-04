@@ -343,7 +343,7 @@ else
   note "ok: every family and first-run role defaults to high, or to the only effort it lists"
 fi
 
-routed_model_skills=(how why unslop typescript-best-practices create-formal-verification-skill)
+routed_model_skills=(how why unslop typescript-best-practices create-formal-verification-skill ketchup)
 routed_model_bad=""
 for name in "${routed_model_skills[@]}"; do
   routed_skill="$plugin/skills/$name/SKILL.md"
