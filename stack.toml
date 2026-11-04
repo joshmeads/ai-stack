@@ -6,7 +6,7 @@ skills = ["art-iteration"]
 
 [groups.engineering]
 global = true
-skills = ["grilling", "grill-me", "grill-with-docs", "domain-modeling", "to-spec", "to-tickets", "triage", "wayfinder", "to-questionnaire", "wait-what", "wizard", "writing-for-agents", "improve-codebase-architecture", "codebase-design", "implement-spec", "setup-matt-pocock-skills", "retro", "research", "compact-handoff"]
+skills = ["grilling", "grill-me", "grill-with-docs", "domain-modeling", "to-spec", "to-tickets", "triage", "wayfinder", "to-questionnaire", "wait-what", "wizard", "writing-for-agents", "improve-codebase-architecture", "codebase-design", "implement-spec", "setup-matt-pocock-skills", "retro", "research", "compact-handoff", "modernize", "takeover", "leaving-pr-comments"]
 
 [groups.writing]
 global = true
@@ -172,3 +172,22 @@ source = "https://github.com/mattpocock/skills"
 path = "skills/productivity/handoff"
 commit = "4ae2317ddb22b046e26455e4f9c9b3aaaf62212d"
 move = "compact-handoff"
+
+[[skill]]
+name = "modernize"
+source = "https://github.com/t3dotgg/tstack"
+path = "skills/modernize"
+commit = "1085050f3baed1ac724caa4a8166145fb2ac88af"
+
+[[skill]]
+name = "takeover"
+source = "https://github.com/t3dotgg/tstack"
+path = "skills/takeover"
+commit = "1085050f3baed1ac724caa4a8166145fb2ac88af"
+process = [{ type = "script", input = "scripts/skill-patches/takeover.sh" }]
+
+[[skill]]
+name = "leaving-pr-comments"
+source = "https://github.com/t3dotgg/tstack"
+path = "skills/leaving-pr-comments"
+commit = "1085050f3baed1ac724caa4a8166145fb2ac88af"
