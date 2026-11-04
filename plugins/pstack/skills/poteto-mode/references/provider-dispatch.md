@@ -92,6 +92,12 @@ Read-only mode maps to Claude plan mode with project-only settings and an explic
 
 Every concurrent external lane needs distinct prompt, output, and receipt paths. The launcher exclusively reserves the output, receipt, and `<receipt>.stdout` / `<receipt>.stderr` sidecars with private (`0600`) permissions and refuses to overwrite existing files. For a provider whose notes name one, it also creates the private `<receipt>.provider/` directory (`0700`) that holds the provider's run-owned config and the file the CLI exports. All these paths must be distinct from each other and the prompt; a failed reservation rolls back only files created by that attempt. Schema-version-1 receipts add nullable `stdoutPath` and `stderrPath` fields identifying reserved artifacts. Sidecars retain the model process's raw stdout/stderr bytes, including on dropouts; they do not include authentication-preflight output. Cancellation and timeout retain every byte captured before the drain stops. Keep these private local files with the receipt; quote only operator-selected excerpts in public evidence.
 
+### Repository code in a read-only lane
+
+`read-only` limits the model's tools, not the CLI. Hooks and language servers run outside those limits, and a real Cursor lane ran the repository's `node_modules/.bin/typescript-language-server`, which wrote a file into the repository. So repository code may run in a lane on a read-only provider other than Claude or Codex. Seat such a lane only on a repository you trust.
+
+Run every such lane with `--cwd` set to its own fresh throwaway worktree of the scope, never the primary checkout or a candidate's worktree. The worktree keeps a stray write out of your checkout, and it is not a sandbox. Anything written there is discarded: after taking the output file, the parent reports it if `git status` in that worktree was not clean, then removes the worktree.
+
 ## Completion and dropouts
 
 Success requires all of these:
