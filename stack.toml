@@ -24,6 +24,10 @@ skills = ["diagram-design"]
 global = true
 skills = ["cua-driver", "cua-sandboxes", "cua-spaces", "cua-volume", "gui-automation"]
 
+[groups.archived]
+global = false
+skills = ["redesign-existing-projects", "full-output-enforcement", "make-interfaces-feel-better"]
+
 [groups.games]
 global = true
 includes = ["threejs"]
@@ -341,3 +345,25 @@ name = "gui-automation"
 source = "https://github.com/trycua/cua"
 path = "libs/cua/skills/gui-automation"
 commit = "e58d2eddd68402991afaf2f3fad357adf9fb31f7"
+
+[[skill]]
+name = "redesign-skill"
+source = "https://github.com/Leonxlnx/taste-skill"
+path = "skills/redesign-skill"
+ref = "a206bbf75a9d80554c0de17c1198ee2fbbc555aa"
+commit = "a206bbf75a9d80554c0de17c1198ee2fbbc555aa"
+move = "redesign-existing-projects"
+
+[[skill]]
+name = "output-skill"
+source = "https://github.com/Leonxlnx/taste-skill"
+path = "skills/output-skill"
+ref = "a206bbf75a9d80554c0de17c1198ee2fbbc555aa"
+commit = "a206bbf75a9d80554c0de17c1198ee2fbbc555aa"
+move = "full-output-enforcement"
+
+[[skill]]
+name = "make-interfaces-feel-better"
+source = "https://github.com/jakubkrehel/make-interfaces-feel-better"
+path = "skills/make-interfaces-feel-better"
+commit = "35545ea1512ad59fa463e6b1f95ca9c052981fe6"

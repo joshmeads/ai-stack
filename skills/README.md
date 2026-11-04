@@ -111,6 +111,16 @@ The `design` group is vendored from [jakubkrehel/skills](https://github.com/jaku
 | `variant` | Produce design alternatives for a piece of UI without ranking them. |
 | `brandkit` | Generate brand-guidelines boards, logo systems and identity decks as images. |
 
+## Archived
+
+The `archived` group is vendored but disabled: its skills aren't linked into any harness, so they cost no context. To turn one back on, move it to a global group in `stack.toml` and run `ai-stack install`. `better-ui` and the other `better-*` skills replace `make-interfaces-feel-better`. `design-taste-frontend` covers `redesign-existing-projects`, which upstream retired along with `full-output-enforcement`; those two stay pinned to the last upstream commit that had them.
+
+| Skill | Use |
+| --- | --- |
+| `redesign-existing-projects` | Upgrade an existing site or app to a higher design standard. |
+| `full-output-enforcement` | Stop an agent truncating its output or leaving placeholders. |
+| `make-interfaces-feel-better` | Design engineering details that make an interface feel polished. |
+
 ## Diagrams
 
 The `diagrams` group is vendored from [cathrynlavery/diagram-design](https://github.com/cathrynlavery/diagram-design).
