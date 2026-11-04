@@ -103,6 +103,10 @@ enum Commands {
         /// Apply without review.
         #[arg(long)]
         yes: bool,
+        /// Replace an unmanaged model sheet, and move a stray skill in a skill link's way, each
+        /// into the backup first.
+        #[arg(long)]
+        force: bool,
         /// Print the plan instead of opening the review screen.
         #[arg(long)]
         plain: bool,
@@ -280,7 +284,7 @@ fn main() -> Result<()> {
         Commands::Diff { clean } => cmd_diff(&ctx, clean)?,
         Commands::Stray { json } => cmd_stray(&ctx, json)?,
         Commands::Install { yes, force, plain, clean } => cmd_install(&ctx, yes, Options { force, clean, report: false }, plain)?,
-        Commands::Update { yes, plain, bump_models, branch } => cmd_update(&ctx, yes, plain, bump_models, branch)?,
+        Commands::Update { yes, force, plain, bump_models, branch } => cmd_update(&ctx, yes, force, plain, bump_models, branch)?,
         Commands::Models { bump } => cmd_models(&ctx, bump)?,
         Commands::Skills { command } => cmd_skills(&ctx, command)?,
         Commands::Groups { json } => cmd_groups(&ctx, json)?,
@@ -447,7 +451,7 @@ fn apply_plan(ctx: &Context, plan: &Plan, runner: &dyn plugins::Runner) -> Resul
     Ok(0)
 }
 
-fn cmd_update(ctx: &Context, yes: bool, plain: bool, bump: bool, branch: Option<String>) -> Result<i32> {
+fn cmd_update(ctx: &Context, yes: bool, force: bool, plain: bool, bump: bool, branch: Option<String>) -> Result<i32> {
     let mut cfg = load_config(ctx)?;
     let mut stack = cfg.stack.clone();
     if let Some(branch) = branch {
@@ -470,7 +474,7 @@ fn cmd_update(ctx: &Context, yes: bool, plain: bool, bump: bool, branch: Option<
         reports = check_models(&cfg, &catalogs);
     }
 
-    install_flow(ctx, &cfg, Options::default(), yes, plain, &reports)
+    install_flow(ctx, &cfg, Options { force, ..Options::default() }, yes, plain, &reports)
 }
 
 fn git_pull(exec: &dyn exec::Exec, stack: &Stack) -> Result<bool> {
