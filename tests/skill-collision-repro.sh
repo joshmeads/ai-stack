@@ -332,6 +332,17 @@ else
   note "ok: excluded upstream skills stay absent"
 fi
 
+catalog="$plugin/skills/poteto-mode/references/model-catalog.md"
+default_effort_bad="$(awk -F ' *\\| *' '/^## Model matrix/ { on = 1; next } /^## / { on = 0 } on && NF > 7 && $6 != "Default effort" && $6 !~ /^-+$/ && $6 != "high" && !($6 == "default" && $7 == "default") { print $2 ": " $6 }' "$catalog")"
+role_effort_bad="$(sed -n '/^## Role defaults/,$p' "$catalog" | grep -oE '@[a-z]+' | grep -vx '@high' || true)"
+if [ -n "$default_effort_bad$role_effort_bad" ]; then
+  note "FAIL: default efforts must be high, or default for a family that lists only default:"
+  note "$default_effort_bad$role_effort_bad"
+  fail=1
+else
+  note "ok: every family and first-run role defaults to high, or to the only effort it lists"
+fi
+
 routed_model_skills=(how why unslop typescript-best-practices create-formal-verification-skill)
 routed_model_bad=""
 for name in "${routed_model_skills[@]}"; do

@@ -8,12 +8,12 @@ Model and provider facts for [`provider-dispatch.md`](provider-dispatch.md), whi
 
 | Family | Label | Provider | Model | Default effort | Selectable efforts | Claude-native agents | Status | Upstream pstack choice |
 | --- | --- | --- | --- | --- | --- | --- | --- | --- |
-| fable | Fable | claude | fable | xhigh | low medium high xhigh max | `stack-fable-<effort>` | optional | - |
-| sol | GPT-6.1 Sol | codex | gpt-6.1-sol | xhigh | low medium high xhigh max ultra | - | default | gpt-5.6-sol-max |
-| luna | GPT-6 Luna | codex | gpt-6-luna | xhigh | low medium high xhigh max | - | optional | - |
-| opus | Opus | claude | opus | xhigh | low medium high xhigh max | `stack-opus-<effort>` | default | opus |
-| haiku | Haiku | claude | haiku | xhigh | low medium high xhigh max | `stack-haiku-<effort>` | optional | - |
-| sonnet | Sonnet | claude | sonnet | xhigh | low medium high xhigh max | `stack-sonnet-<effort>` | optional | - |
+| fable | Fable | claude | fable | high | low medium high xhigh max | `stack-fable-<effort>` | optional | - |
+| sol | GPT-6.1 Sol | codex | gpt-6.1-sol | high | low medium high xhigh max ultra | - | default | gpt-5.6-sol-max |
+| luna | GPT-6 Luna | codex | gpt-6-luna | high | low medium high xhigh max | - | optional | - |
+| opus | Opus | claude | opus | high | low medium high xhigh max | `stack-opus-<effort>` | default | opus |
+| haiku | Haiku | claude | haiku | high | low medium high xhigh max | `stack-haiku-<effort>` | optional | - |
+| sonnet | Sonnet | claude | sonnet | high | low medium high xhigh max | `stack-sonnet-<effort>` | optional | - |
 | swe-2 | SWE-2 | devin | swe-2 | high | medium high max | - | optional | - |
 | swe-1.6 | SWE-1.6 | devin | swe-1.6 | default | default | - | optional | - |
 | deepseek-v4.1-flash-free | DeepSeek V4.1 Flash (OpenCode Zen) | opencode | opencode/deepseek-v4.1-flash-free | high | low high max | - | optional | - |
@@ -204,19 +204,19 @@ The complete first-run sheet. A sheet that lacks a role uses that role's line he
 
 Provider-qualified per-role choices. Read the installed jm:stack provider-dispatch reference before dispatching a configured role. Every documented role remains present. `inherit-parent` and `auto` use the parent model natively and still count as one panel lane.
 
-feature, refactoring: codex:gpt-6.1-sol@xhigh
-bug-fix: codex:gpt-6.1-sol@xhigh
-perf-issue: codex:gpt-6.1-sol@xhigh
-hillclimb: codex:gpt-6.1-sol@xhigh
-judgment and prose: claude:opus@xhigh
-hardest tasks: claude:opus@xhigh
-how explorer: codex:gpt-6.1-sol@xhigh
-how explainer: claude:opus@xhigh
+feature, refactoring: codex:gpt-6.1-sol@high
+bug-fix: codex:gpt-6.1-sol@high
+perf-issue: codex:gpt-6.1-sol@high
+hillclimb: codex:gpt-6.1-sol@high
+judgment and prose: claude:opus@high
+hardest tasks: claude:opus@high
+how explorer: codex:gpt-6.1-sol@high
+how explainer: claude:opus@high
 why investigators, synthesizer: inherit-parent
 reflect tooling, judgment, divergent, synthesizer: inherit-parent
-arena runners: claude:opus@xhigh, codex:gpt-6.1-sol@xhigh
-arena cross-judge pool: claude:opus@xhigh, codex:gpt-6.1-sol@xhigh
-swarm workers: codex:gpt-6.1-sol@xhigh
-architect runners: claude:opus@xhigh, codex:gpt-6.1-sol@xhigh
-interrogate reviewers: claude:opus@xhigh, codex:gpt-6.1-sol@xhigh
+arena runners: claude:opus@high, codex:gpt-6.1-sol@high
+arena cross-judge pool: claude:opus@high, codex:gpt-6.1-sol@high
+swarm workers: codex:gpt-6.1-sol@high
+architect runners: claude:opus@high, codex:gpt-6.1-sol@high
+interrogate reviewers: claude:opus@high, codex:gpt-6.1-sol@high
 ```
