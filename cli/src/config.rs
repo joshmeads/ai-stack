@@ -232,10 +232,9 @@ impl Default for SkillsSection {
 }
 
 const SKILL_ROOTS: [&str; 3] = ["~/.claude/skills", "~/.codex/skills", "~/.agents/skills"];
-const KEEP_SKILLS: [&str; 21] = [
+const KEEP_SKILLS: [&str; 18] = [
     "better-*", "brandkit", "break", "variant", "explain-interface", "interface-review", "design-taste-frontend",
-    "gpt-taste", "high-end-visual-design", "image-to-code", "redesign-existing-projects", "full-output-enforcement",
-    "make-interfaces-feel-better", "oklch-skill", "color-expert", "minimalist-ui", "cua-*", "gui-automation", "hatch-pet", "turborepo", "computer-use-linux",
+    "gpt-taste", "high-end-visual-design", "image-to-code", "oklch-skill", "color-expert", "minimalist-ui", "cua-*", "gui-automation", "hatch-pet", "turborepo", "computer-use-linux",
 ];
 const KEEP_PLUGINS: [&str; 3] = ["github@claude-plugins-official", "chrome-devtools-mcp@claude-plugins-official", "*@openai-*"];
 

@@ -50,9 +50,100 @@ The `art-iteration` critic runs on the review model named in the routing block o
 | `feedback` | Record the user's feedback on the current project in `FEEDBACK.md`, newest first. |
 | `codex-session-export` | Find and export the Codex sessions that contributed to a project, with their metadata. |
 
+## Engineering
+
+The `engineering` group is vendored from [mattpocock/skills](https://github.com/mattpocock/skills) and [t3dotgg/tstack](https://github.com/t3dotgg/tstack). `stack.toml` records the source and commit of each skill, and `ai-stack skills update` pulls newer commits. Run `setup-matt-pocock-skills` once in a repo before the ticket skills.
+
+| Skill | Use |
+| --- | --- |
+| `grilling` | Grill the user relentlessly about a plan, decision or idea. |
+| `grill-me` | A relentless interview to sharpen a plan or design. |
+| `grill-with-docs` | The same interview, writing ADRs and the glossary as it goes. |
+| `domain-modeling` | Build and sharpen the domain model, `GLOSSARY.md` and ADRs. |
+| `to-spec` | Turn the current conversation into a spec on the issue tracker, with no interview. |
+| `to-tickets` | Break a plan or spec into tracer-bullet tickets with blocking edges. |
+| `triage` | Move issues and external PRs through triage roles and write agent-ready briefs. |
+| `wayfinder` | Plan a very large piece of work as a map of decision tickets and resolve them one at a time. |
+| `to-questionnaire` | Turn a decision you cannot fully answer into a questionnaire for someone else. |
+| `wait-what` | Say that the last message did not land and have it re-pitched. |
+| `wizard` | Generate an interactive bash wizard for steps only a human can do. |
+| `writing-for-agents` | Reference for writing skills, `AGENTS.md` and `CLAUDE.md`. |
+| `improve-codebase-architecture` | Find deepening opportunities, show them as an HTML report, then grill through one. |
+| `codebase-design` | Shared vocabulary for deep modules, seams and adapters. |
+| `implement-spec` | Implement a spec and its tickets on an integration branch with fresh subagents. |
+| `setup-matt-pocock-skills` | Set up the issue tracker, triage labels and domain doc layout for a repo. |
+| `retro` | Run a retrospective on a coding session. |
+| `research` | Investigate a question against primary sources and save the findings as Markdown. |
+| `compact-handoff` | Compact the conversation into a handoff document (upstream `handoff`; `handoff` above is a different skill). |
+| `modernize` | Bring an old PR up to date, or recommend closing it. |
+| `takeover` | Take over a PR, branch or thread and finish it while keeping credit. |
+| `leaving-pr-comments` | Mark every comment posted on the user's behalf with an attribution note. |
+
+## Writing
+
+The `writing` group is vendored from [mattpocock/skills](https://github.com/mattpocock/skills).
+
+| Skill | Use |
+| --- | --- |
+| `writing-fragments` | Explore: mine raw fragments for a piece, with no structure yet. |
+| `writing-shape` | Exploit: shape the raw material into an article, paragraph by paragraph. |
+| `writing-beats` | Exploit: assemble the raw material into a journey of beats. |
+| `tutor` | Teach a topic over several sessions in a workspace (upstream `teach`; `jm-stack:teach` is a different skill). |
+
+`takeover`, `implement-spec`, `wayfinder`, `tutor`, `compact-handoff`, `break`, `variant` and `diagram-design` are patched by scripts in `scripts/skill-patches/`, so their edits survive `skills update`.
+
+## Design
+
+The `design` group is vendored from [jakubkrehel/skills](https://github.com/jakubkrehel/skills) and [Leonxlnx/imagegen-skills](https://github.com/Leonxlnx/imagegen-skills). `better-interface` runs the other `better-*` skills as one review.
+
+| Skill | Use |
+| --- | --- |
+| `better-accessibility` | Check a project against accessibility standards and best practices. |
+| `better-colors` | Build a color system: palettes, semantic tokens, format conversion, contrast checks. |
+| `better-interface` | One review across accessibility, layout, writing, typography, color and UI polish. |
+| `better-layout` | Grouping, alignment, reading order, progressive disclosure. |
+| `better-typography` | Type scale, spacing, sizing, variable fonts, OpenType features, wrapping, truncation. |
+| `better-ui` | UI polish: concentric radius, optical alignment, surface depth, icons, hit areas. |
+| `better-writing` | Improve product copy. |
+| `break` | Stress a component or page with hostile content and states, and report what visibly broke. |
+| `explain-interface` | Explain how something on the web was built, layer by layer. |
+| `interface-review` | Review a change, pull request or branch against the `better-*` standards. |
+| `variant` | Produce design alternatives for a piece of UI without ranking them. |
+| `brandkit` | Generate brand-guidelines boards, logo systems and identity decks as images. |
+
+## Archived
+
+The `archived` group is vendored but disabled: its skills aren't linked into any harness, so they cost no context. To turn one back on, move it to a global group in `stack.toml` and run `ai-stack install`. `better-ui` and the other `better-*` skills replace `make-interfaces-feel-better`. `design-taste-frontend` covers `redesign-existing-projects`, which upstream retired along with `full-output-enforcement`; those two stay pinned to the last upstream commit that had them.
+
+| Skill | Use |
+| --- | --- |
+| `redesign-existing-projects` | Upgrade an existing site or app to a higher design standard. |
+| `full-output-enforcement` | Stop an agent truncating its output or leaving placeholders. |
+| `make-interfaces-feel-better` | Design engineering details that make an interface feel polished. |
+
+## Diagrams
+
+The `diagrams` group is vendored from [cathrynlavery/diagram-design](https://github.com/cathrynlavery/diagram-design).
+
+| Skill | Use |
+| --- | --- |
+| `diagram-design` | Branded diagrams and charts as HTML, SVG or PNG, with draw.io, Mermaid and Excalidraw import. |
+
+## Cua
+
+The `cua` group is vendored from [trycua/cua](https://github.com/trycua/cua).
+
+| Skill | Use |
+| --- | --- |
+| `cua-driver` | Drive a native GUI app on macOS, Windows or Linux through the `cua-driver` CLI or MCP server. |
+| `cua-sandboxes` | Create, use and clean up disposable Linux or macOS computers with the `cua` CLI or SDK. |
+| `cua-spaces` | Work inside Cua Spaces through the cua MCP server: run commands, move files, show windows. |
+| `cua-volume` | Use the Cua Volume shared by every Space and agent, for files that outlive a Space. |
+| `gui-automation` | Test, fill and screenshot a GUI through the `cua` CLI on VMs, containers and local machines. |
+
 ## Credits
 
-Several tool skills are adapted from third-party skills. Each keeps its licence file, and the skill names and cross-references were changed for this stack. [NOTICE.md](../NOTICE.md) has the details.
+Several tool skills are adapted from third-party skills. The tool skills below keep their licence files, and the skill names and cross-references were changed for this stack. [NOTICE.md](../NOTICE.md) has the details, including the sources, commits and licences of the engineering, writing, design, diagram and cua skills.
 
 | Skill | Copyright | Licence |
 | --- | --- | --- |
