@@ -17,12 +17,15 @@ Every candidate gets the same prompt, so the prompt is the contract.
 2. Derive the rubric, 3-6 concrete gradeable criteria for what success looks like on *this* task. It is the picker's tool in Phase D. Candidates only see the task.
 3. Pick the runners. Use `arena runners` from the current harness's pstack model sheet when present. Otherwise use its [role default](../poteto-mode/references/model-catalog.md#role-defaults), one runner per entry. Spawn more runners when the arena covers multiple design directions. Use the same descriptor N times when the work is generation-bound rather than judgment-sensitive. Pick each subagent's effort for the job, per the Subagents section of the **poteto-mode** skill.
 4. Give each candidate its own output location (a git worktree where possible, otherwise `/tmp/arena-<slug>/candidate-<n>/`), per the **separate-before-serializing-shared-state** principle skill.
+5. Mark the read-only seats. A runner whose provider's Access modes cell in the [route table](../poteto-mode/references/model-catalog.md#routes) lacks `isolated-write` is a read-only seat: it runs in `read-only` mode, reads the repository, and returns its complete candidate (a full patch, or the full design or prose) as its final output. It cannot iterate on tests, so read-only seats suit design and prose best. `read-only` limits the model's tools, not the CLI, so repository code may run in such a lane; seat one only on a repository you trust. Run it with `--cwd` set to its own fresh throwaway worktree of the scope, never the primary checkout or a candidate's worktree, using the commands in [`provider-dispatch.md`](../poteto-mode/references/provider-dispatch.md#repository-code-in-a-read-only-lane), with a clone where the sandbox refuses a worktree. Keep its output file outside that folder. Anything written there is discarded. After taking the output file, report it if `git status` there was not clean, then remove the folder.
 
 ## Phase B: Fan out
 
 Start all N lanes in one fan-out phase through the provider-dispatch contract. Native lanes are background subagents. External lanes are direct background launcher processes with retained task/session handles, never foreground calls and never subagents supervising subprocesses. Give every lane the task, the path to the shared grounding, its own output path, and instructions to produce the artifact and a short rationale naming the alternatives it considered and what it rejected.
 
-An external lane counts only when its receipt says `complete` and carries either a matching `provider-report` or Codex's exact `pinned-argv` evidence; a native lane counts when its tool transcript returns the assigned model's result. If a candidate fails, proceed with N-1 and note the exact dropout in the synthesis record. Never replace it with another provider silently.
+An external lane counts only when its receipt says `complete` and carries either a matching `provider-report` or, for a provider whose Model proof cell in the [route table](../poteto-mode/references/model-catalog.md#routes) reads `pinned argv`, `pinned-argv` evidence; a native lane counts when its tool transcript returns the assigned model's result. If a candidate fails, proceed with N-1 and note the exact dropout in the synthesis record. Never replace it with another provider silently. A missing CLI, login or model is a named dropout the same way, and the arena continues. Never substitute.
+
+Save a read-only seat's output as that candidate. For a patch, apply it in a fresh worktree for that candidate and run the rubric's checks there. Record a patch that does not apply or fails its checks: that is a result about the candidate, not a dropout.
 
 ## Phase C: Cross-judge
 
@@ -30,7 +33,7 @@ After all Phase B candidates complete, read `arena cross-judge pool` in the curr
 
 ## Phase D: Pick a base
 
-Read every candidate end to end before picking. Score each against the rubric criterion by criterion, not on holistic feel, and compare with the cross-judge when Phase C ran one. Agreement on the base confirms the pick. Disagreement means one of you is biased or the rubric was ambiguous. Read both rationales before deciding.
+Read every candidate end to end before picking. The judge and the picker treat every candidate the same, and name which were read-only. Score each against the rubric criterion by criterion, not on holistic feel, and compare with the cross-judge when Phase C ran one. Agreement on the base confirms the pick. Disagreement means one of you is biased or the rubric was ambiguous. Read both rationales before deciding.
 
 Pick the base a future maintainer can extend most easily without breaking invariants. When two feel tied, prefer the cleaner boundary or smaller API, per the Laziness Protocol.
 
@@ -46,4 +49,4 @@ Verify the synthesized artifact like any other output, per the **prove-it-works*
 
 ## Outputs
 
-One synthesized artifact, with a short synthesis note alongside naming the base and why, the cross-judge's verdict or that Phase C skipped the judge, each graft with its source candidate, what was rejected and why, any convergence or dropouts, and the verification result.
+One synthesized artifact, with a short synthesis note alongside naming the base and why, the cross-judge's verdict or that Phase C skipped the judge, each graft with its source candidate, what was rejected and why, any convergence or dropouts, which candidates were read-only and how each patch applied, and the verification result.

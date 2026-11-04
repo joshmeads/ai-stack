@@ -23,6 +23,10 @@ Model and provider facts for [`provider-dispatch.md`](provider-dispatch.md), whi
 | gemini-3.8-flash | Gemini 3.8 Flash (Antigravity) | agy | gemini-3.8-flash | high | low medium high | - | optional | - |
 | composer-2.5 | Composer 2.5 (Cursor) | cursor | composer-2.5 | default | default | - | optional | - |
 | gemini-3.7-flash | Gemini 3.7 Flash (Cursor) | cursor | gemini-3.7-flash | high | low medium high | - | optional | - |
+| grok-4.7 | Grok 4.7 (Cursor) | cursor | grok-4.7 | high | low medium high xhigh | - | optional | - |
+| cursor-gemini-4-argon | Gemini 4 Argon (Cursor) | cursor | gemini-4-argon | high | low medium high | - | optional | - |
+| gemini-4-argon | Gemini 4 Argon (Antigravity) | agy | gemini-4-argon | high | low medium high | - | optional | - |
+| pi-gemini-pro-latest | Gemini Pro, latest (OpenRouter through pi) | pi | openrouter/~google/gemini-pro-latest | high | low medium high xhigh max | - | optional | - |
 
 A family is `default` when a role default names it and `optional` otherwise. A Claude-native agent exists for each selectable effort of a Claude family.
 
@@ -42,6 +46,16 @@ Effort in the model ID: for these families the effort selects the CLI model, and
 | gemini-3.7-flash | low | `gemini-3.7-flash-low` |
 | gemini-3.7-flash | medium | `gemini-3.7-flash-medium` |
 | gemini-3.7-flash | high | `gemini-3.7-flash-high` |
+| grok-4.7 | low | `grok-4.7-low` |
+| grok-4.7 | medium | `grok-4.7-medium` |
+| grok-4.7 | high | `grok-4.7-high` |
+| grok-4.7 | xhigh | `grok-4.7-xhigh` |
+| cursor-gemini-4-argon | low | `gemini-4-argon-low` |
+| cursor-gemini-4-argon | medium | `gemini-4-argon-medium` |
+| cursor-gemini-4-argon | high | `gemini-4-argon-high` |
+| gemini-4-argon | low | `gemini-4-argon-low` |
+| gemini-4-argon | medium | `gemini-4-argon-medium` |
+| gemini-4-argon | high | `gemini-4-argon-high` |
 
 ## Kept predecessors and normalization
 
@@ -70,6 +84,7 @@ Rolling aliases:
 | amp | external runner | external runner | `read-only` | stdin | pinned argv | allowlist | - |
 | agy | external runner | external runner | `read-only` | stdin | pinned argv | allowlist | - |
 | cursor | external runner | external runner | `read-only` | stdin | pinned argv | allowlist | - |
+| pi | external runner | external runner | `read-only` | stdin | provider report | allowlist | - |
 
 The runner refuses an access mode outside a provider's Access modes cell before launch. `isolated-write-full-access` is a writer capability, not a `--mode` value: the runner takes it as `--mode isolated-write --writer-sandbox full-access`, which a parent passes only when the model sheet opts in, as [`provider-dispatch.md`](provider-dispatch.md#codex-writer-sandbox) says.
 
@@ -194,6 +209,25 @@ The runner refuses an access mode outside a provider's Access modes cell before 
 - Cursor never reports the served model ID. The init event's `model` is a display label such as `Claude Opus 5.5 300K High`, so the proof is the pinned argv (`pinned-argv`).
 - Every turn starts a `worker-server` process in the workspace with the lane's environment, in an empty repository too and whether or not the model reads a file. The worker runs `npx -y typescript-language-server --stdio`, and npx runs a repository's own copy when it has one. In the batch-158 containment captures (Cursor CLI 2026.10.14-0f9edde, 2026-10-16), each of these ran repository code: a `node_modules/.bin/typescript-language-server`, a root `package.json` named `typescript-language-server` with a `bin`, an `.npmrc` `script-shell`, and an `.npmrc` `node-options`. The language server inherits the lane's environment plus `AGENT_CLI_*` and `npm_*` variables. A `package.json` `bin` run leaves a `file:` link to the repository in `~/.npm/_npx/`.
 - The worker and the language server stay running in the CLI's process group after the turn and exit after about five idle minutes. An unknown model exits before the worker starts.
+
+### pi: pi
+
+- Executable: `pi`.
+- Host prerequisites: none.
+- State paths: `~/.pi/agent/` (or an inherited `PI_CODING_AGENT_DIR`): the lane reads `auth.json`, `settings.json`, `models.json` and the model catalog there, and takes transient lock directories. Measured: no file under it changed in a real lane, and no session file appeared.
+- Child environment: only `PATH` `HOME` `USER` `LOGNAME` `SHELL` `TMPDIR` `LANG` `TERM` `COLORTERM` `TZ` `HTTP_PROXY` `HTTPS_PROXY` `NO_PROXY` `ALL_PROXY` `http_proxy` `https_proxy` `no_proxy` `all_proxy` `SSL_CERT_FILE` `SSL_CERT_DIR` `NODE_EXTRA_CA_CERTS` `OPENROUTER_API_KEY` `PI_CODING_AGENT_DIR`, and variables starting with `LC_`, `XDG_`; sets `PI_OFFLINE=1`, `PI_TELEMETRY=0`.
+- Measured with pi 1.4.0. A lane seats any OpenRouter model on this one adapter. The model is `openrouter/<id>`, and a rolling ID such as `openrouter/~google/gemini-pro-latest` resolves to the provider's latest model. The preflight refuses a model outside `openrouter/` as `unavailable-model`/69, because the allowlist passes only OpenRouter's key. An unregistered ID runs unchanged at any effort except `ultra`, which pi does not have: `--thinking ultra` only warns and runs at the default level, so the preflight refuses it as `unavailable-model`/69.
+- The effort is `--thinking <effort>`, omitted for `default`. Pi clamps a level the model does not offer, so a receipt's effort is the level asked for.
+- Read-only only. A lane runs `-p --mode json --no-session --tools read,grep,find,ls --no-extensions --no-mcp --no-skills --no-prompt-templates --no-themes --no-approve` with the prompt on stdin. Pi's tool allowlist enforces this, not an OS sandbox, and pi has no bounded write mode, so the runner refuses an `isolated-write` lane before launch.
+- Containment, measured with real lanes on the Grok and Gemini rolling IDs in a temporary git repository. Asked to create a file, run a shell command, call `web_search` and edit `AGENTS.md`, both models reported those tools unavailable, and the repository, `~/.pi/agent/sessions` and the rest of `~/.pi/agent` were unchanged. A request capture showed the tool list as exactly `read`, `grep`, `find`, `ls`. A local fake model that forced calls to `bash`, `write`, `edit` and `web_search` got `Tool <name> not found` for each, and nothing ran.
+- `read` is not confined to the cwd: both models read a file outside the repository. A lane can read anything the user can, including `~/.pi/agent/auth.json`. It has no shell or network tool, but a measured lane's read file went to the model provider in its next request, so treat anything it can read as sent to the provider.
+- Repository configuration does not load. With `--no-approve`, planted `.pi/settings.json`, `.pi/mcp.json`, `.pi/extensions/`, `.pi/skills/`, `.pi/SYSTEM.md`, `.pi/APPEND_SYSTEM.md` and a root `.mcp.json` all stayed out. With `--approve` as the control, the extension and MCP server ran and the prompts loaded.
+- The lane passes no `--no-context-files`, so a repository review reads the project's rules: `AGENTS.md` loads from the cwd and each parent directory, and a directory with both uses `AGENTS.md` over `CLAUDE.md`. Treat those files as the same untrusted input as any file in the repository.
+- A lane reads the operator's real agent directory, because that is where `pi` stores its login and no setting moves `auth.json` on its own. A run-owned `PI_CODING_AGENT_DIR` found no key on the measured Mac, where the OpenRouter key is in `auth.json` and not in the environment. With the lane's flags, extensions, packages and MCP servers planted in an agent directory did not run, as a control without the flags showed they would. The directory's `AGENTS.md` and `APPEND_SYSTEM.md` still load, and its `models.json` can reroute a provider, as a measurement here used it to. `--no-session` is what keeps a lane out of the operator's sessions.
+- The environment is an allowlist that adds `OPENROUTER_API_KEY` and `PI_CODING_AGENT_DIR`, and sets `PI_OFFLINE=1` and `PI_TELEMETRY=0`, which turn off pi's automatic network activity, such as the catalog refresh, and its telemetry and attribution headers. No other `PI_` name or provider key passes. A stored `auth.json` key takes precedence over the variable. Offline, the model list is the cached catalog, so run `pi update --models` when a new ID is missing from it.
+- The preflight runs `pi --list-models <model>`, and it exits 0 in every measured case. A row whose `provider/model` equals the model passes, with the fixed evidence `model <id> listed; key not validated`. It proves that a key is present and the catalog lists the model, not that the key works or has credits: an invalid key passes. `No models available.` is `unauthenticated`/77. `No models matching` is `unavailable-model`/69, and that includes a host with another provider's login and no OpenRouter key. Any other output is `child-failed`/70. A model the catalog does not list is refused here, even though pi would send it as a custom ID.
+- The reply, session ID, token usage and cost come from the `--mode json` stream on stdout. A lane is complete only when the stream has `agent_settled` and the last assistant `message_end` has `stopReason` `stop` and text; the reply is that message's text parts, without thinking parts. Usage and cost are summed over every assistant message. A provider error exits 0 with `stopReason` `error`, so an invalid key (`401`) or a model OpenRouter refuses (`400`) is `child-failed`/70 with its text. Running out of credits was not measured and takes the same path. No key at launch exits 1 with `No API key found` on stderr, and an empty prompt exits 0 with only the session header, and each ends without a complete reply. SIGTERM exits 143 and SIGINT exits 130, each `cancelled`/130 even when the stream looks finished.
+- The model proof is the stream's `responseModel`, such as `x-ai/...` for `~x-ai/grok-latest`. The receipt keeps it as `reportedModel`, so a rolling ID's receipt says which model served it. A rolling `~vendor/...` ID must report that vendor, because it never equals the model it resolves to. An `openrouter/openrouter/...` router ID can serve any vendor, so it accepts any report. A concrete ID must equal the report exactly: no measured stream shows a variant suffix such as `:free` added or dropped, so none is allowed. A real stream for a concrete ID (`x-ai/grok-4.7`) carried no `responseModel`, so the report falls back to the message's `model`. That field repeats the request, so for a concrete ID the proof is about as strong as a pinned argv. A mismatch is `malformed-output`/65 with no output file.
 
 ## Role defaults
 

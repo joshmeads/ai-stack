@@ -1,0 +1,2 @@
+provider    model              context  max-out  thinking  images
+openrouter  ~x-ai/grok-latest  500K     450K     yes       yes   
