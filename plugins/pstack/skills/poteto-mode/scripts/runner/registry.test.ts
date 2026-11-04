@@ -192,6 +192,28 @@ describe("ai-stack CLI sheets", () => {
   });
 });
 
+describe("ai-stack CLI matrix", () => {
+  const source = readFileSync(join(PLUGIN_ROOT, "../../cli/src/config.rs"), "utf8");
+  const constant = (name: string): string => source.split(`const ${name}:`)[1]!.split("];")[0]!;
+
+  it("lists every registered family's provider, model and efforts", () => {
+    const named: Record<string, string> = { FIVE: constant("FIVE"), SIX: constant("SIX") };
+    const rows = [...constant("MATRIX").matchAll(/\("([^"]+)", "([^"]+)", ([^)]+)\)/g)].map(([, provider, model, efforts]) =>
+      [`${provider}:${model}`, [...(named[efforts!] ?? efforts!).matchAll(/"([^"]+)"/g)].map(([, effort]) => effort!)] as const);
+    const families = REGISTRY.families.map((entry) => [`${entry.provider}:${entry.model}`, [...effortsOf(entry)]] as const);
+    expect(new Map(rows)).toEqual(new Map(families));
+  });
+
+  it("refuses read-only providers on the rows setup-stack names as writers", () => {
+    const setup = readFileSync(join(PLUGIN_ROOT, "skills/setup-stack/SKILL.md"), "utf8");
+    const line = setup.split("\n").find((text) => text.startsWith("Lanes for these roles write files"))!;
+    const named = (name: string): string[] => [...constant(name).split("=")[1]!.matchAll(/"([^"]+)"/g)].map(([, value]) => value!);
+    for (const row of named("WRITER_ROWS")) expect([row, line.includes(`\`${row}\``)]).toEqual([row, true]);
+    const readOnly = REGISTRY.adapters.filter((adapter) => !adapter.launch.supports.includes("isolated-write")).map((adapter) => adapter.id);
+    expect(new Set(named("READ_ONLY_PROVIDERS"))).toEqual(new Set(readOnly));
+  });
+});
+
 describe("generated files", () => {
   const roots: string[] = [];
   afterEach(() => {

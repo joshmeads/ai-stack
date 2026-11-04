@@ -87,8 +87,7 @@ impl Effort {
 // ---- What the jm-stack plugin accepts in a model sheet ----
 //
 // Keep these in step with plugins/pstack/skills/poteto-mode/references/provider-dispatch.md
-// (descriptor grammar `<provider>:<model>@<effort>`) and model-catalog.md (its Claude and
-// Codex matrix rows and role defaults). Its read-only providers stay out of ai-stack sheets.
+// (descriptor grammar `<provider>:<model>@<effort>`) and model-catalog.md (its matrix rows).
 
 /// The 15 sheet rows, in file order.
 pub const SHEET_ROWS: [&str; 15] = [
@@ -103,16 +102,32 @@ const PANEL_ROWS: [&str; 4] = ["arena runners", "arena cross-judge pool", "archi
 const PARENT_ROWS: [&str; 2] = ["why investigators, synthesizer", "reflect tooling, judgment, divergent, synthesizer"];
 /// Lanes that run on the parent's own model.
 const PARENT_LANES: [&str; 2] = ["inherit-parent", "auto"];
+/// Rows whose lanes write files, as the setup-stack skill's step 2 lists them.
+const WRITER_ROWS: [&str; 8] = [
+    "feature, refactoring", "bug-fix", "perf-issue", "hillclimb", "hardest tasks",
+    "arena runners", "architect runners", "swarm workers",
+];
+/// Providers whose runner lanes are read-only, so they cannot take a writer row.
+const READ_ONLY_PROVIDERS: [&str; 6] = ["devin", "opencode", "dsh", "amp", "agy", "cursor"];
 const FIVE: &[&str] = &["low", "medium", "high", "xhigh", "max"];
 const SIX: &[&str] = &["low", "medium", "high", "xhigh", "max", "ultra"];
 /// (provider, model, selectable efforts) for every model-matrix row.
-const MATRIX: [(&str, &str, &[&str]); 6] = [
+const MATRIX: [(&str, &str, &[&str]); 15] = [
     ("claude", "fable", FIVE),
     ("claude", "opus", FIVE),
     ("claude", "haiku", FIVE),
     ("claude", "sonnet", FIVE),
     ("codex", "gpt-6.1-sol", SIX),
     ("codex", "gpt-6-luna", FIVE),
+    ("devin", "swe-2", &["medium", "high", "max"]),
+    ("devin", "swe-1.6", &["default"]),
+    ("opencode", "opencode/deepseek-v4.1-flash-free", &["low", "high", "max"]),
+    ("dsh", "deepseek-flash", &["low", "high", "max"]),
+    ("dsh", "deepseek-v4-pro", &["low", "high", "max"]),
+    ("amp", "deepseek-v4.1-flash", &["default"]),
+    ("agy", "gemini-3.8-flash", &["low", "medium", "high"]),
+    ("cursor", "composer-2.5", &["default"]),
+    ("cursor", "gemini-3.7-flash", &["low", "medium", "high"]),
 ];
 
 // ---- File schema (what config.toml contains) ----
@@ -397,17 +412,22 @@ pub fn parse_effort(token: &str) -> Option<Effort> {
     }
 }
 
-/// Checks one sheet lane against the jm-stack descriptor grammar and model matrix.
-fn check_descriptor(lane: &str) -> Result<()> {
+/// Checks one sheet lane against the jm-stack descriptor grammar and model matrix, and refuses a
+/// read-only provider on a row whose lanes write files.
+fn check_descriptor(label: &str, lane: &str) -> Result<()> {
     let (provider, rest) = lane.split_once(':').ok_or_else(|| anyhow!("lane {lane:?} is not `<provider>:<model>@<effort>`, inherit-parent or auto"))?;
     let (model, effort) = rest.split_once('@').ok_or_else(|| anyhow!("lane {lane:?} has no `@<effort>`"))?;
     let rows: Vec<_> = MATRIX.iter().filter(|(p, _, _)| *p == provider).collect();
-    ensure!(!rows.is_empty(), "lane {lane:?}: unknown provider {provider:?}; jm-stack accepts claude and codex");
+    ensure!(!rows.is_empty(), "lane {lane:?}: unknown provider {provider:?}; jm-stack accepts claude, codex and {}", READ_ONLY_PROVIDERS.join(", "));
     let (_, _, efforts) = rows.iter().find(|(_, m, _)| *m == model).ok_or_else(|| {
         let known: Vec<&str> = rows.iter().map(|(_, m, _)| *m).collect();
         anyhow!("lane {lane:?}: jm-stack has no {provider} model {model:?}; known: {}", known.join(", "))
     })?;
     ensure!(efforts.contains(&effort), "lane {lane:?}: effort {effort:?} is not selectable for {provider}:{model}; allowed: {}", efforts.join(", "));
+    ensure!(
+        !(WRITER_ROWS.contains(&label) && READ_ONLY_PROVIDERS.contains(&provider)),
+        "lane {lane:?}: row {label:?} writes files, and {provider} lanes are read-only; choose claude or codex",
+    );
     Ok(())
 }
 
@@ -433,7 +453,7 @@ fn resolve_sheet(harness: Harness, rows: &BTreeMap<String, Lanes>) -> Result<Vec
                 continue;
             }
             ensure!(!PARENT_ROWS.contains(&label), "{table}: jm:stack model row {label:?} needs the parent's MCP servers; use inherit-parent or auto");
-            check_descriptor(lane).map_err(|err| anyhow!("{table}: row {label:?}: {err}"))?;
+            check_descriptor(label, lane).map_err(|err| anyhow!("{table}: row {label:?}: {err}"))?;
         }
         sheet.push((label.to_owned(), lanes.join(", ")));
     }
@@ -595,6 +615,22 @@ mod tests {
         assert!(from_str(&base.replace(bug, "\"bug-fix\" = \"claude:sonnet@high\""), Path::new("/h")).is_ok());
         // Ultra is selectable for Sol only.
         assert!(from_str(&base.replace("\"bug-fix\" = \"codex:gpt-6.1-sol@medium\"", "\"bug-fix\" = \"codex:gpt-6.1-sol@ultra\""), Path::new("/h")).is_ok());
+    }
+
+    #[test]
+    fn read_only_providers_fit_read_only_rows_and_never_writer_rows() {
+        let base = default_config_text();
+        let lane = "opencode:opencode/deepseek-v4.1-flash-free@high";
+        let judgment = "\"judgment and prose\" = \"claude:opus@xhigh\"";
+        let cfg = from_str(&base.replace(judgment, &format!("\"judgment and prose\" = \"{lane}\"")), Path::new("/h")).unwrap();
+        assert!(cfg.sheets[&Harness::Claude].iter().any(|(label, lanes)| label == "judgment and prose" && lanes == lane));
+        let panel = "\"interrogate reviewers\" = [\"claude:opus@xhigh\", \"codex:gpt-6.1-sol@xhigh\"]";
+        assert!(from_str(&base.replace(panel, "\"interrogate reviewers\" = [\"claude:opus@xhigh\", \"cursor:composer-2.5@default\"]"), Path::new("/h")).is_ok());
+        let writer = base.replace("\"bug-fix\" = \"claude:opus@medium\"", &format!("\"bug-fix\" = \"{lane}\""));
+        let msg = err_of(&writer);
+        assert!(msg.contains("row \"bug-fix\" writes files, and opencode lanes are read-only"), "{msg}");
+        let effort = base.replace(judgment, "\"judgment and prose\" = \"agy:gemini-3.8-flash@xhigh\"");
+        assert!(err_of(&effort).contains("effort \"xhigh\" is not selectable"));
     }
 
     #[test]
