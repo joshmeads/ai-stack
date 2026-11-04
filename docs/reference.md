@@ -167,11 +167,11 @@ The table uses the short upstream names. Claude Code exposes each native skill w
 
 ## Subagents
 
-`poteto-agent` keeps the upstream prompt and adds Claude Code `skills` frontmatter. The field preloads `jm-stack:poteto-mode` because Claude subagents do not inherit the parent's loaded skills. Spawn the agent from a parent with `subagent_type: "poteto-agent"`.
+`poteto-agent` keeps the upstream prompt and adds Claude Code `skills` frontmatter. The field preloads `jm-stack:poteto-mode` because Claude subagents do not inherit the parent's loaded skills. Spawn the agent from a parent with `subagent_type: "jm-stack:poteto-agent"`.
 
-`comment-sicko` is the read-only comment reviewer the `no-comments` skill spawns. Upstream names it `Comment Sicko`; the port renames it to `comment-sicko` so the name is a valid `subagent_type`. Invoke it through `/no-comments`, not directly.
+`comment-sicko` is the read-only comment reviewer the `no-comments` skill spawns. Upstream names it `Comment Sicko`; the port renames it to `comment-sicko` so the name is valid, and Claude Code registers it as `subagent_type: "jm-stack:comment-sicko"`. Invoke it through `/no-comments`, not directly.
 
-Each Claude family in the [model catalog](../plugins/pstack/skills/poteto-mode/references/model-catalog.md) ships a generated agent at each selectable effort. Names are `stack-<family>-<effort>`, such as `stack-opus-high` and `stack-haiku-high`. Each file selects the family's rolling alias and the requested effort, and denies nested Agent/Task dispatch. The caller chooses foreground or background as [Waits on Claude Code](../plugins/pstack/skills/poteto-mode/references/codex-tools.md#waits-on-claude-code) says. jm:stack dispatches them from provider-qualified descriptors; they are not user-facing workflows.
+Each Claude family in the [model catalog](../plugins/pstack/skills/poteto-mode/references/model-catalog.md) ships a generated agent at each selectable effort. Claude Code registers them as `jm-stack:stack-<family>-<effort>`, such as `jm-stack:stack-opus-high` and `jm-stack:stack-haiku-high`. Each file selects the family's rolling alias and the requested effort, and denies nested Agent/Task dispatch. The caller chooses foreground or background as [Waits on Claude Code](../plugins/pstack/skills/poteto-mode/references/codex-tools.md#waits-on-claude-code) says. jm:stack dispatches them from provider-qualified descriptors; they are not user-facing workflows.
 
 ## Differences from upstream
 

@@ -55,7 +55,7 @@ Whether `/poteto-mode` stays on depends on the harness:
 - In Codex, ask for `jm-stack:poteto-mode` by name at the start of each task.
 - In both, start each new task with `/poteto-mode` when it matters.
 
-Mid-session, "new task" makes the mode match a fresh playbook. In Claude Code, `/poteto-mode` already uses `poteto-agent` for the subagents its playbook steps spawn. To get the same style from a subagent of your own, spawn it with `subagent_type: "poteto-agent"`. Codex has no `poteto-agent` type, so dispatch a `spawn_agent` whose instructions say to read the `poteto-mode` skill in full first.
+Mid-session, "new task" makes the mode match a fresh playbook. In Claude Code, `/poteto-mode` already uses `jm-stack:poteto-agent` for the subagents its playbook steps spawn. To get the same style from a subagent of your own, spawn it with `subagent_type: "jm-stack:poteto-agent"`. Codex has no `poteto-agent` type, so dispatch a `spawn_agent` whose instructions say to read the `poteto-mode` skill in full first.
 
 ## Pick a skill
 

@@ -8,12 +8,12 @@ Model and provider facts for [`provider-dispatch.md`](provider-dispatch.md), whi
 
 | Family | Label | Provider | Model | Default effort | Selectable efforts | Claude-native agents | Status | Upstream pstack choice |
 | --- | --- | --- | --- | --- | --- | --- | --- | --- |
-| fable | Fable | claude | fable | high | low medium high xhigh max | `stack-fable-<effort>` | optional | - |
+| fable | Fable | claude | fable | high | low medium high xhigh max | `jm-stack:stack-fable-<effort>` | optional | - |
 | sol | GPT-6.1 Sol | codex | gpt-6.1-sol | high | low medium high xhigh max ultra | - | default | gpt-5.6-sol-max |
 | luna | GPT-6 Luna | codex | gpt-6-luna | high | low medium high xhigh max | - | optional | - |
-| opus | Opus | claude | opus | high | low medium high xhigh max | `stack-opus-<effort>` | default | opus |
-| haiku | Haiku | claude | haiku | high | low medium high xhigh max | `stack-haiku-<effort>` | optional | - |
-| sonnet | Sonnet | claude | sonnet | high | low medium high xhigh max | `stack-sonnet-<effort>` | optional | - |
+| opus | Opus | claude | opus | high | low medium high xhigh max | `jm-stack:stack-opus-<effort>` | default | opus |
+| haiku | Haiku | claude | haiku | high | low medium high xhigh max | `jm-stack:stack-haiku-<effort>` | optional | - |
+| sonnet | Sonnet | claude | sonnet | high | low medium high xhigh max | `jm-stack:stack-sonnet-<effort>` | optional | - |
 | swe-2 | SWE-2 | devin | swe-2 | high | medium high max | - | optional | - |
 | swe-1.6 | SWE-1.6 | devin | swe-1.6 | default | default | - | optional | - |
 | deepseek-v4.1-flash-free | DeepSeek V4.1 Flash (OpenCode Zen) | opencode | opencode/deepseek-v4.1-flash-free | high | low high max | - | optional | - |

@@ -67,7 +67,7 @@ Without it, the native Codex lane is a named dropout. Independent external lanes
 
 ## Subagent policy
 
-poteto-mode's Subagents section sets the Claude-specific default `subagent_type: "poteto-agent"`. Claude Code waits follow [Waits on Claude Code](#waits-on-claude-code). On Codex:
+poteto-mode's Subagents section sets the Claude-specific default `subagent_type: "jm-stack:poteto-agent"`. Claude Code waits follow [Waits on Claude Code](#waits-on-claude-code). On Codex:
 
 - There is no `poteto-agent` subagent type. Route an ad-hoc subagent through poteto-mode's style by dispatching a `spawn_agent` whose instructions tell it to read the `poteto-mode` skill in full first.
 - `spawn_agent` calls already run concurrently with your turn, so `run_in_background: true` has no separate flag. Issue the dispatch and continue.
