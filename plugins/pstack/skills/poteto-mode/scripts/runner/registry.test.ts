@@ -155,13 +155,39 @@ describe("registry data", () => {
 });
 
 describe("ai-stack CLI sheets", () => {
+  const config = readFileSync(join(PLUGIN_ROOT, "../../cli/config.default.toml"), "utf8");
+  const sheet = (harness: string): Map<string, string[]> => {
+    const table = config.split(`[sheet.${harness}]\n`)[1]!.split("\n\n")[0]!;
+    return new Map([...table.matchAll(/^"([^"]+)" = (.+)$/gm)].map(([, role, value]) =>
+      [role!, [...value!.matchAll(/"([^"]+)"/g)].map(([, lane]) => lane!)]));
+  };
+  const familyName = (lane: string): string | undefined => {
+    const [provider, rest] = lane.split(":");
+    const model = rest?.split("@")[0];
+    return REGISTRY.families.find((entry) => entry.provider === provider && entry.model === model)?.name;
+  };
+
   it("name the role defaults in order, and Claude lanes only by rolling alias", () => {
-    const config = readFileSync(join(PLUGIN_ROOT, "../../cli/config.default.toml"), "utf8");
     const aliases = REGISTRY.families.filter((entry) => entry.rolling !== undefined).map((entry) => entry.model);
     for (const harness of ["claude", "codex"]) {
-      const table = config.split(`[sheet.${harness}]\n`)[1]!.split("\n\n")[0]!;
-      expect([...table.matchAll(/^"([^"]+)" =/gm)].map(([, role]) => role)).toEqual(REGISTRY.roleDefaults.map((entry) => entry.role));
-      for (const [, model] of table.matchAll(/claude:([^@"]+)@/g)) expect(aliases).toContain(model!);
+      expect([...sheet(harness).keys()]).toEqual(REGISTRY.roleDefaults.map((entry) => entry.role));
+      for (const lanes of sheet(harness).values()) {
+        for (const lane of lanes) {
+          const [, model] = lane.match(/^claude:([^@]+)@/) ?? [];
+          if (model !== undefined) expect(aliases).toContain(model);
+        }
+      }
+    }
+  });
+
+  it("pair the default panel's families on the cross-provider rows, each with the other provider's judge first", () => {
+    const panel = (role: string) => REGISTRY.roleDefaults.find((entry) => entry.role === role)!.lanes;
+    for (const [harness, other] of [["claude", "sol"], ["codex", "opus"]] as const) {
+      for (const role of ["arena cross-judge pool", "interrogate reviewers"]) {
+        const lanes = sheet(harness).get(role)!;
+        expect([harness, role, new Set(lanes.map(familyName))]).toEqual([harness, role, new Set(panel(role))]);
+      }
+      expect([harness, familyName(sheet(harness).get("arena cross-judge pool")![0]!)]).toEqual([harness, other]);
     }
   });
 });
