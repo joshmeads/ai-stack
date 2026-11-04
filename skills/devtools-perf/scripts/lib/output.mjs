@@ -1,5 +1,3 @@
-// Text summary of measured steps.
-
 import { round } from "./util.mjs";
 
 export const slug = (s) => String(s).toLowerCase().replace(/[^a-z0-9]+/g, "-").replace(/^-|-$/g, "").slice(0, 40) || "step";

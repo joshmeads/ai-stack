@@ -1,8 +1,3 @@
-//! Adds the stack checkout to each harness as the local `jm` marketplace and installs its
-//! plugins through the harness's own CLI. ai-stack owns the `jm` marketplace, so an installed
-//! `jm` plugin the checkout no longer lists is removed. The commands run through a `Runner`, so
-//! tests use a fake and `diff` only runs the read-only `list --json` queries.
-
 use std::fmt;
 use std::collections::BTreeMap;
 use std::io;
@@ -17,30 +12,20 @@ use crate::exec::{self, shell_quote as quote};
 use crate::plan::Plan;
 
 pub const MARKETPLACE: &str = "jm";
-/// The plugins every harness gets. The stack's other skills are standalone skills.
 pub const PLUGINS: [&str; 1] = ["jm-stack"];
 
-/// One harness CLI invocation, e.g. `claude plugin install jm-stack@jm`.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Command {
     pub harness: Harness,
-    /// `CLAUDE_CONFIG_DIR` or `CODEX_HOME`, set only when the harness home is not the one the
-    /// CLI would use anyway.
     pub env: Option<(&'static str, PathBuf)>,
     pub args: Vec<String>,
-    /// For a removal, how the plugin comes back. `None` otherwise.
     pub undo: Option<Restore>,
-    /// A `--clean` removal of a plugin the stack does not own.
     pub clean: bool,
 }
 
-/// How a removed plugin comes back, recorded in `removed-plugins.json`.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum Restore {
-    /// Arguments to the same CLI that reinstall or re-enable it.
     Command(Vec<String>),
-    /// No command can, because its marketplace (the stack) no longer lists it. Apply names
-    /// the stack commit to restore it from (`retired_note`).
     Retired { stack: PathBuf, plugin: String },
 }
 
@@ -50,7 +35,6 @@ impl Command {
         Some(Command { harness: self.harness, env: self.env.clone(), args: args.clone(), undo: None, clean: false })
     }
 
-    /// For a retired plugin, where to restore it from. Runs `git` in the stack.
     pub fn undo_note(&self) -> Option<String> {
         match &self.undo {
             Some(Restore::Retired { stack, plugin }) => Some(retired_note(stack, self.harness, plugin)),
@@ -81,11 +65,9 @@ pub struct Ran {
 pub trait Runner {
     fn available(&self, harness: Harness) -> bool;
 
-    /// Runs `cmd` to completion. An `Err` means the detected CLI could not start.
     fn run(&self, cmd: &Command) -> io::Result<Ran>;
 }
 
-/// Runs the absolute `claude` / `codex` paths captured during detection.
 pub struct SystemRunner {
     executables: BTreeMap<Harness, PathBuf>,
 }
@@ -122,14 +104,12 @@ impl Runner for SystemRunner {
     }
 }
 
-/// Where the harness's `jm` marketplace currently points.
 enum Marketplace {
     Absent,
     Stack,
     Elsewhere(String),
 }
 
-/// Adds the marketplace and plugin commands one harness still needs to `out`.
 pub fn plan(cfg: &Config, hc: &HarnessConfig, runner: &dyn Runner, out: &mut Plan) -> Result<()> {
     let stack = &cfg.stack.path;
     let name = hc.harness.name();
@@ -157,8 +137,6 @@ pub fn plan(cfg: &Config, hc: &HarnessConfig, runner: &dyn Runner, out: &mut Pla
             out.conflicts.push(err);
             return Ok(());
         }
-        // Nothing is configured yet, and Codex refuses a CODEX_HOME that does not exist.
-        // The file actions create the home before the commands run.
         out.commands.extend(everything());
         return Ok(());
     }
@@ -204,9 +182,6 @@ pub fn plan(cfg: &Config, hc: &HarnessConfig, runner: &dyn Runner, out: &mut Pla
         out.commands.extend(PLUGINS.map(install));
         return Ok(());
     };
-    // A `jm` plugin the checkout no longer lists, such as the retired jm-games, is removed
-    // before the installs. Its marketplace cannot reinstall it, so the record names the last
-    // stack commit that lists it instead of a command.
     for entry in &installed {
         let Some(plugin) = entry.id.strip_suffix(&format!("@{MARKETPLACE}")) else { continue };
         if manifest.iter().any(|(name, _)| name == plugin) {
@@ -221,7 +196,6 @@ pub fn plan(cfg: &Config, hc: &HarnessConfig, runner: &dyn Runner, out: &mut Pla
         match installed.iter().find(|entry| entry.id == id && (hc.harness != Harness::Claude || matches!(entry.scope.as_deref(), None | Some("user")))) {
             None => out.commands.push(install(plugin)),
             Some(entry) => {
-                // Both CLIs cache an installed version; a checkout version change needs a refresh.
                 let wanted = manifest.iter().find(|(name, _)| name == plugin).and_then(|(_, version)| version.as_deref());
                 if wanted.is_some() && entry.version.as_deref() != wanted {
                     out.commands.push(match hc.harness {
@@ -238,8 +212,6 @@ pub fn plan(cfg: &Config, hc: &HarnessConfig, runner: &dyn Runner, out: &mut Pla
     Ok(())
 }
 
-/// `--clean`: removes every installed plugin `[clean] keep_plugins` does not match, except the
-/// `jm` marketplace's own, which `plan` handles. Marketplaces stay.
 pub fn plan_clean(cfg: &Config, hc: &HarnessConfig, runner: &dyn Runner, out: &mut Plan) -> Result<()> {
     let name = hc.harness.name();
     let env = env_for(hc);
@@ -269,7 +241,6 @@ pub fn plan_clean(cfg: &Config, hc: &HarnessConfig, runner: &dyn Runner, out: &m
     };
     for entry in installed {
         let marketplace = entry.id.rsplit_once('@').map_or("", |(_, marketplace)| marketplace);
-        // Skills-directory plugins are entries in a skill root, which the skill pass handles.
         if cfg.clean.keeps_plugin(&entry.id) || marketplace == "skills-dir" || marketplace == MARKETPLACE {
             continue;
         }
@@ -278,10 +249,6 @@ pub fn plan_clean(cfg: &Config, hc: &HarnessConfig, runner: &dyn Runner, out: &m
     Ok(())
 }
 
-/// Removes one installed plugin with a command that records how to restore it: a user-scope
-/// uninstall, a disable for a plugin synced from the claude.ai account (which Claude Code
-/// cannot uninstall, and the app may sync back), or `codex plugin remove`. A Claude plugin
-/// installed for a project stays, with a note.
 fn plan_removal(harness: Harness, entry: &Installed, removal: &dyn Fn(&[&str], &[&str]) -> Command, out: &mut Plan) {
     let id = entry.id.as_str();
     match (harness, entry.scope.as_deref()) {
@@ -299,9 +266,6 @@ fn plan_removal(harness: Harness, entry: &Installed, removal: &dyn Fn(&[&str], &
     }
 }
 
-/// Where a retired `jm` plugin can be restored from: the newest stack commit whose marketplace
-/// manifest lists it and whose copy of its source directory still holds a skill (a `SKILL.md`).
-/// A commit that only lists it, after its skills moved out, cannot restore it.
 fn retired_note(stack: &Path, harness: Harness, plugin: &str) -> String {
     let manifest = manifest_path(harness);
     match restorable_commit(stack, manifest, plugin) {
@@ -312,7 +276,6 @@ fn retired_note(stack: &Path, harness: Harness, plugin: &str) -> String {
 
 fn restorable_commit(stack: &Path, manifest: &str, plugin: &str) -> Option<String> {
     let git = |args: &[&str]| exec::check(&exec::SystemExec, "git", &strings(&[&["-C", &stack.to_string_lossy()], args].concat()), None).ok();
-    // A plugin no commit ever named needs no walk through the history.
     git(&["log", "-1", "--format=%H", "-S", &format!("\"{plugin}\""), "--", manifest]).filter(|found| !found.trim().is_empty())?;
     let commits = git(&["rev-list", "HEAD"])?;
     commits.lines().find(|commit| {
@@ -336,7 +299,6 @@ fn strings(args: &[&str]) -> Vec<String> {
     args.iter().map(|arg| arg.to_string()).collect()
 }
 
-/// Sets the harness home for the CLI when it would otherwise use a different one.
 fn env_for(hc: &HarnessConfig) -> Option<(&'static str, PathBuf)> {
     let (var, dir) = match hc.harness {
         Harness::Claude => ("CLAUDE_CONFIG_DIR", ".claude"),
@@ -365,8 +327,6 @@ fn query(runner: &dyn Runner, cmd: &Command) -> Query {
     }
 }
 
-/// Reads `claude plugin marketplace list --json` (`[{name, source, path}]`) or
-/// `codex plugin marketplace list --json` (`{marketplaces: [{name, marketplaceSource: {sourceType, source}}]}`).
 fn marketplace_state(harness: Harness, json: &Value, stack: &Path) -> Marketplace {
     let entries = match harness {
         Harness::Claude => json.as_array(),
@@ -390,12 +350,9 @@ struct Installed {
     id: String,
     version: Option<String>,
     enabled: bool,
-    /// Claude Code only: `user`, `project`, `local` or `synced`.
     scope: Option<String>,
 }
 
-/// Reads `claude plugin list --json` (`[{id, version, enabled, scope}]`) or
-/// `codex plugin list --json` (`{installed: [{pluginId, version, enabled}]}`).
 fn installed_plugins(harness: Harness, json: &Value) -> Option<Vec<Installed>> {
     let (entries, key) = match harness {
         Harness::Claude => (json.as_array()?, "id"),
@@ -416,9 +373,6 @@ fn installed_plugins(harness: Harness, json: &Value) -> Option<Vec<Installed>> {
     )
 }
 
-/// The harness's marketplace manifest in the stack: checks it is `jm` and lists every plugin
-/// in `PLUGINS`. Returns every listed plugin with the version its harness manifest declares,
-/// when it declares one.
 fn read_manifest(stack: &Path, harness: Harness) -> Result<Vec<(String, Option<String>)>> {
     let manifest = manifest_path(harness);
     let plugin_manifest = match harness {
@@ -454,8 +408,6 @@ fn same_path(a: &Path, b: &Path) -> bool {
 
 #[cfg(test)]
 pub mod fake {
-    //! A stateful stand-in for the `claude` and `codex` plugin CLIs.
-
     use std::cell::RefCell;
     use std::collections::{BTreeMap, BTreeSet};
 
@@ -465,9 +417,7 @@ pub mod fake {
 
     #[derive(Default)]
     pub struct State {
-        /// marketplace name -> source path
         pub marketplaces: BTreeMap<String, String>,
-        /// plugin id -> installed version. Claude ids ending in `@synced` list with scope `synced`.
         pub installed: BTreeMap<String, String>,
         pub disabled: std::collections::BTreeSet<String>,
     }
@@ -477,7 +427,6 @@ pub mod fake {
         pub missing: BTreeSet<Harness>,
         pub claude: RefCell<State>,
         pub codex: RefCell<State>,
-        /// Every mutating command run, as displayed.
         pub ran: RefCell<Vec<String>>,
     }
 
@@ -499,7 +448,6 @@ pub mod fake {
                     json!({"id": id, "version": version, "enabled": !state.disabled.contains(id), "scope": scope})
                 }).collect::<Vec<_>>()).to_string(),
                 (Harness::Codex, ["plugin", "list", "--json"]) => json!({"installed": state.installed.iter().map(|(id, version)| json!({"pluginId": id, "version": version, "enabled": !state.disabled.contains(id)})).collect::<Vec<_>>(), "available": []}).to_string(),
-                // Like the real CLI, Claude Code refuses to uninstall a plugin synced from claude.ai.
                 (Harness::Claude, ["plugin", "uninstall", id]) if id.ends_with("@synced") => {
                     return Ok(Ran { ok: false, stdout: String::new(), stderr: format!("{id} is synced from your claude.ai account") });
                 }
@@ -696,7 +644,6 @@ mod tests {
 
         let f = fixture();
         f.apply(&f.plan());
-        // The throwaway CLI probe confirmed plugin.json wins when these versions disagree.
         put(&f.stack.join(".claude-plugin/marketplace.json"), &json!({"name":"jm", "plugins":[{"name":"jm-stack", "source":"./plugins/pstack", "version":"9.0.0"}]}).to_string());
         let hc = f.cfg.harnesses.iter().find(|hc| hc.harness == Harness::Claude).unwrap();
         let project = json!({"id":"jm-stack@jm", "version":"0.1.0", "scope":"project"});
@@ -719,7 +666,6 @@ mod tests {
     fn the_retired_jm_plugins_restore_from_the_commit_before_their_skills_moved_out() {
         let repo = Path::new(env!("CARGO_MANIFEST_DIR")).parent().unwrap();
         let git = |args: &[&str]| exec::check(&exec::SystemExec, "git", &strings(&[&["-C", &repo.to_string_lossy()], args].concat()), None).ok().map(|out| out.trim().to_string());
-        // 8b08520 moved the jm-games and jm-tools skills to skills/; a shallow clone may lack it.
         let Some(parent) = git(&["rev-parse", "--verify", "-q", "8b08520^{commit}^"]) else { return };
         for plugin in ["jm-games", "jm-tools"] {
             for harness in [Harness::Claude, Harness::Codex] {

@@ -1,14 +1,7 @@
-// Actions a step can run. prepareAction does the setup that is not part of
-// the user's action (find the element, scroll it into view if needed, work
-// out coordinates) and returns act(), which the measurement window brackets.
-
 import { spawn } from "node:child_process";
 import { NoReply, evaluate, limits } from "./cdp.mjs";
 import { ActionTimeout, round, sleep, withTimeout } from "./util.mjs";
 
-// Two frames, so rendering caused by what just ran lands in the window.
-// Raced against a timeout because rAF stalls in hidden tabs; the loser is
-// cancelled so nothing lingers into a later sample.
 export const TWO_FRAMES = `new Promise(r => {
   let id;
   const t = setTimeout(() => { cancelAnimationFrame(id); r(); }, 1000);
@@ -17,7 +10,6 @@ export const TWO_FRAMES = `new Promise(r => {
 
 export const PAGE_ACTIONS = new Set(["click", "type", "press", "eval", "goto"]);
 
-// kind -> minimum number of arguments
 const ARITY = { click: 1, type: 2, press: 1, eval: 1, goto: 1, request: 1, idle: 0, run: 1 };
 
 export function validateAction(action, where) {
@@ -62,8 +54,6 @@ export async function goto(page, url, timeoutMs = limits.actionMs) {
       throw e instanceof NoReply ? new ActionTimeout(`goto ${url}: no answer to the navigation within ${timeoutMs}ms (raise --action-timeout, 0 waits forever)`) : e;
     });
     if (r.errorText) throw new Error(`navigate failed: ${r.errorText}`);
-    // No loaderId: same-document navigation (fragment, history API), which
-    // fires navigatedWithinDocument and never a load event.
     await (r.loaderId ? load.promise : sameDoc.promise);
   } finally {
     load.cancel();
@@ -86,19 +76,16 @@ async function request(args, timeoutMs) {
     ttfb = performance.now() - t0;
     buf = await r.arrayBuffer();
   } catch (e) {
-    // Aborting the fetch does not stop the server working on the request.
     if (e.name === "TimeoutError") throw new ActionTimeout(`${method} ${url} did not answer within ${timeoutMs}ms (raise --action-timeout, 0 waits forever)`);
     throw e;
   }
   return { method, url, status: r.status, ttfbMs: round(ttfb), totalMs: round(performance.now() - t0), bytes: buf.byteLength };
 }
 
-// Whether any process in the group is left.
 const groupAlive = (pgid) => {
   try { process.kill(-pgid, 0); return true; } catch (e) { return e.code === "EPERM"; }
 };
 
-// SIGTERM, then SIGKILL, to the whole process group; true once it is empty.
 async function stopGroup(pgid) {
   for (const [sig, waitMs] of [["SIGTERM", 5000], ["SIGKILL", 2000]]) {
     try { process.kill(-pgid, sig); } catch {}
@@ -108,9 +95,6 @@ async function stopGroup(pgid) {
   return false;
 }
 
-// The command runs in its own process group, so a timeout (or cdt being
-// interrupted) stops the driver and everything it started, not only the
-// shell.
 function runShell(cmd, timeoutMs) {
   return new Promise((res, rej) => {
     const child = spawn(cmd, { shell: true, detached: true, stdio: ["ignore", "inherit", "inherit"] });
@@ -136,7 +120,6 @@ function runShell(cmd, timeoutMs) {
   });
 }
 
-// Returns act(). Throws if the action cannot be prepared (missing element).
 export async function prepareAction(ctx, action) {
   const [kind, ...args] = action;
   const page = ctx.page;
@@ -145,8 +128,6 @@ export async function prepareAction(ctx, action) {
   const bounded = (fn) => () => withTimeout(fn(), ms, `"${action.join(" ")}"`, "--action-timeout");
   switch (kind) {
     case "click": {
-      // Scroll only when the centre is off-screen, so an on-screen click
-      // does not pay for a scroll it would never have had.
       const box = await evaluate(page, `(() => {
         const el = document.querySelector(${sel(args[0])});
         if (!el) return null;
@@ -161,8 +142,6 @@ export async function prepareAction(ctx, action) {
       })()`);
       if (!box) throw new Error(`no element matches ${args[0]}`);
       const { x, y } = box;
-      // The scroll's own work (scroll events, observers, lazy loads)
-      // happens before the window opens.
       if (box.scrolled) await evaluate(page, TWO_FRAMES);
       return bounded(async () => {
         await page.send("Input.dispatchMouseEvent", { type: "mouseMoved", x, y });

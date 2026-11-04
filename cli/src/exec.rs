@@ -1,6 +1,3 @@
-//! Runs git, ssh, process scripts and prompt runners for `skills` and `fleet`. Tests swap in
-//! `fake::FakeExec`, which records each call and answers from a closure.
-
 use std::ffi::{CString, OsStr};
 use std::io;
 use std::os::unix::ffi::OsStrExt as _;
@@ -11,7 +8,6 @@ use anyhow::{Result, anyhow};
 
 pub struct Ran {
     pub ok: bool,
-    /// `None` when a signal ended the process.
     pub code: Option<i32>,
     pub stdout: String,
     pub stderr: String,
@@ -24,7 +20,6 @@ pub trait Exec {
 
     fn interactive(&self, program: &str, args: &[String]) -> io::Result<Option<i32>>;
 
-    /// Runs `program` to completion with stdin closed. An `Err` means it could not start.
     fn run(&self, program: &str, args: &[String], cwd: Option<&Path>) -> io::Result<Ran>;
 }
 
@@ -37,7 +32,6 @@ pub(crate) fn executable_on_path(program: &str, path: &OsStr) -> Option<PathBuf>
         let path = std::path::absolute(dir.join(program)).ok()?;
         let meta = std::fs::metadata(&path).ok()?;
         let name = CString::new(path.as_os_str().as_bytes()).ok()?;
-        // access checks the current user's permissions, including ACLs and directory traversal.
         (meta.is_file() && unsafe { libc::access(name.as_ptr(), libc::X_OK) } == 0).then_some(path)
     })
 }
@@ -65,18 +59,15 @@ impl Exec for SystemExec {
     }
 }
 
-/// Runs and returns stdout, or an error carrying the command line and its stderr.
 pub fn check(exec: &dyn Exec, program: &str, args: &[String], cwd: Option<&Path>) -> Result<String> {
     let line = command_line(program, args);
     finish(&line, launch(exec, program, args, cwd)?)
 }
 
-/// Launches a command with the same diagnostics as `check`, leaving its exit code available.
 pub fn launch(exec: &dyn Exec, program: &str, args: &[String], cwd: Option<&Path>) -> Result<Ran> {
     exec.run(program, args, cwd).map_err(|err| anyhow!("cannot run `{}`: {err}", command_line(program, args)))
 }
 
-/// Returns stdout on success, or the standard command failure diagnostic.
 pub fn finish(line: &str, ran: Ran) -> Result<String> {
     if !ran.ok {
         let detail = if ran.stderr.trim().is_empty() { ran.stdout.trim() } else { ran.stderr.trim() };
@@ -93,7 +84,6 @@ pub fn command_line(program: &str, args: &[String]) -> String {
     std::iter::once(program).chain(args.iter().map(String::as_str)).map(shell_quote).collect::<Vec<_>>().join(" ")
 }
 
-/// Rejects a branch or tag name that could be read as an option or is not a plain git ref.
 pub fn check_ref(name: &str) -> Result<()> {
     let bad = name.is_empty()
         || name.starts_with('-')
@@ -107,8 +97,6 @@ pub fn check_ref(name: &str) -> Result<()> {
     Ok(())
 }
 
-/// A branch name for `update`, `fleet update` and `fleet switch`: a valid ref that is a plain
-/// branch, not `HEAD`, a full `refs/` name or a `+`-prefixed refspec.
 pub fn check_branch(name: &str) -> Result<()> {
     check_ref(name)?;
     anyhow::ensure!(name != "HEAD" && !name.starts_with("refs/") && !name.starts_with('+'), "{name:?} is not a plain branch name");
@@ -119,7 +107,6 @@ pub fn is_commit(text: &str) -> bool {
     text.len() == 40 && text.bytes().all(|b| b.is_ascii_hexdigit())
 }
 
-/// The first 7 characters.
 pub fn short(text: &str) -> &str {
     text.char_indices().nth(7).map_or(text, |(end, _)| &text[..end])
 }
@@ -128,7 +115,6 @@ pub fn one_line(text: &str) -> String {
     text.split_whitespace().collect::<Vec<_>>().join(" ")
 }
 
-/// Quotes `arg` for a POSIX shell, leaving plainly safe words bare.
 pub fn shell_quote(arg: &str) -> String {
     if !arg.is_empty() && arg.chars().all(|c| c.is_ascii_alphanumeric() || "/._-@:+=,".contains(c)) {
         arg.to_string()
@@ -145,8 +131,6 @@ pub mod fake {
 
     type Respond = Box<dyn Fn(&str) -> io::Result<Ran>>;
 
-    /// Records every call as its command line (prefixed with `[cwd] ` when one is set) and
-    /// answers with `respond(line)`.
     pub struct FakeExec {
         pub calls: RefCell<Vec<String>>,
         pub interactive_calls: RefCell<Vec<String>>,

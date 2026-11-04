@@ -6,6 +6,8 @@ This repository is the stack: the `jm` marketplace with one plugin (`jm-stack`),
 
 Claude Code runs a cached copy of the plugin, keyed by version, so an edit under `plugins/pstack/` reaches it only when the version changes. On every plugin edit, bump `version` in `plugins/pstack/.claude-plugin/plugin.json`, `plugins/pstack/.codex-plugin/plugin.json` and `.claude-plugin/marketplace.json`, and the `open-pstack version` row in `UPSTREAM.md`. The static test requires all four to match. Use a jm suffix such as `1.16.0+jm.1`, so the number stays tied to the Open Pstack release it came from. `ai-stack` only checks that the versions differ.
 
+Code this repository owns explains itself. `UPSTREAM.md`, `CHANGES.md` and `NOTICE.md` say which files are local adaptations or additions. Upstream-derived files keep upstream's comments, so later syncs stay clean, and vendored or third-party code stays as it came. In owned code, a comment stays only if a tool or a user reads it: a shebang, a compiler, linter or formatter directive, a legal or license header, clap doc text that generates `--help`, or a comment in a shipped config template. When owned code would surprise a reader, reshape it (rename, extract, add a type) instead of explaining it. Encode a "must not change" constraint as a type, test or lint, then delete its comment. Suppress a lint or type error only when its rule is wrong, pedantic or style-only; otherwise fix the cause. The `no-comments` skill applies this rule.
+
 Before opening a pull request, run:
 
 - `bun run test` and `bun run typecheck` in `plugins/pstack/skills/poteto-mode/scripts`

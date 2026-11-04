@@ -214,6 +214,14 @@ describe("ai-stack CLI matrix", () => {
   });
 });
 
+describe("ai-stack CLI managed sheet", () => {
+  it("opens with the marker setup-stack treats as installer-owned", () => {
+    const marker = "<!-- Managed by ai-stack";
+    expect(readFileSync(join(PLUGIN_ROOT, "skills/setup-stack/SKILL.md"), "utf8")).toContain(`first line starts with \`${marker}\``);
+    expect(readFileSync(join(PLUGIN_ROOT, "../../cli/src/render.rs"), "utf8")).toContain(`MANAGED_MD: &str = "${marker}`);
+  });
+});
+
 describe("generated files", () => {
   const roots: string[] = [];
   afterEach(() => {
