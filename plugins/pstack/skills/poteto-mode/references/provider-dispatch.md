@@ -96,7 +96,7 @@ Every concurrent external lane needs distinct prompt, output, and receipt paths.
 
 `read-only` limits the model's tools, not the CLI. Hooks and language servers run outside those limits, and a real Cursor lane ran the repository's `node_modules/.bin/typescript-language-server`, which wrote a file into the repository. So repository code may run in a lane on a read-only provider other than Claude or Codex. Seat such a lane only on a repository you trust.
 
-Run every such lane with `--cwd` set to its own fresh throwaway worktree of the scope, never the primary checkout or a candidate's worktree. The worktree keeps a stray write out of your checkout, and it is not a sandbox. Anything written there is discarded: after taking the output file, the parent reports it if `git status` in that worktree was not clean, then removes the worktree.
+Run every such lane with `--cwd` set to its own fresh throwaway worktree of the scope, never the primary checkout or a candidate's worktree. The worktree keeps a stray write out of your checkout, and it is not a sandbox. Create it with `git worktree add --detach "$dir" "$head"`, and keep the lane's `--output` and `--receipt` paths outside it. A parent whose sandbox cannot write the repository's `.git`, as Codex's `workspace-write` cannot, runs `git clone --no-hardlinks "$repo" "$dir"` under `$TMPDIR` and checks out `$head` there. Anything written there is discarded: after taking the output file, the parent reports it if `git status` there was not clean, then removes it with `git worktree remove --force "$dir"`, or deletes the clone.
 
 ## Completion and dropouts
 
