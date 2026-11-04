@@ -88,12 +88,12 @@ describe("registry data", () => {
 
   it("keeps the default efforts, the Claude rolling aliases and Sol's ultra", () => {
     expect(REGISTRY.families.map((entry) => [entry.name, entry.defaultEffort])).toEqual([
-      ["fable", "xhigh"],
-      ["sol", "xhigh"],
-      ["luna", "xhigh"],
-      ["opus", "xhigh"],
-      ["haiku", "xhigh"],
-      ["sonnet", "xhigh"],
+      ["fable", "high"],
+      ["sol", "high"],
+      ["luna", "high"],
+      ["opus", "high"],
+      ["haiku", "high"],
+      ["sonnet", "high"],
       ["swe-2", "high"],
       ["swe-1.6", "default"],
       ["deepseek-v4.1-flash-free", "high"],

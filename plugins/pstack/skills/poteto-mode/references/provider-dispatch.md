@@ -10,7 +10,7 @@ jm:stack model choices are provider-qualified descriptors:
 
 The generated [model catalog](model-catalog.md) holds the model facts: the model matrix, kept predecessors and rolling aliases, the route table, provider notes, and role defaults. Match a descriptor's `(provider, model)` there.
 
-The allowed effort universe is exactly `low`, `medium`, `high`, `xhigh`, `max`, `ultra`, and `default`, which passes no effort flag. A row offers `default` only when its Selectable efforts cell lists it. A row offers `ultra` only when its CLI's model entry lists that effort; for Codex, that is the model's entry in `codex`'s model list. First-run requested efforts are the Default effort cell of each row. Per spawn, the parent may move a role's effort to another effort that the row lists, under poteto-mode's Match the model to the job rule. A child never changes its assigned effort.
+The allowed effort universe is exactly `low`, `medium`, `high`, `xhigh`, `max`, `ultra`, and `default`, which passes no effort flag. A row offers `default` only when its Selectable efforts cell lists it. A row offers `ultra` only when its CLI's model entry lists that effort; for Codex, that is the model's entry in `codex`'s model list. First-run requested efforts are the Default effort cell of each row. Every family defaults to `high`, except a family whose row lists only `default`, which stays on that nearest listed effort. Per spawn, the parent may move a role's effort to another effort that the row lists, under poteto-mode's Match the model to the job rule. A child never changes its assigned effort.
 
 A rolling alias, such as `opus`, names a family whose CLI resolves it to the latest available family revision. A runner receipt keeps the requested alias in `model` and the concrete provider-reported revision in `reportedModel`; verification accepts only a revision of the matching family, as the catalog's rolling-alias table gives it.
 
@@ -40,7 +40,7 @@ The catalog's [route table](model-catalog.md#routes) gives each provider's route
 
 Native dispatch avoids a second CLI startup and its base context.
 
-- Claude Code: match the descriptor's `(provider, model)` to one model-matrix row, then dispatch it through `stack-<family>-<effort>` using that row's family and the descriptor's effort. Those definitions select the row's model and requested effort. `stack-opus-xhigh` and `stack-haiku-xhigh` are in that set. Pass the complete task, grounding paths, access mode, and unique output location in the `Agent` prompt. Dispatch and wait as [Waits on Claude Code](codex-tools.md#waits-on-claude-code) says.
+- Claude Code: match the descriptor's `(provider, model)` to one model-matrix row, then dispatch it through `stack-<family>-<effort>` using that row's family and the descriptor's effort. Those definitions select the row's model and requested effort. `stack-opus-high` and `stack-haiku-high` are in that set. Pass the complete task, grounding paths, access mode, and unique output location in the `Agent` prompt. Dispatch and wait as [Waits on Claude Code](codex-tools.md#waits-on-claude-code) says.
 - Codex: call `spawn_agent` with the descriptor's model and `reasoning_effort`, the complete task, grounding paths, access mode, and unique output location. Use an isolated worktree for a writer. Codex subagents already run concurrently.
 
 Do not send a same-provider descriptor to the external runner. It rejects that call because the native route is cheaper and already available.
