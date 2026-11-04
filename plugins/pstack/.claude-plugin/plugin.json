@@ -1,7 +1,7 @@
 {
   "name": "jm-stack",
   "displayName": "jm:stack",
-  "version": "1.16.0+jm.2",
+  "version": "1.16.0+jm.3",
   "description": "jm:stack: Lauren Tan's pstack for Claude Code and Codex with Josh Meads's model routing. Based on Open Pstack (ericlitman/open-pstack), which began from michael-denyer/pstack-claude and ports cursor/plugins/pstack.",
   "author": {
     "name": "Lauren Tan"

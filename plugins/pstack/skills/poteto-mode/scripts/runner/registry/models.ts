@@ -147,6 +147,42 @@ export const FAMILIES = [
     defaultEffort: "high",
     upstream: null,
   }),
+  family({
+    name: "grok-4.7",
+    label: "Grok 4.7 (Cursor)",
+    provider: "cursor",
+    model: "grok-4.7",
+    efforts: { low: "grok-4.7-low", medium: "grok-4.7-medium", high: "grok-4.7-high", xhigh: "grok-4.7-xhigh" },
+    defaultEffort: "high",
+    upstream: null,
+  }),
+  family({
+    name: "cursor-gemini-4-argon",
+    label: "Gemini 4 Argon (Cursor)",
+    provider: "cursor",
+    model: "gemini-4-argon",
+    efforts: { low: "gemini-4-argon-low", medium: "gemini-4-argon-medium", high: "gemini-4-argon-high" },
+    defaultEffort: "high",
+    upstream: null,
+  }),
+  family({
+    name: "gemini-4-argon",
+    label: "Gemini 4 Argon (Antigravity)",
+    provider: "agy",
+    model: "gemini-4-argon",
+    efforts: { low: "gemini-4-argon-low", medium: "gemini-4-argon-medium", high: "gemini-4-argon-high" },
+    defaultEffort: "high",
+    upstream: null,
+  }),
+  family({
+    name: "pi-gemini-pro-latest",
+    label: "Gemini Pro, latest (OpenRouter through pi)",
+    provider: "pi",
+    model: "openrouter/~google/gemini-pro-latest",
+    efforts: UP_TO_MAX,
+    defaultEffort: "high",
+    upstream: null,
+  }),
 ] as const;
 export type FamilyName = (typeof FAMILIES)[number]["name"];
 
@@ -188,4 +224,8 @@ export const RELEASED_PAIRS = [
   { pair: "agy:gemini-3.8-flash", family: "gemini-3.8-flash" },
   { pair: "cursor:composer-2.5", family: "composer-2.5" },
   { pair: "cursor:gemini-3.7-flash", family: "gemini-3.7-flash" },
+  { pair: "cursor:grok-4.7", family: "grok-4.7" },
+  { pair: "cursor:gemini-4-argon", family: "cursor-gemini-4-argon" },
+  { pair: "agy:gemini-4-argon", family: "gemini-4-argon" },
+  { pair: "pi:openrouter/~google/gemini-pro-latest", family: "pi-gemini-pro-latest" },
 ] as const satisfies readonly ReleasedPair<FamilyName>[];

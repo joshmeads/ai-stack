@@ -60,7 +60,8 @@ codex = "sol@xhigh"
 # Each lane is a provider-qualified descriptor `<provider>:<model>@<effort>`
 # (see the jm-stack provider-dispatch reference), or inherit-parent / auto.
 # Panel rows accept arrays. Why and Reflect need the parent's MCP servers, so
-# they must inherit the parent. All 15 rows are required in each table.
+# they must inherit the parent. All 15 rows are required in each table. A
+# read-only provider on "arena runners" returns its candidate to the parent.
 
 [sheet.claude]
 "feature, refactoring" = "claude:opus@medium"
@@ -73,7 +74,7 @@ codex = "sol@xhigh"
 "how explainer" = "claude:opus@medium"
 "why investigators, synthesizer" = "inherit-parent"
 "reflect tooling, judgment, divergent, synthesizer" = "inherit-parent"
-"arena runners" = ["claude:opus@medium", "claude:opus@high"]
+"arena runners" = ["claude:opus@high", "codex:gpt-6.1-sol@high", "cursor:grok-4.7@high", "agy:gemini-4-argon@high"]
 "arena cross-judge pool" = ["codex:gpt-6.1-sol@xhigh", "claude:opus@xhigh"]
 "swarm workers" = "claude:opus@medium"
 "architect runners" = ["claude:opus@high", "claude:opus@medium"]
@@ -90,7 +91,7 @@ codex = "sol@xhigh"
 "how explainer" = "codex:gpt-6.1-sol@medium"
 "why investigators, synthesizer" = "inherit-parent"
 "reflect tooling, judgment, divergent, synthesizer" = "inherit-parent"
-"arena runners" = ["codex:gpt-6.1-sol@medium", "codex:gpt-6.1-sol@xhigh"]
+"arena runners" = ["codex:gpt-6.1-sol@high", "claude:opus@high", "cursor:grok-4.7@high", "agy:gemini-4-argon@high"]
 "arena cross-judge pool" = ["claude:opus@xhigh", "codex:gpt-6.1-sol@xhigh"]
 "swarm workers" = "codex:gpt-6.1-sol@medium"
 "architect runners" = ["codex:gpt-6.1-sol@xhigh", "codex:gpt-6.1-sol@medium"]

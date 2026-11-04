@@ -103,6 +103,10 @@ describe("registry data", () => {
       ["gemini-3.8-flash", "high"],
       ["composer-2.5", "default"],
       ["gemini-3.7-flash", "high"],
+      ["grok-4.7", "high"],
+      ["cursor-gemini-4-argon", "high"],
+      ["gemini-4-argon", "high"],
+      ["pi-gemini-pro-latest", "high"],
     ]);
     expect(REGISTRY.families.filter((entry) => entry.provider === "claude").map((entry) => [entry.name, entry.model]))
       .toEqual([["fable", "fable"], ["opus", "opus"], ["haiku", "haiku"], ["sonnet", "sonnet"]]);
@@ -208,7 +212,9 @@ describe("ai-stack CLI matrix", () => {
     const setup = readFileSync(join(PLUGIN_ROOT, "skills/setup-stack/SKILL.md"), "utf8");
     const line = setup.split("\n").find((text) => text.startsWith("Lanes for these roles write files"))!;
     const named = (name: string): string[] => [...constant(name).split("=")[1]!.matchAll(/"([^"]+)"/g)].map(([, value]) => value!);
-    for (const row of named("WRITER_ROWS")) expect([row, line.includes(`\`${row}\``)]).toEqual([row, true]);
+    const writers = line.split(" Refuse any of those roles")[0]!;
+    expect(new Set([...writers.matchAll(/`([^`]+)`/g)].map(([, row]) => row!).filter((row) => row !== "isolated-write")))
+      .toEqual(new Set(named("WRITER_ROWS")));
     const readOnly = REGISTRY.adapters.filter((adapter) => !adapter.launch.supports.includes("isolated-write")).map((adapter) => adapter.id);
     expect(new Set(named("READ_ONLY_PROVIDERS"))).toEqual(new Set(readOnly));
   });
@@ -350,15 +356,17 @@ describe("hand-written dispatch and setup rules", () => {
       .flatMap(([, roles]) => roles);
     expect(new Set(writers)).toEqual(new Set(["feature, refactoring", "bug-fix", "perf-issue", "hillclimb"]));
     const rule = section(setup, "### 3. Parse per-family efforts", "### 4. Collect one requested effort per family");
-    expect(rule).toContain("Lanes for these roles write files: `feature, refactoring`, `bug-fix`, `perf-issue`, and `hillclimb`, whose playbooks delegate with `isolated-write`; `hardest tasks`, which takes the hardest code changes; and `arena runners`, `architect runners` and `swarm workers`, which write to their own worktrees or output directories.");
+    expect(rule).toContain("Lanes for these roles write files: `feature, refactoring`, `bug-fix`, `perf-issue`, and `hillclimb`, whose playbooks delegate with `isolated-write`; `hardest tasks`, which takes the hardest code changes; and `architect runners` and `swarm workers`, which write to their own worktrees or output directories.");
+    expect(rule).toContain("`arena runners` may too, because Arena runs a read-only provider's lane in `read-only` mode");
     expect(readFileSync(join(PLUGIN_ROOT, "skills/poteto-mode/SKILL.md"), "utf8")).toContain("the hardest changes read `hardest tasks`");
-    expect(readFileSync(join(PLUGIN_ROOT, "skills/arena/SKILL.md"), "utf8")).toContain("Give each candidate its own output location (a git worktree");
+    expect(readFileSync(join(PLUGIN_ROOT, "skills/arena/SKILL.md"), "utf8")).toContain("runs in `read-only` mode");
+    expect(section(dispatch, "## External lanes", "## Completion and dropouts")).toContain("An `arena runners` lane on a provider whose Access modes cell lacks `isolated-write` runs in `read-only` mode.");
     expect(readFileSync(join(PLUGIN_ROOT, "skills/swarm/SKILL.md"), "utf8")).toContain("in the worker's own worktree");
     expect(readFileSync(join(PLUGIN_ROOT, "skills/architect/SKILL.md"), "utf8")).toContain("Take the runners from `architect runners` in the current harness's pstack model sheet, in place of Arena's `arena runners`.");
     expect(rule).toContain("lacks `isolated-write`: name the role and the provider, and say why.");
     expect(rule).toContain("The runner refuses that provider's writer lane before launch");
     expect(REGISTRY.adapters.filter((adapter) => !adapter.launch.supports.includes("isolated-write")).map((adapter) => adapter.id))
-      .toEqual(["devin", "opencode", "dsh", "amp", "agy", "cursor"]);
+      .toEqual(["devin", "opencode", "dsh", "amp", "agy", "cursor", "pi"]);
     const devinRoute = renderCatalog(REGISTRY).content.split("\n").find((line) => line.startsWith("| devin |"));
     expect(devinRoute).toContain("| `read-only` |");
   });
@@ -574,7 +582,7 @@ describe("resolveLane", () => {
   it("rejects same-provider recursion and unknown names", () => {
     expect(() => resolveLane(request({ parent: "claude" })))
       .toThrow("provider claude is native to parent claude; use the parent subagent primitive");
-    expect(() => resolveLane(request({ provider: "kiro" }))).toThrow("provider must be one of: claude, codex, devin, opencode, dsh, amp, agy, cursor");
+    expect(() => resolveLane(request({ provider: "kiro" }))).toThrow("provider must be one of: claude, codex, devin, opencode, dsh, amp, agy, cursor, pi");
     expect(() => resolveLane(request({ parent: "devin" }))).toThrow("parent must be one of: claude, codex");
     expect(() => resolveLane(request({ mode: "full" }))).toThrow("mode must be one of: read-only, isolated-write");
     expect(() => resolveLane(request({ model: " " }))).toThrow("model is required");

@@ -2,6 +2,20 @@
 
 This port applies the Cursor → Claude Code substitutions in skill bodies. Earlier drafts left them flagged; this revision resolves them. A later pass added a Codex build that shares the same skills; see [Codex port](#codex-port) below.
 
+## 1.16.0+jm.3 arena pulls several model families
+
+**Read-only arena seats.** `arena runners` can seat any family. Only Claude and Codex write. Every other family runs in `read-only` mode, reads the repository and returns its complete candidate as its final output. The parent saves it, applies a patch in a fresh worktree for that candidate and runs the rubric's checks there. A patch that does not apply or fails is a result about the candidate; a missing CLI, login or model is a named dropout. `arena runners` is no longer a writer row in the ai-stack CLI or `/setup-stack`. `architect runners`, `swarm workers` and the code roles stay writers.
+
+**New families.** `cursor:grok-4.7` at `low` to `xhigh`, `cursor:gemini-4-argon` and `agy:gemini-4-argon` at `low` to `high`, from `cursor-agent models` on Cursor CLI 2026.10.22-27dcf5f and `agy models` on Antigravity CLI 1.4.12, each defaulting to `high`. No role default uses them. Grok stays out of every default, and there is still no Grok adapter.
+
+**New read-only provider `pi`.** `pi:openrouter/~google/gemini-pro-latest` runs through the `pi` CLI at `low` to `max`, and the runner passes any other `openrouter/` ID unchanged. A rolling ID's receipt records the model OpenRouter served, as `provider-report` evidence. A lane has only `read`, `grep`, `find` and `ls`. Extensions, MCP servers, skills and the repository's `.pi/` stay off, and it writes no session. The repository's `AGENTS.md` still loads. The model catalog holds the measurements.
+
+**Default sheets.** The ai-stack CLI's `arena runners` rows now seat Opus, Sol, Cursor's Grok and Antigravity's Gemini at `high`, with the harness's own family first. No other row changed, and first-run role defaults stay Opus and Sol.
+
+**Limits of a read-only lane.** `read-only` limits the model's tools, not the CLI, so repository code may run in a lane on a provider other than Claude or Codex. Each such lane runs in its own throwaway worktree, and belongs only on a repository you trust. A `pi` lane's read file goes to the model provider, and a concrete `pi` ID must match the reported model exactly.
+
+**`ai-stack update --force`.** `update` takes `--force` with the same meaning as `install --force`. `fleet` does not, so a machine with stray skills runs `install --force` once.
+
 ## 1.16.0+jm.2 applies Cursor pstack 0.15.36 and takes ideas from tstack
 
 This distribution applies Cursor pstack 0.15.30 to 0.15.36 at `c742dd61706fbacc1b95f1a20b7b988cf096ce6c` on top of Open Pstack 1.16.0. `UPSTREAM.md` holds a decision for each commit.
