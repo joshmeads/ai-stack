@@ -1,0 +1,6 @@
+## Codex working rules
+
+- **Choose verification by risk.** Use existing checks first. Add tests for behavior that can break, especially state transitions, transactions, concurrency, and reconciliation. Skip new tests for low-impact presentation, copy, or mechanical edits. Once relevant checks pass, stop unless a change or unresolved failure justifies another run.
+- **Check the delivered behavior.** Verify changed behavior in its actual runtime. For interactive or responsive web changes, use a real browser and the affected input or viewport checks in proportion to risk. Preserve meaningful coverage when removing probes; report unverified behavior plainly.
+- **Finish with durable checks.** Keep useful regression coverage, requested deliverables and necessary review evidence. Remove only this task's temporary probes, superseded checks and disposable verification output. Never remove existing useful tests to meet a size target.
+- **Clean your workspace.** At task completion, remove this task's obsolete worktrees, build output, caches and scratch files. Keep assets needed for continuing work. Remove a worktree only when ownership is clear, it is clean and its commits are reachable from another branch or remote. Preserve active, dirty, unrelated or uncertain work; follow the shared-cache rule above.
