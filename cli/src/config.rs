@@ -131,6 +131,37 @@ struct ConfigFile {
     clean: CleanSection,
     #[serde(default)]
     skills: SkillsSection,
+    #[serde(default)]
+    incidents: IncidentsSection,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Deserialize, Serialize, Default)]
+#[serde(rename_all = "lowercase")]
+pub enum IncidentWorker {
+    #[default]
+    Haiku,
+    Luna,
+}
+
+#[derive(Debug, Clone, Deserialize, Serialize)]
+#[serde(deny_unknown_fields)]
+struct IncidentsSection {
+    #[serde(default = "default_incident_path")]
+    path: String,
+    #[serde(default)]
+    worker: IncidentWorker,
+}
+
+fn default_incident_path() -> String { "~/.local/state/ai-stack/incidents.md".into() }
+
+impl Default for IncidentsSection {
+    fn default() -> Self { Self { path: default_incident_path(), worker: IncidentWorker::default() } }
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+pub struct Incidents {
+    pub path: PathBuf,
+    pub worker: IncidentWorker,
 }
 
 #[derive(Debug, Clone, Deserialize, Serialize)]
@@ -334,6 +365,7 @@ pub struct Config {
     pub sheets: BTreeMap<Harness, Vec<(String, String)>>,
     pub clean: Clean,
     pub prompt_runner: Vec<String>,
+    pub incidents: Incidents,
 }
 
 pub fn default_config_text() -> &'static str {
@@ -483,7 +515,10 @@ pub fn from_str(text: &str, home: &Path) -> Result<Config> {
         keep_plugins: file.clean.keep_plugins,
     };
     ensure!(!file.skills.prompt_runner.is_empty(), "[skills] prompt_runner is empty");
-    Ok(Config { home: home.to_path_buf(), stack, harnesses, models, leads, review, sheets, clean, prompt_runner: file.skills.prompt_runner })
+    let incident_path = crate::paths::expand(&file.incidents.path, home);
+    let incident_path = if incident_path.is_absolute() { incident_path } else { home.join(incident_path) };
+    let incidents = Incidents { path: crate::paths::normalize(&incident_path), worker: file.incidents.worker };
+    Ok(Config { home: home.to_path_buf(), stack, harnesses, models, leads, review, sheets, clean, prompt_runner: file.skills.prompt_runner, incidents })
 }
 
 pub fn flat(text: &str, home: &Path) -> Result<crate::drift::Flat> {
@@ -543,6 +578,8 @@ mod tests {
         assert_eq!(older.clean, cfg.clean);
         assert_eq!(older.prompt_runner, cfg.prompt_runner);
         assert_eq!(cfg.prompt_runner[0], "claude");
+        let relative = from_str(&text.replace("~/.local/state/ai-stack/incidents.md", "incidents.md"), Path::new("/h")).unwrap();
+        assert_eq!(relative.incidents.path, PathBuf::from("/h/incidents.md"));
     }
 
     #[test]
