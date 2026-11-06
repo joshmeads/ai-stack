@@ -13,6 +13,7 @@ ratatui = "0.30.2"
 serde = { version = "1.0.229", features = ["derive"] }
 serde_json = { version = "1.0.154", features = ["preserve_order"] }
 similar = "3.2.0"
+signal-hook = "0.3.18"
 toml = "1.1.8"
 tempfile = "3.27.0"
 time = "0.3.55"
