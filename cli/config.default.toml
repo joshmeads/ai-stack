@@ -126,3 +126,10 @@ keep_plugins = [
 # edits files there by design, so pick a permission mode you trust.
 [skills]
 prompt_runner = ["claude", "-p", "--permission-mode", "acceptEdits"]
+
+# Both harnesses submit to this private file through `ai-stack incident record`.
+# The worker classifies duplicates without project context; agents never read it.
+# Relative paths resolve from the user home.
+[incidents]
+path = "~/.local/state/ai-stack/incidents.md"
+worker = "haiku"

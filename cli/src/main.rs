@@ -5,6 +5,7 @@ mod drift;
 mod exec;
 mod fleet;
 mod groups;
+mod incident;
 mod install;
 mod ledger;
 mod links;
@@ -50,6 +51,11 @@ struct Cli {
 
 #[derive(Subcommand)]
 enum Commands {
+    /// Submit a confirmed material incident through an isolated small worker.
+    Incident {
+        #[command(subcommand)]
+        command: IncidentCommand,
+    },
     /// Print this machine's effective configuration.
     Config {
         #[command(subcommand)]
@@ -139,6 +145,19 @@ enum Commands {
     Fleet {
         #[command(subcommand)]
         command: FleetCommand,
+    },
+}
+
+#[derive(Subcommand)]
+enum IncidentCommand {
+    /// Create the shared private log if missing; preserve an existing log.
+    Init,
+    /// Record a delivered-code bug, substantially off-course work, or an evidenced recurring mistake.
+    #[command(long_about = incident::HELP)]
+    Record {
+        /// JSON payload file, or - for stdin. Keep the saved payload for retries.
+        #[arg(long, value_name = "PATH")]
+        file: PathBuf,
     },
 }
 
@@ -271,6 +290,8 @@ fn main() -> Result<()> {
     let cli = Cli::parse();
     let ctx = resolve_context(&cli)?;
     let code = match cli.command {
+        Commands::Incident { command: IncidentCommand::Init } => incident::initialize(&load_config(&ctx)?),
+        Commands::Incident { command: IncidentCommand::Record { file } } => incident::run(&load_config(&ctx)?, &file),
         Commands::Auth { command: AuthCommand::Status { json } } => {
             let status = auth::collect(&exec::SystemExec, &ctx.home, |name| std::env::var_os(name).map(PathBuf::from));
             auth::write_status(&status, json, auth::now(), &mut io::stdout())?;
