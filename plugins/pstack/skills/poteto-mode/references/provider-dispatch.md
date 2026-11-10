@@ -22,7 +22,7 @@ A sheet that another tool writes, such as the ai-stack CLI's per-harness sheet, 
 
 ## Read-time normalization
 
-Match each configured descriptor before choosing a route, in this order: an exact model-matrix row, then a kept predecessor, then a rolling-alias revision. A model that is its own matrix row, such as a registered exact pin, is never normalized. If a provider-qualified model matches no matrix row or kept predecessor and is a versioned predecessor of a rolling alias in the catalog, replace that model component in memory with the alias. Preserve provider, effort, role, and lane order. Use only the normalized descriptor for native dispatch or runner argv. Never pass the versioned predecessor to Claude.
+Match each configured descriptor before choosing a route, in this order: an exact model-matrix row, then a kept predecessor, then a rolling-alias revision. A model that is its own matrix row, such as a registered exact pin, is never normalized. If a provider-qualified model matches no matrix row or kept predecessor and is a versioned predecessor of a rolling alias in the catalog, replace that model component in memory with the alias. Preserve provider, effort, role, and lane order. Use only the normalized descriptor for native dispatch, T3 dispatch, or runner argv. Never pass the versioned predecessor to Claude. A [T3 Code lane](#t3-code-lanes) is the one exception: T3 accepts only concrete revisions, so it passes the one resolved from T3's advertised models at dispatch.
 
 This read-time rule makes an older installed sheet use the latest family revision immediately without writing user files. Once per parent run, report that the persisted sheet is stale and that `/setup-stack` will rewrite it after its normal probes and confirmation. Unknown versioned Claude models remain invalid. The external runner rejects a missed rolling-alias version pin instead of silently executing it.
 
@@ -32,7 +32,7 @@ A kept predecessor in the catalog matches its family. Dispatch it with the sheet
 
 The top-level harness resolves the route once. A child receives an assigned provider, model, effort, access mode, prompt, working directory, and output path. A child never detects the harness, chooses a provider, or launches another model. Environment markers may corroborate the top-level harness before fan-out, but nested processes inherit parent markers and must not use them for routing.
 
-The catalog's [route table](model-catalog.md#routes) gives each provider's route from each parent. A provider native to the parent uses the parent's subagent primitive. Every other provider uses the external runner.
+The catalog's [route table](model-catalog.md#routes) gives each provider's route from each parent. A provider native to the parent uses the parent's subagent primitive. Every other provider uses the external runner, except a read-only Claude or Codex lane that a parent inside T3 Code sends through [T3 Code lanes](#t3-code-lanes).
 
 `inherit-parent` and `auto` remain aliases. They use the parent's current model and effort through its native subagent primitive. In a panel they still consume one lane, but they reduce provider diversity; say so in the synthesis record.
 
@@ -44,6 +44,23 @@ Native dispatch avoids a second CLI startup and its base context.
 - Codex: call `spawn_agent` with the descriptor's model and `reasoning_effort`, the complete task, grounding paths, access mode, and unique output location. Use an isolated worktree for a writer. Codex subagents already run concurrently.
 
 Do not send a same-provider descriptor to the external runner. It rejects that call because the native route is cheaper and already available.
+
+## T3 Code lanes
+
+A parent running inside T3 Code may launch a read-only Claude or Codex lane through T3's `delegate_task`, because T3's own instructions route a child on another provider there. Every other provider stays on the external runner, whose containment its provider notes measure. T3 accepts only the model IDs it advertises, and the sheet's model is not always one of them: a Claude descriptor names a rolling alias, while T3 lists only concrete revisions. Never pass the descriptor's model to `delegate_task` unchecked, and never write a concrete model ID into a sheet, skill, or brief to work around this. Check the descriptor against the models T3 has available, at the moment of dispatch, so a new release is picked up and a withdrawn one is never used.
+
+Before each fan-out phase that uses `delegate_task`:
+
+1. Call `orchestrator_capabilities`. Its model lists are short, so when a provider reports omitted models and none of its listed models match, call it again with `search` set to the descriptor's model.
+2. Pick the T3 provider: `claudeAgent` for `claude`, `codex` for `codex`. It must report `canRunChildTask: true`.
+3. Pick the model, starting from the normalized descriptor. An advertised ID equal to its model wins. Otherwise, when the model is a rolling alias in the catalog, take the advertised IDs that are revisions of that alias, by the rolling-alias table's versioned-predecessor pattern, and choose the highest revision, comparing its digit groups as numbers. A model with no exact match that is not a rolling alias has no T3 model.
+4. Set the effort. For `default`, pass no effort option. Otherwise pass it through the chosen model's option that lists effort levels, `effort` for Claude and `reasoningEffort` for Codex, and only when that option lists the requested effort. Otherwise the requested effort is unavailable, and poteto-mode's Match the model to the job rule applies.
+5. Give the lane its own copy. Pass `interactionMode: "plan"` with `isolation: "shared"`. Plan mode is a rule the model follows, not a sandbox: a Codex child keeps a writable sandbox, Codex's plan mode allows cache and build-output writes, and T3 itself writes checkpoint refs under `.git` while a child runs, so no before-and-after check of the parent's checkout can single out the lane's writes. Make a throwaway copy of the scope as [Repository code in a read-only lane](#repository-code-in-a-read-only-lane) describes, and bring the scope's uncommitted state into it: run `git diff HEAD --binary --output=<patch>` in the checkout, `git -C <copy> apply <patch>`, and copy any untracked files in scope. Tell the child in its task that the copy is the repository it reviews, and to read and run commands only there. Remove the copy after taking the result, so anything the lane wrote goes with it. A lane that needs an enforced read-only sandbox uses the external runner instead. An `isolated-write` lane keeps its native or runner route, because a T3 worktree starts from the parent's commit without its uncommitted edits, and a Codex parent on `workspace-write` cannot commit them.
+6. Bound the child. A T3 child is a full session with the user's plugins, MCP servers and `delegate_task`, and it receives only the task text. Write into every task the limits the native lane definitions carry: do not choose another model, start another agent or delegate, or start a jm:stack workflow.
+
+Resolving an alias to its own family's advertised revision is not a substitution. The rules against writing a concrete Claude revision govern sheets and runner argv, not a T3 target resolved at dispatch. If no advertised model matches, the lane is a dropout. Its reason names the descriptor, the T3 provider, and the IDs T3 advertised. Never pick another family. If a lane was sent with its model unresolved and T3 answered `Model <model> is not advertised by provider <provider>`, resolve it as above and send it once more; any further `delegate_task` refusal is a dropout.
+
+A T3 lane has no runner receipt, and this rule replaces the receipt checks in [Completion and dropouts](#completion-and-dropouts) for it. The lane counts when its task status is `completed`, its `workState` is `result_available` with `hasPendingChildRuns: false`, its `summary` is non-empty, and the `providerInstanceId` and `model` it reports equal the resolved target. Those two fields repeat the request. `executedModel` is the field that would name the served model. When it is set, it must equal the target, or for a rolling alias be a revision of the same family; a mismatch is a dropout. When it is `null`, the proof is the pinned request, as with `pinned-argv`. Record each lane's descriptor, resolved target, `executedModel`, task ID and summary in place of a receipt.
 
 ## External lanes
 
@@ -100,7 +117,7 @@ Run every such lane with `--cwd` set to its own fresh throwaway worktree of the 
 
 ## Completion and dropouts
 
-Success requires all of these:
+A [T3 Code lane](#t3-code-lanes) completes by that section's rule. Success for a runner lane requires all of these:
 
 1. Exit status `0`.
 2. Receipt status `complete`.

@@ -15,7 +15,7 @@ The scope is what the user names. Otherwise it is the branch diff from its merge
 
 ## Fan out
 
-Start all adversaries in one fan-out phase, one per entry on the `interrogate reviewers` line of the current harness's pstack model sheet. If the sheet or that line is missing, use its [role default](../poteto-mode/references/model-catalog.md#role-defaults). Native adversaries use the parent subagent primitive. External adversaries use the launcher directly, and each counts only when its receipt passes [Completion and dropouts](../poteto-mode/references/provider-dispatch.md#completion-and-dropouts).
+Start all adversaries in one fan-out phase, one per entry on the `interrogate reviewers` line of the current harness's pstack model sheet. If the sheet or that line is missing, use its [role default](../poteto-mode/references/model-catalog.md#role-defaults). Native adversaries use the parent subagent primitive. External adversaries use the launcher directly, and each counts only when its receipt passes [Completion and dropouts](../poteto-mode/references/provider-dispatch.md#completion-and-dropouts). An adversary launched through T3 Code's `delegate_task` follows [T3 Code lanes](../poteto-mode/references/provider-dispatch.md#t3-code-lanes): its model is checked against T3's available models, never passed unchecked, it runs in plan mode on its own throwaway copy of the scope, and it counts by that section's completion rule in place of a receipt.
 
 Route each descriptor with `read-only` access and a unique output and receipt path. Use the parent subagent primitive without a model override for an `auto` or `inherit-parent` entry, so that adversary runs on the parent model. Pick each subagent's effort for the job, per the Subagents section of the **poteto-mode** skill.
 
@@ -49,8 +49,10 @@ One pass of Fan out and Verify is a round. A fresh pass after someone fixes find
 
 ## Output
 
+Open with the panel line, before the intent. Write `Panel: <completed> of <configured> adversaries completed`, followed by each dropped descriptor and its reason. Start the line with `NO REVIEW` when none completed, `SINGLE-PROVIDER REVIEW` when every completed adversary ran on one provider, and `REDUCED PANEL` when any other adversary dropped out. Carry that line unchanged into every report of this review: the final reply, a lead's summary, and a PR's `## Review` section.
+
 - **Intent**: the restatement.
-- **Adversaries**: each descriptor with its output and receipt paths, or its dropout.
+- **Adversaries**: each descriptor with its output and receipt paths, or for a T3 lane its resolved target, `executedModel` and task ID, or its dropout.
 - **Findings**: for each verified finding, its severity, the command, its output, how it breaks the intent, and the adversaries that found it. Say "no verified findings" when none survive.
 - **Dropped**: for each adversary, the count of dropped findings and why.
 - **Ledger**: one row per finding across rounds, with the round it appeared in, its severity, and its outcome (`fixed`, `declined` with the reason, or `open`).
