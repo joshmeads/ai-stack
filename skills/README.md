@@ -76,6 +76,12 @@ The `engineering` group is vendored from [mattpocock/skills](https://github.com/
 | `modernize` | Bring an old PR up to date, or recommend closing it. |
 | `takeover` | Take over a PR, branch or thread and finish it while keeping credit. |
 | `leaving-pr-comments` | Mark every comment posted on the user's behalf with an attribution note. |
+| `file-pr` | Open a concise PR whose title and description say why the change matters. |
+| `babysit-pr` | Watch a PR through CI and review bots with one watcher, and fix real findings. |
+| `council` | Get review or feedback from three models on three providers, scored per round. |
+| `sol-loop` | Have GPT Sol review a change in a short, budgeted loop. |
+| `full-send` | Finish the work end to end without the user: prove it, review, file, babysit and merge the PR. |
+| `full-stop` | Do the `full-send` work but stop with the PR ready for the user to merge. |
 
 ## Writing
 
