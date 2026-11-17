@@ -178,11 +178,18 @@ pub fn plan(cfg: &Config, hc: &HarnessConfig, runner: &dyn Runner, out: &mut Pla
         Query::Json(json) => installed_plugins(hc.harness, &json),
         Query::Failed(_) => None,
     };
-    let Some(installed) = installed else {
+    let Some(mut installed) = installed else {
         out.warnings.push(format!("note: cannot read {name}'s installed plugins; planning every install command, which the CLI skips when already done"));
         out.commands.extend(install_all());
         return Ok(());
     };
+    if hc.harness == Harness::Codex {
+        for id in codex_configured_plugins(&hc.home) {
+            if id.ends_with(&format!("@{MARKETPLACE}")) && !installed.iter().any(|entry| entry.id == id) {
+                installed.push(Installed { id, version: None, enabled: true, scope: None });
+            }
+        }
+    }
     for entry in &installed {
         let Some(plugin) = entry.id.strip_suffix(&format!("@{MARKETPLACE}")) else { continue };
         if manifest.iter().any(|(name, _)| name == plugin) {
@@ -371,6 +378,12 @@ fn installed_plugins(harness: Harness, json: &Value) -> Option<Vec<Installed>> {
             })
             .collect(),
     )
+}
+
+fn codex_configured_plugins(home: &Path) -> Vec<String> {
+    let Ok(text) = std::fs::read_to_string(home.join("config.toml")) else { return Vec::new() };
+    let Ok(config) = toml::from_str::<toml::Table>(&text) else { return Vec::new() };
+    config.get("plugins").and_then(toml::Value::as_table).map(|plugins| plugins.keys().cloned().collect()).unwrap_or_default()
 }
 
 fn read_manifest(stack: &Path, harness: Harness) -> Result<Vec<(String, Option<String>)>> {
@@ -682,10 +695,24 @@ mod tests {
     }
 
     #[test]
+    fn a_codex_plugin_the_marketplace_dropped_is_removed_although_codex_no_longer_lists_it() {
+        use crate::install::tests::{fixture, put};
+
+        let f = fixture();
+        f.apply(&f.plan());
+        let hc = f.cfg.harnesses.iter().find(|hc| hc.harness == Harness::Codex).unwrap();
+        put(&hc.home.join("config.toml"), "[plugins.\"jm-stack@jm\"]\nenabled = true\n\n[plugins.\"pstack@jm\"]\nenabled = true\n\n[plugins.\"other@market\"]\nenabled = true\n");
+        let mut out = Plan::default();
+        plan(&f.cfg, hc, &f.runner, &mut out).unwrap();
+        assert!(out.conflicts.is_empty(), "{:?}", out.conflicts);
+        assert_eq!(out.commands.iter().map(|cmd| cmd.args.clone()).collect::<Vec<_>>(), vec![strings(&["plugin", "remove", "jm-stack@jm"])]);
+    }
+
+    #[test]
     fn the_retired_jm_plugins_restore_from_the_commit_before_their_skills_moved_out() {
         let repo = Path::new(env!("CARGO_MANIFEST_DIR")).parent().unwrap();
         let git = |args: &[&str]| exec::check(&exec::SystemExec, "git", &strings(&[&["-C", &repo.to_string_lossy()], args].concat()), None).ok().map(|out| out.trim().to_string());
-        let Some(parent) = git(&["rev-parse", "--verify", "-q", "8b08520^{commit}^"]) else { return };
+        let Some(parent) = git(&["rev-parse", "--verify", "-q", "54f7c48^{commit}^"]) else { return };
         for plugin in ["jm-games", "jm-tools"] {
             for harness in [Harness::Claude, Harness::Codex] {
                 assert_eq!(restorable_commit(repo, manifest_path(harness), plugin), Some(parent.clone()), "{plugin} {harness:?}");
