@@ -25,6 +25,26 @@
         "subagents",
         "unslop"
       ]
+    },
+    {
+      "name": "t3stack",
+      "source": "./plugins/t3stack",
+      "description": "Theo Browne's tstack skills: filing, babysitting and finishing PRs, takeovers, council and Sol review loops.",
+      "author": {
+        "name": "Theo Browne"
+      },
+      "homepage": "https://github.com/t3dotgg/tstack",
+      "license": "MIT"
+    },
+    {
+      "name": "pocock",
+      "source": "./plugins/pocock",
+      "description": "Matt Pocock's grill-me and grilling, wizard, and writing-for-agents skills.",
+      "author": {
+        "name": "Matt Pocock"
+      },
+      "homepage": "https://github.com/mattpocock/skills",
+      "license": "MIT"
     }
   ]
 }

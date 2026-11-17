@@ -45,6 +45,26 @@ else
   fail=1
 fi
 
+for vendored in t3stack pocock; do
+  claude_version="$(verof "$repo/plugins/$vendored/.claude-plugin/plugin.json")"
+  codex_version="$(verof "$repo/plugins/$vendored/.codex-plugin/plugin.json")"
+  commits="$(awk -v dest="plugins/$vendored/skills" '
+    /^\[\[skill\]\]/ { if (d == dest) print c; c = ""; d = "" }
+    /^commit = / { c = substr($3, 2, 7) }
+    /^dest = / { d = substr($3, 2, length($3) - 2) }
+    END { if (d == dest) print c }
+  ' "$repo/stack.toml" | sort -u)"
+  if [ -z "$commits" ] || [ "$(printf '%s\n' "$commits" | wc -l)" -ne 1 ]; then
+    note "FAIL: $vendored's vendored skills must share one pinned commit, found: ${commits:-none}"
+    fail=1
+  elif [ "$claude_version" != "$codex_version" ] || [ "${claude_version##*.}" != "$commits" ]; then
+    note "FAIL: $vendored version must end in its pinned commit $commits in both manifests (claude=$claude_version codex=$codex_version); bump it after skills update so Claude Code refreshes its cache"
+    fail=1
+  else
+    note "ok: $vendored version $claude_version matches its pinned commit"
+  fi
+done
+
 rolling='fable|opus|haiku|sonnet'
 legacy_model_pins="$(
   grep -REn \

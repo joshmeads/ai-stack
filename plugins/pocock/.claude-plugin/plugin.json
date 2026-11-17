@@ -1,0 +1,13 @@
+{
+  "name": "pocock",
+  "displayName": "pocock",
+  "version": "0.1.0+pocock.5863806",
+  "description": "Matt Pocock's skills for Claude Code and Codex: grill-me and grilling, wizard, and writing-for-agents.",
+  "author": {
+    "name": "Matt Pocock"
+  },
+  "homepage": "https://github.com/mattpocock/skills",
+  "repository": "https://github.com/joshmeads/ai-stack",
+  "license": "MIT",
+  "keywords": ["pocock", "grilling", "wizard", "writing-for-agents"]
+}

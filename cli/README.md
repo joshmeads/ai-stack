@@ -2,7 +2,7 @@
 
 `ai-stack` sets up this repository's `jm-stack` plugin and standalone skills in Claude Code (`~/.claude`) and Codex (`~/.codex`) from one config file. For each enabled harness it:
 
-1. adds the stack checkout as the local `jm` plugin marketplace and installs `jm-stack` through the harness's own CLI, removing any other installed `jm` plugin the checkout no longer lists;
+1. adds the stack checkout as the local `jm` plugin marketplace and installs every plugin its marketplace manifest lists (it must list `jm-stack`) through the harness's own CLI, removing any other installed `jm` plugin the checkout no longer lists;
 2. links each skill of the global groups in `<stack>/stack.toml` into the harness's user skill folder (see [Skills and groups](#skills-and-groups));
 3. writes the jm:stack model sheet `<home>/pstack-models.md` and wires it into `CLAUDE.md` (an `@` import) or `AGENTS.md` (a mirror of the sheet);
 4. writes one `ai-stack:routing` block into `CLAUDE.md` or `AGENTS.md`;

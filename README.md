@@ -1,13 +1,15 @@
 # jm
 
-Personal skills for Claude Code and Codex, maintained at [joshmeads/ai-stack](https://github.com/joshmeads/ai-stack). The repository is the stack: a marketplace named `jm` with one plugin, a folder of standalone skills, and the `ai-stack` CLI that installs both.
+Personal skills for Claude Code and Codex, maintained at [joshmeads/ai-stack](https://github.com/joshmeads/ai-stack). The repository is the stack: a marketplace named `jm` with three plugins, a folder of standalone skills, and the `ai-stack` CLI that installs both.
 
 | Part | Shown as | What it is |
 | --- | --- | --- |
 | `jm-stack` plugin | `jm-stack:how`, `jm-stack:poteto-mode`, … | [Open Pstack](https://github.com/ericlitman/open-pstack), the Claude Code and Codex port of Lauren Tan's [pstack](https://github.com/cursor/plugins/tree/main/pstack), renamed jm:stack and set up for the models below. Everything else is upstream's. |
-| Standalone skills in [`skills/`](skills/README.md) | `game-gdd`, `game-mvp`, `threejs`, `tools-web-qa`, `art-iteration`, `handoff`, `try-to-break`, `grilling`, `to-spec`, `wayfinder`, `takeover`, … | Write a game design document and take a browser game from prompt to MVP to final build; three.js, react-three-fiber, Phaser, audio, Blender and web QA tools; a loop for visual work judged against reference images; working tools for handoffs, adversarial checks, visual evidence, performance profiling, static hosting and feedback; engineering skills for grilling, specs, tickets, triage and taking over PRs; and writing skills. |
+| `t3stack` plugin | `t3stack:file-pr`, `t3stack:full-send`, … | Theo Browne's [tstack](https://github.com/t3dotgg/tstack) skills for filing, babysitting and finishing PRs, vendored through `stack.toml`. |
+| `pocock` plugin | `pocock:grill-me`, `pocock:wizard`, … | The [mattpocock/skills](https://github.com/mattpocock/skills) skills kept on by default, vendored through `stack.toml`. |
+| Standalone skills in [`skills/`](skills/README.md) | `handoff`, `archify`, `game-gdd`, `threejs`, `to-spec`, … | Write a game design document and take a browser game from prompt to MVP to final build; three.js, react-three-fiber, Phaser, audio, Blender and web QA tools; a loop for visual work judged against reference images; working tools for handoffs, adversarial checks, visual evidence, performance profiling, static hosting and feedback; engineering skills for specs, tickets and triage; and writing skills. |
 
-`stack.toml` sorts the standalone skills into groups. A global group's skills are installed for every harness; `ai-stack groups` lists the groups and their estimated token cost.
+`stack.toml` sorts the standalone skills into groups. A global group's skills are installed for every harness, and only `core` is global; `ai-stack groups` lists the groups and their estimated token cost.
 
 ## Install
 
@@ -23,7 +25,7 @@ ai-stack install
 `ai-stack install` does three things for each harness:
 
 1. It writes the files that differ between Claude Code and Codex: the jm:stack model sheet for that harness, a short routing block, and an instructions block in `~/.claude/CLAUDE.md` or `~/.codex/AGENTS.md`. The instructions block inlines `instructions/common.md` and the harness's own file (`claude.md` or `codex.md`, which carries the Anthropic guidance text for Claude Code). See [instructions/README.md](instructions/README.md).
-2. It adds this checkout as the `jm` marketplace and installs `jm-stack` with each harness's own plugin commands, and uninstalls any other `jm` plugin, such as the retired `jm-games` and `jm-tools`.
+2. It adds this checkout as the `jm` marketplace and installs every plugin it lists (`jm-stack`, `t3stack` and `pocock`) with each harness's own plugin commands, and uninstalls any other `jm` plugin, such as the retired `jm-games` and `jm-tools`.
 3. It links each skill of the global groups into `~/.claude/skills` (Claude Code) and `~/.agents/skills` (Codex) under its plain name.
 
 It also removes what older ai-stack installs left behind. Every file it changes is backed up under `~/.local/state/ai-stack/backups/`. `ai-stack update` pulls this checkout and installs again. `ai-stack install --clean` (or `c` in the review screen) also moves every skill outside the `[clean] keep_skills` list into the backup and uninstalls every plugin outside `keep_plugins`, so only this install and the keep lists remain; preview it with `ai-stack diff --clean`. See [cli/README.md](cli/README.md) for the details.

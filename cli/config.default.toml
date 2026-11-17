@@ -2,7 +2,8 @@
 
 [stack]
 # Checkout of joshmeads/ai-stack. ai-stack adds it to each harness as the
-# local `jm` plugin marketplace, installs jm-stack, and links the skills of
+# local `jm` plugin marketplace, installs its plugins (jm-stack, t3stack and
+# pocock), and links the skills of
 # the global groups in its stack.toml into each harness's user skill folder.
 path = "~/Documents/Projects/@joshmeads/ai-stack"
 remote = "origin"

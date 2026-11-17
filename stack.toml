@@ -1,27 +1,40 @@
 # Skill groups and vendored skills. See cli/README.md
 
-[groups.art]
+[groups.core]
 global = true
+includes = ["cua"]
+skills = [
+    "tools-web-qa",
+    "feedback",
+    "handoff",
+    "archify",
+    "anatomy",
+    "color-expert",
+    "oklch-skill",
+]
+
+[groups.art]
+global = false
 skills = ["art-iteration"]
 
 [groups.engineering]
-global = true
-skills = ["grilling", "grill-me", "grill-with-docs", "domain-modeling", "to-spec", "to-tickets", "triage", "wayfinder", "to-questionnaire", "wait-what", "wizard", "writing-for-agents", "improve-codebase-architecture", "codebase-design", "implement-spec", "setup-matt-pocock-skills", "retro", "research", "compact-handoff", "modernize", "takeover", "leaving-pr-comments", "babysit-pr", "council", "full-send", "full-stop", "sol-loop", "file-pr"]
+global = false
+skills = ["grill-with-docs", "domain-modeling", "to-spec", "to-tickets", "triage", "wayfinder", "to-questionnaire", "wait-what", "improve-codebase-architecture", "codebase-design", "implement-spec", "setup-matt-pocock-skills", "retro", "research", "compact-handoff"]
 
 [groups.writing]
-global = true
+global = false
 skills = ["writing-beats", "writing-fragments", "writing-shape", "tutor"]
 
 [groups.design]
-global = true
+global = false
 skills = ["better-accessibility", "better-colors", "better-interface", "better-layout", "better-typography", "better-ui", "better-writing", "break", "explain-interface", "interface-review", "variant", "brandkit", "color-expert", "oklch-skill"]
 
 [groups.diagrams]
-global = true
+global = false
 skills = ["diagram-design", "archify", "anatomy"]
 
 [groups.cua]
-global = true
+global = false
 skills = ["cua-driver", "cua-sandboxes", "cua-spaces", "cua-volume", "gui-automation"]
 
 [groups.archived]
@@ -29,7 +42,7 @@ global = false
 skills = ["redesign-existing-projects", "full-output-enforcement", "make-interfaces-feel-better"]
 
 [groups.games]
-global = true
+global = false
 includes = ["threejs"]
 skills = [
     "game-gdd",
@@ -44,7 +57,7 @@ skills = [
 ]
 
 [groups.threejs]
-global = true
+global = false
 skills = [
     "threejs",
     "tools-threejs-debug",
@@ -60,7 +73,7 @@ skills = [
 ]
 
 [groups.tools]
-global = true
+global = false
 skills = [
     "devtools-perf",
     "feedback",
@@ -75,12 +88,15 @@ name = "grilling"
 source = "https://github.com/mattpocock/skills"
 path = "skills/productivity/grilling"
 commit = "5863806dd4e15c63174bee4e7515a4256792ecfa"
+dest = "plugins/pocock/skills"
 
 [[skill]]
 name = "grill-me"
 source = "https://github.com/mattpocock/skills"
 path = "skills/productivity/grill-me"
 commit = "5863806dd4e15c63174bee4e7515a4256792ecfa"
+dest = "plugins/pocock/skills"
+process = [{ type = "script", input = "scripts/skill-patches/grill-me.sh" }]
 
 [[skill]]
 name = "grill-with-docs"
@@ -136,12 +152,14 @@ name = "wizard"
 source = "https://github.com/mattpocock/skills"
 path = "skills/engineering/wizard"
 commit = "5863806dd4e15c63174bee4e7515a4256792ecfa"
+dest = "plugins/pocock/skills"
 
 [[skill]]
 name = "writing-for-agents"
 source = "https://github.com/mattpocock/skills"
 path = "skills/productivity/writing-for-agents"
 commit = "5863806dd4e15c63174bee4e7515a4256792ecfa"
+dest = "plugins/pocock/skills"
 
 [[skill]]
 name = "improve-codebase-architecture"
@@ -193,12 +211,14 @@ name = "modernize"
 source = "https://github.com/t3dotgg/tstack"
 path = "skills/modernize"
 commit = "11e37a74d0a6868c121cd0910ab2b3bd9873b92a"
+dest = "plugins/t3stack/skills"
 
 [[skill]]
 name = "takeover"
 source = "https://github.com/t3dotgg/tstack"
 path = "skills/takeover"
 commit = "11e37a74d0a6868c121cd0910ab2b3bd9873b92a"
+dest = "plugins/t3stack/skills"
 process = [{ type = "script", input = "scripts/skill-patches/takeover.sh" }]
 
 [[skill]]
@@ -206,6 +226,7 @@ name = "leaving-pr-comments"
 source = "https://github.com/t3dotgg/tstack"
 path = "skills/leaving-pr-comments"
 commit = "11e37a74d0a6868c121cd0910ab2b3bd9873b92a"
+dest = "plugins/t3stack/skills"
 
 [[skill]]
 name = "writing-beats"
@@ -237,68 +258,68 @@ process = [{ type = "script", input = "scripts/skill-patches/teach.sh" }]
 name = "better-accessibility"
 source = "https://github.com/jakubkrehel/skills"
 path = "skills/better-accessibility"
-commit = "a72290d140249813898ba8648becf6415abcb059"
+commit = "6c2120103600407a1a9986afd834e73144ef8998"
 
 [[skill]]
 name = "better-colors"
 source = "https://github.com/jakubkrehel/skills"
 path = "skills/better-colors"
-commit = "a72290d140249813898ba8648becf6415abcb059"
+commit = "6c2120103600407a1a9986afd834e73144ef8998"
 
 [[skill]]
 name = "better-interface"
 source = "https://github.com/jakubkrehel/skills"
 path = "skills/better-interface"
-commit = "a72290d140249813898ba8648becf6415abcb059"
+commit = "6c2120103600407a1a9986afd834e73144ef8998"
 
 [[skill]]
 name = "better-layout"
 source = "https://github.com/jakubkrehel/skills"
 path = "skills/better-layout"
-commit = "a72290d140249813898ba8648becf6415abcb059"
+commit = "6c2120103600407a1a9986afd834e73144ef8998"
 
 [[skill]]
 name = "better-typography"
 source = "https://github.com/jakubkrehel/skills"
 path = "skills/better-typography"
-commit = "a72290d140249813898ba8648becf6415abcb059"
+commit = "6c2120103600407a1a9986afd834e73144ef8998"
 
 [[skill]]
 name = "better-ui"
 source = "https://github.com/jakubkrehel/skills"
 path = "skills/better-ui"
-commit = "a72290d140249813898ba8648becf6415abcb059"
+commit = "6c2120103600407a1a9986afd834e73144ef8998"
 
 [[skill]]
 name = "better-writing"
 source = "https://github.com/jakubkrehel/skills"
 path = "skills/better-writing"
-commit = "a72290d140249813898ba8648becf6415abcb059"
+commit = "6c2120103600407a1a9986afd834e73144ef8998"
 
 [[skill]]
 name = "break"
 source = "https://github.com/jakubkrehel/skills"
 path = "skills/break"
-commit = "a72290d140249813898ba8648becf6415abcb059"
+commit = "6c2120103600407a1a9986afd834e73144ef8998"
 process = [{ type = "script", input = "scripts/skill-patches/break.sh" }]
 
 [[skill]]
 name = "explain-interface"
 source = "https://github.com/jakubkrehel/skills"
 path = "skills/explain-interface"
-commit = "a72290d140249813898ba8648becf6415abcb059"
+commit = "6c2120103600407a1a9986afd834e73144ef8998"
 
 [[skill]]
 name = "interface-review"
 source = "https://github.com/jakubkrehel/skills"
 path = "skills/interface-review"
-commit = "a72290d140249813898ba8648becf6415abcb059"
+commit = "6c2120103600407a1a9986afd834e73144ef8998"
 
 [[skill]]
 name = "variant"
 source = "https://github.com/jakubkrehel/skills"
 path = "skills/variant"
-commit = "a72290d140249813898ba8648becf6415abcb059"
+commit = "6c2120103600407a1a9986afd834e73144ef8998"
 process = [{ type = "script", input = "scripts/skill-patches/variant.sh" }]
 
 [[skill]]
@@ -318,31 +339,31 @@ process = [{ type = "script", input = "scripts/skill-patches/diagram-design.sh" 
 name = "cua-driver"
 source = "https://github.com/trycua/cua"
 path = "libs/cua-driver/rust/Skills/cua-driver"
-commit = "133259a34f926d3e294e0399e9901b69f240a830"
+commit = "97c837b02ea916793c1f08a5118ad841a7147560"
 
 [[skill]]
 name = "cua-sandboxes"
 source = "https://github.com/trycua/cua"
 path = "libs/cua/skills/cua-sandboxes"
-commit = "133259a34f926d3e294e0399e9901b69f240a830"
+commit = "97c837b02ea916793c1f08a5118ad841a7147560"
 
 [[skill]]
 name = "cua-spaces"
 source = "https://github.com/trycua/cua"
 path = "libs/cua/skills/cua-spaces"
-commit = "133259a34f926d3e294e0399e9901b69f240a830"
+commit = "97c837b02ea916793c1f08a5118ad841a7147560"
 
 [[skill]]
 name = "cua-volume"
 source = "https://github.com/trycua/cua"
 path = "libs/cua/skills/cua-volume"
-commit = "133259a34f926d3e294e0399e9901b69f240a830"
+commit = "97c837b02ea916793c1f08a5118ad841a7147560"
 
 [[skill]]
 name = "gui-automation"
 source = "https://github.com/trycua/cua"
 path = "libs/cua/skills/gui-automation"
-commit = "133259a34f926d3e294e0399e9901b69f240a830"
+commit = "97c837b02ea916793c1f08a5118ad841a7147560"
 
 [[skill]]
 name = "redesign-skill"
@@ -364,7 +385,7 @@ move = "full-output-enforcement"
 name = "make-interfaces-feel-better"
 source = "https://github.com/jakubkrehel/make-interfaces-feel-better"
 path = "skills/make-interfaces-feel-better"
-commit = "35545ea1512ad59fa463e6b1f95ca9c052981fe6"
+commit = "1a2aa9695487dc6d2a59af28e34db9b1490ab181"
 
 [[skill]]
 name = "color-expert"
@@ -395,33 +416,39 @@ name = "babysit-pr"
 source = "https://github.com/t3dotgg/tstack"
 path = "skills/babysit-pr"
 commit = "11e37a74d0a6868c121cd0910ab2b3bd9873b92a"
+dest = "plugins/t3stack/skills"
 
 [[skill]]
 name = "council"
 source = "https://github.com/t3dotgg/tstack"
 path = "skills/council"
 commit = "11e37a74d0a6868c121cd0910ab2b3bd9873b92a"
+dest = "plugins/t3stack/skills"
 
 [[skill]]
 name = "full-send"
 source = "https://github.com/t3dotgg/tstack"
 path = "skills/full-send"
 commit = "11e37a74d0a6868c121cd0910ab2b3bd9873b92a"
+dest = "plugins/t3stack/skills"
 
 [[skill]]
 name = "full-stop"
 source = "https://github.com/t3dotgg/tstack"
 path = "skills/full-stop"
 commit = "11e37a74d0a6868c121cd0910ab2b3bd9873b92a"
+dest = "plugins/t3stack/skills"
 
 [[skill]]
 name = "sol-loop"
 source = "https://github.com/t3dotgg/tstack"
 path = "skills/sol-loop"
 commit = "11e37a74d0a6868c121cd0910ab2b3bd9873b92a"
+dest = "plugins/t3stack/skills"
 
 [[skill]]
 name = "file-pr"
 source = "https://github.com/t3dotgg/tstack"
 path = "skills/file-pr"
 commit = "11e37a74d0a6868c121cd0910ab2b3bd9873b92a"
+dest = "plugins/t3stack/skills"
