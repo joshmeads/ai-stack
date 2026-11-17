@@ -404,7 +404,7 @@ const ROLE_DEFAULTS = "model-catalog.md#role-defaults";
 const ROLE_POINTERS: Record<string, readonly string[]> = {
   "skills/arena/SKILL.md": ["arena runners", "arena cross-judge pool"],
   "skills/architect/SKILL.md": ["architect runners"],
-  "skills/how/SKILL.md": ["how explorer", "how explainer"],
+  "skills/how/SKILL.md": ["how explainer"],
   "skills/interrogate/SKILL.md": ["interrogate reviewers"],
   "skills/swarm/SKILL.md": ["swarm workers"],
   "skills/poteto-mode/SKILL.md": ["feature, refactoring", "bug-fix", "perf-issue", "hillclimb", "hardest tasks", "judgment and prose"],

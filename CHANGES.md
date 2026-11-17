@@ -2,6 +2,16 @@
 
 This port applies the Cursor → Claude Code substitutions in skill bodies. Earlier drafts left them flagged; this revision resolves them. A later pass added a Codex build that shares the same skills; see [Codex port](#codex-port) below.
 
+## 1.16.0+jm.4 applies Cursor pstack 0.15.43
+
+This distribution applies Cursor pstack 0.15.37 to 0.15.43 at `2f87c854fe3e2fcda44ca86b46ede35aad3c46b7`. `UPSTREAM.md` decides each part of the two squashed commits.
+
+**Taken.** `how` starts one read-only lane that explores and explains in one pass. `why` answers from the commits and PR discussions with no lanes. `reflect` reads the transcript itself and starts no reviewers. `architect` is a short brief that sends a large or contested design to Arena. poteto-mode has shorter triggers, Subagents, reply and playbook sections, and every agent it starts first reads the new `worker.md`, which carries the operator's rules. The Orchestrate playbook is gone, and program-scale work goes to figure-it-out. The multi-phase plan has five steps, and `check-plan.mjs` and its test are gone. The principle leaves, `unslop` and `technical-writing` are shorter. `sharpen` asks the agent to prototype a choice an experiment can settle. Trivial mechanical edits read `swarm workers`, panel seats keep their listed effort, the hardest work raises a role one step but never past `xhigh`, and a second opinion uses another provider's model.
+
+**Changed for jm:stack.** How's lane uses the `how explainer` descriptor, and Architect's Arena uses `architect runners`. Recall's per-source investigators run natively on the parent model, because the external runner omits MCP servers. Reflect keeps the Codex transcript pointer and the Claude Code and Codex destinations. Opening a PR takes upstream's shorter lead and keeps its forge, fork, draft-evidence, secret and REST rules. Babysit keeps its nine steps, because upstream's six rules are already among them. `worker.md` allows a draft that repository instructions require. A configured effort above `xhigh` stays as configured.
+
+**Left out.** The new default models, the Fable exception and the retired `hardest tasks` role, `-fast` slugs, `poteto-agent`'s model pin, setup's defaults marker and budgets, the 40-line PR body limit, statechart, Benny, the Cursor manifests, guide and Claude Code adapter. The `how explorer`, `why investigators, synthesizer` and `reflect tooling, judgment, divergent, synthesizer` roles stay registered, though no skill reads them now.
+
 ## 1.16.0+jm.3 arena pulls several model families
 
 **Read-only arena seats.** `arena runners` can seat any family. Only Claude and Codex write. Every other family runs in `read-only` mode, reads the repository and returns its complete candidate as its final output. The parent saves it, applies a patch in a fresh worktree for that candidate and runs the rubric's checks there. A patch that does not apply or fails is a result about the candidate; a missing CLI, login or model is a named dropout. `arena runners` is no longer a writer row in the ai-stack CLI or `/setup-stack`. `architect runners`, `swarm workers` and the code roles stay writers.

@@ -33,7 +33,7 @@ codex plugin marketplace add joshmeads/ai-stack --ref main
 codex plugin add jm-stack@jm
 ```
 
-Codex discovers the plugin skills under the `jm-stack` namespace, so they list as `jm-stack:poteto-mode`, `jm-stack:tdd`, and so on. The namespace comes from `plugins/pstack/.codex-plugin/plugin.json`. To enable the multi-model and parallel-subagent skills (`interrogate`, `arena`, `how`, `why`, `reflect`, `architect`), turn on subagents in `~/.codex/config.toml`:
+Codex discovers the plugin skills under the `jm-stack` namespace, so they list as `jm-stack:poteto-mode`, `jm-stack:tdd`, and so on. The namespace comes from `plugins/pstack/.codex-plugin/plugin.json`. To enable the multi-model and parallel-subagent skills (`interrogate`, `arena`, `swarm`, `how`), turn on subagents in `~/.codex/config.toml`:
 
 ```toml
 [features]
@@ -61,7 +61,7 @@ The marketplace install is the normal user path. Direct links are only for testi
 │   ├── .codex-plugin/plugin.json     # Codex manifest (skills: ./skills/)
 │   ├── skills/                       # 63 skills shared by Claude Code and Codex
 │   │   ├── poteto-mode/references/{codex-tools,provider-dispatch}.md  # tool + provider routing
-│   │   └── poteto-mode/scripts/      # bun/bash/node tooling: watch-pr, runner, resolve-codex-transcript, check-plan.mjs, worktree-audit.sh
+│   │   └── poteto-mode/scripts/      # bun/bash tooling: watch-pr, runner, resolve-codex-transcript, worktree-audit.sh
 │   ├── hooks/                        # SessionStart auto-fire: injects the poteto-mode mandate (Claude Code only)
 │   └── agents/                       # Claude subagents, including a native lane for each Claude family at each selectable effort
 ├── skills/                           # standalone skills, installed under their plain names
@@ -104,7 +104,6 @@ Not declared as deps, but referenced in skill bodies:
 - **`git` 2.25 or later** — the runner asks `git rev-parse --git-common-dir` for a linked worktree's shared git directory, and `worktree-audit.sh` reads `git worktree list --porcelain`. Ubuntu 20.04 LTS ships 2.25; older git is unsupported.
 - **Bash on Windows** — the SessionStart hook runs through `hooks/run-hook.cmd`, which looks for Git for Windows' `bash.exe` in its standard system-wide and per-user locations, then for a `bash` on `PATH` (MSYS2, Cygwin). Without one, the hook exits 0 and skips the pstack startup context, as the superpowers wrapper it comes from does. Install [Git for Windows](https://git-scm.com/download/win) to get the context. In Codex, the hook starts `C:\Windows\System32\cmd.exe` by full path, because one command must work in both PowerShell and cmd. A Windows installed outside `C:\Windows` does not run the hook.
 - **macOS, Linux or WSL2 for Claude writer lanes** — Claude Code's sandbox does not run on native Windows, so a Claude writer lane needs one of these hosts.
-- **`node`** — runs `skills/poteto-mode/scripts/check-plan.mjs`. The checker uses only Node built-ins and does not need Bun.
 - **Provider CLIs** — the external runner uses the assigned subscribed CLI directly, one per provider in the [model catalog's route table](../plugins/pstack/skills/poteto-mode/references/model-catalog.md#routes). Install and authenticate only the providers present in your model sheet. Some providers run read-only lanes only. `read-only` limits the model's tools, not the CLI, so repository code may run in such a lane: each runs in its own throwaway worktree, and you should seat them only on repositories you trust. The catalog notes for OpenCode, Amp, Cursor, Devin, agy, dsh and pi say what repository and host configuration their CLIs load into a lane. Same-provider work stays native; the runner refuses it.
 - **`jq` and `rg` (ripgrep)** — only for `scripts/worktree-audit.sh` (the Worktree cleanup playbook). Without them the audit still runs but blanks its PR and LAST_CHAT columns, so it warns on stderr rather than returning a table that looks complete.
 
@@ -118,7 +117,7 @@ The table uses the short upstream names. Claude Code exposes each native skill w
 | --- | --- |
 | `/poteto-mode` | default entry point for any non-trivial task |
 | `/how` | walk through how a subsystem works |
-| `/why` | investigate why something was built this way (parallel multi-MCP evidence) |
+| `/why` | answer why something was built this way from the commits and PR discussions behind it |
 | `/architect` | settle types and module shape before writing code that crosses a function boundary |
 | `/arena` | run N parallel attempts at the same task and pick the best parts |
 | `/interrogate` | have several different models try to break a diff |
@@ -194,7 +193,6 @@ The port is editorial, not mechanical. Anywhere upstream pstack assumed Cursor-s
 | Skill paths `.cursor/skills/`, `~/.cursor/plugins/` | `.claude/skills/`, `~/.claude/plugins/` |
 | MCP discovery via Cursor's `mcps/` directory | Tool list at top of system prompt (`mcp__<server>__<name>` entries), or `.mcp.json`, or `claude mcp list` |
 | Cursor cloud agents (`environment: "cloud"`, `cloud_base_branch`) | Local background subagents (`run_in_background: true`), isolated by git worktree |
-| The Cursor agent store (path in the system prompt) | `~/.claude/orchestrate/<project-slug>/`, which survives the session restarts a multi-day program expects |
 | Model rule `~/.cursor/rules/pstack-models.mdc` | Override sheet `~/.claude/pstack-models.md`, included from `CLAUDE.md` |
 | Multi-model panels (arena, architect, interrogate) | Provider dispatch runs a default two-model panel of Opus then Sol from the model catalog's [role defaults](../plugins/pstack/skills/poteto-mode/references/model-catalog.md#role-defaults). Same-provider lanes stay native; external lanes use the bundled runner. |
 
