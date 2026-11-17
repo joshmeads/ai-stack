@@ -68,3 +68,41 @@ All the machines the owner manages together.
 **Publish**:
 To commit the stack's changes, push them and update every machine in the fleet, from any machine.
 _Avoid_: deploy, sync, push
+
+### The hub
+
+**Hub**:
+The always-on machine that holds every subscription login and serves model traffic to the fleet over Tailscale.
+_Avoid_: gateway, proxy box, server
+
+**Fork**:
+The owner's copy of CLIProxyAPI that the hub runs, which adds the hub's features and keeps merging upstream.
+_Avoid_: patch set, proxy (when the owner's changes matter)
+
+**Seam**:
+An upstream file the fork changes, listed so that each merge knows where conflicts can appear.
+_Avoid_: patch, hook
+
+**Credential**:
+One signed-in account or API key held by the hub.
+_Avoid_: auth file, account (when talking about the hub's records)
+
+**Access key**:
+The key a machine sends to the hub, limited to a list of providers and revocable per machine.
+_Avoid_: API key, token
+
+**Hub home**:
+A second harness home, such as `~/.claude-hub`, whose harness sends its traffic to the hub.
+_Avoid_: profile, instance
+
+**Pass-through**:
+Traffic the hub forwards on the client's own login, reading usage without choosing a credential.
+_Avoid_: tap, MITM
+
+**Quota reader**:
+The fork's code for one provider that reads a credential's usage windows from that provider.
+_Avoid_: sidecar, adapter
+
+**Ledger**:
+The hub's stored history of requests and quota readings, holding counts but no prompts.
+_Avoid_: logs, analytics
