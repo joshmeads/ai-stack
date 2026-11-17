@@ -1,12 +1,6 @@
 ---
 name: game-delivery
-description: >
-  The delivery contract for every browser game built with the game-mini-gdd,
-  game-mvp and game-final stage skills: fidelity to the task prompt, platform,
-  permitted tools, assets, quality bar, per-stage scope, hosting on ChatGPT
-  Sites, project hygiene, exact README sections and the end-of-session routine.
-  Read it at the start of any game stage, and whenever checking whether a game
-  project is ready to hand over.
+description: "Use at the start of any game stage (game-mini-gdd, game-mvp, game-final), or when checking whether a browser game project is ready to hand over. Holds the delivery contract every stage follows."
 ---
 
 # Game delivery requirements

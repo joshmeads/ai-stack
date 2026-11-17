@@ -9,6 +9,7 @@ pub const FILE: &str = "stack.toml";
 pub const SKILLS_DIR: &str = "skills";
 pub const DEFAULT_DEST: &str = SKILLS_DIR;
 pub const DEFAULT_REF: &str = "HEAD";
+pub const PRIVATE_DIR: &str = "private";
 
 #[derive(Clone, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
 #[serde(try_from = "String", into = "String")]
@@ -69,6 +70,8 @@ pub struct StackFile {
     pub groups: BTreeMap<GroupName, Group>,
     #[serde(default, rename = "skill", skip_serializing_if = "Vec::is_empty")]
     pub skills: Vec<Skill>,
+    #[serde(skip)]
+    pub private: BTreeSet<SkillName>,
 }
 
 #[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
@@ -167,6 +170,25 @@ pub fn resolve<'a>(groups: &'a BTreeMap<GroupName, Group>, roots: impl IntoItera
 impl StackFile {
     pub fn global_skills(&self) -> BTreeSet<SkillName> {
         resolve(&self.groups, self.groups.iter().filter(|(_, group)| group.global).map(|(name, _)| name))
+    }
+
+    pub fn skill_dir(&self, stack: &Path, name: &str) -> PathBuf {
+        let root = if self.private.contains(name) { stack.join(PRIVATE_DIR) } else { stack.to_path_buf() };
+        root.join(SKILLS_DIR).join(name)
+    }
+
+    fn merge_private(&mut self, private: StackFile) -> Result<()> {
+        ensure!(private.skills.is_empty(), "[[skill]]: private skills are kept as files in {PRIVATE_DIR}/{SKILLS_DIR}/, not vendored");
+        let public = resolve(&self.groups, self.groups.keys());
+        for (name, group) in private.groups {
+            ensure!(!self.groups.contains_key(&name), "[groups.{name}]: {} already has a group with this name", FILE);
+            for skill in &group.skills {
+                ensure!(!public.iter().any(|other| other.as_str().eq_ignore_ascii_case(skill.as_str())), "[groups.{name}] skills: {skill:?} is also a skill in {}", FILE);
+                self.private.insert(skill.clone());
+            }
+            self.groups.insert(name, group);
+        }
+        Ok(())
     }
 
     pub fn vendored(&self, name: &str) -> Option<&Skill> {
@@ -327,12 +349,23 @@ pub fn from_str(text: &str) -> Result<StackFile> {
 
 pub fn load(stack: &Path) -> Result<StackFile> {
     let path = stack.join(FILE);
-    let file = match std::fs::read_to_string(&path) {
+    let mut file = match std::fs::read_to_string(&path) {
         Ok(text) => from_str(&text).with_context(|| format!("invalid {}", path.display()))?,
         Err(err) if err.kind() == std::io::ErrorKind::NotFound => StackFile::default(),
         Err(err) => return Err(anyhow!("cannot read {}: {err}", path.display())),
     };
     file.check_skills_dir(stack).and_then(|()| file.check_dests(stack)).with_context(|| format!("invalid {}", path.display()))?;
+    let private_root = stack.join(PRIVATE_DIR);
+    let private_path = private_root.join(FILE);
+    match std::fs::read_to_string(&private_path) {
+        Ok(text) => {
+            let private = from_str(&text).with_context(|| format!("invalid {}", private_path.display()))?;
+            let dirs = private.check_skills_dir(&private_root);
+            file.merge_private(private).and(dirs).with_context(|| format!("invalid {}", private_path.display()))?;
+        }
+        Err(err) if err.kind() == std::io::ErrorKind::NotFound => {}
+        Err(err) => return Err(anyhow!("cannot read {}: {err}", private_path.display())),
+    }
     Ok(file)
 }
 
@@ -744,6 +777,34 @@ mod tests {
         assert_eq!(load(stack).unwrap().groups.len(), 2);
         write(&format!("[groups.tools]\nskills = [\"handoff\", \"feedback\", \"grill\"]\n\n{}", entry("").replace("dest = \"vendor\"\n", "")));
         assert!(load(stack).is_ok());
+    }
+
+    #[test]
+    fn a_private_manifest_adds_groups_whose_skills_live_in_the_private_dir() {
+        let dir = tempfile::tempdir().unwrap();
+        let stack = dir.path();
+        for root in [stack.join("skills/handoff"), stack.join("private/skills/secret")] {
+            std::fs::create_dir_all(&root).unwrap();
+            std::fs::write(root.join("SKILL.md"), "---\nname: x\n---\n").unwrap();
+        }
+        std::fs::write(stack.join(FILE), "[groups.tools]\nglobal = true\nskills = [\"handoff\"]\n").unwrap();
+        let private = |text: &str| std::fs::write(stack.join("private").join(FILE), text).unwrap();
+
+        private("[groups.mine]\nglobal = true\nskills = [\"secret\"]\n");
+        let file = load(stack).unwrap();
+        assert_eq!(file.global_skills().into_iter().map(String::from).collect::<Vec<_>>(), ["handoff", "secret"]);
+        assert_eq!(file.skill_dir(stack, "secret"), stack.join("private/skills/secret"));
+        assert_eq!(file.skill_dir(stack, "handoff"), stack.join("skills/handoff"));
+
+        for (text, message) in [
+            ("[groups.tools]\nskills = [\"secret\"]\n", "already has a group"),
+            ("[groups.mine]\nskills = [\"secret\", \"Handoff\"]\n", "\"Handoff\" is also a skill"),
+            ("[groups.mine]\nskills = [\"secret\", \"gone\"]\n", "\"gone\" has no skills/gone/SKILL.md"),
+        ] {
+            private(text);
+            let err = format!("{:#}", load(stack).unwrap_err());
+            assert!(err.contains("private/stack.toml") && err.contains(message), "{message}: {err}");
+        }
     }
 
     #[test]

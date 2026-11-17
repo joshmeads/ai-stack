@@ -18,7 +18,7 @@ const AGENT = /^stack-.*\.md$/;
 const SHEET_HEADER = [
   "# pstack model configuration",
   "",
-  "Provider-qualified per-role choices. Read the installed jm:stack provider-dispatch reference before dispatching a configured role. Every documented role remains present. `inherit-parent` and `auto` use the parent model natively and still count as one panel lane.",
+  "Provider-qualified per-role choices. Read the installed pstack provider-dispatch reference before dispatching a configured role. Every documented role remains present. `inherit-parent` and `auto` use the parent model natively and still count as one panel lane.",
 ];
 
 const code = (value: string): string => `\`${value}\``;
@@ -74,7 +74,7 @@ export function renderCatalog(registry: Registry): GeneratedFile {
         family.model,
         family.defaultEffort,
         effortsOf(family).join(" "),
-        family.provider === "claude" ? code(`jm-stack:stack-${family.name}-<effort>`) : "-",
+        family.provider === "claude" ? code(`pstack:stack-${family.name}-<effort>`) : "-",
         named.has(family.name) ? "default" : "optional",
         family.upstream ?? "-",
       ])
@@ -171,15 +171,15 @@ export function renderNativeAgents(registry: Registry): readonly GeneratedFile[]
         content: [
           "---",
           `name: ${name}`,
-          `description: Native Claude lane for jm:stack roles configured as ${family.provider}:${family.model}@${effort}.`,
+          `description: Native Claude lane for pstack roles configured as ${family.provider}:${family.model}@${effort}.`,
           `model: ${family.model}`,
           `effort: ${effort}`,
           "disallowedTools: Agent, Task",
           "---",
           "",
-          `# jm:stack ${family.label} lane`,
+          `# pstack ${family.label} lane`,
           "",
-          "Execute only the task and path scope the parent assigns. Read the grounding artifacts by path. Do not choose another model, spawn another agent, or start a jm:stack workflow. If the assignment is read-only, do not modify files. Return the requested artifact or verdict plus a concise rationale.",
+          "Execute only the task and path scope the parent assigns. Read the grounding artifacts by path. Do not choose another model, spawn another agent, or start a pstack workflow. If the assignment is read-only, do not modify files. Return the requested artifact or verdict plus a concise rationale.",
           "",
         ].join("\n"),
       };

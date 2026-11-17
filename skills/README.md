@@ -2,7 +2,7 @@
 
 Each folder here is one standalone skill, installed under its plain name. `stack.toml` at the stack root puts every skill in at least one group, and `ai-stack install` links the skills of the global groups into each harness's user skill folder (`~/.claude/skills` and `~/.agents/skills`). `ai-stack groups` lists the groups, their members and an estimated token cost.
 
-Only the `core` group is global: `feedback`, `handoff`, `archify`, `anatomy`, `color-expert`, `oklch-skill` and the `cua` group. Every other group is off until you set `global = true` on it. Theo Browne's and Matt Pocock's skills that are always on ship as the `t3stack` and `pocock` plugins instead (see [Plugins](#plugins)).
+Only the `core` group is global: `feedback`, `handoff`, `archify`, `anatomy`, `color-expert`, `oklch-skill` and the `cua` group. Every other group is off until you set `global = true` on it. Theo Browne's and Matt Pocock's skills that are always on ship as the `t3stack` and `pocock` plugins instead (see [Plugins](#plugins)). Private skills are kept out of the public tree (see [Private skills](#private-skills)).
 
 ## Game stages
 
@@ -101,7 +101,7 @@ The `writing` group is vendored from [mattpocock/skills](https://github.com/matt
 | `writing-fragments` | Explore: mine raw fragments for a piece, with no structure yet. |
 | `writing-shape` | Exploit: shape the raw material into an article, paragraph by paragraph. |
 | `writing-beats` | Exploit: assemble the raw material into a journey of beats. |
-| `tutor` | Teach a topic over several sessions in a workspace (upstream `teach`; `jm-stack:teach` is a different skill). |
+| `tutor` | Teach a topic over several sessions in a workspace (upstream `teach`; `pstack:teach` is a different skill). |
 
 `t3stack:takeover`, `pocock:grill-me`, `implement-spec`, `wayfinder`, `tutor`, `compact-handoff`, `break`, `variant` and `diagram-design` are patched by scripts in `scripts/skill-patches/`, so their edits survive `skills update`.
 
@@ -135,6 +135,21 @@ The `archived` group is vendored but disabled: its skills aren't linked into any
 | `redesign-existing-projects` | Upgrade an existing site or app to a higher design standard. |
 | `full-output-enforcement` | Stop an agent truncating its output or leaving placeholders. |
 | `make-interfaces-feel-better` | Design engineering details that make an interface feel polished. |
+| `gpt-taste`, `high-end-visual-design`, `image-to-code`, `minimalist-ui` | Taste-skill design styles, adopted from hand installs and pinned to the last upstream commit with these paths. |
+| `implement` | Matt Pocock's implementation skill, adopted from a hand install. |
+| `reverse-engineer-anything` | Reverse-engineering workflow for the [REA](https://github.com/morluto/rea) MCP server (MIT). It is gitignored: `ai-stack skills update reverse-engineer-anything` downloads it from upstream, and it is never committed here. |
+
+## Private skills
+
+`private/` is gitignored. It holds `private/stack.toml`, with the same group format as `stack.toml`, and the skills it lists in `private/skills/<name>/`. `ai-stack install` merges those groups and links their skills like any other. The repository carries the folder only as `private.age`, encrypted with [age](https://github.com/FiloSottile/age) for the public keys in `private.recipients`, one per machine. Each machine keeps its own identity in fnox as `AI_STACK_PRIVATE_KEY`.
+
+The hooks in `.githooks/` keep the two in step. Run `ai-stack private init` once per clone to turn them on:
+
+- `pre-commit` seals `private/` into `private.age` and stages it, when the folder changed.
+- `post-checkout`, `post-merge` and `post-rewrite` open `private.age` into `private/`. They refuse to overwrite edits that are not sealed yet.
+- `pre-push` refuses a push whose commits hold a `private/` path, a private skill's name, or a word listed in `private/guard.txt`.
+
+To add a machine, store an age identity in its fnox, add its public key to `private.recipients`, then run `ai-stack private seal` on a machine that can already open the bundle, and commit.
 
 ## Diagrams
 

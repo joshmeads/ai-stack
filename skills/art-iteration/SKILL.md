@@ -1,6 +1,6 @@
 ---
 name: art-iteration
-description: Iterate a visual or art deliverable (VFX, shaders, materials, illustration, motion, UI look) until it meets a reference bar. Use when the work is judged by how it looks, when the user supplies reference images, or when a visual review fails.
+description: "Use when a visual deliverable (VFX, shaders, materials, illustration, motion, UI look) is judged by how it looks: the user supplies reference images, asks to match a look, or a visual review fails."
 ---
 
 # Art iteration

@@ -1,0 +1,9 @@
+# Machines that can open private.age. Each keeps its identity in fnox as AI_STACK_PRIVATE_KEY.
+# To add a machine: store its key there, add its public key here, then run `ai-stack private seal`
+# on a machine that can already open the bundle, and commit.
+# cachy
+age14c77uq2wuvp9dldmtjx988m6dsvmlugkvl4ghr4z7zf7jxtmcujqcegxm8
+# macbook
+age1aeww7u5d3lnj6zw23rsnvzp7aaapmhuc3y5y8m0w23f95z32d45qr3y4vw
+# ubuntu-vm
+age14c5txtx7du2nkzn46atxkx7lwpkws3jnusgr3c55nngv90azupmqc2nq6l

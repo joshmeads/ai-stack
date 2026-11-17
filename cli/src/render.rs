@@ -4,10 +4,10 @@ use crate::config::{Config, Harness, Route};
 
 pub const MANAGED_MD: &str = "<!-- Managed by ai-stack. Edit ~/.config/ai-stack/config.toml, then run `ai-stack install`. -->";
 pub const MANAGED_TOML: &str = "# Managed by ai-stack. Edit ~/.config/ai-stack/config.toml, then run `ai-stack install`.";
-const SHEET_PREAMBLE: &str = "Provider-qualified per-role choices. Read the installed jm:stack provider-dispatch reference before dispatching a configured role. `inherit-parent` and `auto` use the parent model natively and still count as one panel lane.";
+const SHEET_PREAMBLE: &str = "Provider-qualified per-role choices. Read the installed pstack provider-dispatch reference before dispatching a configured role. `inherit-parent` and `auto` use the parent model natively and still count as one panel lane.";
 
 pub fn sheet(cfg: &Config, harness: Harness) -> String {
-    let mut text = format!("{MANAGED_MD}\n# jm:stack model sheet ({})\n\n{SHEET_PREAMBLE}\n\n", harness.name());
+    let mut text = format!("{MANAGED_MD}\n# pstack model sheet ({})\n\n{SHEET_PREAMBLE}\n\n", harness.name());
     for (label, lanes) in &cfg.sheets[&harness] {
         text.push_str(&format!("{label}: {lanes}\n"));
     }
@@ -29,7 +29,7 @@ pub fn routing(cfg: &Config, harness: Harness, sheet_path: &Path) -> String {
     let mut parts = vec![
         "## Model routing".to_string(),
         format!(
-            "The {} lead runs {lead}. jm:stack skills delegate through {sheet_where}; follow its rows and the jm:stack provider-dispatch reference rather than picking models by hand.",
+            "The {} lead runs {lead}. pstack skills delegate through {sheet_where}; follow its rows and the pstack provider-dispatch reference rather than picking models by hand.",
             harness.name()
         ),
         format!(
@@ -73,14 +73,14 @@ mod tests {
         let claude = routing(&cfg, Harness::Claude, Path::new("/h/.claude/pstack-models.md"));
         assert_eq!(claude, concat!(
             "## Model routing\n\n",
-            "The Claude Code lead runs `claude-opus-5-5` at high effort. jm:stack skills delegate through the model sheet `/h/.claude/pstack-models.md`, imported below; follow its rows and the jm:stack provider-dispatch reference rather than picking models by hand.\n\n",
+            "The Claude Code lead runs `claude-opus-5-5` at high effort. pstack skills delegate through the model sheet `/h/.claude/pstack-models.md`, imported below; follow its rows and the pstack provider-dispatch reference rather than picking models by hand.\n\n",
             "A major review uses the `interrogate` skill, whose reviewers are the sheet's `interrogate reviewers` row (`claude:opus@xhigh, codex:gpt-6.1-sol@xhigh`). Run one at two points: after an architecture or design is settled, and before submitting a pull request (or, for a non-trivial code change with no pull request, before calling it done). Questions, assessments and trivial edits get no review.\n\n",
             "`haiku` (`claude-haiku-5-5`) is capped at 100k tokens of context; the owner sets its compaction. Send work whose total context (files read, tool output and conversation) would exceed that to another model.\n\n",
             "A lane on the other provider runs that provider's CLI and may need the user's approval. If approval is refused or the lane fails, report the review as single-provider.\n\n",
             "The `art-iteration` skill's critic uses this harness's review model: `claude-opus-5-5` at xhigh effort.",
         ));
         let codex = routing(&cfg, Harness::Codex, Path::new("/h/.codex/pstack-models.md"));
-        assert!(codex.contains("The Codex lead runs `gpt-6.1-sol` at high effort. jm:stack skills delegate through the model sheet `/h/.codex/pstack-models.md`, mirrored in the `pstack:models` block below;"), "{codex}");
+        assert!(codex.contains("The Codex lead runs `gpt-6.1-sol` at high effort. pstack skills delegate through the model sheet `/h/.codex/pstack-models.md`, mirrored in the `pstack:models` block below;"), "{codex}");
         assert!(codex.contains("row (`codex:gpt-6.1-sol@xhigh, claude:opus@xhigh`)"), "{codex}");
         assert!(codex.ends_with("review model: `gpt-6.1-sol` at xhigh effort."), "{codex}");
     }

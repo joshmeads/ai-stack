@@ -1,6 +1,6 @@
 ---
 name: devtools-perf
-description: Measure CPU and memory per user action or per request path, in the browser and on a Node server (Next.js included), with a zero-dependency Chrome DevTools Protocol CLI. Use when asked to profile, optimise or find leaks in a web app's CPU or memory, to say which function or route costs the most, or to check whether a change made an action cheaper.
+description: "Use when you have to profile, speed up or find leaks in a web app or a Node or Next.js server: CPU and memory per action or route, which function or route costs most, or whether a change made something cheaper."
 ---
 
 # devtools-perf

@@ -1,6 +1,6 @@
-# Codex tool mapping for jm:stack
+# Codex tool mapping for pstack
 
-jm:stack skills retain Claude Code tool language (`Skill`, `Agent`, `AskUserQuestion`) in shared prose. On Codex the files are the same; only those tool names resolve differently. Model execution is not translated here. Read [`provider-dispatch.md`](provider-dispatch.md) for the parent-owned Claude/Codex route table and provider-qualified descriptors.
+pstack skills retain Claude Code tool language (`Skill`, `Agent`, `AskUserQuestion`) in shared prose. On Codex the files are the same; only those tool names resolve differently. Model execution is not translated here. Read [`provider-dispatch.md`](provider-dispatch.md) for the parent-owned Claude/Codex route table and provider-qualified descriptors.
 
 ## Harness config homes
 
@@ -39,7 +39,7 @@ The resolver reads the [Codex config home](#harness-config-homes) and looks up t
 
 ## Tool actions
 
-| jm:stack / Claude action | Codex equivalent |
+| pstack / Claude action | Codex equivalent |
 |------------------------|------------------|
 | Read a file | `shell` (`cat`, `head`, `tail`) |
 | Create / edit / delete a file | `apply_patch` |
@@ -48,7 +48,7 @@ The resolver reads the [Codex config home](#harness-config-homes) and looks up t
 | Fetch a URL | `shell` with `curl` / `wget` |
 | Search the web | `web_search` |
 | Invoke a skill (the `Skill` tool, `/command`) | Skills load natively. Follow the instructions presented. |
-| `paths` frontmatter scopes automatic loading | Claude Code only. On Codex, invoke `jm-stack:typescript-best-practices` by name. |
+| `paths` frontmatter scopes automatic loading | Claude Code only. On Codex, invoke `pstack:typescript-best-practices` by name. |
 | Dispatch a subagent (the `Agent`/`Task` tool) | `spawn_agent` |
 | Dispatch N parallel subagents in one turn | N `spawn_agent` calls in one response |
 | Wait for a subagent result | `wait_agent` |
@@ -67,7 +67,7 @@ Without it, the native Codex lane is a named dropout. Independent external lanes
 
 ## Subagent policy
 
-poteto-mode's Subagents section sets the Claude-specific default `subagent_type: "jm-stack:poteto-agent"`. Claude Code waits follow [Waits on Claude Code](#waits-on-claude-code). On Codex:
+poteto-mode's Subagents section sets the Claude-specific default `subagent_type: "pstack:poteto-agent"`. Claude Code waits follow [Waits on Claude Code](#waits-on-claude-code). On Codex:
 
 - There is no `poteto-agent` subagent type. Route an ad-hoc subagent through poteto-mode's style by dispatching a `spawn_agent` whose instructions tell it to read the `poteto-mode` skill in full first.
 - `spawn_agent` calls already run concurrently with your turn, so `run_in_background: true` has no separate flag. Issue the dispatch and continue.
@@ -89,11 +89,11 @@ poteto-mode's Subagents section sets the Claude-specific default `subagent_type:
 
 Do not replace every configured entry with a Codex model. `/setup-stack` writes portable descriptors, such as the [role defaults](model-catalog.md#role-defaults). In a Codex parent, only `codex:*` is native. Route every other descriptor through the external launcher exactly as `provider-dispatch.md` specifies. The default panel runs one model from each of two providers and contains no older GPT or Claude substitute.
 
-## Claude built-in skills jm:stack references
+## Claude built-in skills pstack references
 
-Some triggers name skills that ship with Claude Code, not jm:stack. They do not exist on Codex. Substitute the behavior:
+Some triggers name skills that ship with Claude Code, not pstack. They do not exist on Codex. Substitute the behavior:
 
-| Claude built-in named in jm:stack | On Codex |
+| Claude built-in named in pstack | On Codex |
 |---------------------------------|----------|
 | `run` (drive a CLI/TUI to see a change work) | Run the app yourself via `shell` and observe the real output. |
 | `loop` (recurring/self-paced re-invocation, used by `babysit`) | Codex has no `loop` skill. Re-run the step yourself on a cadence, or use a Codex scheduled task if available. |
@@ -106,4 +106,4 @@ UI proof names no skill on either harness. Drive the UI with whatever automation
 
 ## Instructions file
 
-Where a jm:stack skill says "your instructions file", on Codex that is `AGENTS.md` (project root, plus `<config-home>/AGENTS.md` global). On Claude Code it is `CLAUDE.md` (project root, plus `<config-home>/CLAUDE.md` global). Resolve the global directory with the [config-home rule](#harness-config-homes).
+Where a pstack skill says "your instructions file", on Codex that is `AGENTS.md` (project root, plus `<config-home>/AGENTS.md` global). On Claude Code it is `CLAUDE.md` (project root, plus `<config-home>/CLAUDE.md` global). Resolve the global directory with the [config-home rule](#harness-config-homes).

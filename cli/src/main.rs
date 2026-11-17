@@ -13,6 +13,7 @@ mod models;
 mod paths;
 mod plan;
 mod plugins;
+mod private;
 mod render;
 mod skills;
 mod stackfile;
@@ -34,7 +35,7 @@ use crate::plugins::SystemRunner;
 const REBUILD_NEEDED: i32 = 3;
 
 #[derive(Parser)]
-#[command(name = "ai-stack", version, about = "Install and update the jm:stack agent configuration")]
+#[command(name = "ai-stack", version, about = "Install and update the pstack agent configuration")]
 struct Cli {
     /// Config file (default: <home>/.config/ai-stack/config.toml).
     #[arg(long, global = true, value_name = "PATH")]
@@ -146,6 +147,36 @@ enum Commands {
         #[command(subcommand)]
         command: FleetCommand,
     },
+    /// The gitignored private/ folder (private/stack.toml and private/skills/), committed only
+    /// as the age-encrypted private.age. Runs on the git repository of the current directory.
+    Private {
+        #[command(subcommand)]
+        command: PrivateCommand,
+    },
+}
+
+#[derive(Subcommand)]
+enum PrivateCommand {
+    /// Point this clone's git hooks at .githooks/, then open private.age.
+    Init,
+    /// Encrypt private/ into private.age for the keys in private.recipients, when it changed.
+    Seal {
+        /// Also stage private.age (the pre-commit hook passes this).
+        #[arg(long)]
+        stage: bool,
+    },
+    /// Decrypt private.age into private/ with the key from `fnox get AI_STACK_PRIVATE_KEY`.
+    Open {
+        /// Replace private/ even when it has changes that are not sealed.
+        #[arg(long)]
+        force: bool,
+        /// Warn instead of failing (the checkout and merge hooks pass this).
+        #[arg(long)]
+        hook: bool,
+    },
+    /// Read pre-push ref lines on stdin and exit 1 when an outgoing commit holds a private/
+    /// path, a private skill name or a word in private/guard.txt.
+    Check,
 }
 
 #[derive(Subcommand)]
@@ -310,6 +341,7 @@ fn main() -> Result<()> {
         Commands::Skills { command } => cmd_skills(&ctx, command)?,
         Commands::Groups { json } => cmd_groups(&ctx, json)?,
         Commands::Fleet { command } => cmd_fleet(&ctx, command)?,
+        Commands::Private { command } => cmd_private(&ctx, command)?,
     };
     io::stdout().flush()?;
     std::process::exit(code);
@@ -550,6 +582,28 @@ fn cmd_skills(ctx: &Context, command: SkillsCommand) -> Result<i32> {
         }
         SkillsCommand::Status => skills.status(&mut out),
         SkillsCommand::Update { names, git_ref, reprocess, force } => skills.update(skills::Update { names: &names, git_ref, reprocess, force }, &mut out),
+    }
+}
+
+fn cmd_private(ctx: &Context, command: PrivateCommand) -> Result<i32> {
+    let dir = match &ctx.stack_override {
+        Some(stack) => stack.clone(),
+        None => std::env::current_dir()?,
+    };
+    let private = private::Private::locate(&exec::SystemExec, &dir, private::fnox_key_command())?;
+    let mut out = io::stdout();
+    match command {
+        PrivateCommand::Init => private.init(&mut out).map(|()| 0),
+        PrivateCommand::Seal { stage } => private.seal(stage, &mut out).map(|()| 0),
+        PrivateCommand::Open { force, hook } => match private.open(force, &mut out) {
+            Ok(_) => Ok(0),
+            Err(err) if hook => {
+                eprintln!("warning: private.age was not opened: {err:#}");
+                Ok(0)
+            }
+            Err(err) => Err(err),
+        },
+        PrivateCommand::Check => private.check(&mut io::stdin().lock(), &mut io::stderr()),
     }
 }
 

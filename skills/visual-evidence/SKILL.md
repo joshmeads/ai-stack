@@ -1,6 +1,6 @@
 ---
 name: visual-evidence
-description: Show a UI change with screenshots taken under the same conditions before and after. Use for visible bugs, layout, spacing, color, typography, theme or responsive changes, new components, or when asked to show what changed. For art or VFX judged against a reference, use `art-iteration` instead.
+description: "Use when you have to show a UI change with matching before and after screenshots: visible bugs, layout, spacing, color, typography, theme or responsive changes. For art judged against a reference, use `art-iteration`."
 ---
 
 # Visual evidence

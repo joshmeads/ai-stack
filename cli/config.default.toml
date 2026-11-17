@@ -1,8 +1,8 @@
-# jm:stack config. Edit, then run `ai-stack install`.
+# pstack config. Edit, then run `ai-stack install`.
 
 [stack]
 # Checkout of joshmeads/ai-stack. ai-stack adds it to each harness as the
-# local `jm` plugin marketplace, installs its plugins (jm-stack, t3stack and
+# local `jm` plugin marketplace, installs its plugins (pstack, t3stack and
 # pocock), and links the skills of
 # the global groups in its stack.toml into each harness's user skill folder.
 path = "~/Documents/Projects/@joshmeads/ai-stack"
@@ -57,9 +57,9 @@ codex = "sol@high"
 claude = "opus@xhigh"
 codex = "sol@xhigh"
 
-# jm:stack model sheets, one per harness, written to <home>/pstack-models.md.
+# pstack model sheets, one per harness, written to <home>/pstack-models.md.
 # Each lane is a provider-qualified descriptor `<provider>:<model>@<effort>`
-# (see the jm-stack provider-dispatch reference), or inherit-parent / auto.
+# (see the pstack provider-dispatch reference), or inherit-parent / auto.
 # Panel rows accept arrays. Why and Reflect need the parent's MCP servers, so
 # they must inherit the parent. All 15 rows are required in each table. A
 # read-only provider on "arena runners" returns its candidate to the parent.

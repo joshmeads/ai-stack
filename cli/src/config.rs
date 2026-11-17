@@ -420,14 +420,14 @@ fn check_descriptor(label: &str, lane: &str) -> Result<()> {
     let (provider, rest) = lane.split_once(':').ok_or_else(|| anyhow!("lane {lane:?} is not `<provider>:<model>@<effort>`, inherit-parent or auto"))?;
     let (model, effort) = rest.split_once('@').ok_or_else(|| anyhow!("lane {lane:?} has no `@<effort>`"))?;
     let rows: Vec<_> = MATRIX.iter().filter(|(p, _, _)| *p == provider).collect();
-    ensure!(!rows.is_empty(), "lane {lane:?}: unknown provider {provider:?}; jm-stack accepts claude, codex and {}", READ_ONLY_PROVIDERS.join(", "));
+    ensure!(!rows.is_empty(), "lane {lane:?}: unknown provider {provider:?}; pstack accepts claude, codex and {}", READ_ONLY_PROVIDERS.join(", "));
     let any_openrouter_model = provider == "pi" && model.strip_prefix("openrouter/").is_some_and(valid_openrouter_id);
     let efforts: &[&str] = match rows.iter().find(|(_, m, _)| *m == model) {
         Some((_, _, efforts)) => efforts,
         None if any_openrouter_model => FIVE,
         None => {
             let known: Vec<&str> = rows.iter().map(|(_, m, _)| *m).collect();
-            anyhow::bail!("lane {lane:?}: jm-stack has no {provider} model {model:?}; known: {}", known.join(", "));
+            anyhow::bail!("lane {lane:?}: pstack has no {provider} model {model:?}; known: {}", known.join(", "));
         }
     };
     ensure!(efforts.contains(&effort), "lane {lane:?}: effort {effort:?} is not selectable for {provider}:{model}; allowed: {}", efforts.join(", "));
@@ -441,16 +441,16 @@ fn check_descriptor(label: &str, lane: &str) -> Result<()> {
 fn resolve_sheet(harness: Harness, rows: &BTreeMap<String, Lanes>) -> Result<Vec<(String, String)>> {
     let table = format!("[sheet.{}]", harness.as_str());
     for label in rows.keys() {
-        ensure!(SHEET_ROWS.contains(&label.as_str()), "{table}: unknown jm:stack model row {label:?}");
+        ensure!(SHEET_ROWS.contains(&label.as_str()), "{table}: unknown pstack model row {label:?}");
     }
     let mut sheet = Vec::new();
     for label in SHEET_ROWS {
-        let value = rows.get(label).ok_or_else(|| anyhow!("{table}: missing jm:stack model row {label:?}"))?;
+        let value = rows.get(label).ok_or_else(|| anyhow!("{table}: missing pstack model row {label:?}"))?;
         let lanes: Vec<&str> = match value {
             Lanes::Single(lane) => vec![lane.trim()],
             Lanes::Panel(lanes) => {
-                ensure!(PANEL_ROWS.contains(&label), "{table}: jm:stack model row {label:?} is not a panel; give one lane");
-                ensure!(!lanes.is_empty(), "{table}: jm:stack model panel {label:?} is empty");
+                ensure!(PANEL_ROWS.contains(&label), "{table}: pstack model row {label:?} is not a panel; give one lane");
+                ensure!(!lanes.is_empty(), "{table}: pstack model panel {label:?} is empty");
                 lanes.iter().map(|lane| lane.trim()).collect()
             }
         };
@@ -458,7 +458,7 @@ fn resolve_sheet(harness: Harness, rows: &BTreeMap<String, Lanes>) -> Result<Vec
             if PARENT_LANES.contains(lane) {
                 continue;
             }
-            ensure!(!PARENT_ROWS.contains(&label), "{table}: jm:stack model row {label:?} needs the parent's MCP servers; use inherit-parent or auto");
+            ensure!(!PARENT_ROWS.contains(&label), "{table}: pstack model row {label:?} needs the parent's MCP servers; use inherit-parent or auto");
             check_descriptor(label, lane).map_err(|err| anyhow!("{table}: row {label:?}: {err}"))?;
         }
         sheet.push((label.to_owned(), lanes.join(", ")));
@@ -594,7 +594,7 @@ mod tests {
         for kept in ["github@claude-plugins-official", "browser@openai-bundled", "pdf@openai-primary-runtime"] {
             assert!(clean.keeps_plugin(kept), "{kept}");
         }
-        for removed in ["jm-stack@other", "expo@claude-plugins-official", "pdf-viewer@synced", "github@jm"] {
+        for removed in ["pstack@other", "expo@claude-plugins-official", "pdf-viewer@synced", "github@jm"] {
             assert!(!clean.keeps_plugin(removed), "{removed}");
         }
     }
@@ -610,8 +610,8 @@ mod tests {
             (base.replace(bug, "\"bug-fix\" = \"claude:claude-opus-5-5@high\""), "has no claude model \"claude-opus-5-5\""),
             (base.replace(bug, "\"bug-fix\" = \"claude:opus@ultra\""), "effort \"ultra\" is not selectable"),
             (base.replace(bug, "\"bug-fix\" = [\"claude:opus@high\"]"), "is not a panel"),
-            (base.replace(bug, "\"unknown\" = \"claude:opus@high\""), "unknown jm:stack model row \"unknown\""),
-            (base.replace(&format!("{bug}\n"), ""), "[sheet.claude]: missing jm:stack model row \"bug-fix\""),
+            (base.replace(bug, "\"unknown\" = \"claude:opus@high\""), "unknown pstack model row \"unknown\""),
+            (base.replace(&format!("{bug}\n"), ""), "[sheet.claude]: missing pstack model row \"bug-fix\""),
             (base.replacen("\"why investigators, synthesizer\" = \"inherit-parent\"", "\"why investigators, synthesizer\" = \"claude:opus@high\"", 1), "needs the parent's MCP servers"),
             (base.replace("[\"claude:opus@high\", \"claude:opus@medium\"]", "[]"), "is empty"),
             (format!("{base}\n[roles.worker]\nclaude = \"opus\"\n"), "older ai-stack"),

@@ -1,6 +1,6 @@
 ---
 name: threejs
-description: Version-specific facts and gotchas for three.js r180+ (WebGPURenderer, TSL node materials, RenderPipeline, WebGL2 fallback) and react-three-fiber v9 that models get wrong from training data. Use when writing, reviewing, or debugging three.js or r3f code, TSL shaders, post-processing, GPU particles, or headless WebGPU capture.
+description: "Use when you write, review or debug three.js r180+ or react-three-fiber v9 code (WebGPURenderer, TSL shaders, post-processing, GPU particles, headless WebGPU capture). Holds the version facts models get wrong."
 ---
 
 # three.js

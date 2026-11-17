@@ -1,12 +1,6 @@
 ---
 name: tools-phaser
-description: >
-  Build or fix a Phaser 4 browser game using the official Phaser skills that
-  ship inside the project's node_modules/phaser/skills, plus verified fixes for
-  pitfalls those docs miss (lost key taps, per-step collision callbacks,
-  frame-rate-dependent camera follow, registry events, hit-stop timing). Use
-  for any Phaser task: scenes, config, Arcade physics, input, cameras, tweens,
-  particles, audio, tilemaps, UI, or Phaser 3 to 4 migration.
+description: "Use when you build or fix a Phaser 4 game or migrate one from Phaser 3: scenes, config, physics, input, cameras, tweens, particles, audio, tilemaps or UI."
 ---
 
 # Phaser 4

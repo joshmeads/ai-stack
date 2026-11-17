@@ -22,4 +22,4 @@ replace() {
   mv "$file.patched" "$file"
 }
 
-replace 'by calling the Skill tool with "prototype".' 'by running the Prototype playbook of `jm-stack:poteto-mode`.'
+replace 'by calling the Skill tool with "prototype".' 'by running the Prototype playbook of `pstack:poteto-mode`.'

@@ -1,11 +1,6 @@
 ---
 name: feedback
-description: >
-  Record the user's feedback on the current project in FEEDBACK.md: a dated
-  entry with the newest at the top, in the user's own words. Use when the user
-  gives review notes, playtest feedback, change requests or reviewer comments
-  and asks to log, save, note or record them, or invokes this skill. Only
-  records; it does not act on the feedback.
+description: "Use when the user gives review notes, playtest feedback, change requests or reviewer comments and asks to log, save or record them in FEEDBACK.md. Records only; it does not act on them."
 ---
 
 # Feedback log

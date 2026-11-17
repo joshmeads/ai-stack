@@ -37,11 +37,11 @@ verof() { { grep -m1 '"version"' "$1" || true; } | sed -E 's/.*"version"[[:space
 vc="$(verof "$repo/plugins/pstack/.claude-plugin/plugin.json")"
 vx="$(verof "$repo/plugins/pstack/.codex-plugin/plugin.json")"
 vm="$(verof "$repo/.claude-plugin/marketplace.json")"
-vu="$(sed -n 's/| open-pstack version | `\([^`]*\)` |/\1/p' "$repo/UPSTREAM.md")"
+vu="$(sed -n 's/| port version | `\([^`]*\)` |/\1/p' "$repo/UPSTREAM.md")"
 if [ -n "$vc" ] && [ "$vc" = "$vx" ] && [ "$vc" = "$vm" ] && [ "$vc" = "$vu" ]; then
-  note "ok: open-pstack version matches across UPSTREAM.md and the 3 manifests ($vc)"
+  note "ok: port version matches across UPSTREAM.md and the 3 manifests ($vc)"
 else
-  note "FAIL: open-pstack version differs: upstream=$vu claude-plugin=$vc codex-plugin=$vx marketplace=$vm"
+  note "FAIL: port version differs: upstream=$vu claude-plugin=$vc codex-plugin=$vx marketplace=$vm"
   fail=1
 fi
 
@@ -142,8 +142,8 @@ poteto_preload_bad=""
 if [ "$(printf '%s\n' "$poteto_agent_front" | grep -cx 'skills:' || true)" != "1" ]; then
   poteto_preload_bad="${poteto_agent} must declare one skills list"$'\n'
 fi
-if [ "$(printf '%s\n' "$poteto_agent_front" | grep -cx '  - jm-stack:poteto-mode' || true)" != "1" ]; then
-  poteto_preload_bad="${poteto_preload_bad}${poteto_agent} must preload jm-stack:poteto-mode"$'\n'
+if [ "$(printf '%s\n' "$poteto_agent_front" | grep -cx '  - pstack:poteto-mode' || true)" != "1" ]; then
+  poteto_preload_bad="${poteto_preload_bad}${poteto_agent} must preload pstack:poteto-mode"$'\n'
 fi
 if [ -n "$poteto_preload_bad" ]; then
   note "FAIL: Claude poteto-agent does not preload poteto-mode:"
@@ -437,7 +437,7 @@ check "user /testplug:foo invocation" "SKILL-RAN" "$(run '/testplug:foo')"
 
 preloaded_agent_output="$(
   claude -p \
-    'Use the Agent tool once with subagent_type jm-stack:poteto-agent. Give it this task verbatim: "Without invoking Skill or reading files, reply with the first Core principle named in the preloaded poteto-mode skill." Return only the child response.' \
+    'Use the Agent tool once with subagent_type pstack:poteto-agent. Give it this task verbatim: "Without invoking Skill or reading files, reply with the first Core principle named in the preloaded poteto-mode skill." Return only the child response.' \
     --plugin-dir "$plugin" \
     --model opus \
     --effort high \

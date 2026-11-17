@@ -1,0 +1,7 @@
+#!/bin/sh
+[ -d private ] || exit 0
+if ! command -v ai-stack >/dev/null 2>&1; then
+    echo "pre-commit: ai-stack is not on PATH, so private/ cannot be sealed into private.age" >&2
+    exit 1
+fi
+exec ai-stack private seal --stage

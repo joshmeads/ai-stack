@@ -1,6 +1,6 @@
 ---
 name: handoff
-description: Write a continuation packet so unfinished work can resume in a fresh Claude Code or Codex session without the old transcript. Use when the user wants to continue in a fresh session, reset or clear context, hand off to a new task, or preserve unfinished work before clearing.
+description: "Use when unfinished work has to continue in a fresh Claude Code or Codex session: the user wants to reset or clear context, hand off, or save progress before clearing."
 ---
 
 # Handoff

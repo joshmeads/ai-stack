@@ -12,7 +12,7 @@ use crate::exec::{self, shell_quote as quote};
 use crate::plan::Plan;
 
 pub const MARKETPLACE: &str = "jm";
-const REQUIRED_PLUGIN: &str = "jm-stack";
+const REQUIRED_PLUGIN: &str = "pstack";
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Command {
@@ -642,15 +642,15 @@ mod tests {
 
         let f = fixture();
         f.apply(&f.plan());
-        put(&f.stack.join(".claude-plugin/marketplace.json"), &json!({"name":"jm", "plugins":[{"name":"jm-stack", "source":"./plugins/pstack", "version":"9.0.0"}]}).to_string());
+        put(&f.stack.join(".claude-plugin/marketplace.json"), &json!({"name":"jm", "plugins":[{"name":"pstack", "source":"./plugins/pstack", "version":"9.0.0"}]}).to_string());
         let hc = f.cfg.harnesses.iter().find(|hc| hc.harness == Harness::Claude).unwrap();
-        let project = json!({"id":"jm-stack@jm", "version":"0.1.0", "scope":"project"});
+        let project = json!({"id":"pstack@jm", "version":"0.1.0", "scope":"project"});
         for (installed, expected) in [
-            (json!([project, {"id":"jm-stack@jm", "version":"1.0.0", "scope":"user"}]), vec![]),
-            (json!([project, {"id":"jm-stack@jm", "version":"0.1.0", "scope":"user"}]), strings(&["plugin", "update", "jm-stack@jm", "--scope", "user"])),
-            (json!([project, {"id":"jm-stack@jm", "version":"0.1.0"}]), strings(&["plugin", "update", "jm-stack@jm", "--scope", "user"])),
-            (json!([project]), strings(&["plugin", "install", "jm-stack@jm"])),
-            (json!([{"id":"jm-stack@jm", "version":"0.1.0", "scope":"local"}, {"id":"jm-stack@jm", "version":"0.1.0", "scope":"synced"}]), strings(&["plugin", "install", "jm-stack@jm"])),
+            (json!([project, {"id":"pstack@jm", "version":"1.0.0", "scope":"user"}]), vec![]),
+            (json!([project, {"id":"pstack@jm", "version":"0.1.0", "scope":"user"}]), strings(&["plugin", "update", "pstack@jm", "--scope", "user"])),
+            (json!([project, {"id":"pstack@jm", "version":"0.1.0"}]), strings(&["plugin", "update", "pstack@jm", "--scope", "user"])),
+            (json!([project]), strings(&["plugin", "install", "pstack@jm"])),
+            (json!([{"id":"pstack@jm", "version":"0.1.0", "scope":"local"}, {"id":"pstack@jm", "version":"0.1.0", "scope":"synced"}]), strings(&["plugin", "install", "pstack@jm"])),
         ] {
             let runner = ScopedPlugins { inner: &f.runner, installed };
             let mut out = Plan::default();
@@ -668,7 +668,7 @@ mod tests {
         let f = fixture();
         f.apply(&f.plan());
         let marketplace = f.stack.join(".claude-plugin/marketplace.json");
-        put(&marketplace, &json!({"name":"jm", "plugins":[{"name":"jm-stack", "source":"./plugins/pstack"}, {"name":"t3stack", "source":"./plugins/t3stack"}]}).to_string());
+        put(&marketplace, &json!({"name":"jm", "plugins":[{"name":"pstack", "source":"./plugins/pstack"}, {"name":"t3stack", "source":"./plugins/t3stack"}]}).to_string());
         let hc = f.cfg.harnesses.iter().find(|hc| hc.harness == Harness::Claude).unwrap();
         let mut out = Plan::default();
         plan(&f.cfg, hc, &f.runner, &mut out).unwrap();
@@ -678,7 +678,7 @@ mod tests {
         put(&marketplace, &json!({"name":"jm", "plugins":[{"name":"t3stack", "source":"./plugins/t3stack"}]}).to_string());
         let mut out = Plan::default();
         plan(&f.cfg, hc, &f.runner, &mut out).unwrap();
-        assert!(out.conflicts.iter().any(|conflict| conflict.contains("does not list jm-stack")), "{:?}", out.conflicts);
+        assert!(out.conflicts.iter().any(|conflict| conflict.contains("does not list pstack")), "{:?}", out.conflicts);
     }
 
     #[test]

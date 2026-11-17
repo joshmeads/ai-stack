@@ -22,5 +22,5 @@ replace() {
   mv "$file.patched" "$file"
 }
 
-replace 'calls the Skill tool with `tdd` to build the ticket;' 'calls the Skill tool with `jm-stack:tdd` to build the ticket;'
-replace 'call the Skill tool with `code-review` on the integration branch.' 'call the Skill tool with `jm-stack:interrogate` on the integration branch.'
+replace 'calls the Skill tool with `tdd` to build the ticket;' 'calls the Skill tool with `pstack:tdd` to build the ticket;'
+replace 'call the Skill tool with `code-review` on the integration branch.' 'call the Skill tool with `pstack:interrogate` on the integration branch.'

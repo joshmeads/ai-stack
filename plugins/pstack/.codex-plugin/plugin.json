@@ -1,7 +1,7 @@
 {
-  "name": "jm-stack",
-  "version": "1.16.0+jm.4",
-  "description": "jm:stack: Lauren Tan's pstack for Claude Code and Codex with Josh Meads's model routing. Based on Open Pstack (ericlitman/open-pstack), which began from michael-denyer/pstack-claude and ports cursor/plugins/pstack. Skills are shared; tool names resolve via skills/poteto-mode/references/codex-tools.md.",
+  "name": "pstack",
+  "version": "1.16.0+jm.5",
+  "description": "Lauren Tan's pstack for Claude Code and Codex, with Josh Meads's model routing. Ports cursor/plugins/pstack. Skills are shared; tool names resolve via skills/poteto-mode/references/codex-tools.md.",
   "author": {
     "name": "Lauren Tan"
   },
@@ -9,7 +9,7 @@
   "repository": "https://github.com/joshmeads/ai-stack",
   "license": "MIT",
   "keywords": [
-    "jm-stack",
+    "pstack",
     "pstack",
     "poteto-mode",
     "workflow",
@@ -21,10 +21,10 @@
   "skills": "./skills/",
   "interface": {
     "logo": "./assets/logo.png",
-    "displayName": "jm:stack",
+    "displayName": "pstack",
     "shortDescription": "Rigorous, parallelizable agent workflows: go deep first, write less, verify everything",
-    "longDescription": "jm:stack guides agent work through poteto-mode's principles, parallel design exploration (architect/arena), adversarial multi-model review (interrogate), root-cause debugging, prose deslopping, and verified delivery. Skills are shared with the Claude Code build; on Codex, tool names resolve via the codex-tools mapping.",
-    "developerName": "Lauren Tan (original), Open Pstack maintainers, Josh Meads",
+    "longDescription": "pstack guides agent work through poteto-mode's principles, parallel design exploration (architect/arena), adversarial multi-model review (interrogate), root-cause debugging, prose deslopping, and verified delivery. Skills are shared with the Claude Code build; on Codex, tool names resolve via the codex-tools mapping.",
+    "developerName": "Lauren Tan (original), Josh Meads",
     "category": "Developer Tools",
     "capabilities": [
       "Interactive",

@@ -4,7 +4,6 @@
 global = true
 includes = ["cua"]
 skills = [
-    "tools-web-qa",
     "feedback",
     "handoff",
     "archify",
@@ -39,7 +38,7 @@ skills = ["cua-driver", "cua-sandboxes", "cua-spaces", "cua-volume", "gui-automa
 
 [groups.archived]
 global = false
-skills = ["redesign-existing-projects", "full-output-enforcement", "make-interfaces-feel-better"]
+skills = ["redesign-existing-projects", "full-output-enforcement", "make-interfaces-feel-better", "gpt-taste", "high-end-visual-design", "image-to-code", "minimalist-ui", "implement", "reverse-engineer-anything"]
 
 [groups.games]
 global = false
@@ -219,7 +218,6 @@ source = "https://github.com/t3dotgg/tstack"
 path = "skills/takeover"
 commit = "11e37a74d0a6868c121cd0910ab2b3bd9873b92a"
 dest = "plugins/t3stack/skills"
-process = [{ type = "script", input = "scripts/skill-patches/takeover.sh" }]
 
 [[skill]]
 name = "leaving-pr-comments"
@@ -452,3 +450,48 @@ source = "https://github.com/t3dotgg/tstack"
 path = "skills/file-pr"
 commit = "11e37a74d0a6868c121cd0910ab2b3bd9873b92a"
 dest = "plugins/t3stack/skills"
+
+[[skill]]
+name = "gpt-taste"
+source = "https://github.com/Leonxlnx/taste-skill"
+path = "skills/gpt-tasteskill"
+ref = "a206bbf75a9d80554c0de17c1198ee2fbbc555aa"
+commit = "a206bbf75a9d80554c0de17c1198ee2fbbc555aa"
+move = "gpt-taste"
+
+[[skill]]
+name = "high-end-visual-design"
+source = "https://github.com/Leonxlnx/taste-skill"
+path = "skills/soft-skill"
+ref = "a206bbf75a9d80554c0de17c1198ee2fbbc555aa"
+commit = "a206bbf75a9d80554c0de17c1198ee2fbbc555aa"
+move = "high-end-visual-design"
+
+[[skill]]
+name = "image-to-code"
+source = "https://github.com/Leonxlnx/taste-skill"
+path = "skills/image-to-code-skill"
+ref = "a206bbf75a9d80554c0de17c1198ee2fbbc555aa"
+commit = "a206bbf75a9d80554c0de17c1198ee2fbbc555aa"
+move = "image-to-code"
+
+[[skill]]
+name = "minimalist-ui"
+source = "https://github.com/Leonxlnx/taste-skill"
+path = "skills/minimalist-skill"
+ref = "a206bbf75a9d80554c0de17c1198ee2fbbc555aa"
+commit = "a206bbf75a9d80554c0de17c1198ee2fbbc555aa"
+move = "minimalist-ui"
+
+[[skill]]
+name = "implement"
+source = "https://github.com/mattpocock/skills"
+path = "skills/engineering/implement"
+ref = "5863806dd4e15c63174bee4e7515a4256792ecfa"
+commit = "5863806dd4e15c63174bee4e7515a4256792ecfa"
+
+[[skill]]
+name = "reverse-engineer-anything"
+source = "https://github.com/morluto/rea"
+path = ".agents/skills/reverse-engineer-anything"
+commit = "05be423acbdf3a56673bdbd3004e4b500c0f5217"

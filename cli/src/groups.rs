@@ -39,7 +39,7 @@ pub fn report(stack: &Path, file: &StackFile) -> Result<Report> {
         let mut chars = 0;
         let mut missing = Vec::new();
         for skill in &skills {
-            let dir = stack.join(stackfile::SKILLS_DIR).join(skill.as_str());
+            let dir = file.skill_dir(stack, skill.as_str());
             if !dir.is_dir() {
                 missing.push(skill.to_string());
             }

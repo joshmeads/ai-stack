@@ -1,6 +1,6 @@
 ---
 name: game-gdd
-description: Write a game design document (GDD.md) for a new game, plus the AGENTS.md and Codex agent files the build will follow; or a short-format GDD when asked for one outside the staged game flow. Interview the user until every open question is answered or they tell you to use your judgement. Use for "write a GDD", "game design doc", "/game-gdd", "plan a new game", or before starting any new game build.
+description: "Use when you have to plan a new game or write its game design document (GDD.md) and the AGENTS.md its build follows, or when asked for a short GDD."
 ---
 
 # GDD

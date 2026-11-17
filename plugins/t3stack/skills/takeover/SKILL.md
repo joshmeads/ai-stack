@@ -34,8 +34,8 @@ Independently verify the original failure and realistic workflows, following
 repository guidance and permissions. Green mocked tests do not prove the user
 experience works. State what remains unverified.
 
-When the requested finish includes a PR, use the `opening-a-pr` playbook of `jm-stack:poteto-mode` to file or update it,
-then run the Babysit playbook of `jm-stack:poteto-mode` rather than stopping at creation. Use `leaving-pr-comments`
+When the requested finish includes a PR, use the `opening-a-pr` playbook of `pstack:poteto-mode` to file or update it,
+then run the Babysit playbook of `pstack:poteto-mode` rather than stopping at creation. Use `leaving-pr-comments`
 for replies. Merge or close the original PR only when authorized.
 
 Report what you inherited, what you changed, how you verified it, how credit

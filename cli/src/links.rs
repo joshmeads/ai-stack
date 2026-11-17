@@ -12,7 +12,7 @@ use crate::ledger;
 use crate::paths;
 use crate::plan::{self, Action, Anchor, Displaced, Plan};
 use crate::render;
-use crate::stackfile::{self, SkillName, StackFile};
+use crate::stackfile::{SkillName, StackFile};
 
 pub struct Owner {
     stack: PathBuf,
@@ -152,20 +152,21 @@ struct Entry {
 }
 
 pub fn plan(cfg: &Config, owner: &Owner, index: &Index, file: &StackFile, opts: Options, out: &mut Plan) -> Result<()> {
-    let skills_dir = cfg.stack.path.join(stackfile::SKILLS_DIR);
-    let mut wanted = BTreeSet::new();
+    let mut skills = Skills::new();
     for name in file.global_skills() {
-        if skills_dir.join(name.as_str()).is_dir() {
-            wanted.insert(name);
+        let dir = file.skill_dir(&cfg.stack.path, name.as_str());
+        if dir.is_dir() {
+            let real = paths::resolve(dir.parent().expect("a skill dir has a parent")).join(name.as_str());
+            skills.insert(name, (dir, real));
         } else {
-            out.warnings.push(format!("note: {name} is in a global group but {} is missing; run `ai-stack skills update {name}` to rebuild it", skills_dir.join(name.as_str()).display()));
+            out.warnings.push(format!("note: {name} is in a global group but {} is missing; run `ai-stack skills update {name}` to rebuild it", dir.display()));
         }
     }
+    let wanted: BTreeSet<SkillName> = skills.keys().cloned().collect();
     let ledger = ledger::path(&cfg.home);
     if !index.blocks_write(&ledger, out) {
         out.ledger = Some(ledger);
     }
-    let skills = Skills { dir: &skills_dir, real: paths::resolve(&skills_dir) };
     for folder in &index.folders {
         if !folder.links && (folder.skipped || index.skipped_routes.iter().any(|root| paths::starts_with(&folder.real, root))) {
             continue;
@@ -187,10 +188,7 @@ pub fn plan(cfg: &Config, owner: &Owner, index: &Index, file: &StackFile, opts: 
     Ok(())
 }
 
-struct Skills<'a> {
-    dir: &'a Path,
-    real: PathBuf,
-}
+type Skills = BTreeMap<SkillName, (PathBuf, PathBuf)>;
 
 fn dangling(path: &Path) -> Option<(PathBuf, PathBuf)> {
     if fs::metadata(path).is_ok() {
@@ -237,12 +235,13 @@ fn plan_folder(cfg: &Config, entries: &[Entry], folder: &Folder, wanted: &BTreeS
         }
     }
     for name in wanted {
-        let (path, target) = (folder.path.join(name.as_str()), skills.dir.join(name.as_str()));
+        let (target, wanted_real) = skills[name].clone();
+        let path = folder.path.join(name.as_str());
         let displaces = match at.get(name).map(|&index| &entries[index]) {
             None => Displaced::Nothing,
             Some(Entry { kind: Kind::Protected { .. } | Kind::Skipped, .. }) => continue,
             Some(Entry { path: entry, kind: Kind::Ours { target: was, real }, .. }) => {
-                if *real == skills.real.join(name.as_str()) && *entry == path {
+                if *real == wanted_real && *entry == path {
                     continue;
                 }
                 Displaced::OwnLink { entry: entry.clone(), target: was.clone() }

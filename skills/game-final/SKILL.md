@@ -1,11 +1,6 @@
 ---
 name: game-final
-description: >
-  Stage 3 of a browser game: take the MVP to a complete, publishable game with
-  all feedback in FEEDBACK.md applied, package the submission, update the same
-  ChatGPT Site and verify the live build matches the local one. Use after
-  game-mvp when asked for the final build, polish pass, release or
-  submission build of a designed game, or when this skill is invoked.
+description: "Use when you have to take a browser game's MVP to its final, publishable build: apply FEEDBACK.md, polish, package the submission and update the hosted build."
 ---
 
 # Final build (stage: FINAL)
