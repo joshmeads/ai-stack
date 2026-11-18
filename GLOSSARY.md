@@ -104,5 +104,5 @@ The fork's code for one provider that reads a credential's usage windows from th
 _Avoid_: sidecar, adapter
 
 **Ledger**:
-The hub's stored history of requests and quota readings, holding counts but no prompts.
+The hub's stored history of every model request and response, with token counts, tool calls and quota readings, kept in the hub's local ClickHouse.
 _Avoid_: logs, analytics

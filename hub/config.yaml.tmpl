@@ -37,7 +37,7 @@ observability:
   usage:
     usage-statistics-enabled: true
 
-# Every proxied request as one row in the ClickHouse usage ledger: counts and names, never prompt text.
+# Every proxied request and response, in full, in the local ClickHouse usage ledger. Rows that wait while ClickHouse is down spool to ~/cliproxyapi/ledger-spool.
 ledger:
   enabled: true
   url: http://127.0.0.1:8123
