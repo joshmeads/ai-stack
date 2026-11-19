@@ -2,6 +2,12 @@
 
 This port applies the Cursor → Claude Code substitutions in skill bodies. Earlier drafts left them flagged; this revision resolves them. A later pass added a Codex build that shares the same skills; see [Codex port](#codex-port) below.
 
+## 1.16.0+jm.6 moves Sol to GPT-6.2 and adds Astra and Terra
+
+**GPT-6.2 Sol default.** The Sol row now uses `gpt-6.2-sol`, so every first-run role and panel that names Sol names `codex:gpt-6.2-sol@high`. `gpt-6.1-sol` joins `gpt-5.6-sol` as a kept predecessor: a sheet that names it keeps running it, and `/setup-stack` proposes `gpt-6.2-sol` at the same effort.
+
+**New Codex families.** `codex:gpt-6.2-astra` (`astra`) and `codex:gpt-6.1-terra` (`terra`) run at `low` to `ultra` and default to `high`. `gpt-6-astra` is Astra's kept predecessor. No role default uses them; the ai-stack CLI's sheets do. Efforts come from `codex debug models` on Codex CLI 0.170.0. Luna is unchanged.
+
 ## 1.16.0+jm.4 applies Cursor pstack 0.15.43
 
 This distribution applies Cursor pstack 0.15.37 to 0.15.43 at `2f87c854fe3e2fcda44ca86b46ede35aad3c46b7`. `UPSTREAM.md` decides each part of the two squashed commits.

@@ -16,13 +16,16 @@ export const FAMILIES = [
   }),
   family({
     name: "sol",
-    label: "GPT-6.1 Sol",
+    label: "GPT-6.2 Sol",
     provider: "codex",
-    model: "gpt-6.1-sol",
-    efforts: UP_TO_ULTRA, // `codex debug models`, Codex CLI 0.159.0
+    model: "gpt-6.2-sol",
+    efforts: UP_TO_ULTRA, // `codex debug models`, Codex CLI 0.170.0
     defaultEffort: "high",
     upstream: "gpt-5.6-sol-max",
-    predecessors: [{ model: "gpt-5.6-sol", efforts: UP_TO_ULTRA }],
+    predecessors: [
+      { model: "gpt-6.1-sol", efforts: UP_TO_ULTRA },
+      { model: "gpt-5.6-sol", efforts: UP_TO_ULTRA },
+    ],
   }),
   family({
     name: "luna",
@@ -30,6 +33,25 @@ export const FAMILIES = [
     provider: "codex",
     model: "gpt-6-luna",
     efforts: UP_TO_MAX, // `codex debug models`, Codex CLI 0.159.0: no `ultra`
+    defaultEffort: "high",
+    upstream: null,
+  }),
+  family({
+    name: "astra",
+    label: "GPT-6.2 Astra",
+    provider: "codex",
+    model: "gpt-6.2-astra",
+    efforts: UP_TO_ULTRA, // `codex debug models`, Codex CLI 0.170.0
+    defaultEffort: "high",
+    upstream: null,
+    predecessors: [{ model: "gpt-6-astra", efforts: UP_TO_ULTRA }],
+  }),
+  family({
+    name: "terra",
+    label: "GPT-6.1 Terra",
+    provider: "codex",
+    model: "gpt-6.1-terra",
+    efforts: UP_TO_ULTRA, // `codex debug models`, Codex CLI 0.170.0
     defaultEffort: "high",
     upstream: null,
   }),
@@ -228,4 +250,7 @@ export const RELEASED_PAIRS = [
   { pair: "cursor:gemini-4-argon", family: "cursor-gemini-4-argon" },
   { pair: "agy:gemini-4-argon", family: "gemini-4-argon" },
   { pair: "pi:openrouter/~google/gemini-pro-latest", family: "pi-gemini-pro-latest" },
+  { pair: "codex:gpt-6.2-sol", family: "sol" },
+  { pair: "codex:gpt-6.2-astra", family: "astra" },
+  { pair: "codex:gpt-6.1-terra", family: "terra" },
 ] as const satisfies readonly ReleasedPair<FamilyName>[];

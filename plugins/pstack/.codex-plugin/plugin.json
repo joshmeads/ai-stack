@@ -1,6 +1,6 @@
 {
   "name": "pstack",
-  "version": "1.16.0+jm.5",
+  "version": "1.16.0+jm.6",
   "description": "Lauren Tan's pstack for Claude Code and Codex, with Josh Meads's model routing. Ports cursor/plugins/pstack. Skills are shared; tool names resolve via skills/poteto-mode/references/codex-tools.md.",
   "author": {
     "name": "Lauren Tan"
