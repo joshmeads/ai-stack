@@ -38,10 +38,9 @@ pub fn routing(cfg: &Config, harness: Harness, sheet_path: &Path) -> String {
     ];
     for model in cfg.models.values() {
         if let Some(tokens) = model.context {
+            let name = if model.alias == model.id() { format!("`{}`", model.alias) } else { format!("`{}` (`{}`)", model.alias, model.id()) };
             parts.push(format!(
-                "`{}` (`{}`) is capped at {} tokens of context; the owner sets its compaction. Send work whose total context (files read, tool output and conversation) would exceed that to another model.",
-                model.alias,
-                model.id,
+                "{name} is capped at {} tokens of context; the owner sets its compaction. Send work whose total context (files read, tool output and conversation) would exceed that to another model.",
                 tokens_text(tokens)
             ));
         }
@@ -53,8 +52,8 @@ pub fn routing(cfg: &Config, harness: Harness, sheet_path: &Path) -> String {
 
 fn route_text(route: &Route) -> String {
     match route.effort {
-        Some(effort) => format!("`{}` at {} effort", route.model.id, effort.as_str()),
-        None => format!("`{}`", route.model.id),
+        Some(effort) => format!("`{}` at {} effort", route.model.id(), effort.as_str()),
+        None => format!("`{}`", route.model.id()),
     }
 }
 
@@ -73,15 +72,15 @@ mod tests {
         let claude = routing(&cfg, Harness::Claude, Path::new("/h/.claude/pstack-models.md"));
         assert_eq!(claude, concat!(
             "## Model routing\n\n",
-            "The Claude Code lead runs `claude-opus-5-5` at high effort. pstack skills delegate through the model sheet `/h/.claude/pstack-models.md`, imported below; follow its rows and the pstack provider-dispatch reference rather than picking models by hand.\n\n",
-            "A major review uses the `interrogate` skill, whose reviewers are the sheet's `interrogate reviewers` row (`claude:opus@xhigh, codex:gpt-6.1-sol@xhigh`). Run one at two points: after an architecture or design is settled, and before submitting a pull request (or, for a non-trivial code change with no pull request, before calling it done). Questions, assessments and trivial edits get no review.\n\n",
-            "`haiku` (`claude-haiku-5-5`) is capped at 100k tokens of context; the owner sets its compaction. Send work whose total context (files read, tool output and conversation) would exceed that to another model.\n\n",
+            "The Claude Code lead runs `opus` at high effort. pstack skills delegate through the model sheet `/h/.claude/pstack-models.md`, imported below; follow its rows and the pstack provider-dispatch reference rather than picking models by hand.\n\n",
+            "A major review uses the `interrogate` skill, whose reviewers are the sheet's `interrogate reviewers` row (`claude:opus@xhigh, codex:gpt-6.2-astra@xhigh`). Run one at two points: after an architecture or design is settled, and before submitting a pull request (or, for a non-trivial code change with no pull request, before calling it done). Questions, assessments and trivial edits get no review.\n\n",
+            "`haiku` is capped at 100k tokens of context; the owner sets its compaction. Send work whose total context (files read, tool output and conversation) would exceed that to another model.\n\n",
             "A lane on the other provider runs that provider's CLI and may need the user's approval. If approval is refused or the lane fails, report the review as single-provider.\n\n",
-            "The `art-iteration` skill's critic uses this harness's review model: `claude-opus-5-5` at xhigh effort.",
+            "The `art-iteration` skill's critic uses this harness's review model: `opus` at xhigh effort.",
         ));
         let codex = routing(&cfg, Harness::Codex, Path::new("/h/.codex/pstack-models.md"));
-        assert!(codex.contains("The Codex lead runs `gpt-6.1-sol` at high effort. pstack skills delegate through the model sheet `/h/.codex/pstack-models.md`, mirrored in the `pstack:models` block below;"), "{codex}");
-        assert!(codex.contains("row (`codex:gpt-6.1-sol@xhigh, claude:opus@xhigh`)"), "{codex}");
-        assert!(codex.ends_with("review model: `gpt-6.1-sol` at xhigh effort."), "{codex}");
+        assert!(codex.contains("The Codex lead runs `gpt-6.2-sol` at high effort. pstack skills delegate through the model sheet `/h/.codex/pstack-models.md`, mirrored in the `pstack:models` block below;"), "{codex}");
+        assert!(codex.contains("row (`codex:gpt-6.2-astra@xhigh, claude:opus@xhigh`)"), "{codex}");
+        assert!(codex.ends_with("review model: `gpt-6.2-astra` at xhigh effort."), "{codex}");
     }
 }

@@ -11,7 +11,7 @@ Model and provider facts for [`provider-dispatch.md`](provider-dispatch.md), whi
 | fable | Fable | claude | fable | high | low medium high xhigh max | `pstack:stack-fable-<effort>` | optional | - |
 | sol | GPT-6.2 Sol | codex | gpt-6.2-sol | high | low medium high xhigh max ultra | - | default | gpt-5.6-sol-max |
 | luna | GPT-6 Luna | codex | gpt-6-luna | high | low medium high xhigh max | - | optional | - |
-| astra | GPT-6.2 Astra | codex | gpt-6.2-astra | high | low medium high xhigh max ultra | - | optional | - |
+| astra | GPT-6.2 Astra | codex | gpt-6.2-astra | high | low medium high xhigh max ultra | - | default | - |
 | terra | GPT-6.1 Terra | codex | gpt-6.1-terra | high | low medium high xhigh max ultra | - | optional | - |
 | opus | Opus | claude | opus | high | low medium high xhigh max | `pstack:stack-opus-<effort>` | default | opus |
 | haiku | Haiku | claude | haiku | high | low medium high xhigh max | `pstack:stack-haiku-<effort>` | optional | - |
@@ -253,8 +253,8 @@ how explainer: claude:opus@high
 why investigators, synthesizer: inherit-parent
 reflect tooling, judgment, divergent, synthesizer: inherit-parent
 arena runners: claude:opus@high, codex:gpt-6.2-sol@high
-arena cross-judge pool: claude:opus@high, codex:gpt-6.2-sol@high
+arena cross-judge pool: claude:opus@high, codex:gpt-6.2-astra@high
 swarm workers: codex:gpt-6.2-sol@high
 architect runners: claude:opus@high, codex:gpt-6.2-sol@high
-interrogate reviewers: claude:opus@high, codex:gpt-6.2-sol@high
+interrogate reviewers: claude:opus@high, codex:gpt-6.2-astra@high
 ```

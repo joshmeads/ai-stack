@@ -6,7 +6,9 @@ This port applies the Cursor → Claude Code substitutions in skill bodies. Earl
 
 **GPT-6.2 Sol default.** The Sol row now uses `gpt-6.2-sol`, so every first-run role and panel that names Sol names `codex:gpt-6.2-sol@high`. `gpt-6.1-sol` joins `gpt-5.6-sol` as a kept predecessor: a sheet that names it keeps running it, and `/setup-stack` proposes `gpt-6.2-sol` at the same effort.
 
-**New Codex families.** `codex:gpt-6.2-astra` (`astra`) and `codex:gpt-6.1-terra` (`terra`) run at `low` to `ultra` and default to `high`. `gpt-6-astra` is Astra's kept predecessor. No role default uses them; the ai-stack CLI's sheets do. Efforts come from `codex debug models` on Codex CLI 0.170.0. Luna is unchanged.
+**New Codex families.** `codex:gpt-6.2-astra` (`astra`) and `codex:gpt-6.1-terra` (`terra`) run at `low` to `ultra` and default to `high`. `gpt-6-astra` is Astra's kept predecessor. Efforts come from `codex debug models` on Codex CLI 0.170.0. Luna is unchanged.
+
+**Astra reviews.** The review panels, `arena cross-judge pool` and `interrogate reviewers`, default to Opus then Astra (`claude:opus@high, codex:gpt-6.2-astra@high`). The runner panels, `arena runners` and `architect runners`, stay Opus then Sol. `judgment and prose` and `hardest tasks` stay on Opus. An existing sheet keeps its own rows.
 
 ## 1.16.0+jm.4 applies Cursor pstack 0.15.43
 

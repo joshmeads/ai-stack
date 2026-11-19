@@ -208,7 +208,8 @@ export const FAMILIES = [
 ] as const;
 export type FamilyName = (typeof FAMILIES)[number]["name"];
 
-const PANEL = ["opus", "sol"] as const;
+const RUNNER_PANEL = ["opus", "sol"] as const;
+const REVIEW_PANEL = ["opus", "astra"] as const;
 export const ROLE_DEFAULTS = [
   { role: "feature, refactoring", lanes: ["sol"] },
   { role: "bug-fix", lanes: ["sol"] },
@@ -220,11 +221,11 @@ export const ROLE_DEFAULTS = [
   { role: "how explainer", lanes: ["opus"] },
   { role: "why investigators, synthesizer", lanes: ["inherit-parent"] },
   { role: "reflect tooling, judgment, divergent, synthesizer", lanes: ["inherit-parent"] },
-  { role: "arena runners", lanes: PANEL },
-  { role: "arena cross-judge pool", lanes: PANEL },
+  { role: "arena runners", lanes: RUNNER_PANEL },
+  { role: "arena cross-judge pool", lanes: REVIEW_PANEL },
   { role: "swarm workers", lanes: ["sol"] },
-  { role: "architect runners", lanes: PANEL },
-  { role: "interrogate reviewers", lanes: PANEL },
+  { role: "architect runners", lanes: RUNNER_PANEL },
+  { role: "interrogate reviewers", lanes: REVIEW_PANEL },
 ] as const satisfies readonly RoleDefault<FamilyName>[];
 
 export const RELEASED_PAIRS = [

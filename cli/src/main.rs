@@ -26,7 +26,7 @@ use std::path::{Path, PathBuf};
 use anyhow::{Context as _, Result, anyhow, bail};
 use clap::{Parser, Subcommand};
 
-use crate::config::{Config, Harness, Provider, Stack};
+use crate::config::{Config, Harness, Stack};
 use crate::install::Options;
 use crate::models::{ModelReport, Status};
 use crate::plan::Plan;
@@ -117,16 +117,17 @@ enum Commands {
         /// Print the plan instead of opening the review screen.
         #[arg(long)]
         plain: bool,
-        /// Bump configured models to newer versions in the same family.
+        /// Rewrite exact model IDs in the config as their families before updating.
         #[arg(long)]
         bump_models: bool,
         /// Pull this branch instead of `stack.branch` for this run. The config is not changed.
         #[arg(long, value_name = "BRANCH")]
         branch: Option<String>,
     },
-    /// Report configured models against the provider catalogs.
+    /// Report configured models against the provider catalogs. `newer: <id>` means the
+    /// stack's model registry lags the catalog.
     Models {
-        /// Rewrite config model IDs to the newest version in the same family.
+        /// Rewrite exact model IDs in [models.*] and [sheet.*] as their families, then report.
         #[arg(long)]
         bump: bool,
     },
@@ -505,7 +506,10 @@ fn apply_plan(ctx: &Context, plan: &Plan, runner: &dyn plugins::Runner) -> Resul
 }
 
 fn cmd_update(ctx: &Context, yes: bool, force: bool, plain: bool, bump: bool, branch: Option<String>) -> Result<i32> {
-    let mut cfg = load_config(ctx)?;
+    if bump {
+        bump_config(&ctx.config_path)?;
+    }
+    let cfg = load_config(ctx)?;
     let mut stack = cfg.stack.clone();
     if let Some(branch) = branch {
         exec::check_branch(&branch)?;
@@ -519,13 +523,9 @@ fn cmd_update(ctx: &Context, yes: bool, force: bool, plain: bool, bump: bool, br
         return Ok(REBUILD_NEEDED);
     }
 
-    let catalogs = fetch_catalogs();
-    let mut reports = check_models(&cfg, &catalogs);
+    let catalogs = fetch_catalogs(&cfg);
+    let reports = check_models(&cfg, &catalogs);
     print_reports(&reports);
-    if bump && bump_models(&ctx.config_path, &reports)? > 0 {
-        cfg = load_config(ctx)?;
-        reports = check_models(&cfg, &catalogs);
-    }
 
     install_flow(ctx, &cfg, Options { force, ..Options::default() }, yes, plain, &reports)
 }
@@ -649,19 +649,19 @@ fn cmd_fleet(ctx: &Context, command: FleetCommand) -> Result<i32> {
 }
 
 fn cmd_models(ctx: &Context, bump: bool) -> Result<i32> {
-    let cfg = load_config(ctx)?;
-    let catalogs = fetch_catalogs();
-    let reports = check_models(&cfg, &catalogs);
-    print_reports(&reports);
     if bump {
-        bump_models(&ctx.config_path, &reports)?;
+        bump_config(&ctx.config_path)?;
     }
+    let cfg = load_config(ctx)?;
+    let catalogs = fetch_catalogs(&cfg);
+    print_reports(&check_models(&cfg, &catalogs));
     Ok(0)
 }
 
-fn fetch_catalogs() -> Catalogs {
+fn fetch_catalogs(cfg: &Config) -> Catalogs {
+    let codex_home = cfg.harnesses.iter().find(|hc| hc.harness == Harness::Codex).map(|hc| hc.home.as_path());
     Catalogs {
-        openai: models::openai_catalog().map_err(|e| format!("{e:#}")),
+        openai: models::openai_catalog(codex_home).map_err(|e| format!("{e:#}")),
         anthropic: models::anthropic_catalog().map_err(|e| format!("{e:#}")),
     }
 }
@@ -680,16 +680,9 @@ fn print_reports(reports: &[ModelReport]) {
             "{}  {}  {}  {}",
             report.alias,
             report.id,
-            provider_name(report.provider),
+            report.provider.as_str(),
             status_text(&report.status)
         );
-    }
-}
-
-fn provider_name(provider: Provider) -> &'static str {
-    match provider {
-        Provider::Anthropic => "anthropic",
-        Provider::Openai => "openai",
     }
 }
 
@@ -702,27 +695,19 @@ fn status_text(status: &Status) -> String {
     }
 }
 
-fn bump_models(config_path: &Path, reports: &[ModelReport]) -> Result<usize> {
-    let newer: Vec<(&ModelReport, &str)> = reports
-        .iter()
-        .filter_map(|report| match &report.status {
-            Status::Newer { latest } => Some((report, latest.as_str())),
-            _ => None,
-        })
-        .collect();
-    if newer.is_empty() {
-        return Ok(0);
-    }
-    let mut text = fs::read_to_string(config_path)
+fn bump_config(config_path: &Path) -> Result<()> {
+    let text = fs::read_to_string(config_path)
         .with_context(|| format!("cannot read {}", config_path.display()))?;
-    for (report, latest) in &newer {
-        text = models::bump(&text, &report.alias, latest)?;
+    let bumped = models::bump(&text);
+    if bumped.changes.is_empty() {
+        println!("bump: the config already names families");
+        return Ok(());
     }
-    fs::write(config_path, text).with_context(|| format!("cannot write {}", config_path.display()))?;
-    for (report, latest) in &newer {
-        println!("bumped {}: {} -> {}", report.alias, report.id, latest);
+    fs::write(config_path, bumped.text).with_context(|| format!("cannot write {}", config_path.display()))?;
+    for change in &bumped.changes {
+        println!("bumped {change}");
     }
-    Ok(newer.len())
+    Ok(())
 }
 
 #[cfg(test)]

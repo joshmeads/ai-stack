@@ -1,7 +1,7 @@
 use std::collections::BTreeMap;
 use std::path::{Path, PathBuf};
 
-use anyhow::{Result, anyhow, ensure};
+use anyhow::{Result, anyhow, bail, ensure};
 use serde::{Deserialize, Serialize};
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
@@ -57,6 +57,102 @@ pub enum Provider {
     Openai,
 }
 
+impl Provider {
+    pub fn as_str(self) -> &'static str {
+        match self {
+            Provider::Anthropic => "anthropic",
+            Provider::Openai => "openai",
+        }
+    }
+
+    fn of(family: &Family) -> Option<Provider> {
+        match family.provider {
+            "claude" => Some(Provider::Anthropic),
+            "codex" => Some(Provider::Openai),
+            _ => None,
+        }
+    }
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
+pub struct Family {
+    pub provider: &'static str,
+    pub name: &'static str,
+    pub model: &'static str,
+    pub efforts: &'static [&'static str],
+    pub kept: &'static [Kept],
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
+pub struct Kept {
+    pub model: &'static str,
+    pub efforts: &'static [&'static str],
+}
+
+const fn kept(model: &'static str, efforts: &'static [&'static str]) -> Kept {
+    Kept { model, efforts }
+}
+
+impl Family {
+    const fn new(provider: &'static str, name: &'static str, model: &'static str, efforts: &'static [&'static str]) -> Family {
+        Family { provider, name, model, efforts, kept: &[] }
+    }
+
+    const fn keeping(self, kept: &'static [Kept]) -> Family {
+        Family { kept, ..self }
+    }
+
+    fn pin(&'static self, slug: &str) -> Option<ModelRef> {
+        std::iter::once(kept(self.model, self.efforts))
+            .chain(self.kept.iter().copied())
+            .find(|model| model.model == slug)
+            .map(|model| ModelRef::Pinned { family: self, model: model.model, efforts: model.efforts })
+    }
+
+    fn revision(&self, slug: &str) -> bool {
+        self.provider == "claude"
+            && slug
+                .strip_prefix("claude-")
+                .and_then(|rest| rest.strip_prefix(self.name))
+                .and_then(|rest| rest.strip_prefix('-'))
+                .is_some_and(|numbers| numbers.split('-').all(|part| !part.is_empty() && part.bytes().all(|b| b.is_ascii_digit())))
+    }
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
+pub enum ModelRef {
+    Family(&'static Family),
+    Pinned { family: &'static Family, model: &'static str, efforts: &'static [&'static str] },
+}
+
+impl ModelRef {
+    fn resolve(provider: &str, token: &str) -> Option<ModelRef> {
+        let families = || MATRIX.iter().filter(move |family| family.provider == provider);
+        families()
+            .find(|family| family.name == token)
+            .map(ModelRef::Family)
+            .or_else(|| families().find_map(|family| family.pin(token)))
+    }
+
+    pub fn id(self) -> &'static str {
+        match self {
+            ModelRef::Family(family) => family.model,
+            ModelRef::Pinned { model, .. } => model,
+        }
+    }
+
+    fn efforts(self) -> &'static [&'static str] {
+        match self {
+            ModelRef::Family(family) => family.efforts,
+            ModelRef::Pinned { efforts, .. } => efforts,
+        }
+    }
+}
+
+pub fn family_of_slug(provider: &str, slug: &str) -> Option<&'static Family> {
+    MATRIX.iter().find(|family| family.provider == provider && (family.pin(slug).is_some() || family.revision(slug)))
+}
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
 #[serde(rename_all = "lowercase")]
 pub enum Effort {
@@ -95,26 +191,28 @@ const WRITER_ROWS: [&str; 7] = [
 const READ_ONLY_PROVIDERS: [&str; 7] = ["devin", "opencode", "dsh", "amp", "agy", "cursor", "pi"];
 const FIVE: &[&str] = &["low", "medium", "high", "xhigh", "max"];
 const SIX: &[&str] = &["low", "medium", "high", "xhigh", "max", "ultra"];
-const MATRIX: [(&str, &str, &[&str]); 19] = [
-    ("claude", "fable", FIVE),
-    ("claude", "opus", FIVE),
-    ("claude", "haiku", FIVE),
-    ("claude", "sonnet", FIVE),
-    ("codex", "gpt-6.1-sol", SIX),
-    ("codex", "gpt-6-luna", FIVE),
-    ("devin", "swe-2", &["medium", "high", "max"]),
-    ("devin", "swe-1.6", &["default"]),
-    ("opencode", "opencode/deepseek-v4.1-flash-free", &["low", "high", "max"]),
-    ("dsh", "deepseek-flash", &["low", "high", "max"]),
-    ("dsh", "deepseek-v4-pro", &["low", "high", "max"]),
-    ("amp", "deepseek-v4.1-flash", &["default"]),
-    ("agy", "gemini-3.8-flash", &["low", "medium", "high"]),
-    ("cursor", "composer-2.5", &["default"]),
-    ("cursor", "gemini-3.7-flash", &["low", "medium", "high"]),
-    ("cursor", "grok-4.7", &["low", "medium", "high", "xhigh"]),
-    ("cursor", "gemini-4-argon", &["low", "medium", "high"]),
-    ("agy", "gemini-4-argon", &["low", "medium", "high"]),
-    ("pi", "openrouter/~google/gemini-pro-latest", FIVE),
+static MATRIX: [Family; 21] = [
+    Family::new("claude", "fable", "fable", FIVE),
+    Family::new("claude", "opus", "opus", FIVE),
+    Family::new("claude", "haiku", "haiku", FIVE),
+    Family::new("claude", "sonnet", "sonnet", FIVE),
+    Family::new("codex", "sol", "gpt-6.2-sol", SIX).keeping(&[kept("gpt-6.1-sol", SIX), kept("gpt-5.6-sol", SIX)]),
+    Family::new("codex", "astra", "gpt-6.2-astra", SIX).keeping(&[kept("gpt-6-astra", SIX)]),
+    Family::new("codex", "terra", "gpt-6.1-terra", SIX),
+    Family::new("codex", "luna", "gpt-6-luna", FIVE),
+    Family::new("devin", "swe-2", "swe-2", &["medium", "high", "max"]),
+    Family::new("devin", "swe-1.6", "swe-1.6", &["default"]),
+    Family::new("opencode", "deepseek-v4.1-flash-free", "opencode/deepseek-v4.1-flash-free", &["low", "high", "max"]),
+    Family::new("dsh", "deepseek-flash", "deepseek-flash", &["low", "high", "max"]),
+    Family::new("dsh", "deepseek-v4-pro", "deepseek-v4-pro", &["low", "high", "max"]),
+    Family::new("amp", "amp-deepseek-v4.1-flash", "deepseek-v4.1-flash", &["default"]),
+    Family::new("agy", "gemini-3.8-flash", "gemini-3.8-flash", &["low", "medium", "high"]),
+    Family::new("cursor", "composer-2.5", "composer-2.5", &["default"]),
+    Family::new("cursor", "gemini-3.7-flash", "gemini-3.7-flash", &["low", "medium", "high"]),
+    Family::new("cursor", "grok-4.7", "grok-4.7", &["low", "medium", "high", "xhigh"]),
+    Family::new("cursor", "cursor-gemini-4-argon", "gemini-4-argon", &["low", "medium", "high"]),
+    Family::new("agy", "gemini-4-argon", "gemini-4-argon", &["low", "medium", "high"]),
+    Family::new("pi", "pi-gemini-pro-latest", "openrouter/~google/gemini-pro-latest", FIVE),
 ];
 
 #[derive(Debug, Clone, Deserialize, Serialize)]
@@ -225,8 +323,15 @@ struct HarnessEntry {
 #[derive(Debug, Clone, Deserialize, Serialize)]
 #[serde(deny_unknown_fields)]
 struct ModelEntry {
-    provider: Provider,
-    id: String,
+    #[serde(default)]
+    #[serde(skip_serializing_if = "Option::is_none")]
+    provider: Option<Provider>,
+    #[serde(default)]
+    #[serde(skip_serializing_if = "Option::is_none")]
+    family: Option<String>,
+    #[serde(default)]
+    #[serde(skip_serializing_if = "Option::is_none")]
+    id: Option<String>,
     #[serde(default)]
     #[serde(skip_serializing_if = "Option::is_none")]
     efforts: Option<Vec<Effort>>,
@@ -288,10 +393,16 @@ fn default_codex() -> HarnessEntry {
 #[derive(Debug, Clone, PartialEq, Eq, Serialize)]
 pub struct Model {
     pub alias: String,
-    pub id: String,
+    pub reference: ModelRef,
     pub provider: Provider,
     pub efforts: Option<Vec<Effort>>,
     pub context: Option<u64>,
+}
+
+impl Model {
+    pub fn id(&self) -> &'static str {
+        self.reference.id()
+    }
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize)]
@@ -416,18 +527,19 @@ fn valid_openrouter_id(id: &str) -> bool {
     !id.is_empty() && id.chars().all(|c| c.is_ascii_alphanumeric() || "._~:/-".contains(c))
 }
 
-fn check_descriptor(label: &str, lane: &str) -> Result<()> {
-    let (provider, rest) = lane.split_once(':').ok_or_else(|| anyhow!("lane {lane:?} is not `<provider>:<model>@<effort>`, inherit-parent or auto"))?;
+fn render_descriptor(label: &str, lane: &str) -> Result<String> {
+    let (provider, rest) = lane.split_once(':').ok_or_else(|| anyhow!("lane {lane:?} is not `<provider>:<family or model>@<effort>`, inherit-parent or auto"))?;
     let (model, effort) = rest.split_once('@').ok_or_else(|| anyhow!("lane {lane:?} has no `@<effort>`"))?;
-    let rows: Vec<_> = MATRIX.iter().filter(|(p, _, _)| *p == provider).collect();
-    ensure!(!rows.is_empty(), "lane {lane:?}: unknown provider {provider:?}; pstack accepts claude, codex and {}", READ_ONLY_PROVIDERS.join(", "));
+    let families: Vec<&Family> = MATRIX.iter().filter(|family| family.provider == provider).collect();
+    ensure!(!families.is_empty(), "lane {lane:?}: unknown provider {provider:?}; pstack accepts claude, codex and {}", READ_ONLY_PROVIDERS.join(", "));
     let any_openrouter_model = provider == "pi" && model.strip_prefix("openrouter/").is_some_and(valid_openrouter_id);
-    let efforts: &[&str] = match rows.iter().find(|(_, m, _)| *m == model) {
-        Some((_, _, efforts)) => efforts,
-        None if any_openrouter_model => FIVE,
+    let (rendered, efforts) = match ModelRef::resolve(provider, model) {
+        Some(reference) => (reference.id(), reference.efforts()),
+        None if any_openrouter_model => (model, FIVE),
         None => {
-            let known: Vec<&str> = rows.iter().map(|(_, m, _)| *m).collect();
-            anyhow::bail!("lane {lane:?}: pstack has no {provider} model {model:?}; known: {}", known.join(", "));
+            let mut known: Vec<&str> = families.iter().flat_map(|family| [family.name, family.model].into_iter().chain(family.kept.iter().map(|kept| kept.model))).collect();
+            known.dedup();
+            anyhow::bail!("lane {lane:?}: pstack has no {provider} model {model:?}; known families and models: {}", known.join(", "));
         }
     };
     ensure!(efforts.contains(&effort), "lane {lane:?}: effort {effort:?} is not selectable for {provider}:{model}; allowed: {}", efforts.join(", "));
@@ -435,7 +547,34 @@ fn check_descriptor(label: &str, lane: &str) -> Result<()> {
         !(WRITER_ROWS.contains(&label) && READ_ONLY_PROVIDERS.contains(&provider)),
         "lane {lane:?}: row {label:?} writes files, and {provider} lanes are read-only; choose claude or codex",
     );
-    Ok(())
+    Ok(format!("{provider}:{rendered}@{effort}"))
+}
+
+fn resolve_model(alias: &str, entry: &ModelEntry) -> Result<(ModelRef, Provider)> {
+    let harness_families = || MATRIX.iter().filter_map(|family| Provider::of(family).map(|provider| (family, provider)));
+    let (reference, provider) = match (&entry.family, &entry.id) {
+        (Some(name), None) => harness_families()
+            .find(|(family, _)| family.name == name)
+            .map(|(family, provider)| (ModelRef::Family(family), provider))
+            .ok_or_else(|| {
+                let known: Vec<&str> = harness_families().map(|(family, _)| family.name).collect();
+                anyhow!("model \"{alias}\": unknown family {name:?}; known families: {}", known.join(", "))
+            })?,
+        (None, Some(id)) => harness_families()
+            .find_map(|(family, provider)| family.pin(id).map(|reference| (reference, provider)))
+            .ok_or_else(|| {
+                let migration = ["claude", "codex"].into_iter().find_map(|provider| family_of_slug(provider, id));
+                match migration {
+                    Some(family) => anyhow!("model \"{alias}\": id {id:?} is not a model pstack registers; run `ai-stack models --bump` to name its family \"{}\" instead", family.name),
+                    None => anyhow!("model \"{alias}\": unknown model id {id:?}; use `family` (such as \"sol\") or a model id pstack registers"),
+                }
+            })?,
+        _ => bail!("model \"{alias}\" needs exactly one of `family` (such as \"sol\") or `id` (an exact model id)"),
+    };
+    if let Some(given) = entry.provider {
+        ensure!(given == provider, "model \"{alias}\": provider {} disagrees with {}, whose provider is {}", given.as_str(), reference.id(), provider.as_str());
+    }
+    Ok((reference, provider))
 }
 
 fn resolve_sheet(harness: Harness, rows: &BTreeMap<String, Lanes>) -> Result<Vec<(String, String)>> {
@@ -454,14 +593,16 @@ fn resolve_sheet(harness: Harness, rows: &BTreeMap<String, Lanes>) -> Result<Vec
                 lanes.iter().map(|lane| lane.trim()).collect()
             }
         };
-        for lane in &lanes {
-            if PARENT_LANES.contains(lane) {
+        let mut rendered = Vec::with_capacity(lanes.len());
+        for lane in lanes {
+            if PARENT_LANES.contains(&lane) {
+                rendered.push(lane.to_owned());
                 continue;
             }
             ensure!(!PARENT_ROWS.contains(&label), "{table}: pstack model row {label:?} needs the parent's MCP servers; use inherit-parent or auto");
-            check_descriptor(label, lane).map_err(|err| anyhow!("{table}: row {label:?}: {err}"))?;
+            rendered.push(render_descriptor(label, lane).map_err(|err| anyhow!("{table}: row {label:?}: {err}"))?);
         }
-        sheet.push((label.to_owned(), lanes.join(", ")));
+        sheet.push((label.to_owned(), rendered.join(", ")));
     }
     Ok(sheet)
 }
@@ -477,10 +618,10 @@ pub fn from_str(text: &str, home: &Path) -> Result<Config> {
     let mut models = BTreeMap::new();
     for (alias, entry) in file.models {
         ensure!(valid_name(&alias), "invalid model alias \"{alias}\": use lowercase letters, digits and '-'");
-        ensure!(!entry.id.trim().is_empty(), "model \"{alias}\" has an empty id");
+        let (reference, provider) = resolve_model(&alias, &entry)?;
         ensure!(entry.efforts.as_ref().is_none_or(|efforts| !efforts.is_empty()), "model \"{alias}\" has an empty efforts list");
         ensure!(entry.context != Some(0), "model \"{alias}\" has a zero context limit");
-        models.insert(alias.clone(), Model { alias, id: entry.id, provider: entry.provider, efforts: entry.efforts, context: entry.context });
+        models.insert(alias.clone(), Model { alias, reference, provider, efforts: entry.efforts, context: entry.context });
     }
 
     let stack = Stack {
@@ -568,8 +709,9 @@ mod tests {
     fn default_config_resolves() {
         let cfg = from_str(default_config_text(), Path::new("/h")).unwrap();
         assert_eq!(cfg.stack.path, PathBuf::from("/h/Documents/Projects/@joshmeads/ai-stack"));
-        assert_eq!(cfg.leads[&Harness::Claude].model.id, "claude-opus-5-5");
-        assert_eq!(cfg.review[&Harness::Codex].model.id, "gpt-6.1-sol");
+        assert_eq!(cfg.leads[&Harness::Claude].model.id(), "opus");
+        assert_eq!(cfg.leads[&Harness::Codex].model.id(), "gpt-6.2-sol");
+        assert_eq!(cfg.review[&Harness::Codex].model.id(), "gpt-6.2-astra");
         assert_eq!(cfg.models["haiku"].context, Some(100_000));
         assert_eq!(cfg.sheets[&Harness::Codex].len(), 15);
         assert_eq!(cfg.clean.skill_roots[2], PathBuf::from("/h/.agents/skills"));
@@ -604,7 +746,7 @@ mod tests {
         let base = default_config_text();
         let bug = "\"bug-fix\" = \"claude:opus@medium\"";
         for (text, message) in [
-            (base.replace(bug, "\"bug-fix\" = \"opus@medium\""), "is not `<provider>:<model>@<effort>`"),
+            (base.replace(bug, "\"bug-fix\" = \"opus@medium\""), "is not `<provider>:<family or model>@<effort>`"),
             (base.replace(bug, "\"bug-fix\" = \"claude:opus\""), "has no `@<effort>`"),
             (base.replace(bug, "\"bug-fix\" = \"grok:grok-4.7@xhigh\""), "unknown provider \"grok\""),
             (base.replace(bug, "\"bug-fix\" = \"claude:claude-opus-5-5@high\""), "has no claude model \"claude-opus-5-5\""),
@@ -621,7 +763,40 @@ mod tests {
             assert!(msg.contains(message), "{message:?} not in {msg}");
         }
         assert!(from_str(&base.replace(bug, "\"bug-fix\" = \"claude:sonnet@high\""), Path::new("/h")).is_ok());
-        assert!(from_str(&base.replace("\"bug-fix\" = \"codex:gpt-6.1-sol@medium\"", "\"bug-fix\" = \"codex:gpt-6.1-sol@ultra\""), Path::new("/h")).is_ok());
+    }
+
+    #[test]
+    fn families_render_as_their_current_model_and_exact_ids_stay_pinned() {
+        let base = default_config_text();
+        let lane = |cfg: &Config, harness: Harness, row: &str| cfg.sheets[&harness].iter().find(|(label, _)| label == row).unwrap().1.clone();
+        let cfg = from_str(base, Path::new("/h")).unwrap();
+        assert_eq!(lane(&cfg, Harness::Codex, "bug-fix"), "codex:gpt-6.2-sol@medium");
+        assert_eq!(lane(&cfg, Harness::Codex, "how explorer"), "codex:gpt-6.1-terra@xhigh");
+        assert_eq!(lane(&cfg, Harness::Codex, "arena cross-judge pool"), "claude:opus@xhigh, codex:gpt-6.2-astra@xhigh");
+        assert_eq!(lane(&cfg, Harness::Claude, "bug-fix"), "claude:opus@medium");
+
+        let pinned = base
+            .replace("\"bug-fix\" = \"codex:sol@medium\"", "\"bug-fix\" = \"codex:gpt-6.1-sol@ultra\"")
+            .replace("[models.sol]\nfamily = \"sol\"", "[models.sol]\nprovider = \"openai\"\nid = \"gpt-6.1-sol\"");
+        let cfg = from_str(&pinned, Path::new("/h")).unwrap();
+        assert_eq!(lane(&cfg, Harness::Codex, "bug-fix"), "codex:gpt-6.1-sol@ultra");
+        assert_eq!(cfg.leads[&Harness::Codex].model.id(), "gpt-6.1-sol");
+        assert_eq!(cfg.leads[&Harness::Codex].model.provider, Provider::Openai);
+
+        let sol = "[models.sol]\nfamily = \"sol\"";
+        for (text, message) in [
+            (base.replace("\"bug-fix\" = \"codex:sol@medium\"", "\"bug-fix\" = \"codex:gpt-6.12-sol@medium\""), "has no codex model \"gpt-6.12-sol\""),
+            (base.replace(sol, "[models.sol]\nfamily = \"sol\"\nid = \"gpt-6.2-sol\""), "needs exactly one of `family`"),
+            (base.replace(sol, "[models.sol]\nprovider = \"openai\""), "needs exactly one of `family`"),
+            (base.replace(sol, "[models.sol]\nfamily = \"sol\"\nprovider = \"anthropic\""), "provider anthropic disagrees with gpt-6.2-sol, whose provider is openai"),
+            (base.replace(sol, "[models.sol]\nfamily = \"grok-4.7\""), "unknown family \"grok-4.7\""),
+            (base.replace(sol, "[models.sol]\nid = \"gpt-6.12-sol\""), "unknown model id \"gpt-6.12-sol\""),
+            (base.replace("[models.opus]\nfamily = \"opus\"", "[models.opus]\nid = \"claude-opus-5-5\""), "run `ai-stack models --bump` to name its family \"opus\""),
+        ] {
+            assert_ne!(text, base);
+            let msg = err_of(&text);
+            assert!(msg.contains(message), "{message:?} not in {msg}");
+        }
     }
 
     #[test]
@@ -631,7 +806,7 @@ mod tests {
         let judgment = "\"judgment and prose\" = \"claude:opus@xhigh\"";
         let cfg = from_str(&base.replace(judgment, &format!("\"judgment and prose\" = \"{lane}\"")), Path::new("/h")).unwrap();
         assert!(cfg.sheets[&Harness::Claude].iter().any(|(label, lanes)| label == "judgment and prose" && lanes == lane));
-        let panel = "\"interrogate reviewers\" = [\"claude:opus@xhigh\", \"codex:gpt-6.1-sol@xhigh\"]";
+        let panel = "\"interrogate reviewers\" = [\"claude:opus@xhigh\", \"codex:astra@xhigh\"]";
         assert!(from_str(&base.replace(panel, "\"interrogate reviewers\" = [\"claude:opus@xhigh\", \"cursor:composer-2.5@default\"]"), Path::new("/h")).is_ok());
         let writer = base.replace("\"bug-fix\" = \"claude:opus@medium\"", &format!("\"bug-fix\" = \"{lane}\""));
         let msg = err_of(&writer);
@@ -644,8 +819,8 @@ mod tests {
     fn arena_seats_take_read_only_providers_and_the_other_writer_rows_refuse_them() {
         let cfg = from_str(default_config_text(), Path::new("/h")).unwrap();
         let arena = |harness: Harness| cfg.sheets[&harness].iter().find(|(label, _)| label == "arena runners").unwrap().1.clone();
-        assert_eq!(arena(Harness::Claude), "claude:opus@high, codex:gpt-6.1-sol@high, cursor:grok-4.7@high, agy:gemini-4-argon@high");
-        assert_eq!(arena(Harness::Codex), "codex:gpt-6.1-sol@high, claude:opus@high, cursor:grok-4.7@high, agy:gemini-4-argon@high");
+        assert_eq!(arena(Harness::Claude), "claude:opus@high, codex:gpt-6.2-sol@high, cursor:grok-4.7@high, agy:gemini-4-argon@high");
+        assert_eq!(arena(Harness::Codex), "codex:gpt-6.2-sol@high, claude:opus@high, cursor:grok-4.7@high, agy:gemini-4-argon@high");
         let base = default_config_text();
         let lane = "pi:openrouter/~google/gemini-pro-latest@high";
         for (row, value) in [
@@ -683,7 +858,7 @@ mod tests {
         let base = default_config_text();
         let msg = err_of(&base.replace("claude = \"opus@high\"", "claude = \"opus\""));
         assert!(msg.contains("[leads] claude needs an effort"), "{msg}");
-        let msg = err_of(&base.replace("codex = \"sol@xhigh\"", "codex = \"nope@xhigh\""));
+        let msg = err_of(&base.replace("codex = \"astra@xhigh\"", "codex = \"nope@xhigh\""));
         assert!(msg.contains("[review] codex: unknown model alias \"nope\""), "{msg}");
     }
 }

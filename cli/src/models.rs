@@ -1,10 +1,11 @@
 use std::cmp::Ordering;
+use std::path::Path;
 use std::process::Command;
 
 use anyhow::{Context, Result, anyhow, bail};
 use serde_json::Value;
 
-use crate::config::{Config, Provider};
+use crate::config::{self, Config, ModelRef, Provider};
 
 const ANTHROPIC_DOCS_URL: &str = "https://platform.claude.com/docs/en/about-claude/models/overview";
 
@@ -36,17 +37,17 @@ pub fn check(
                 Provider::Openai => openai,
                 Provider::Anthropic => anthropic,
             };
-            let status = match catalog {
-                Err(reason) => Status::Unknown(reason.to_string()),
-                Ok(list) if !list.contains(&model.id) => Status::Missing,
-                Ok(list) => match newer_than(&model.id, list) {
+            let status = match (catalog, model.reference) {
+                (Err(reason), _) => Status::Unknown(reason.to_string()),
+                (Ok(list), ModelRef::Pinned { model: id, .. }) if !list.iter().any(|slug| slug == id) => Status::Missing,
+                (Ok(list), reference) => match newer_than(reference.id(), list) {
                     Some(latest) => Status::Newer { latest },
                     None => Status::Current,
                 },
             };
             ModelReport {
                 alias: model.alias.clone(),
-                id: model.id.clone(),
+                id: model.id().to_string(),
                 provider: model.provider,
                 status,
             }
@@ -81,8 +82,9 @@ pub fn newer_than(id: &str, catalog: &[String]) -> Option<String> {
     best.map(|(_, _, latest)| latest.clone())
 }
 
-pub fn openai_catalog() -> Result<Vec<String>> {
-    let body = run_command("codex", &["debug", "models"])?;
+pub fn openai_catalog(codex_home: Option<&Path>) -> Result<Vec<String>> {
+    let env: Vec<(&str, &Path)> = codex_home.map(|home| ("CODEX_HOME", home)).into_iter().collect();
+    let body = run_command("codex", &["debug", "models"], &env)?;
     let value: Value =
         serde_json::from_slice(&body).context("codex debug models did not return JSON")?;
     let models = value["models"]
@@ -110,38 +112,38 @@ pub fn anthropic_catalog() -> Result<Vec<String>> {
     Ok(ids)
 }
 
-pub fn bump(config_text: &str, alias: &str, new_id: &str) -> Result<String> {
-    if new_id.contains('"') {
-        bail!("new id {new_id:?} contains a quote");
-    }
-    let header = format!("[models.{alias}]");
-    let mut in_table = false;
-    let mut found_table = false;
-    let mut replaced = false;
-    let mut out = String::with_capacity(config_text.len() + new_id.len());
+pub struct Bumped {
+    pub text: String,
+    pub changes: Vec<String>,
+}
+
+pub fn bump(config_text: &str) -> Bumped {
+    let mut table = "";
+    let mut text = String::with_capacity(config_text.len());
+    let mut changes = Vec::new();
     for line in config_text.split_inclusive('\n') {
         let body = line.trim_end_matches(['\n', '\r']);
-        let terminator = &line[body.len()..];
         let trimmed = body.trim_start();
         if trimmed.starts_with('[') {
-            in_table = body.trim() == header;
-            found_table |= in_table;
+            table = trimmed.split_inclusive(']').next().unwrap_or(trimmed);
         }
-        if in_table && !replaced && is_id_line(trimmed) {
-            out.push_str(&replace_quoted_value(body, new_id, alias)?);
-            out.push_str(terminator);
-            replaced = true;
-            continue;
+        let rewritten = if table.starts_with("[models.") && is_id_line(trimmed) {
+            id_as_family(body)
+        } else if table.starts_with("[sheet.") {
+            lanes_as_families(body)
+        } else {
+            None
+        };
+        match rewritten {
+            Some((new_body, line_changes)) => {
+                text.push_str(&new_body);
+                text.push_str(&line[body.len()..]);
+                changes.extend(line_changes.into_iter().map(|change| format!("{table} {change}")));
+            }
+            None => text.push_str(line),
         }
-        out.push_str(line);
     }
-    if !found_table {
-        bail!("config has no {header} table");
-    }
-    if !replaced {
-        bail!("{header} has no id line");
-    }
-    Ok(out)
+    Bumped { text, changes }
 }
 
 fn is_id_line(trimmed: &str) -> bool {
@@ -150,15 +152,44 @@ fn is_id_line(trimmed: &str) -> bool {
         .is_some_and(|rest| rest.trim_start().starts_with('='))
 }
 
-fn replace_quoted_value(line: &str, new_id: &str, alias: &str) -> Result<String> {
-    let eq = line.find('=').context("id line has no =")?;
-    let open = eq + line[eq..].find('"').with_context(|| {
-        format!("id line in [models.{alias}] has no quoted value")
-    })?;
-    let close = open + 1 + line[open + 1..].find('"').with_context(|| {
-        format!("id line in [models.{alias}] has an unclosed quoted value")
-    })?;
-    Ok(format!("{}{}{}", &line[..=open], new_id, &line[close..]))
+fn id_as_family(body: &str) -> Option<(String, Vec<String>)> {
+    let trimmed = body.trim_start();
+    let indent = &body[..body.len() - trimmed.len()];
+    let mut changes = Vec::new();
+    let value = rewrite_strings(&trimmed["id".len()..], |id| {
+        let family = ["claude", "codex"].into_iter().find_map(|provider| config::family_of_slug(provider, id))?;
+        changes.push(format!("id \"{id}\" -> family \"{}\"", family.name));
+        Some(family.name.to_string())
+    });
+    (!changes.is_empty()).then(|| (format!("{indent}family{value}"), changes))
+}
+
+fn lanes_as_families(body: &str) -> Option<(String, Vec<String>)> {
+    let mut changes = Vec::new();
+    let text = rewrite_strings(body, |lane| {
+        let (provider, rest) = lane.split_once(':').filter(|(provider, _)| matches!(*provider, "claude" | "codex"))?;
+        let (slug, effort) = rest.split_once('@')?;
+        let family = config::family_of_slug(provider, slug).filter(|family| family.name != slug && family.efforts.contains(&effort))?;
+        let renamed = format!("{provider}:{}@{effort}", family.name);
+        changes.push(format!("{lane} -> {renamed}"));
+        Some(renamed)
+    });
+    (!changes.is_empty()).then_some((text, changes))
+}
+
+fn rewrite_strings(text: &str, mut rewrite: impl FnMut(&str) -> Option<String>) -> String {
+    let mut out = String::with_capacity(text.len());
+    let mut rest = text;
+    while let Some(open) = rest.find(['"', '#']).filter(|&open| rest.as_bytes()[open] == b'"') {
+        let Some(len) = rest[open + 1..].find('"') else { break };
+        let value = &rest[open + 1..open + 1 + len];
+        out.push_str(&rest[..=open]);
+        out.push_str(&rewrite(value).unwrap_or_else(|| value.to_string()));
+        out.push('"');
+        rest = &rest[open + 2 + len..];
+    }
+    out.push_str(rest);
+    out
 }
 
 fn parse_version(id: &str) -> Option<(String, Vec<u64>, Option<u64>)> {
@@ -215,9 +246,10 @@ fn compare_versions(a: &[u64], b: &[u64]) -> Ordering {
     Ordering::Equal
 }
 
-fn run_command(program: &str, args: &[&str]) -> Result<Vec<u8>> {
+fn run_command(program: &str, args: &[&str], env: &[(&str, &Path)]) -> Result<Vec<u8>> {
     let output = Command::new(program)
         .args(args)
+        .envs(env.iter().copied())
         .output()
         .with_context(|| format!("failed to run {program}"))?;
     if !output.status.success() {
@@ -263,7 +295,7 @@ fn anthropic_api_ids(key: &str) -> Result<Vec<String>> {
 }
 
 fn anthropic_docs_ids() -> Result<Vec<String>> {
-    let body = run_command("curl", &["-fsSL", ANTHROPIC_DOCS_URL])?;
+    let body = run_command("curl", &["-fsSL", ANTHROPIC_DOCS_URL], &[])?;
     let text = String::from_utf8_lossy(&body);
     let mut ids: Vec<String> = Vec::new();
     for id in scan_model_ids(&text) {
@@ -324,44 +356,20 @@ fn model_id_len(s: &str) -> usize {
 
 #[cfg(test)]
 mod tests {
-    use std::collections::BTreeMap;
-    use std::path::PathBuf;
-
     use super::*;
-    use crate::config::{Config, Model, Stack};
 
     fn strings(items: &[&str]) -> Vec<String> {
         items.iter().map(|item| item.to_string()).collect()
     }
 
-    fn config_with(models: &[(&str, Provider, &str)]) -> Config {
-        let models: BTreeMap<String, Model> = models
-            .iter()
-            .map(|&(alias, provider, id)| {
-                (
-                    alias.to_string(),
-                    Model {
-                        alias: alias.to_string(),
-                        id: id.to_string(),
-                        provider,
-                        efforts: None,
-                        context: None,
-                    },
-                )
-            })
-            .collect();
-        Config {
-            stack: Stack {
-                path: PathBuf::from("/h/stack"),
-                configured: "/h/stack".into(),
-                remote: "origin".into(),
-                branch: "main".into(),
-                legacy_paths: Vec::new(),
-            },
-            harnesses: Vec::new(),
-            models,
-            ..crate::config::from_str(crate::config::default_config_text(), std::path::Path::new("/h")).unwrap()
-        }
+    fn with_models(models: &str) -> String {
+        let text = config::default_config_text();
+        let (start, end) = (text.find("[models.sol]").unwrap(), text.find("# The lead in each harness").unwrap());
+        format!("{}{models}\n{}", &text[..start], &text[end..])
+    }
+
+    fn config_with(models: &str) -> Config {
+        config::from_str(&with_models(models), Path::new("/h")).unwrap()
     }
 
     #[test]
@@ -381,44 +389,75 @@ mod tests {
 
     #[test]
     fn check_reports_current_newer_missing_and_unknown() {
-        let cfg = config_with(&[
-            ("astra", Provider::Openai, "gpt-6-astra"),
-            ("claude", Provider::Anthropic, "claude-haiku-5-5"),
-            ("old", Provider::Openai, "gpt-5-sol"),
-            ("sol", Provider::Openai, "gpt-6.1-sol"),
-        ]);
-        let openai = strings(&["gpt-6-astra", "gpt-6.1-sol", "gpt-6.2-sol"]);
+        let cfg = config_with(concat!(
+            "[models.astra]\nfamily = \"astra\"\n",
+            "[models.old]\nid = \"gpt-6.1-sol\"\n",
+            "[models.opus]\nfamily = \"opus\"\n",
+            "[models.sol]\nfamily = \"sol\"\n",
+        ));
+        let openai = strings(&["gpt-6.2-astra", "gpt-6.2-sol", "gpt-6.3-sol"]);
         let reports = check(&cfg, Ok(openai.as_slice()), Err("offline"));
-        let summary: Vec<(&str, Status)> = reports
+        let summary: Vec<(&str, &str, Status)> = reports
             .iter()
-            .map(|report| (report.alias.as_str(), report.status.clone()))
+            .map(|report| (report.alias.as_str(), report.id.as_str(), report.status.clone()))
             .collect();
         assert_eq!(
             summary,
             vec![
-                ("astra", Status::Current),
-                ("claude", Status::Unknown("offline".into())),
-                ("old", Status::Missing),
-                ("sol", Status::Newer { latest: "gpt-6.2-sol".into() }),
+                ("astra", "gpt-6.2-astra", Status::Current),
+                ("old", "gpt-6.1-sol", Status::Missing),
+                ("opus", "opus", Status::Unknown("offline".into())),
+                ("sol", "gpt-6.2-sol", Status::Newer { latest: "gpt-6.3-sol".into() }),
             ]
         );
     }
 
     #[test]
-    fn bump_keeps_comments_and_other_tables() {
-        let text = "# top\n[stack]\npath = \"x\"\n\n[models.sol]\nprovider = \"openai\"\n    id = \"gpt-6.1-sol\"   # pinned\n# between\n[models.opus]\nid = \"claude-opus-5-5\"\n";
-        let bumped = bump(text, "sol", "gpt-6.2-sol").unwrap();
-        assert_eq!(
-            bumped,
-            "# top\n[stack]\npath = \"x\"\n\n[models.sol]\nprovider = \"openai\"\n    id = \"gpt-6.2-sol\"   # pinned\n# between\n[models.opus]\nid = \"claude-opus-5-5\"\n"
-        );
-        assert!(bump(text, "missing", "gpt-6.2-sol").is_err());
+    fn bump_rewrites_exact_ids_and_lanes_as_families_and_nothing_else() {
+        let pinned = with_models(concat!(
+            "[models.sol]\nprovider = \"openai\"\n  id = \"gpt-6.1-sol\"   # pinned\n\n",
+            "[models.luna]\nid = \"gpt-6-luna\"\n\n",
+            "[models.astra]\nfamily = \"astra\"\n\n",
+            "[models.opus]\nprovider = \"anthropic\"\nid = \"claude-opus-5-5\"\n\n",
+            "[models.haiku]\nid = \"haiku\"\ncontext = 100000\n",
+        ))
+        .replace("\"bug-fix\" = \"codex:sol@medium\"", "\"bug-fix\" = \"codex:gpt-6.1-sol@medium\" # was \"codex:gpt-6.1-sol@high\"")
+        .replace("\"architect runners\" = [\"codex:astra@xhigh\", \"codex:sol@medium\"]", "\"architect runners\" = [\n  \"codex:gpt-6-astra@xhigh\",\n  \"codex:gpt-6.2-sol@medium\",\n]")
+        .replace("\"how explorer\" = \"codex:terra@xhigh\"", "\"how explorer\" = \"codex:gpt-6-luna@xhigh\"");
+        let error = config::from_str(&pinned, Path::new("/h")).unwrap_err().to_string();
+        assert!(error.contains("run `ai-stack models --bump`"), "{error}");
+
+        let bumped = bump(&pinned);
+        let expected = with_models(concat!(
+            "[models.sol]\nprovider = \"openai\"\n  family = \"sol\"   # pinned\n\n",
+            "[models.luna]\nfamily = \"luna\"\n\n",
+            "[models.astra]\nfamily = \"astra\"\n\n",
+            "[models.opus]\nprovider = \"anthropic\"\nfamily = \"opus\"\n\n",
+            "[models.haiku]\nfamily = \"haiku\"\ncontext = 100000\n",
+        ))
+        .replace("\"bug-fix\" = \"codex:sol@medium\"", "\"bug-fix\" = \"codex:sol@medium\" # was \"codex:gpt-6.1-sol@high\"")
+        .replace("\"architect runners\" = [\"codex:astra@xhigh\", \"codex:sol@medium\"]", "\"architect runners\" = [\n  \"codex:astra@xhigh\",\n  \"codex:sol@medium\",\n]")
+        .replace("\"how explorer\" = \"codex:terra@xhigh\"", "\"how explorer\" = \"codex:luna@xhigh\"");
+        assert_eq!(bumped.text, expected);
+        assert_eq!(bumped.changes, [
+            "[models.sol] id \"gpt-6.1-sol\" -> family \"sol\"",
+            "[models.luna] id \"gpt-6-luna\" -> family \"luna\"",
+            "[models.opus] id \"claude-opus-5-5\" -> family \"opus\"",
+            "[models.haiku] id \"haiku\" -> family \"haiku\"",
+            "[sheet.codex] codex:gpt-6.1-sol@medium -> codex:sol@medium",
+            "[sheet.codex] codex:gpt-6-luna@xhigh -> codex:luna@xhigh",
+            "[sheet.codex] codex:gpt-6-astra@xhigh -> codex:astra@xhigh",
+            "[sheet.codex] codex:gpt-6.2-sol@medium -> codex:sol@medium",
+        ]);
+        assert!(config::from_str(&bumped.text, Path::new("/h")).is_ok());
+        assert!(bump(&bumped.text).changes.is_empty());
+        assert!(bump(config::default_config_text()).changes.is_empty());
     }
 
     #[test]
     #[ignore = "needs codex on PATH and network access"]
     fn live_catalogs_are_listed() {
-        let openai = openai_catalog().expect("openai catalog");
+        let openai = openai_catalog(None).expect("openai catalog");
         let anthropic = anthropic_catalog().expect("anthropic catalog");
         println!("openai: {} ids, first {:?}", openai.len(), &openai[..openai.len().min(10)]);
         println!("anthropic: {} ids, first {:?}", anthropic.len(), &anthropic[..anthropic.len().min(10)]);

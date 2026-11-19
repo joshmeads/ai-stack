@@ -74,16 +74,16 @@ describe("registry data", () => {
     }
   });
 
-  it("keeps every default on Opus or Sol, the solo code roles on Sol and every panel on Opus then Sol", () => {
+  it("keeps the solo code roles on Sol, the runner panels on Opus then Sol and the review panels on Opus then Astra", () => {
     const lanes = (role: string) => REGISTRY.roleDefaults.find((entry) => entry.role === role)?.lanes;
     for (const role of ["bug-fix", "perf-issue", "hillclimb"]) expect([role, lanes(role)]).toEqual([role, ["sol"]]);
-    for (const role of ["arena runners", "arena cross-judge pool", "architect runners", "interrogate reviewers"]) {
-      expect([role, lanes(role)]).toEqual([role, ["opus", "sol"]]);
-    }
+    for (const role of ["judgment and prose", "hardest tasks"]) expect([role, lanes(role)]).toEqual([role, ["opus"]]);
+    for (const role of ["arena runners", "architect runners"]) expect([role, lanes(role)]).toEqual([role, ["opus", "sol"]]);
+    for (const role of ["arena cross-judge pool", "interrogate reviewers"]) expect([role, lanes(role)]).toEqual([role, ["opus", "astra"]]);
     for (const role of ["why investigators, synthesizer", "reflect tooling, judgment, divergent, synthesizer"]) {
       expect([role, lanes(role)]).toEqual([role, ["inherit-parent"]]);
     }
-    expect(new Set(REGISTRY.roleDefaults.flatMap((entry) => entry.lanes))).toEqual(new Set(["opus", "sol", "inherit-parent"]));
+    expect(new Set(REGISTRY.roleDefaults.flatMap((entry) => entry.lanes))).toEqual(new Set(["opus", "sol", "astra", "inherit-parent"]));
   });
 
   it("keeps the default efforts, the Claude rolling aliases and Sol's ultra", () => {
@@ -170,7 +170,7 @@ describe("ai-stack CLI sheets", () => {
   const familyName = (lane: string): string | undefined => {
     const [provider, rest] = lane.split(":");
     const model = rest?.split("@")[0];
-    return REGISTRY.families.find((entry) => entry.provider === provider && entry.model === model)?.name;
+    return REGISTRY.families.find((entry) => entry.provider === provider && (entry.name === model || entry.model === model))?.name;
   };
 
   it("name the role defaults in order, and Claude lanes only by rolling alias", () => {
@@ -188,26 +188,36 @@ describe("ai-stack CLI sheets", () => {
 
   it("pair the default panel's families on the cross-provider rows, each with the other provider's judge first", () => {
     const panel = (role: string) => REGISTRY.roleDefaults.find((entry) => entry.role === role)!.lanes;
-    for (const [harness, other] of [["claude", "sol"], ["codex", "opus"]] as const) {
+    const providerOf = (name: string) => REGISTRY.families.find((entry) => entry.name === name)?.provider;
+    for (const harness of ["claude", "codex"]) {
       for (const role of ["arena cross-judge pool", "interrogate reviewers"]) {
         const lanes = sheet(harness).get(role)!;
         expect([harness, role, new Set(lanes.map(familyName))]).toEqual([harness, role, new Set(panel(role))]);
       }
-      expect([harness, familyName(sheet(harness).get("arena cross-judge pool")![0]!)]).toEqual([harness, other]);
+      const judge = familyName(sheet(harness).get("arena cross-judge pool")![0]!)!;
+      expect([harness, judge, providerOf(judge) !== harness]).toEqual([harness, judge, true]);
     }
   });
 });
 
 describe("ai-stack CLI matrix", () => {
   const source = readFileSync(join(PLUGIN_ROOT, "../../cli/src/config.rs"), "utf8");
-  const constant = (name: string): string => source.split(`const ${name}:`)[1]!.split("];")[0]!;
+  const constant = (name: string): string => source.split(new RegExp(`(?:const|static) ${name}:`))[1]!.split("];")[0]!;
 
-  it("lists every registered family's provider, model and efforts", () => {
+  it("lists every registered family's provider, name, current model, efforts and kept predecessors", () => {
     const named: Record<string, string> = { FIVE: constant("FIVE"), SIX: constant("SIX") };
-    const rows = [...constant("MATRIX").matchAll(/\("([^"]+)", "([^"]+)", ([^)]+)\)/g)].map(([, provider, model, efforts]) =>
-      [`${provider}:${model}`, [...(named[efforts!] ?? efforts!).matchAll(/"([^"]+)"/g)].map(([, effort]) => effort!)] as const);
-    const families = REGISTRY.families.map((entry): readonly [string, string[]] => [`${entry.provider}:${entry.model}`, [...effortsOf(entry)]]);
-    expect(new Map<string, string[]>(rows)).toEqual(new Map(families));
+    const efforts = (text: string) => [...(named[text] ?? text).matchAll(/"([^"]+)"/g)].map(([, effort]) => effort!);
+    const row = /Family::new\("([^"]+)", "([^"]+)", "([^"]+)", ([A-Z]+|&\[[^\]]*\])\)(?:\.keeping\(&\[(.*)\]\))?,$/gm;
+    const rows = [...constant("MATRIX").matchAll(row)].map(([, provider, name, model, own, kept]) => [name!, {
+      provider, model, efforts: efforts(own!),
+      kept: [...(kept ?? "").matchAll(/kept\("([^"]+)", ([A-Z]+|&\[[^\]]*\])\)/g)].map(([, slug, list]) => [slug, efforts(list!)]),
+    }] as const);
+    const families = REGISTRY.families.map((entry) => [entry.name, {
+      provider: entry.provider, model: entry.model, efforts: [...effortsOf(entry)],
+      kept: (entry.predecessors ?? []).map((kept) => [kept.model, [...kept.efforts]]),
+    }] as const);
+    expect(rows.length).toBe(families.length);
+    expect(new Map<string, unknown>(rows)).toEqual(new Map<string, unknown>(families));
   });
 
   it("refuses read-only providers on the rows setup-stack names as writers", () => {
