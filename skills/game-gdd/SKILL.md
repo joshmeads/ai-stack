@@ -22,11 +22,11 @@ This skill departs from your usual working rules in two places:
 
 - **Questions.** A GDD interview is the case where asking is the job.
 - **Models.** Codex game builds use these models:
-  - orchestrator: `gpt-6.1-sol`, high;
-  - implementers: `gpt-6.1-sol`, high;
-  - QA and reviews: the review model named in the routing block of your global instructions (Codex: `gpt-6.1-sol`, xhigh).
+  - orchestrator: Codex's default model, the newest Sol, at high;
+  - implementers: the orchestrator's model, at high;
+  - QA and reviews: the review model named in the routing block of your global instructions, at xhigh.
 
-  They take precedence over the routing block in your global instructions for this skill and for the files it writes. Copy the models in the templates unchanged unless the user names different ones in the interview.
+  They take precedence over the routing block in your global instructions for this skill and for the files it writes. Name no model version in the files you write, so each run gets the newest model, unless the user names one in the interview.
 
 ## Why the rules look like this
 
@@ -96,7 +96,7 @@ Follow `references/gdd-template.md`. These rules apply to every line:
 
 1. Copy `references/agents-template.md` into `AGENTS.md`. If an `AGENTS.md` already exists, merge: keep the user's existing rules, add the missing sections, and point out any conflict.
 2. Fill in the **Project** section: stack, commands, dev ports, remote, deploy target.
-3. Copy `references/codex-agents/implementer.toml` and `qa.toml` into `.codex/agents/`. If the user chose different models or effort, change them there and in `AGENTS.md`.
+3. Copy `references/codex-agents/implementer.toml` and `qa.toml` into `.codex/agents/`. Neither names a model, so both run on the orchestrator's model; add a `model` line to `qa.toml` with the review model from your routing block. If the user chose different models or effort, change them there and in `AGENTS.md`.
 
 ## 5. Save
 

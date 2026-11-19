@@ -1,6 +1,5 @@
 name = "qa"
 description = "Independent QA. Decides PASS or FAIL for a task branch or a tier on integration. Never edits source."
-model = "gpt-6.1-sol"
 model_reasoning_effort = "xhigh"
 sandbox_mode = "workspace-write"
 developer_instructions = """

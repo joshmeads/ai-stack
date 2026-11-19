@@ -77,6 +77,6 @@ Use this to build the open-question list. Ask only what the user has not already
 - When the user will play it.
 
 ## 13. Process
-- Orchestrator model: `gpt-6.1-sol`, high. Implementers: `gpt-6.1-sol` high. QA and reviews: the review model named in the routing block of your global instructions (Codex: `gpt-6.1-sol` xhigh).
+- Orchestrator model: Codex's default (the newest Sol), high. Implementers: the orchestrator's model, high. QA and reviews: the review model named in the routing block of your global instructions, xhigh.
 - Parallelism. Remote and push rights. Deploy rights.
 - Notes files: NOTES.md, DECISIONS.md, JOSH.md for blockers.

@@ -27,9 +27,9 @@ All work runs through one orchestrator and its subagents. Only the orchestrator 
 
 | Role | Model | Does | Never does |
 | --- | --- | --- | --- |
-| Orchestrator (main session) | `gpt-6.1-sol`, high | Writes PLAN.md, splits work into tasks, creates worktrees, spawns implementers and QA, merges branches that passed QA, keeps JOSH.md and HANDOFF.md | Writes feature code itself, beyond small integration fixes; merges anything QA has not passed |
-| Implementer (`.codex/agents/implementer.toml`) | `gpt-6.1-sol`, high | One task, in its own worktree, on its own branch | Touches another worktree, `integration` or `main`; declares its own task done |
-| QA (`.codex/agents/qa.toml`) | `gpt-6.1-sol`, xhigh (the review model in the routing block of your global instructions) | Decides whether a task or a tier is done; runs the game, captures, probes and tests itself | Edits source files; passes work because "it's close" |
+| Orchestrator (main session) | Codex's default model (the newest Sol), high | Writes PLAN.md, splits work into tasks, creates worktrees, spawns implementers and QA, merges branches that passed QA, keeps JOSH.md and HANDOFF.md | Writes feature code itself, beyond small integration fixes; merges anything QA has not passed |
+| Implementer (`.codex/agents/implementer.toml`) | the orchestrator's model, high | One task, in its own worktree, on its own branch | Touches another worktree, `integration` or `main`; declares its own task done |
+| QA (`.codex/agents/qa.toml`) | the review model in the routing block of your global instructions, xhigh | Decides whether a task or a tier is done; runs the game, captures, probes and tests itself | Edits source files; passes work because "it's close" |
 
 ## Workflow
 1. **Plan.** The orchestrator writes `PLAN.md` (at most 200 lines): module boundaries, types, state shape, events, and the task list. Each task names its files, dependencies and acceptance, copied from the GDD. Tasks that run in parallel touch disjoint files. Split each tier into 2–4 tasks that can run at once, for example simulation and rules, rendering and art, and UI and audio. Never put a whole tier in one task.
