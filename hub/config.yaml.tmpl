@@ -1,0 +1,49 @@
+# Hub config for the prox fork of CLIProxyAPI, rendered by hub/install.sh into ~/cliproxyapi/config.yaml.
+# Follows Theo's hub guide. The access and management keys come from fnox.
+config-version: 8
+
+server:
+  # Every interface. ufw admits port 8317 only from the LAN and the tailnet.
+  host: ""
+  port: 8317
+  trusted-proxies: ["127.0.0.1", "::1"]
+
+management:
+  # The panel opens from the LAN and the tailnet; the secret is still required.
+  allow-remote: true
+  secret-key: "@HUB_MANAGEMENT_KEY@"
+
+access:
+  # What Claude Code, Codex and T3 Code send to the hub.
+  api-keys:
+    - "@HUB_ACCESS_KEY@"
+
+routing:
+  # Burn the quota that resets soonest first; keep each conversation on one account for its cache.
+  strategy: "soonest-reset-first"
+  session-affinity: true
+  session-affinity-ttl: "1h"
+  retry:
+    request-retry: 3
+    max-retry-interval: 30
+
+# Poll each account's usage and keep the history the panel's pool charts draw.
+quota-history:
+  enabled: true
+  interval: 10m
+  retention: 35d
+
+observability:
+  usage:
+    usage-statistics-enabled: true
+
+# Every proxied request and response, in full, in the local ClickHouse usage ledger. Rows that wait while ClickHouse is down spool to ~/cliproxyapi/ledger-spool.
+ledger:
+  enabled: true
+  url: http://127.0.0.1:8123
+  user: hub
+  password-file: ~/cliproxyapi/clickhouse.password
+
+plugins:
+  # Plugins run native code next to every token.
+  enabled: false

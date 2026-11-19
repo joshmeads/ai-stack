@@ -1,0 +1,22 @@
+[Unit]
+Description=prox hub (CLIProxyAPI fork)
+Documentation=https://github.com/joshmeads/prox
+Wants=network-online.target
+After=network-online.target
+StartLimitIntervalSec=0
+
+[Service]
+Type=simple
+WorkingDirectory=%h/cliproxyapi
+ExecStart=%h/cliproxyapi/cli-proxy-api -config %h/cliproxyapi/config.yaml
+Restart=always
+RestartSec=5
+UMask=0077
+NoNewPrivileges=yes
+LockPersonality=yes
+RestrictRealtime=yes
+RestrictSUIDSGID=yes
+SystemCallArchitectures=native
+
+[Install]
+WantedBy=default.target
