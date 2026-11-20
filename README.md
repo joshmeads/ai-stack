@@ -51,7 +51,7 @@ The first install needs `--force`, because it moves any hand-installed copy of a
 
 First-run role defaults use Opus and Sol, and Opus and Astra for reviews and the arena judge. In the shipped `ai-stack` sheet below, each harness stays on its own provider's models, except for major reviews, the arena judge and `arena runners`, which seats Opus and Sol and also Grok through Cursor and Gemini through agy.
 
-Each entry is a model family. The [model catalog](plugins/pstack/skills/poteto-mode/references/model-catalog.md) gives its current model, such as `gpt-6.2-sol` for Sol, and a model release updates that catalog, not your config.
+Each entry is a model family. The [model catalog](plugins/pstack/skills/poteto-mode/references/model-catalog.md) gives each family's current model. A model release updates the catalog, not your config.
 
 | Work | Codex | Claude Code |
 | --- | --- | --- |
