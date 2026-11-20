@@ -359,7 +359,7 @@ else
   note "ok: every family and first-run role defaults to high, or to the only effort it lists"
 fi
 
-routed_model_skills=(how why unslop typescript-best-practices create-formal-verification-skill ketchup)
+routed_model_skills=(how why unslop typescript-best-practices create-formal-verification-skill ketchup statechart)
 routed_model_bad=""
 for name in "${routed_model_skills[@]}"; do
   routed_skill="$plugin/skills/$name/SKILL.md"
@@ -374,6 +374,28 @@ if [ -n "$routed_model_bad" ]; then
   fail=1
 else
   note "ok: routed skills stay model-invocable"
+fi
+
+statechart_scripts="$plugin/skills/statechart/scripts"
+statechart_offline="$(grep '"test:offline"' "$statechart_scripts/package.json" || true)"
+statechart_test_bad=""
+for test_file in "$statechart_scripts"/test/*.test.ts; do
+  name="test/$(basename "$test_file")"
+  [ "$name" = "test/render.test.ts" ] && continue
+  case "$statechart_offline" in
+    *" $name"*) ;;
+    *) statechart_test_bad="${statechart_test_bad}$name is missing from test:offline"$'\n' ;;
+  esac
+done
+case "$statechart_offline" in
+  *render.test.ts*) statechart_test_bad="${statechart_test_bad}test/render.test.ts installs Pele and Mermaid from npm, so it stays out of test:offline"$'\n' ;;
+esac
+if [ -n "$statechart_test_bad" ]; then
+  note "FAIL: statechart's test:offline must run every test file except render.test.ts:"
+  note "$statechart_test_bad"
+  fail=1
+else
+  note "ok: statechart's test:offline runs every test file except the npm-installing render test"
 fi
 
 codex_manifest="$plugin/.codex-plugin/plugin.json"

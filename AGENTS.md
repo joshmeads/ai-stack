@@ -11,6 +11,7 @@ Code this repository owns explains itself. `UPSTREAM.md`, `CHANGES.md` and `NOTI
 Before opening a pull request, run:
 
 - `bun run test` and `bun run typecheck` in `plugins/pstack/skills/poteto-mode/scripts`
+- `bun install --frozen-lockfile` and `bun run test:offline` in `plugins/pstack/skills/statechart/scripts`
 - `PSTACK_STATIC_ONLY=1 bash tests/skill-collision-repro.sh`
 - `claude plugin validate` on the repository root and on `plugins/pstack`
 - `cargo test` in `cli/`

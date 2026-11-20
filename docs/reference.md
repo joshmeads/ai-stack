@@ -105,6 +105,7 @@ Not declared as deps, but referenced in skill bodies:
 - **Bash on Windows** — the SessionStart hook runs through `hooks/run-hook.cmd`, which looks for Git for Windows' `bash.exe` in its standard system-wide and per-user locations, then for a `bash` on `PATH` (MSYS2, Cygwin). Without one, the hook exits 0 and skips the pstack startup context, as the superpowers wrapper it comes from does. Install [Git for Windows](https://git-scm.com/download/win) to get the context. In Codex, the hook starts `C:\Windows\System32\cmd.exe` by full path, because one command must work in both PowerShell and cmd. A Windows installed outside `C:\Windows` does not run the hook.
 - **macOS, Linux or WSL2 for Claude writer lanes** — Claude Code's sandbox does not run on native Windows, so a Claude writer lane needs one of these hosts.
 - **Provider CLIs** — the external runner uses the assigned subscribed CLI directly, one per provider in the [model catalog's route table](../plugins/pstack/skills/poteto-mode/references/model-catalog.md#routes). Install and authenticate only the providers present in your model sheet. Some providers run read-only lanes only. `read-only` limits the model's tools, not the CLI, so repository code may run in such a lane: each runs in its own throwaway worktree, and you should seat them only on repositories you trust. The catalog notes for OpenCode, Amp, Cursor, Devin, agy, dsh and pi say what repository and host configuration their CLIs load into a lane. Same-provider work stays native; the runner refuses it.
+- **Node 22.18 to 22.x or 23.6 or later, Bun 1.1.5 or later, or Deno 2.0 or later, and `mise`** — only for `/statechart`. Its launcher picks a runtime that runs TypeScript, and its first run installs TLC and Java with `mise`, which needs the network. Its tests run with `bun run test:offline` in `skills/statechart/scripts/`.
 - **`jq` and `rg` (ripgrep)** — only for `scripts/worktree-audit.sh` (the Worktree cleanup playbook). Without them the audit still runs but blanks its PR and LAST_CHAT columns, so it warns on stderr rather than returning a table that looks complete.
 
 No third-party plugins. The harsher-critique escape hatch lives in the bundled `thermo-nuclear-code-quality-review` skill (imported from cursor-team-kit), not in an external plugin.
@@ -140,6 +141,7 @@ The table uses the short upstream names. Claude Code exposes each native skill w
 | `/maintain-verification-skill` | re-sync a drifted verification skill and its feature map |
 | `/create-formal-verification-skill` | generate a project-local skill that formally verifies a race, invariant, or other property tests rarely reach |
 | `/maintain-formal-verification-skill` | bring a formal verification back in line after the code it covers changed, and say whether each failure is drift or a bug (typed only) |
+| `/statechart` | check a TLA+ model and draw it as a Mermaid statechart, with the shortest path to each state that breaks a rule |
 | `/deslop` | deslop a diff before commit |
 | `/babysit` | monitor an open PR, fix CI/comments, keep it merge-ready |
 | `/thermo-nuclear-code-quality-review` | extremely strict maintainability audit |
