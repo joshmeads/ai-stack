@@ -15,6 +15,7 @@ import {
   CATALOG_PATH,
   driftMessage,
   driftReport,
+  FAMILIES_PATH,
   main,
   renderCatalog,
   renderNativeAgents,
@@ -74,16 +75,16 @@ describe("registry data", () => {
     }
   });
 
-  it("keeps every default on Opus or Sol, the solo code roles on Sol and every panel on Opus then Sol", () => {
+  it("keeps the solo code roles on Sol, the runner panels on Opus then Sol and the review panels on Opus then Astra", () => {
     const lanes = (role: string) => REGISTRY.roleDefaults.find((entry) => entry.role === role)?.lanes;
     for (const role of ["bug-fix", "perf-issue", "hillclimb"]) expect([role, lanes(role)]).toEqual([role, ["sol"]]);
-    for (const role of ["arena runners", "arena cross-judge pool", "architect runners", "interrogate reviewers"]) {
-      expect([role, lanes(role)]).toEqual([role, ["opus", "sol"]]);
-    }
+    for (const role of ["judgment and prose", "hardest tasks"]) expect([role, lanes(role)]).toEqual([role, ["opus"]]);
+    for (const role of ["arena runners", "architect runners"]) expect([role, lanes(role)]).toEqual([role, ["opus", "sol"]]);
+    for (const role of ["arena cross-judge pool", "interrogate reviewers"]) expect([role, lanes(role)]).toEqual([role, ["opus", "astra"]]);
     for (const role of ["why investigators, synthesizer", "reflect tooling, judgment, divergent, synthesizer"]) {
       expect([role, lanes(role)]).toEqual([role, ["inherit-parent"]]);
     }
-    expect(new Set(REGISTRY.roleDefaults.flatMap((entry) => entry.lanes))).toEqual(new Set(["opus", "sol", "inherit-parent"]));
+    expect(new Set(REGISTRY.roleDefaults.flatMap((entry) => entry.lanes))).toEqual(new Set(["opus", "sol", "astra", "inherit-parent"]));
   });
 
   it("keeps the default efforts, the Claude rolling aliases and Sol's ultra", () => {
@@ -91,6 +92,8 @@ describe("registry data", () => {
       ["fable", "high"],
       ["sol", "high"],
       ["luna", "high"],
+      ["astra", "high"],
+      ["terra", "high"],
       ["opus", "high"],
       ["haiku", "high"],
       ["sonnet", "high"],
@@ -114,8 +117,8 @@ describe("registry data", () => {
       .map((entry) => [entry.name, entry.rolling!.revisionPrefix]))
       .toEqual([["fable", "claude-fable-"], ["opus", "claude-opus-"], ["haiku", "claude-haiku-"], ["sonnet", "claude-sonnet-"]]);
     expect(REGISTRY.families.filter((entry) => entry.provider === "codex").map((entry) => [entry.name, entry.model]))
-      .toEqual([["sol", "gpt-6.1-sol"], ["luna", "gpt-6-luna"]]);
-    expect(REGISTRY.families.filter((entry) => effortsOf(entry).includes("ultra")).map((entry) => entry.name)).toEqual(["sol"]);
+      .toEqual([["sol", "gpt-6.2-sol"], ["luna", "gpt-6-luna"], ["astra", "gpt-6.2-astra"], ["terra", "gpt-6.1-terra"]]);
+    expect(REGISTRY.families.filter((entry) => effortsOf(entry).includes("ultra")).map((entry) => entry.name)).toEqual(["sol", "astra", "terra"]);
   });
 
   it("keeps family names and (provider, model) pairs unique, and efforts ordered", () => {
@@ -168,7 +171,7 @@ describe("ai-stack CLI sheets", () => {
   const familyName = (lane: string): string | undefined => {
     const [provider, rest] = lane.split(":");
     const model = rest?.split("@")[0];
-    return REGISTRY.families.find((entry) => entry.provider === provider && entry.model === model)?.name;
+    return REGISTRY.families.find((entry) => entry.provider === provider && (entry.name === model || entry.model === model))?.name;
   };
 
   it("name the role defaults in order, and Claude lanes only by rolling alias", () => {
@@ -186,37 +189,33 @@ describe("ai-stack CLI sheets", () => {
 
   it("pair the default panel's families on the cross-provider rows, each with the other provider's judge first", () => {
     const panel = (role: string) => REGISTRY.roleDefaults.find((entry) => entry.role === role)!.lanes;
-    for (const [harness, other] of [["claude", "sol"], ["codex", "opus"]] as const) {
+    const providerOf = (name: string) => REGISTRY.families.find((entry) => entry.name === name)?.provider;
+    for (const harness of ["claude", "codex"]) {
       for (const role of ["arena cross-judge pool", "interrogate reviewers"]) {
         const lanes = sheet(harness).get(role)!;
         expect([harness, role, new Set(lanes.map(familyName))]).toEqual([harness, role, new Set(panel(role))]);
       }
-      expect([harness, familyName(sheet(harness).get("arena cross-judge pool")![0]!)]).toEqual([harness, other]);
+      const judge = familyName(sheet(harness).get("arena cross-judge pool")![0]!)!;
+      expect([harness, judge, providerOf(judge) !== harness]).toEqual([harness, judge, true]);
     }
   });
 });
 
-describe("ai-stack CLI matrix", () => {
+describe("ai-stack CLI rules", () => {
   const source = readFileSync(join(PLUGIN_ROOT, "../../cli/src/config.rs"), "utf8");
-  const constant = (name: string): string => source.split(`const ${name}:`)[1]!.split("];")[0]!;
+  const constant = (name: string): string => source.split(new RegExp(`(?:const|static) ${name}:`))[1]!.split("];")[0]!;
 
-  it("lists every registered family's provider, model and efforts", () => {
-    const named: Record<string, string> = { FIVE: constant("FIVE"), SIX: constant("SIX") };
-    const rows = [...constant("MATRIX").matchAll(/\("([^"]+)", "([^"]+)", ([^)]+)\)/g)].map(([, provider, model, efforts]) =>
-      [`${provider}:${model}`, [...(named[efforts!] ?? efforts!).matchAll(/"([^"]+)"/g)].map(([, effort]) => effort!)] as const);
-    const families = REGISTRY.families.map((entry): readonly [string, string[]] => [`${entry.provider}:${entry.model}`, [...effortsOf(entry)]]);
-    expect(new Map<string, string[]>(rows)).toEqual(new Map(families));
+  it("loads the generated family table from the stack checkout", () => {
+    expect(source).toContain(`"plugins/pstack/${FAMILIES_PATH}"`);
   });
 
-  it("refuses read-only providers on the rows setup-stack names as writers", () => {
+  it("names the writer rows setup-stack names", () => {
     const setup = readFileSync(join(PLUGIN_ROOT, "skills/setup-stack/SKILL.md"), "utf8");
     const line = setup.split("\n").find((text) => text.startsWith("Lanes for these roles write files"))!;
     const named = (name: string): string[] => [...constant(name).split("=")[1]!.matchAll(/"([^"]+)"/g)].map(([, value]) => value!);
     const writers = line.split(" Refuse any of those roles")[0]!;
     expect(new Set([...writers.matchAll(/`([^`]+)`/g)].map(([, row]) => row!).filter((row) => row !== "isolated-write")))
       .toEqual(new Set(named("WRITER_ROWS")));
-    const readOnly = REGISTRY.adapters.filter((adapter) => !adapter.launch.supports.includes("isolated-write")).map((adapter) => adapter.id);
-    expect(new Set(named("READ_ONLY_PROVIDERS"))).toEqual(new Set(readOnly));
   });
 });
 
@@ -377,7 +376,7 @@ describe("hand-written dispatch and setup rules", () => {
     expect(setup).toContain("that family's model stays the kept predecessor for steps 3 to 7: probe it, render it, and write it unchanged.");
     expect(setup).toContain("matching a kept predecessor to its family");
     expect(REGISTRY.families.flatMap((entry) => (entry.predecessors ?? []).map((kept) => `${entry.provider}:${kept.model}`)))
-      .toEqual(["codex:gpt-5.6-sol"]);
+      .toEqual(["codex:gpt-6.1-sol", "codex:gpt-5.6-sol", "codex:gpt-6-astra"]);
   });
 
   it("passes full access only to an opted-in external Codex writer, and setup keeps the setting line", () => {
@@ -541,7 +540,7 @@ describe("resolveLane", () => {
     expect(() => devin("swe-1-7-medium", "max")).toThrow("effort max is not offered for devin:swe-1-7-medium; choose one of: default");
     expect(() => devin("swe-2", "max", "isolated-write"))
       .toThrow("provider devin does not support isolated-write; it supports only: read-only");
-    for (const [provider, model] of [["codex", "gpt-6.1-sol"], ["codex", "gpt-6-nova"]]) {
+    for (const [provider, model] of [["codex", "gpt-6.2-sol"], ["codex", "gpt-6-nova"]]) {
       expect(resolveLane(request({ parent: "claude", provider, model })).cliModel).toBe(model);
     }
   });
@@ -561,7 +560,7 @@ describe("resolveLane", () => {
 
   it("builds a bounded writer unless full access is requested, and refuses full access off a Codex writer", () => {
     const codex = (overrides: Partial<LaneRequest>) =>
-      resolveLane(request({ parent: "claude", provider: "codex", model: "gpt-6.1-sol", ...overrides }));
+      resolveLane(request({ parent: "claude", provider: "codex", model: "gpt-6.2-sol", ...overrides }));
     expect(codex({}).access).toEqual(access("read-only"));
     expect(codex({ writerSandbox: "bounded" }).access).toEqual(access("read-only"));
     expect(codex({ mode: "isolated-write" }).access).toEqual(access("isolated-write"));

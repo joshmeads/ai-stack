@@ -5,6 +5,10 @@ use std::process::Command;
 fn stray_reports_skipped_harnesses_on_stderr_and_keeps_json_parseable() {
     let tmp = tempfile::tempdir().unwrap();
     let home = tmp.path();
+    let stack = home.join("stack");
+    let table = stack.join("plugins/pstack/skills/poteto-mode/references/model-families.json");
+    fs::create_dir_all(table.parent().unwrap()).unwrap();
+    fs::write(&table, include_str!("fixtures/model-families.json")).unwrap();
     let run = |args: &[&str]| {
         Command::new(env!("CARGO_BIN_EXE_ai-stack"))
             .env_clear()
@@ -12,6 +16,7 @@ fn stray_reports_skipped_harnesses_on_stderr_and_keeps_json_parseable() {
             .env("PATH", home.join("empty-path"))
             .current_dir(home)
             .arg("--home").arg(home)
+            .arg("--stack").arg(&stack)
             .args(args).output().unwrap()
     };
     let init = run(&["init"]);

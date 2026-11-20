@@ -10,6 +10,7 @@ export interface GeneratedFile {
 }
 
 export const CATALOG_PATH = "skills/poteto-mode/references/model-catalog.md";
+export const FAMILIES_PATH = "skills/poteto-mode/references/model-families.json";
 export const WRITE_COMMAND = "bun runner/registry/render.ts --write";
 const WRITE_HINT = `Run \`${WRITE_COMMAND}\` from plugins/pstack/skills/poteto-mode/scripts.`;
 const PLUGIN_ROOT = join(import.meta.dir, "../../../../..");
@@ -162,6 +163,24 @@ export function renderCatalog(registry: Registry): GeneratedFile {
   return { path: CATALOG_PATH, content: lines.join("\n") };
 }
 
+export function renderFamilies(registry: Registry): GeneratedFile {
+  const data = {
+    providers: registry.adapters.map((adapter) => ({
+      id: adapter.id,
+      readOnly: !adapter.launch.supports.includes("isolated-write"),
+    })),
+    families: registry.families.map((family) => ({
+      provider: family.provider,
+      name: family.name,
+      model: family.model,
+      efforts: effortsOf(family),
+      kept: (family.predecessors ?? []).map((kept) => ({ model: kept.model, efforts: kept.efforts })),
+      revisionPrefix: family.rolling?.revisionPrefix ?? null,
+    })),
+  };
+  return { path: FAMILIES_PATH, content: `${JSON.stringify(data, null, 2)}\n` };
+}
+
 export function renderNativeAgents(registry: Registry): readonly GeneratedFile[] {
   return registry.families.filter((family) => family.provider === "claude").flatMap((family) =>
     effortsOf(family).map((effort) => {
@@ -188,7 +207,7 @@ export function renderNativeAgents(registry: Registry): readonly GeneratedFile[]
 }
 
 function generated(registry: Registry): readonly GeneratedFile[] {
-  return [renderCatalog(registry), ...renderNativeAgents(registry)];
+  return [renderCatalog(registry), renderFamilies(registry), ...renderNativeAgents(registry)];
 }
 
 function read(path: string): string | null {

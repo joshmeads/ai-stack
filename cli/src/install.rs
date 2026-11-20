@@ -308,7 +308,7 @@ pub(crate) mod tests {
             put(&stack.join("skills").join(skill).join("SKILL.md"), &format!("---\nname: {skill}\ndescription: The {skill} skill.\n---\n"));
         }
         put(&stack.join("stack.toml"), STACK_TOML);
-        let mut cfg = config::from_str(config::default_config_text(), &home).unwrap();
+        let mut cfg = config::test_config(config::default_config_text(), &home).unwrap();
         cfg.stack.path = stack.clone();
         cfg.stack.legacy_paths = vec![root.join("legacy")];
         let runner = FakeRunner::default();
@@ -555,28 +555,28 @@ pub(crate) mod tests {
             "how explainer: claude:opus@medium\n",
             "why investigators, synthesizer: inherit-parent\n",
             "reflect tooling, judgment, divergent, synthesizer: inherit-parent\n",
-            "arena runners: claude:opus@high, codex:gpt-6.1-sol@high, cursor:grok-4.7@high, agy:gemini-4-argon@high\n",
-            "arena cross-judge pool: codex:gpt-6.1-sol@xhigh, claude:opus@xhigh\n",
+            "arena runners: claude:opus@high, codex:gpt-6.2-sol@high, cursor:grok-4.7@high, agy:gemini-4-argon@high\n",
+            "arena cross-judge pool: codex:gpt-6.2-astra@xhigh, claude:opus@xhigh\n",
             "swarm workers: claude:opus@medium\n",
             "architect runners: claude:opus@high, claude:opus@medium\n",
-            "interrogate reviewers: claude:opus@xhigh, codex:gpt-6.1-sol@xhigh\n",
+            "interrogate reviewers: claude:opus@xhigh, codex:gpt-6.2-astra@xhigh\n",
         ));
         let codex_sheet = format!("{header}# pstack model sheet (Codex)\n\n{preamble}{}", concat!(
-            "feature, refactoring: codex:gpt-6.1-sol@medium\n",
-            "bug-fix: codex:gpt-6.1-sol@medium\n",
-            "perf-issue: codex:gpt-6.1-sol@medium\n",
-            "hillclimb: codex:gpt-6.1-sol@medium\n",
-            "judgment and prose: codex:gpt-6.1-sol@xhigh\n",
-            "hardest tasks: codex:gpt-6.1-sol@xhigh\n",
-            "how explorer: codex:gpt-6-luna@xhigh\n",
-            "how explainer: codex:gpt-6.1-sol@medium\n",
+            "feature, refactoring: codex:gpt-6.2-sol@medium\n",
+            "bug-fix: codex:gpt-6.2-sol@medium\n",
+            "perf-issue: codex:gpt-6.2-sol@medium\n",
+            "hillclimb: codex:gpt-6.2-sol@medium\n",
+            "judgment and prose: codex:gpt-6.2-astra@xhigh\n",
+            "hardest tasks: codex:gpt-6.2-astra@xhigh\n",
+            "how explorer: codex:gpt-6.1-terra@xhigh\n",
+            "how explainer: codex:gpt-6.2-sol@medium\n",
             "why investigators, synthesizer: inherit-parent\n",
             "reflect tooling, judgment, divergent, synthesizer: inherit-parent\n",
-            "arena runners: codex:gpt-6.1-sol@high, claude:opus@high, cursor:grok-4.7@high, agy:gemini-4-argon@high\n",
-            "arena cross-judge pool: claude:opus@xhigh, codex:gpt-6.1-sol@xhigh\n",
-            "swarm workers: codex:gpt-6.1-sol@medium\n",
-            "architect runners: codex:gpt-6.1-sol@xhigh, codex:gpt-6.1-sol@medium\n",
-            "interrogate reviewers: codex:gpt-6.1-sol@xhigh, claude:opus@xhigh\n",
+            "arena runners: codex:gpt-6.2-sol@high, claude:opus@high, cursor:grok-4.7@high, agy:gemini-4-argon@high\n",
+            "arena cross-judge pool: claude:opus@xhigh, codex:gpt-6.2-astra@xhigh\n",
+            "swarm workers: codex:gpt-6.2-sol@medium\n",
+            "architect runners: codex:gpt-6.2-astra@xhigh, codex:gpt-6.2-sol@medium\n",
+            "interrogate reviewers: codex:gpt-6.2-astra@xhigh, claude:opus@xhigh\n",
         ));
         assert_eq!(f.read(".claude/pstack-models.md"), claude_sheet);
         assert_eq!(f.read(".codex/pstack-models.md"), codex_sheet);
