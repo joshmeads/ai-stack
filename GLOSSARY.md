@@ -18,7 +18,7 @@ A skill delivered on its own under its plain name, which must be unique across t
 _Avoid_: linked skill, loose skill
 
 **Plugin skill**:
-A skill delivered inside a plugin and named with the plugin's prefix, such as `jm-stack:how`.
+A skill delivered inside a plugin and named with the plugin's prefix, such as `pstack:how`.
 
 **Manual-only skill**:
 A skill that runs only when called by name and is never picked by the model on its own.

@@ -42,10 +42,10 @@ describe("codex launch", () => {
   });
 
   it("passes the ultra effort to Codex unchanged", () => {
-    expect(argv({ model: "gpt-6.1-sol", effort: "ultra" }).slice(0, 5)).toEqual([
+    expect(argv({ model: "gpt-6.2-sol", effort: "ultra" }).slice(0, 5)).toEqual([
       "exec",
       "--model",
-      "gpt-6.1-sol",
+      "gpt-6.2-sol",
       "--config",
       'model_reasoning_effort="ultra"',
     ]);

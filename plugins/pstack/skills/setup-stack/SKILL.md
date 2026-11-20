@@ -1,9 +1,9 @@
 ---
 name: setup-stack
-description: Configure jm:stack's provider-qualified models, per-family requested effort, and parent-owned routes per role. Verifies the assigned native and external lanes before writing the override sheet. Use for /setup-stack, "configure jm:stack models", or changing jm:stack's model choices.
+description: Configure pstack's provider-qualified models, per-family requested effort, and parent-owned routes per role. Verifies the assigned native and external lanes before writing the override sheet. Use for /setup-stack, "configure pstack models", or changing pstack's model choices.
 ---
 
-# Setup jm:stack
+# Setup pstack
 
 Configure one portable model sheet for the current parent harness. Read [`provider-dispatch.md`](../poteto-mode/references/provider-dispatch.md) and the [model catalog](../poteto-mode/references/model-catalog.md) before probing or writing anything. The dispatch rules, descriptor grammar, and the catalog's model matrix, kept predecessors, and route table are the contract. Choose one requested effort per assigned matrix family. Do not add a second configuration file, a runtime resolver, or a weaker-model fallback.
 
@@ -74,7 +74,7 @@ If all chosen families are native, no external CLI permission check or probe is 
 
 Probe only the selected `provider:model@effort` pair of each assigned family. Run one probe per family in the role map, even when two families share a provider, and one probe of its own for each distinct `pi:openrouter/<id>` value. Do not enumerate or offer older models as substitutes. A failed probe writes nothing: report the failing pair and provider, stop, and keep the active sheet plus parent integration bytes unchanged. A failed first run creates neither artifact.
 
-Find the family's provider in the [route table](../poteto-mode/references/model-catalog.md#routes). A native route gets a native one-turn probe: on Claude Code, the family's `jm-stack:stack-<family>-<effort>` agent; on Codex, `spawn_agent` with the descriptor's model and `reasoning_effort`. An external route gets one `pstack-runner` call with a tiny read-only probe prompt. The runner's preflight checks the CLI, the login and the model, and its receipt is the result.
+Find the family's provider in the [route table](../poteto-mode/references/model-catalog.md#routes). A native route gets a native one-turn probe: on Claude Code, the family's `pstack:stack-<family>-<effort>` agent; on Codex, `spawn_agent` with the descriptor's model and `reasoning_effort`. An external route gets one `pstack-runner` call with a tiny read-only probe prompt. The runner's preflight checks the CLI, the login and the model, and its receipt is the result.
 
 Use a tiny read-only probe that returns a unique marker. A login-status command alone proves credentials, not that the requested model and effort flags run. Record native and external results separately. Never call the external launcher for the parent's own provider.
 

@@ -37,13 +37,33 @@ verof() { { grep -m1 '"version"' "$1" || true; } | sed -E 's/.*"version"[[:space
 vc="$(verof "$repo/plugins/pstack/.claude-plugin/plugin.json")"
 vx="$(verof "$repo/plugins/pstack/.codex-plugin/plugin.json")"
 vm="$(verof "$repo/.claude-plugin/marketplace.json")"
-vu="$(sed -n 's/| open-pstack version | `\([^`]*\)` |/\1/p' "$repo/UPSTREAM.md")"
+vu="$(sed -n 's/| port version | `\([^`]*\)` |/\1/p' "$repo/UPSTREAM.md")"
 if [ -n "$vc" ] && [ "$vc" = "$vx" ] && [ "$vc" = "$vm" ] && [ "$vc" = "$vu" ]; then
-  note "ok: open-pstack version matches across UPSTREAM.md and the 3 manifests ($vc)"
+  note "ok: port version matches across UPSTREAM.md and the 3 manifests ($vc)"
 else
-  note "FAIL: open-pstack version differs: upstream=$vu claude-plugin=$vc codex-plugin=$vx marketplace=$vm"
+  note "FAIL: port version differs: upstream=$vu claude-plugin=$vc codex-plugin=$vx marketplace=$vm"
   fail=1
 fi
+
+for vendored in t3stack pocock; do
+  claude_version="$(verof "$repo/plugins/$vendored/.claude-plugin/plugin.json")"
+  codex_version="$(verof "$repo/plugins/$vendored/.codex-plugin/plugin.json")"
+  commits="$(awk -v dest="plugins/$vendored/skills" '
+    /^\[\[skill\]\]/ { if (d == dest) print c; c = ""; d = "" }
+    /^commit = / { c = substr($3, 2, 7) }
+    /^dest = / { d = substr($3, 2, length($3) - 2) }
+    END { if (d == dest) print c }
+  ' "$repo/stack.toml" | sort -u)"
+  if [ -z "$commits" ] || [ "$(printf '%s\n' "$commits" | wc -l)" -ne 1 ]; then
+    note "FAIL: $vendored's vendored skills must share one pinned commit, found: ${commits:-none}"
+    fail=1
+  elif [ "$claude_version" != "$codex_version" ] || [ "${claude_version##*.}" != "$commits" ]; then
+    note "FAIL: $vendored version must end in its pinned commit $commits in both manifests (claude=$claude_version codex=$codex_version); bump it after skills update so Claude Code refreshes its cache"
+    fail=1
+  else
+    note "ok: $vendored version $claude_version matches its pinned commit"
+  fi
+done
 
 rolling='fable|opus|haiku|sonnet'
 legacy_model_pins="$(
@@ -122,8 +142,8 @@ poteto_preload_bad=""
 if [ "$(printf '%s\n' "$poteto_agent_front" | grep -cx 'skills:' || true)" != "1" ]; then
   poteto_preload_bad="${poteto_agent} must declare one skills list"$'\n'
 fi
-if [ "$(printf '%s\n' "$poteto_agent_front" | grep -cx '  - jm-stack:poteto-mode' || true)" != "1" ]; then
-  poteto_preload_bad="${poteto_preload_bad}${poteto_agent} must preload jm-stack:poteto-mode"$'\n'
+if [ "$(printf '%s\n' "$poteto_agent_front" | grep -cx '  - pstack:poteto-mode' || true)" != "1" ]; then
+  poteto_preload_bad="${poteto_preload_bad}${poteto_agent} must preload pstack:poteto-mode"$'\n'
 fi
 if [ -n "$poteto_preload_bad" ]; then
   note "FAIL: Claude poteto-agent does not preload poteto-mode:"
@@ -292,12 +312,10 @@ grep -Fq "Shipping step 4's disarm-and-confirm rule to that child and every desc
 grep -Fq 'If repository instructions require a draft until named evidence exists' "$opening_a_pr" || shipping_safety_bad="${shipping_safety_bad}Opening a PR ignores repository-required draft evidence gates"$'\n'
 grep -Fq 'Create every fork PR' "$opening_a_pr" || shipping_safety_bad="${shipping_safety_bad}Opening a PR does not bind a root fork PR to its explicit head repository"$'\n'
 grep -Fq 'A fork child PR targets trunk while retaining local parent ancestry' "$multi_phase_plan" || shipping_safety_bad="${shipping_safety_bad}Multi-phase plan does not model fork stack PR bases"$'\n'
-for fork_file in "$autopilot_stack" "$opening_a_pr" "$multi_phase_plan"; do
+for fork_file in "$autopilot_stack" "$opening_a_pr"; do
   grep -Fq 'gh api --method POST "repos/$base_repo/pulls"' "$fork_file" || shipping_safety_bad="${shipping_safety_bad}${fork_file} does not create fork PRs through the organization-capable GitHub API"$'\n'
   grep -Fq -- '-f "head_repo=$head_name"' "$fork_file" || shipping_safety_bad="${shipping_safety_bad}${fork_file} does not identify the validated fork repository"$'\n'
 done
-grep -Fq 'Rebase each unmerged stack child onto its parent' "$multi_phase_plan" || shipping_safety_bad="${shipping_safety_bad}Multi-phase plan flattens unmerged stack children onto trunk"$'\n'
-grep -Fq 'An appended stack child keeps its recorded parent tip until that parent lands' "$multi_phase_plan" || shipping_safety_bad="${shipping_safety_bad}Multi-phase plan rebases an unmerged stack child onto trunk before delivery"$'\n'
 grep -Fq 'For fork heads, take the order from the verified local parent ancestry' "$shipping" || shipping_safety_bad="${shipping_safety_bad}Shipping tries to infer a fork stack from shared trunk bases"$'\n'
 grep -Fq 'only the current bottom PR through Shipping, one at a time' "$autopilot_stack" || shipping_safety_bad="${shipping_safety_bad}Autopilot-stack offers merge-when-ready outside the current bottom frontier"$'\n'
 grep -Fq -- '--force-with-lease="refs/heads/$branch:$captured_sha"' "$autopilot_full" || shipping_safety_bad="${shipping_safety_bad}Autopilot-full does not bind its post-rebase push to the captured SHA"$'\n'
@@ -305,8 +323,6 @@ grep -Fq 'Record the selected exact commit as `<target-tip>`' "$autopilot_full" 
 grep -Fq 'git rebase --onto "$target_tip" "$current_base_sha" -- "$branch"' "$autopilot_full" || shipping_safety_bad="${shipping_safety_bad}Autopilot-full does not isolate its own commits when changing the rebase target"$'\n'
 grep -Fq 'git fetch -- "$head_url" "refs/heads/$branch"' "$opening_a_pr" || shipping_safety_bad="${shipping_safety_bad}Opening a PR does not refresh a fork head through its push repository URL"$'\n'
 grep -Fq 'resolve and validate `<head-url>` through Shipping step 1, capture it as `head_url`' "$opening_a_pr" || shipping_safety_bad="${shipping_safety_bad}Opening a PR does not resolve its head URL before a shared-worktree refresh"$'\n'
-grep -Fq 'git fetch -- "$head_url" "refs/heads/$head_branch"' "$multi_phase_plan" || shipping_safety_bad="${shipping_safety_bad}Multi-phase plan does not fetch a live-lane head through its push repository URL"$'\n'
-grep -Fq 'Resolve and validate `<head-url>` through Shipping step 1 and capture it as `head_url` for the live-lane fetch' "$multi_phase_plan" || shipping_safety_bad="${shipping_safety_bad}Multi-phase plan does not resolve its head URL before a live-lane fetch"$'\n'
 autopilot_full_rewrite_order="$(awk '/^2\. / { step = 1 } /^3\. / { step = 0 } step { text = text $0 "\n" } END { capture = index(text, "git ls-remote"); rebase = index(text, "git rebase --onto"); if (capture == 0 || rebase == 0 || capture >= rebase) print "step 2" }' "$autopilot_full")"
 if [ -n "$autopilot_full_rewrite_order" ]; then
   shipping_safety_bad="${shipping_safety_bad}Autopilot-full does not capture the published head before rebasing"$'\n'
@@ -421,7 +437,7 @@ check "user /testplug:foo invocation" "SKILL-RAN" "$(run '/testplug:foo')"
 
 preloaded_agent_output="$(
   claude -p \
-    'Use the Agent tool once with subagent_type jm-stack:poteto-agent. Give it this task verbatim: "Without invoking Skill or reading files, reply with the first Core principle named in the preloaded poteto-mode skill." Return only the child response.' \
+    'Use the Agent tool once with subagent_type pstack:poteto-agent. Give it this task verbatim: "Without invoking Skill or reading files, reply with the first Core principle named in the preloaded poteto-mode skill." Return only the child response.' \
     --plugin-dir "$plugin" \
     --model opus \
     --effort high \

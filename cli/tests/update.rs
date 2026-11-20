@@ -94,8 +94,9 @@ fn update_moves_a_stray_skill_only_with_force() {
     for (path, text) in [
         ("stack.toml", "[groups.tools]\nglobal = true\nskills = [\"handoff\"]\n"),
         ("skills/handoff/SKILL.md", "---\nname: handoff\n---\n"),
-        (".claude-plugin/marketplace.json", "{\"name\":\"jm\",\"plugins\":[{\"name\":\"jm-stack\",\"source\":\"./plugins/pstack\"}]}"),
+        (".claude-plugin/marketplace.json", "{\"name\":\"jm\",\"plugins\":[{\"name\":\"pstack\",\"source\":\"./plugins/pstack\"}]}"),
         ("plugins/pstack/.claude-plugin/plugin.json", "{\"version\":\"1.0.0\"}"),
+        ("plugins/pstack/skills/poteto-mode/references/model-families.json", include_str!("fixtures/model-families.json")),
     ] {
         fs::create_dir_all(stack.join(path).parent().unwrap()).unwrap();
         fs::write(stack.join(path), text).unwrap();

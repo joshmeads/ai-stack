@@ -166,7 +166,8 @@ impl Skills<'_> {
             let message = if next.git_ref == before.git_ref { "current".to_string() } else { format!("now tracks {} (same commit)", next.git_ref) };
             return Ok((next, message));
         }
-        if !update.force && !missing {
+        let download_only = || exec::launch(self.exec, "git", &strings(&["check-ignore", "-q", "--", &target.to_string_lossy()]), Some(self.stack)).is_ok_and(|ran| ran.ok);
+        if !update.force && !missing && !download_only() {
             let args = ["status", "--porcelain", "--untracked-files=all", "--ignored=matching", "--", &target.to_string_lossy()];
             let dirty = exec::check(self.exec, "git", &strings(&args), Some(self.stack))?;
             ensure!(dirty.trim().is_empty(), "{} has uncommitted, untracked or ignored changes; commit or discard them, or pass --force", target.display());
@@ -484,6 +485,14 @@ mod tests {
         assert_eq!(code, 0, "{out}");
         assert!(out.contains("rebuilt missing"), "{out}");
         assert!(fx.installed().contains("Body - v2"));
+
+        fs::write(fx.stack.join(".gitignore"), "*.log\nskills/grill-docs/\n").unwrap();
+        git(&fx.stack, &["rm", "-rq", "--cached", "skills/grill-docs"]);
+        commit_all(&fx.stack, "download only");
+        fx.upstream_commit("---\nname: grill-with-docs\n---\nBody v3\n", "v3");
+        let (code, out) = fx.update(&[], None, false, false);
+        assert_eq!(code, 0, "a gitignored skill is downloaded, never committed, so it has no changes to guard: {out}");
+        assert!(fx.installed().contains("Body v3"));
     }
 
     #[test]

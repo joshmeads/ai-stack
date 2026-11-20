@@ -294,7 +294,7 @@ pub(crate) mod tests {
         let root = fs::canonicalize(tmp.path()).unwrap();
         let stack = root.join("stack");
         let home = root.join("home");
-        let sources = [("jm-stack", "plugins/pstack")];
+        let sources = [("pstack", "plugins/pstack")];
         let claude = sources.map(|(name, dir)| json!({"name": name, "source": format!("./{dir}")}));
         let codex = sources.map(|(name, dir)| json!({"name": name, "source": {"source": "local", "path": format!("./{dir}")}}));
         put(&stack.join(".claude-plugin/marketplace.json"), &json!({"name": "jm", "plugins": claude}).to_string());
@@ -308,7 +308,7 @@ pub(crate) mod tests {
             put(&stack.join("skills").join(skill).join("SKILL.md"), &format!("---\nname: {skill}\ndescription: The {skill} skill.\n---\n"));
         }
         put(&stack.join("stack.toml"), STACK_TOML);
-        let mut cfg = config::from_str(config::default_config_text(), &home).unwrap();
+        let mut cfg = config::test_config(config::default_config_text(), &home).unwrap();
         cfg.stack.path = stack.clone();
         cfg.stack.legacy_paths = vec![root.join("legacy")];
         let runner = FakeRunner::default();
@@ -534,17 +534,17 @@ pub(crate) mod tests {
         let commands: Vec<String> = first.commands.iter().map(ToString::to_string).collect();
         assert_eq!(commands, [
             format!("{claude_env} claude plugin marketplace add {stack}"),
-            format!("{claude_env} claude plugin install jm-stack@jm"),
+            format!("{claude_env} claude plugin install pstack@jm"),
             format!("{codex_env} codex plugin marketplace add {stack}"),
-            format!("{codex_env} codex plugin add jm-stack@jm"),
+            format!("{codex_env} codex plugin add pstack@jm"),
         ]);
         assert!(f.runner.ran.borrow().is_empty(), "planning must not run install commands");
         f.apply(&first);
         assert_eq!(*f.runner.ran.borrow(), commands);
 
         let header = format!("{}\n", render::MANAGED_MD);
-        let preamble = "Provider-qualified per-role choices. Read the installed jm:stack provider-dispatch reference before dispatching a configured role. `inherit-parent` and `auto` use the parent model natively and still count as one panel lane.\n\n";
-        let claude_sheet = format!("{header}# jm:stack model sheet (Claude Code)\n\n{preamble}{}", concat!(
+        let preamble = "Provider-qualified per-role choices. Read the installed pstack provider-dispatch reference before dispatching a configured role. `inherit-parent` and `auto` use the parent model natively and still count as one panel lane.\n\n";
+        let claude_sheet = format!("{header}# pstack model sheet (Claude Code)\n\n{preamble}{}", concat!(
             "feature, refactoring: claude:opus@medium\n",
             "bug-fix: claude:opus@medium\n",
             "perf-issue: claude:opus@medium\n",
@@ -555,28 +555,28 @@ pub(crate) mod tests {
             "how explainer: claude:opus@medium\n",
             "why investigators, synthesizer: inherit-parent\n",
             "reflect tooling, judgment, divergent, synthesizer: inherit-parent\n",
-            "arena runners: claude:opus@high, codex:gpt-6.1-sol@high, cursor:grok-4.7@high, agy:gemini-4-argon@high\n",
-            "arena cross-judge pool: codex:gpt-6.1-sol@xhigh, claude:opus@xhigh\n",
+            "arena runners: claude:opus@high, codex:gpt-6.2-sol@high, cursor:grok-4.7@high, agy:gemini-4-argon@high\n",
+            "arena cross-judge pool: codex:gpt-6.2-astra@xhigh, claude:opus@xhigh\n",
             "swarm workers: claude:opus@medium\n",
             "architect runners: claude:opus@high, claude:opus@medium\n",
-            "interrogate reviewers: claude:opus@xhigh, codex:gpt-6.1-sol@xhigh\n",
+            "interrogate reviewers: claude:opus@xhigh, codex:gpt-6.2-astra@xhigh\n",
         ));
-        let codex_sheet = format!("{header}# jm:stack model sheet (Codex)\n\n{preamble}{}", concat!(
-            "feature, refactoring: codex:gpt-6.1-sol@medium\n",
-            "bug-fix: codex:gpt-6.1-sol@medium\n",
-            "perf-issue: codex:gpt-6.1-sol@medium\n",
-            "hillclimb: codex:gpt-6.1-sol@medium\n",
-            "judgment and prose: codex:gpt-6.1-sol@xhigh\n",
-            "hardest tasks: codex:gpt-6.1-sol@xhigh\n",
-            "how explorer: codex:gpt-6-luna@xhigh\n",
-            "how explainer: codex:gpt-6.1-sol@medium\n",
+        let codex_sheet = format!("{header}# pstack model sheet (Codex)\n\n{preamble}{}", concat!(
+            "feature, refactoring: codex:gpt-6.2-sol@medium\n",
+            "bug-fix: codex:gpt-6.2-sol@medium\n",
+            "perf-issue: codex:gpt-6.2-sol@medium\n",
+            "hillclimb: codex:gpt-6.2-sol@medium\n",
+            "judgment and prose: codex:gpt-6.2-astra@xhigh\n",
+            "hardest tasks: codex:gpt-6.2-astra@xhigh\n",
+            "how explorer: codex:gpt-6.1-terra@xhigh\n",
+            "how explainer: codex:gpt-6.2-sol@medium\n",
             "why investigators, synthesizer: inherit-parent\n",
             "reflect tooling, judgment, divergent, synthesizer: inherit-parent\n",
-            "arena runners: codex:gpt-6.1-sol@high, claude:opus@high, cursor:grok-4.7@high, agy:gemini-4-argon@high\n",
-            "arena cross-judge pool: claude:opus@xhigh, codex:gpt-6.1-sol@xhigh\n",
-            "swarm workers: codex:gpt-6.1-sol@medium\n",
-            "architect runners: codex:gpt-6.1-sol@xhigh, codex:gpt-6.1-sol@medium\n",
-            "interrogate reviewers: codex:gpt-6.1-sol@xhigh, claude:opus@xhigh\n",
+            "arena runners: codex:gpt-6.2-sol@high, claude:opus@high, cursor:grok-4.7@high, agy:gemini-4-argon@high\n",
+            "arena cross-judge pool: claude:opus@xhigh, codex:gpt-6.2-astra@xhigh\n",
+            "swarm workers: codex:gpt-6.2-sol@medium\n",
+            "architect runners: codex:gpt-6.2-astra@xhigh, codex:gpt-6.2-sol@medium\n",
+            "interrogate reviewers: codex:gpt-6.2-astra@xhigh, claude:opus@xhigh\n",
         ));
         assert_eq!(f.read(".claude/pstack-models.md"), claude_sheet);
         assert_eq!(f.read(".codex/pstack-models.md"), codex_sheet);
@@ -594,16 +594,16 @@ pub(crate) mod tests {
         assert!(f.plan().is_empty(), "{}", f.plan().render_text(&f.home));
 
         for manifest in [".claude-plugin/plugin.json", ".codex-plugin/plugin.json"] {
-            put(&f.stack.join("plugins/pstack").join(manifest), &json!({"name": "jm-stack", "version": "1.1.0"}).to_string());
+            put(&f.stack.join("plugins/pstack").join(manifest), &json!({"name": "pstack", "version": "1.1.0"}).to_string());
         }
-        f.runner.claude.borrow_mut().disabled.insert("jm-stack@jm".into());
+        f.runner.claude.borrow_mut().disabled.insert("pstack@jm".into());
         let bumped = f.plan();
         assert_eq!(bumped.commands.iter().map(ToString::to_string).collect::<Vec<_>>(), [
-            format!("{claude_env} claude plugin update jm-stack@jm --scope user"),
-            format!("{codex_env} codex plugin add jm-stack@jm"),
+            format!("{claude_env} claude plugin update pstack@jm --scope user"),
+            format!("{codex_env} codex plugin add pstack@jm"),
         ]);
         f.apply(&bumped);
-        assert!(f.runner.claude.borrow().disabled.contains("jm-stack@jm"));
+        assert!(f.runner.claude.borrow().disabled.contains("pstack@jm"));
         assert!(f.plan().is_empty(), "{}", f.plan().render_text(&f.home));
 
         f.runner.claude.borrow_mut().marketplaces.insert("jm".into(), "/elsewhere".into());
@@ -771,7 +771,7 @@ pub(crate) mod tests {
         ]);
         assert_eq!(manifest["plugins"][2]["id"], "old@market");
         let installed: Vec<String> = f.runner.claude.borrow().installed.keys().cloned().collect();
-        assert_eq!(installed, ["github@claude-plugins-official", "jm-stack@jm", "pdf-viewer@synced"]);
+        assert_eq!(installed, ["github@claude-plugins-official", "pdf-viewer@synced", "pstack@jm"]);
 
         let again = clean(&f);
         assert!(again.is_empty(), "{}", again.render_text(&f.home));
@@ -789,11 +789,11 @@ pub(crate) mod tests {
         let manifests = [".claude-plugin/marketplace.json", ".agents/plugins/marketplace.json"];
         let current: Vec<String> = manifests.iter().map(|path| fs::read_to_string(f.stack.join(path)).unwrap()).collect();
         for (path, text) in manifests.iter().zip(&current) {
-            put(&f.stack.join(path), &text.replace("\"name\":\"jm-stack\"", "\"name\":\"jm-games\"},{\"name\":\"jm-stack\""));
+            put(&f.stack.join(path), &text.replace("\"name\":\"pstack\"", "\"name\":\"jm-games\"},{\"name\":\"pstack\""));
         }
         let manifest_text: Vec<String> = manifests.iter().map(|path| fs::read_to_string(f.stack.join(path)).unwrap()).collect();
         for (path, text) in manifests.iter().zip(&manifest_text) {
-            put(&f.stack.join(path), &text.replace("{\"name\":\"jm-games\"}", "{\"name\":\"jm-games\",\"source\":\"./plugins/jm-games\"}").replace("{\"name\":\"jm-games\",\"source\":\"./plugins/jm-games\"},{\"name\":\"jm-stack\",\"source\":{", "{\"name\":\"jm-games\",\"source\":{\"source\":\"local\",\"path\":\"./plugins/jm-games\"}},{\"name\":\"jm-stack\",\"source\":{"));
+            put(&f.stack.join(path), &text.replace("{\"name\":\"jm-games\"}", "{\"name\":\"jm-games\",\"source\":\"./plugins/jm-games\"}").replace("{\"name\":\"jm-games\",\"source\":\"./plugins/jm-games\"},{\"name\":\"pstack\",\"source\":{", "{\"name\":\"jm-games\",\"source\":{\"source\":\"local\",\"path\":\"./plugins/jm-games\"}},{\"name\":\"pstack\",\"source\":{"));
         }
         put(&f.stack.join("plugins/jm-games/skills/art/SKILL.md"), "---\nname: art\n---\n");
         git(&["init", "-q"]);
@@ -814,7 +814,7 @@ pub(crate) mod tests {
         for state in [&f.runner.claude, &f.runner.codex] {
             let mut state = state.borrow_mut();
             state.marketplaces.insert("jm".into(), f.stack.display().to_string());
-            for id in ["jm-stack@jm", "jm-games@jm", "other@market"] {
+            for id in ["pstack@jm", "jm-games@jm", "other@market"] {
                 state.installed.insert(id.into(), "1.0.0".into());
             }
         }

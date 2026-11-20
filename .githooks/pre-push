@@ -1,0 +1,6 @@
+#!/bin/sh
+if ! command -v ai-stack >/dev/null 2>&1; then
+    echo "pre-push: ai-stack is not on PATH, so the private-content check cannot run" >&2
+    exit 1
+fi
+exec ai-stack private check

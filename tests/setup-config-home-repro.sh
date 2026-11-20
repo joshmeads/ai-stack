@@ -191,7 +191,7 @@ if [ "$harness" = claude ]; then
   printf 'claude --plugin-dir %q\n' "$repo/plugins/pstack"
 else
   printf 'codex plugin marketplace add joshmeads/ai-stack --ref %q\n' "$(git -C "$repo" rev-parse HEAD)"
-  printf 'codex plugin add jm-stack@jm\ncodex\n'
+  printf 'codex plugin add pstack@jm\ncodex\n'
 fi
 printf 'Invoke /setup-stack; permit writes only under the redirected config dirs.\n'
 printf 'Retain native transcripts/receipts; then verify, rerun setup unchanged, verify again, and prove fresh-session loading.\n'

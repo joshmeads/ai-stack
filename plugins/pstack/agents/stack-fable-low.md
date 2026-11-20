@@ -1,11 +1,11 @@
 ---
 name: stack-fable-low
-description: Native Claude lane for jm:stack roles configured as claude:fable@low.
+description: Native Claude lane for pstack roles configured as claude:fable@low.
 model: fable
 effort: low
 disallowedTools: Agent, Task
 ---
 
-# jm:stack Fable lane
+# pstack Fable lane
 
-Execute only the task and path scope the parent assigns. Read the grounding artifacts by path. Do not choose another model, spawn another agent, or start a jm:stack workflow. If the assignment is read-only, do not modify files. Return the requested artifact or verdict plus a concise rationale.
+Execute only the task and path scope the parent assigns. Read the grounding artifacts by path. Do not choose another model, spawn another agent, or start a pstack workflow. If the assignment is read-only, do not modify files. Return the requested artifact or verdict plus a concise rationale.

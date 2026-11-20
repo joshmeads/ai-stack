@@ -1,0 +1,22 @@
+{
+  "name": "t3stack",
+  "version": "0.1.0+tstack.11e37a7",
+  "description": "Theo Browne's tstack skills for Claude Code and Codex: filing, babysitting and finishing PRs, takeovers, council and Sol review loops.",
+  "author": {
+    "name": "Theo Browne"
+  },
+  "homepage": "https://github.com/t3dotgg/tstack",
+  "repository": "https://github.com/joshmeads/ai-stack",
+  "license": "MIT",
+  "keywords": ["t3stack", "tstack", "pull-requests", "review"],
+  "skills": "./skills/",
+  "interface": {
+    "displayName": "t3stack",
+    "shortDescription": "Theo Browne's PR workflow skills",
+    "longDescription": "file-pr, babysit-pr, full-send, full-stop, council, sol-loop, takeover, modernize and leaving-pr-comments from t3dotgg/tstack.",
+    "developerName": "Theo Browne",
+    "category": "Developer Tools",
+    "capabilities": ["Interactive", "Read", "Write"],
+    "websiteURL": "https://github.com/t3dotgg/tstack"
+  }
+}

@@ -1,12 +1,6 @@
 ---
 name: game-mvp
-description: >
-  Stage 2 of a browser game: build the playable MVP from the approved GDD.md
-  and concept style, with the look matched to the chosen concept first and the
-  core loop playable end to end, then host it on ChatGPT Sites and record the
-  live URL. Use after game-mini-gdd once a style is chosen, when asked to
-  build the MVP, first playable or prototype of a designed game, or when this
-  skill is invoked.
+description: "Use when you have to build the playable MVP of a designed browser game once its concept style is chosen, and host it."
 ---
 
 # MVP (stage: MVP)

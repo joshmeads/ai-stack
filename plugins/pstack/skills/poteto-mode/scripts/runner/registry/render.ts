@@ -10,6 +10,7 @@ export interface GeneratedFile {
 }
 
 export const CATALOG_PATH = "skills/poteto-mode/references/model-catalog.md";
+export const FAMILIES_PATH = "skills/poteto-mode/references/model-families.json";
 export const WRITE_COMMAND = "bun runner/registry/render.ts --write";
 const WRITE_HINT = `Run \`${WRITE_COMMAND}\` from plugins/pstack/skills/poteto-mode/scripts.`;
 const PLUGIN_ROOT = join(import.meta.dir, "../../../../..");
@@ -18,7 +19,7 @@ const AGENT = /^stack-.*\.md$/;
 const SHEET_HEADER = [
   "# pstack model configuration",
   "",
-  "Provider-qualified per-role choices. Read the installed jm:stack provider-dispatch reference before dispatching a configured role. Every documented role remains present. `inherit-parent` and `auto` use the parent model natively and still count as one panel lane.",
+  "Provider-qualified per-role choices. Read the installed pstack provider-dispatch reference before dispatching a configured role. Every documented role remains present. `inherit-parent` and `auto` use the parent model natively and still count as one panel lane.",
 ];
 
 const code = (value: string): string => `\`${value}\``;
@@ -74,7 +75,7 @@ export function renderCatalog(registry: Registry): GeneratedFile {
         family.model,
         family.defaultEffort,
         effortsOf(family).join(" "),
-        family.provider === "claude" ? code(`jm-stack:stack-${family.name}-<effort>`) : "-",
+        family.provider === "claude" ? code(`pstack:stack-${family.name}-<effort>`) : "-",
         named.has(family.name) ? "default" : "optional",
         family.upstream ?? "-",
       ])
@@ -162,6 +163,24 @@ export function renderCatalog(registry: Registry): GeneratedFile {
   return { path: CATALOG_PATH, content: lines.join("\n") };
 }
 
+export function renderFamilies(registry: Registry): GeneratedFile {
+  const data = {
+    providers: registry.adapters.map((adapter) => ({
+      id: adapter.id,
+      readOnly: !adapter.launch.supports.includes("isolated-write"),
+    })),
+    families: registry.families.map((family) => ({
+      provider: family.provider,
+      name: family.name,
+      model: family.model,
+      efforts: effortsOf(family),
+      kept: (family.predecessors ?? []).map((kept) => ({ model: kept.model, efforts: kept.efforts })),
+      revisionPrefix: family.rolling?.revisionPrefix ?? null,
+    })),
+  };
+  return { path: FAMILIES_PATH, content: `${JSON.stringify(data, null, 2)}\n` };
+}
+
 export function renderNativeAgents(registry: Registry): readonly GeneratedFile[] {
   return registry.families.filter((family) => family.provider === "claude").flatMap((family) =>
     effortsOf(family).map((effort) => {
@@ -171,15 +190,15 @@ export function renderNativeAgents(registry: Registry): readonly GeneratedFile[]
         content: [
           "---",
           `name: ${name}`,
-          `description: Native Claude lane for jm:stack roles configured as ${family.provider}:${family.model}@${effort}.`,
+          `description: Native Claude lane for pstack roles configured as ${family.provider}:${family.model}@${effort}.`,
           `model: ${family.model}`,
           `effort: ${effort}`,
           "disallowedTools: Agent, Task",
           "---",
           "",
-          `# jm:stack ${family.label} lane`,
+          `# pstack ${family.label} lane`,
           "",
-          "Execute only the task and path scope the parent assigns. Read the grounding artifacts by path. Do not choose another model, spawn another agent, or start a jm:stack workflow. If the assignment is read-only, do not modify files. Return the requested artifact or verdict plus a concise rationale.",
+          "Execute only the task and path scope the parent assigns. Read the grounding artifacts by path. Do not choose another model, spawn another agent, or start a pstack workflow. If the assignment is read-only, do not modify files. Return the requested artifact or verdict plus a concise rationale.",
           "",
         ].join("\n"),
       };
@@ -188,7 +207,7 @@ export function renderNativeAgents(registry: Registry): readonly GeneratedFile[]
 }
 
 function generated(registry: Registry): readonly GeneratedFile[] {
-  return [renderCatalog(registry), ...renderNativeAgents(registry)];
+  return [renderCatalog(registry), renderFamilies(registry), ...renderNativeAgents(registry)];
 }
 
 function read(path: string): string | null {

@@ -1,0 +1,345 @@
+{
+  "providers": [
+    {
+      "id": "claude",
+      "readOnly": false
+    },
+    {
+      "id": "codex",
+      "readOnly": false
+    },
+    {
+      "id": "devin",
+      "readOnly": true
+    },
+    {
+      "id": "opencode",
+      "readOnly": true
+    },
+    {
+      "id": "dsh",
+      "readOnly": true
+    },
+    {
+      "id": "amp",
+      "readOnly": true
+    },
+    {
+      "id": "agy",
+      "readOnly": true
+    },
+    {
+      "id": "cursor",
+      "readOnly": true
+    },
+    {
+      "id": "pi",
+      "readOnly": true
+    }
+  ],
+  "families": [
+    {
+      "provider": "claude",
+      "name": "fable",
+      "model": "fable",
+      "efforts": [
+        "low",
+        "medium",
+        "high",
+        "xhigh",
+        "max"
+      ],
+      "kept": [],
+      "revisionPrefix": "claude-fable-"
+    },
+    {
+      "provider": "codex",
+      "name": "sol",
+      "model": "gpt-6.2-sol",
+      "efforts": [
+        "low",
+        "medium",
+        "high",
+        "xhigh",
+        "max",
+        "ultra"
+      ],
+      "kept": [
+        {
+          "model": "gpt-6.1-sol",
+          "efforts": [
+            "low",
+            "medium",
+            "high",
+            "xhigh",
+            "max",
+            "ultra"
+          ]
+        },
+        {
+          "model": "gpt-5.6-sol",
+          "efforts": [
+            "low",
+            "medium",
+            "high",
+            "xhigh",
+            "max",
+            "ultra"
+          ]
+        }
+      ],
+      "revisionPrefix": null
+    },
+    {
+      "provider": "codex",
+      "name": "luna",
+      "model": "gpt-6-luna",
+      "efforts": [
+        "low",
+        "medium",
+        "high",
+        "xhigh",
+        "max"
+      ],
+      "kept": [],
+      "revisionPrefix": null
+    },
+    {
+      "provider": "codex",
+      "name": "astra",
+      "model": "gpt-6.2-astra",
+      "efforts": [
+        "low",
+        "medium",
+        "high",
+        "xhigh",
+        "max",
+        "ultra"
+      ],
+      "kept": [
+        {
+          "model": "gpt-6-astra",
+          "efforts": [
+            "low",
+            "medium",
+            "high",
+            "xhigh",
+            "max",
+            "ultra"
+          ]
+        }
+      ],
+      "revisionPrefix": null
+    },
+    {
+      "provider": "codex",
+      "name": "terra",
+      "model": "gpt-6.1-terra",
+      "efforts": [
+        "low",
+        "medium",
+        "high",
+        "xhigh",
+        "max",
+        "ultra"
+      ],
+      "kept": [],
+      "revisionPrefix": null
+    },
+    {
+      "provider": "claude",
+      "name": "opus",
+      "model": "opus",
+      "efforts": [
+        "low",
+        "medium",
+        "high",
+        "xhigh",
+        "max"
+      ],
+      "kept": [],
+      "revisionPrefix": "claude-opus-"
+    },
+    {
+      "provider": "claude",
+      "name": "haiku",
+      "model": "haiku",
+      "efforts": [
+        "low",
+        "medium",
+        "high",
+        "xhigh",
+        "max"
+      ],
+      "kept": [],
+      "revisionPrefix": "claude-haiku-"
+    },
+    {
+      "provider": "claude",
+      "name": "sonnet",
+      "model": "sonnet",
+      "efforts": [
+        "low",
+        "medium",
+        "high",
+        "xhigh",
+        "max"
+      ],
+      "kept": [],
+      "revisionPrefix": "claude-sonnet-"
+    },
+    {
+      "provider": "devin",
+      "name": "swe-2",
+      "model": "swe-2",
+      "efforts": [
+        "medium",
+        "high",
+        "max"
+      ],
+      "kept": [],
+      "revisionPrefix": null
+    },
+    {
+      "provider": "devin",
+      "name": "swe-1.6",
+      "model": "swe-1.6",
+      "efforts": [
+        "default"
+      ],
+      "kept": [],
+      "revisionPrefix": null
+    },
+    {
+      "provider": "opencode",
+      "name": "deepseek-v4.1-flash-free",
+      "model": "opencode/deepseek-v4.1-flash-free",
+      "efforts": [
+        "low",
+        "high",
+        "max"
+      ],
+      "kept": [],
+      "revisionPrefix": null
+    },
+    {
+      "provider": "dsh",
+      "name": "deepseek-flash",
+      "model": "deepseek-flash",
+      "efforts": [
+        "low",
+        "high",
+        "max"
+      ],
+      "kept": [],
+      "revisionPrefix": null
+    },
+    {
+      "provider": "dsh",
+      "name": "deepseek-v4-pro",
+      "model": "deepseek-v4-pro",
+      "efforts": [
+        "low",
+        "high",
+        "max"
+      ],
+      "kept": [],
+      "revisionPrefix": null
+    },
+    {
+      "provider": "amp",
+      "name": "amp-deepseek-v4.1-flash",
+      "model": "deepseek-v4.1-flash",
+      "efforts": [
+        "default"
+      ],
+      "kept": [],
+      "revisionPrefix": null
+    },
+    {
+      "provider": "agy",
+      "name": "gemini-3.8-flash",
+      "model": "gemini-3.8-flash",
+      "efforts": [
+        "low",
+        "medium",
+        "high"
+      ],
+      "kept": [],
+      "revisionPrefix": null
+    },
+    {
+      "provider": "cursor",
+      "name": "composer-2.5",
+      "model": "composer-2.5",
+      "efforts": [
+        "default"
+      ],
+      "kept": [],
+      "revisionPrefix": null
+    },
+    {
+      "provider": "cursor",
+      "name": "gemini-3.7-flash",
+      "model": "gemini-3.7-flash",
+      "efforts": [
+        "low",
+        "medium",
+        "high"
+      ],
+      "kept": [],
+      "revisionPrefix": null
+    },
+    {
+      "provider": "cursor",
+      "name": "grok-4.7",
+      "model": "grok-4.7",
+      "efforts": [
+        "low",
+        "medium",
+        "high",
+        "xhigh"
+      ],
+      "kept": [],
+      "revisionPrefix": null
+    },
+    {
+      "provider": "cursor",
+      "name": "cursor-gemini-4-argon",
+      "model": "gemini-4-argon",
+      "efforts": [
+        "low",
+        "medium",
+        "high"
+      ],
+      "kept": [],
+      "revisionPrefix": null
+    },
+    {
+      "provider": "agy",
+      "name": "gemini-4-argon",
+      "model": "gemini-4-argon",
+      "efforts": [
+        "low",
+        "medium",
+        "high"
+      ],
+      "kept": [],
+      "revisionPrefix": null
+    },
+    {
+      "provider": "pi",
+      "name": "pi-gemini-pro-latest",
+      "model": "openrouter/~google/gemini-pro-latest",
+      "efforts": [
+        "low",
+        "medium",
+        "high",
+        "xhigh",
+        "max"
+      ],
+      "kept": [],
+      "revisionPrefix": null
+    }
+  ]
+}

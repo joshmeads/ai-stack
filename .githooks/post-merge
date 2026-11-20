@@ -1,0 +1,4 @@
+#!/bin/sh
+[ -f private.age ] || exit 0
+command -v ai-stack >/dev/null 2>&1 || exit 0
+exec ai-stack private open --hook

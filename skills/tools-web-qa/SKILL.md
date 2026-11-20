@@ -1,12 +1,6 @@
 ---
 name: tools-web-qa
-description: >
-  Decide whether a browser game actually works, using evidence from the running
-  game: clean-checkout run from the README, headless Chromium probe for errors,
-  liveness, input response and page scrolling, mechanic-by-mechanic checks,
-  screenshots, and a pass/fail report. Use when asked to QA, playtest, verify,
-  accept or "check it works" for a web game (Phaser, three.js, R3F, PixiJS,
-  PlayCanvas, Godot web export, or plain canvas/DOM).
+description: "Use when you have to decide whether a browser game works: QA, playtest, verify or accept it from evidence gathered by running it."
 ---
 
 # Web game QA

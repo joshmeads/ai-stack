@@ -2,6 +2,8 @@
 
 Each folder here is one standalone skill, installed under its plain name. `stack.toml` at the stack root puts every skill in at least one group, and `ai-stack install` links the skills of the global groups into each harness's user skill folder (`~/.claude/skills` and `~/.agents/skills`). `ai-stack groups` lists the groups, their members and an estimated token cost.
 
+Only the `core` group is global: `feedback`, `handoff`, `archify`, `anatomy`, `color-expert`, `oklch-skill` and the `cua` group. Every other group is off until you set `global = true` on it. Theo Browne's and Matt Pocock's skills that are always on ship as the `t3stack` and `pocock` plugins instead (see [Plugins](#plugins)). Private skills are kept out of the public tree (see [Private skills](#private-skills)).
+
 ## Game stages
 
 A browser game moves through three stage skills. Each one reads `game-delivery` first.
@@ -48,15 +50,33 @@ The `art-iteration` critic runs on the review model named in the routing block o
 | `host-static` | Host a built static folder at an unlisted games.joshmeads.dev URL. |
 | `feedback` | Record the user's feedback on the current project in `FEEDBACK.md`, newest first. |
 
-## Engineering
+## Plugins
 
-The `engineering` group is vendored from [mattpocock/skills](https://github.com/mattpocock/skills) and [t3dotgg/tstack](https://github.com/t3dotgg/tstack). `stack.toml` records the source and commit of each skill, and `ai-stack skills update` pulls newer commits. Run `setup-matt-pocock-skills` once in a repo before the ticket skills.
+`plugins/t3stack/` and `plugins/pocock/` are vendored like the standalone skills: `stack.toml` pins each skill with `dest` set to the plugin's `skills/` folder, and `ai-stack skills update` pulls newer commits. As plugins, their skills are namespaced `t3stack:<skill>` and `pocock:<skill>`. Each plugin's version ends in its pinned upstream commit, and the static test fails until a `skills update` that moves the commit also bumps both of that plugin's manifests, so Claude Code refreshes its cached copy.
 
 | Skill | Use |
 | --- | --- |
-| `grilling` | Grill the user relentlessly about a plan, decision or idea. |
-| `grill-me` | A relentless interview to sharpen a plan or design. |
-| `grill-with-docs` | The same interview, writing ADRs and the glossary as it goes. |
+| `t3stack:file-pr` | Open a concise PR whose title and description say why the change matters. |
+| `t3stack:babysit-pr` | Watch a PR through CI and review bots with one watcher, and fix real findings. |
+| `t3stack:full-send` | Finish the work end to end without the user: prove it, review, file, babysit and merge the PR. |
+| `t3stack:full-stop` | Do the `full-send` work but stop with the PR ready for the user to merge. |
+| `t3stack:council` | Get review or feedback from three models on three providers, scored per round. |
+| `t3stack:sol-loop` | Have GPT Sol review a change in a short, budgeted loop. |
+| `t3stack:takeover` | Take over a PR, branch or thread and finish it while keeping credit. |
+| `t3stack:modernize` | Bring an old PR up to date, or recommend closing it. |
+| `t3stack:leaving-pr-comments` | Mark every comment posted on the user's behalf with an attribution note. |
+| `pocock:grill-me` | A relentless interview to sharpen a plan or design; it runs `pocock:grilling`. |
+| `pocock:grilling` | Grill the user relentlessly about a plan, decision or idea. |
+| `pocock:wizard` | Generate an interactive bash wizard for steps only a human can do. |
+| `pocock:writing-for-agents` | Reference for writing skills, `AGENTS.md` and `CLAUDE.md`. |
+
+## Engineering
+
+The `engineering` group is vendored from [mattpocock/skills](https://github.com/mattpocock/skills) and is off. `stack.toml` records the source and commit of each skill, and `ai-stack skills update` pulls newer commits. Run `setup-matt-pocock-skills` once in a repo before the ticket skills.
+
+| Skill | Use |
+| --- | --- |
+| `grill-with-docs` | The same interview as `pocock:grill-me`, writing ADRs and the glossary as it goes. |
 | `domain-modeling` | Build and sharpen the domain model, `GLOSSARY.md` and ADRs. |
 | `to-spec` | Turn the current conversation into a spec on the issue tracker, with no interview. |
 | `to-tickets` | Break a plan or spec into tracer-bullet tickets with blocking edges. |
@@ -64,8 +84,6 @@ The `engineering` group is vendored from [mattpocock/skills](https://github.com/
 | `wayfinder` | Plan a very large piece of work as a map of decision tickets and resolve them one at a time. |
 | `to-questionnaire` | Turn a decision you cannot fully answer into a questionnaire for someone else. |
 | `wait-what` | Say that the last message did not land and have it re-pitched. |
-| `wizard` | Generate an interactive bash wizard for steps only a human can do. |
-| `writing-for-agents` | Reference for writing skills, `AGENTS.md` and `CLAUDE.md`. |
 | `improve-codebase-architecture` | Find deepening opportunities, show them as an HTML report, then grill through one. |
 | `codebase-design` | Shared vocabulary for deep modules, seams and adapters. |
 | `implement-spec` | Implement a spec and its tickets on an integration branch with fresh subagents. |
@@ -73,9 +91,6 @@ The `engineering` group is vendored from [mattpocock/skills](https://github.com/
 | `retro` | Run a retrospective on a coding session. |
 | `research` | Investigate a question against primary sources and save the findings as Markdown. |
 | `compact-handoff` | Compact the conversation into a handoff document (upstream `handoff`; `handoff` above is a different skill). |
-| `modernize` | Bring an old PR up to date, or recommend closing it. |
-| `takeover` | Take over a PR, branch or thread and finish it while keeping credit. |
-| `leaving-pr-comments` | Mark every comment posted on the user's behalf with an attribution note. |
 
 ## Writing
 
@@ -86,9 +101,9 @@ The `writing` group is vendored from [mattpocock/skills](https://github.com/matt
 | `writing-fragments` | Explore: mine raw fragments for a piece, with no structure yet. |
 | `writing-shape` | Exploit: shape the raw material into an article, paragraph by paragraph. |
 | `writing-beats` | Exploit: assemble the raw material into a journey of beats. |
-| `tutor` | Teach a topic over several sessions in a workspace (upstream `teach`; `jm-stack:teach` is a different skill). |
+| `tutor` | Teach a topic over several sessions in a workspace (upstream `teach`; `pstack:teach` is a different skill). |
 
-`takeover`, `implement-spec`, `wayfinder`, `tutor`, `compact-handoff`, `break`, `variant` and `diagram-design` are patched by scripts in `scripts/skill-patches/`, so their edits survive `skills update`.
+`t3stack:takeover`, `pocock:grill-me`, `implement-spec`, `wayfinder`, `tutor`, `compact-handoff`, `break`, `variant` and `diagram-design` are patched by scripts in `scripts/skill-patches/`, so their edits survive `skills update`.
 
 ## Design
 
@@ -120,6 +135,21 @@ The `archived` group is vendored but disabled: its skills aren't linked into any
 | `redesign-existing-projects` | Upgrade an existing site or app to a higher design standard. |
 | `full-output-enforcement` | Stop an agent truncating its output or leaving placeholders. |
 | `make-interfaces-feel-better` | Design engineering details that make an interface feel polished. |
+| `gpt-taste`, `high-end-visual-design`, `image-to-code`, `minimalist-ui` | Taste-skill design styles, adopted from hand installs and pinned to the last upstream commit with these paths. |
+| `implement` | Matt Pocock's implementation skill, adopted from a hand install. |
+| `reverse-engineer-anything` | Reverse-engineering workflow for the [REA](https://github.com/morluto/rea) MCP server (MIT). It is gitignored: `ai-stack skills update reverse-engineer-anything` downloads it from upstream, and it is never committed here. |
+
+## Private skills
+
+`private/` is gitignored. It holds `private/stack.toml`, with the same group format as `stack.toml`, and the skills it lists in `private/skills/<name>/`. `ai-stack install` merges those groups and links their skills like any other. The repository carries the folder only as `private.age`, encrypted with [age](https://github.com/FiloSottile/age) for the public keys in `private.recipients`, one per machine. Each machine keeps its own identity in fnox as `AI_STACK_PRIVATE_KEY`.
+
+The hooks in `.githooks/` keep the two in step. Run `ai-stack private init` once per clone to turn them on:
+
+- `pre-commit` seals `private/` into `private.age` and stages it, when the folder changed.
+- `post-checkout`, `post-merge` and `post-rewrite` open `private.age` into `private/`. They refuse to overwrite edits that are not sealed yet.
+- `pre-push` refuses a push whose commits hold a `private/` path, a private skill's name, or a word listed in `private/guard.txt`.
+
+To add a machine, store an age identity in its fnox, add its public key to `private.recipients`, then run `ai-stack private seal` on a machine that can already open the bundle, and commit.
 
 ## Diagrams
 

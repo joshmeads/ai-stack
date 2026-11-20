@@ -3,20 +3,20 @@
   "owner": {
     "name": "Josh Meads"
   },
-  "description": "Josh Meads's agent plugin for Claude Code and Codex: jm:stack (Open Pstack with Josh's model routing). The stack's other skills install as standalone skills.",
+  "description": "Josh Meads's agent plugins for Claude Code and Codex: pstack, t3stack and pocock. The stack's other skills install as standalone skills.",
   "plugins": [
     {
-      "name": "jm-stack",
+      "name": "pstack",
       "source": "./plugins/pstack",
-      "description": "jm:stack: Lauren Tan's pstack for Claude Code and Codex with Josh Meads's model routing. Based on Open Pstack (ericlitman/open-pstack), which began from michael-denyer/pstack-claude and ports cursor/plugins/pstack.",
-      "version": "1.16.0+jm.3",
+      "description": "Lauren Tan's pstack for Claude Code and Codex, with Josh Meads's model routing. Ports cursor/plugins/pstack.",
+      "version": "1.16.0+jm.7",
       "author": {
         "name": "Lauren Tan (original)"
       },
       "homepage": "https://github.com/joshmeads/ai-stack",
       "license": "MIT",
       "keywords": [
-        "jm-stack",
+        "pstack",
         "pstack",
         "poteto-mode",
         "workflow",
@@ -25,6 +25,26 @@
         "subagents",
         "unslop"
       ]
+    },
+    {
+      "name": "t3stack",
+      "source": "./plugins/t3stack",
+      "description": "Theo Browne's tstack skills: filing, babysitting and finishing PRs, takeovers, council and Sol review loops.",
+      "author": {
+        "name": "Theo Browne"
+      },
+      "homepage": "https://github.com/t3dotgg/tstack",
+      "license": "MIT"
+    },
+    {
+      "name": "pocock",
+      "source": "./plugins/pocock",
+      "description": "Matt Pocock's grill-me and grilling, wizard, and writing-for-agents skills.",
+      "author": {
+        "name": "Matt Pocock"
+      },
+      "homepage": "https://github.com/mattpocock/skills",
+      "license": "MIT"
     }
   ]
 }

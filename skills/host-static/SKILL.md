@@ -1,6 +1,6 @@
 ---
 name: host-static
-description: Host a built static folder (a demo, playground or build preview) at an unlisted URL, https://games.joshmeads.dev/hosted/<slug>/. Use when the user asks to host, publish or share a static build on games.joshmeads.dev or wants a URL for a demo without listing it on the site.
+description: "Use when you have to host or share a built static folder (a demo, playground or build preview) at an unlisted games.joshmeads.dev URL."
 ---
 
 # Host a static folder

@@ -5,31 +5,18 @@ description: "Use for \"how does X work\", code walkthroughs before changing som
 
 # How
 
-Explore the codebase to answer "how does X work?" questions. Produce architectural explanations at the level of a senior engineer onboarding onto a subsystem, enough to build a working mental model, not so much that it reads like annotated source code.
-
-**Dispatch contract.** Resolve every configured role through [`provider-dispatch.md`](../poteto-mode/references/provider-dispatch.md). Values are provider-qualified descriptors; the parent chooses native versus external execution. Every lane runs in `read-only` mode. Explorers use the `how explorer` descriptor, and every explainer uses the `how explainer` descriptor. When the sheet lacks either line, use that role's [role default](../poteto-mode/references/model-catalog.md#role-defaults). A native lane uses the parent subagent primitive; an external lane uses the launcher directly. On Codex, resolve remaining Claude tool names via [`codex-tools.md`](../poteto-mode/references/codex-tools.md). Pick each subagent's effort for the job, per the Subagents section of the **poteto-mode** skill.
-
-## 1. Assess complexity
+Explore the codebase to answer "how does X work?" questions.
 
 If the scope is ambiguous, state your interpretation and explore. The user can redirect.
 
-- **Simple** (a single module, a small utility, a narrow question such as "how does function X work"): no explorers. Dispatch one explainer that explores and explains in one pass, built from `references/explainer-prompt.md` without the explorer-findings section. Go to step 4.
-- **Complex** (a subsystem spanning multiple files or services, a cross-cutting feature, a full architectural overview): go to step 2.
+**Dispatch contract.** Resolve the lane through [`provider-dispatch.md`](../poteto-mode/references/provider-dispatch.md). It runs in `read-only` mode on the `how explainer` descriptor, or that role's [role default](../poteto-mode/references/model-catalog.md#role-defaults) when the sheet lacks the line. A native lane uses the parent subagent primitive; an external lane uses the launcher directly. On Codex, resolve remaining Claude tool names via [`codex-tools.md`](../poteto-mode/references/codex-tools.md). Pick the lane's effort for the job, per the Subagents section of the **poteto-mode** skill.
 
-When in doubt, take the simple path.
+## 1. Explain
 
-## 2. Explore (complex only)
+Start one read-only lane that explores and explains in one pass. Give it the user's question and this brief:
 
-Decompose the question into 2 to 4 angles, each a distinct slice of the subsystem. Start all explorers in one fan-out phase, each with `references/explorer-prompt.md` and its angle filled in.
+> You are writing an architectural explanation for a senior engineer. Explore the codebase and write an explanation that a senior engineer unfamiliar with this area could read and walk away with a solid mental model. They should understand the architecture well enough to start working in it confidently. You have read-only access to the codebase.
 
-## 3. Synthesize (complex only)
+## 2. Present
 
-Once all explorers have returned, dispatch one explainer with `references/explainer-prompt.md` and every explorer's findings filled in.
-
-## 4. Present
-
-Present the explainer's output. Light edits for clarity or context from the conversation are fine. Do not substantially rewrite it.
-
-## Output format
-
-The explanation uses the sections defined in `references/explainer-prompt.md`, dropping any that do not apply: Overview, Key Concepts, How It Works, Where Things Live, Gotchas.
+Present the lane's output. Light edits for clarity or context from the conversation are fine. Do not substantially rewrite it.

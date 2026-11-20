@@ -20,5 +20,13 @@ plugins/pstack/skills/poteto-mode/scripts/node_modules/
 # ai-stack skills staging
 .ai-stack/
 
+# Private skills and manifest; committed only as the encrypted private.age (ai-stack private)
+/private/
+/.private.new.*/
+/.private.old.*/
+
+# Skills downloaded from their upstream by `ai-stack skills update`, never committed
+/skills/reverse-engineer-anything/
+
 # cdt run artifacts (skills/devtools-perf)
 .cdt-runs/

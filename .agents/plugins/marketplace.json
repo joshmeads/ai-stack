@@ -5,10 +5,36 @@
   },
   "plugins": [
     {
-      "name": "jm-stack",
+      "name": "pstack",
       "source": {
         "source": "local",
         "path": "./plugins/pstack"
+      },
+      "policy": {
+        "installation": "AVAILABLE",
+        "authentication": "ON_INSTALL",
+        "products": ["CODEX"]
+      },
+      "category": "Developer Tools"
+    },
+    {
+      "name": "t3stack",
+      "source": {
+        "source": "local",
+        "path": "./plugins/t3stack"
+      },
+      "policy": {
+        "installation": "AVAILABLE",
+        "authentication": "ON_INSTALL",
+        "products": ["CODEX"]
+      },
+      "category": "Developer Tools"
+    },
+    {
+      "name": "pocock",
+      "source": {
+        "source": "local",
+        "path": "./plugins/pocock"
       },
       "policy": {
         "installation": "AVAILABLE",

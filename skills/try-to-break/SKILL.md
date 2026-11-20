@@ -1,12 +1,6 @@
 ---
 name: try-to-break
-description: >
-  Try to break a feature, change or integration on purpose and report what
-  fails, with evidence. Use when asked to try to break something, test
-  adversarially, or look for logic, state or security failures before a merge
-  or release. Any kind of app or game. Not a style or architecture review.
-  It runs the change; for a multi-model read of a diff use jm-stack:interrogate,
-  and for effects outside the diff use jm-stack:blast-radius.
+description: "Use when you have to break a change, feature or integration on purpose before a merge or release, hunting logic, state or security failures with evidence. Not a style review; for a multi-model diff read use pstack:interrogate, and for effects outside the diff use pstack:blast-radius."
 ---
 
 # Try to break it

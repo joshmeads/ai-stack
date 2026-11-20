@@ -12,7 +12,7 @@ use crate::exec::{self, shell_quote as quote};
 use crate::plan::Plan;
 
 pub const MARKETPLACE: &str = "jm";
-pub const PLUGINS: [&str; 1] = ["jm-stack"];
+const REQUIRED_PLUGIN: &str = "pstack";
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Command {
@@ -131,7 +131,8 @@ pub fn plan(cfg: &Config, hc: &HarnessConfig, runner: &dyn Runner, out: &mut Pla
             Harness::Codex => command(&["plugin", "add", &id]),
         }
     };
-    let everything = || std::iter::once(add_marketplace.clone()).chain(PLUGINS.map(install)).collect::<Vec<_>>();
+    let install_all = || manifest.iter().map(|(plugin, _)| install(plugin)).collect::<Vec<_>>();
+    let everything = || std::iter::once(add_marketplace.clone()).chain(install_all()).collect::<Vec<_>>();
     if !hc.home.is_dir() {
         if let Query::CannotStart(err) = query(runner, &command(&["--version"])) {
             out.conflicts.push(err);
@@ -177,11 +178,18 @@ pub fn plan(cfg: &Config, hc: &HarnessConfig, runner: &dyn Runner, out: &mut Pla
         Query::Json(json) => installed_plugins(hc.harness, &json),
         Query::Failed(_) => None,
     };
-    let Some(installed) = installed else {
+    let Some(mut installed) = installed else {
         out.warnings.push(format!("note: cannot read {name}'s installed plugins; planning every install command, which the CLI skips when already done"));
-        out.commands.extend(PLUGINS.map(install));
+        out.commands.extend(install_all());
         return Ok(());
     };
+    if hc.harness == Harness::Codex {
+        for id in codex_configured_plugins(&hc.home) {
+            if id.ends_with(&format!("@{MARKETPLACE}")) && !installed.iter().any(|entry| entry.id == id) {
+                installed.push(Installed { id, version: None, enabled: true, scope: None });
+            }
+        }
+    }
     for entry in &installed {
         let Some(plugin) = entry.id.strip_suffix(&format!("@{MARKETPLACE}")) else { continue };
         if manifest.iter().any(|(name, _)| name == plugin) {
@@ -191,13 +199,12 @@ pub fn plan(cfg: &Config, hc: &HarnessConfig, runner: &dyn Runner, out: &mut Pla
         let removal = |args: &[&str], _: &[&str]| Command { harness: hc.harness, env: env.clone(), args: strings(args), undo: Some(undo.clone()), clean: false };
         plan_removal(hc.harness, entry, &removal, out);
     }
-    for plugin in PLUGINS {
+    for (plugin, wanted) in &manifest {
         let id = format!("{plugin}@{MARKETPLACE}");
         match installed.iter().find(|entry| entry.id == id && (hc.harness != Harness::Claude || matches!(entry.scope.as_deref(), None | Some("user")))) {
             None => out.commands.push(install(plugin)),
             Some(entry) => {
-                let wanted = manifest.iter().find(|(name, _)| name == plugin).and_then(|(_, version)| version.as_deref());
-                if wanted.is_some() && entry.version.as_deref() != wanted {
+                if wanted.is_some() && entry.version != *wanted {
                     out.commands.push(match hc.harness {
                         Harness::Claude => command(&["plugin", "update", &id, "--scope", "user"]),
                         Harness::Codex => install(plugin),
@@ -373,6 +380,12 @@ fn installed_plugins(harness: Harness, json: &Value) -> Option<Vec<Installed>> {
     )
 }
 
+fn codex_configured_plugins(home: &Path) -> Vec<String> {
+    let Ok(text) = std::fs::read_to_string(home.join("config.toml")) else { return Vec::new() };
+    let Ok(config) = toml::from_str::<toml::Table>(&text) else { return Vec::new() };
+    config.get("plugins").and_then(toml::Value::as_table).map(|plugins| plugins.keys().cloned().collect()).unwrap_or_default()
+}
+
 fn read_manifest(stack: &Path, harness: Harness) -> Result<Vec<(String, Option<String>)>> {
     let manifest = manifest_path(harness);
     let plugin_manifest = match harness {
@@ -385,9 +398,7 @@ fn read_manifest(stack: &Path, harness: Harness) -> Result<Vec<(String, Option<S
     let found = json["name"].as_str().unwrap_or_default();
     anyhow::ensure!(found == MARKETPLACE, "{} names the marketplace {found:?}", path.display());
     let entries = json["plugins"].as_array().map(Vec::as_slice).unwrap_or_default();
-    for plugin in PLUGINS {
-        anyhow::ensure!(entries.iter().any(|entry| entry["name"] == plugin), "{} does not list {plugin}", path.display());
-    }
+    anyhow::ensure!(entries.iter().any(|entry| entry["name"] == REQUIRED_PLUGIN), "{} does not list {REQUIRED_PLUGIN}", path.display());
     Ok(entries
         .iter()
         .filter_map(|entry| {
@@ -617,7 +628,7 @@ mod tests {
             assert!(plan.commands.is_empty());
             super::plan(&f.cfg, hc, &NonzeroVersion, &mut plan).unwrap();
             assert!(plan.conflicts.is_empty());
-            assert_eq!(plan.commands.len(), 1 + PLUGINS.len());
+            assert_eq!(plan.commands.len(), 1 + read_manifest(&f.cfg.stack.path, hc.harness).unwrap().len());
         }
         assert!(!f.home.exists());
     }
@@ -644,15 +655,15 @@ mod tests {
 
         let f = fixture();
         f.apply(&f.plan());
-        put(&f.stack.join(".claude-plugin/marketplace.json"), &json!({"name":"jm", "plugins":[{"name":"jm-stack", "source":"./plugins/pstack", "version":"9.0.0"}]}).to_string());
+        put(&f.stack.join(".claude-plugin/marketplace.json"), &json!({"name":"jm", "plugins":[{"name":"pstack", "source":"./plugins/pstack", "version":"9.0.0"}]}).to_string());
         let hc = f.cfg.harnesses.iter().find(|hc| hc.harness == Harness::Claude).unwrap();
-        let project = json!({"id":"jm-stack@jm", "version":"0.1.0", "scope":"project"});
+        let project = json!({"id":"pstack@jm", "version":"0.1.0", "scope":"project"});
         for (installed, expected) in [
-            (json!([project, {"id":"jm-stack@jm", "version":"1.0.0", "scope":"user"}]), vec![]),
-            (json!([project, {"id":"jm-stack@jm", "version":"0.1.0", "scope":"user"}]), strings(&["plugin", "update", "jm-stack@jm", "--scope", "user"])),
-            (json!([project, {"id":"jm-stack@jm", "version":"0.1.0"}]), strings(&["plugin", "update", "jm-stack@jm", "--scope", "user"])),
-            (json!([project]), strings(&["plugin", "install", "jm-stack@jm"])),
-            (json!([{"id":"jm-stack@jm", "version":"0.1.0", "scope":"local"}, {"id":"jm-stack@jm", "version":"0.1.0", "scope":"synced"}]), strings(&["plugin", "install", "jm-stack@jm"])),
+            (json!([project, {"id":"pstack@jm", "version":"1.0.0", "scope":"user"}]), vec![]),
+            (json!([project, {"id":"pstack@jm", "version":"0.1.0", "scope":"user"}]), strings(&["plugin", "update", "pstack@jm", "--scope", "user"])),
+            (json!([project, {"id":"pstack@jm", "version":"0.1.0"}]), strings(&["plugin", "update", "pstack@jm", "--scope", "user"])),
+            (json!([project]), strings(&["plugin", "install", "pstack@jm"])),
+            (json!([{"id":"pstack@jm", "version":"0.1.0", "scope":"local"}, {"id":"pstack@jm", "version":"0.1.0", "scope":"synced"}]), strings(&["plugin", "install", "pstack@jm"])),
         ] {
             let runner = ScopedPlugins { inner: &f.runner, installed };
             let mut out = Plan::default();
@@ -663,10 +674,45 @@ mod tests {
     }
 
     #[test]
+    fn every_plugin_the_marketplace_lists_is_installed_and_jm_stack_is_required() {
+        use crate::install::tests::{fixture, put};
+        use serde_json::json;
+
+        let f = fixture();
+        f.apply(&f.plan());
+        let marketplace = f.stack.join(".claude-plugin/marketplace.json");
+        put(&marketplace, &json!({"name":"jm", "plugins":[{"name":"pstack", "source":"./plugins/pstack"}, {"name":"t3stack", "source":"./plugins/t3stack"}]}).to_string());
+        let hc = f.cfg.harnesses.iter().find(|hc| hc.harness == Harness::Claude).unwrap();
+        let mut out = Plan::default();
+        plan(&f.cfg, hc, &f.runner, &mut out).unwrap();
+        assert!(out.conflicts.is_empty(), "{:?}", out.conflicts);
+        assert_eq!(out.commands.iter().map(|cmd| cmd.args.clone()).collect::<Vec<_>>(), vec![strings(&["plugin", "install", "t3stack@jm"])]);
+
+        put(&marketplace, &json!({"name":"jm", "plugins":[{"name":"t3stack", "source":"./plugins/t3stack"}]}).to_string());
+        let mut out = Plan::default();
+        plan(&f.cfg, hc, &f.runner, &mut out).unwrap();
+        assert!(out.conflicts.iter().any(|conflict| conflict.contains("does not list pstack")), "{:?}", out.conflicts);
+    }
+
+    #[test]
+    fn a_codex_plugin_the_marketplace_dropped_is_removed_although_codex_no_longer_lists_it() {
+        use crate::install::tests::{fixture, put};
+
+        let f = fixture();
+        f.apply(&f.plan());
+        let hc = f.cfg.harnesses.iter().find(|hc| hc.harness == Harness::Codex).unwrap();
+        put(&hc.home.join("config.toml"), "[plugins.\"jm-stack@jm\"]\nenabled = true\n\n[plugins.\"pstack@jm\"]\nenabled = true\n\n[plugins.\"other@market\"]\nenabled = true\n");
+        let mut out = Plan::default();
+        plan(&f.cfg, hc, &f.runner, &mut out).unwrap();
+        assert!(out.conflicts.is_empty(), "{:?}", out.conflicts);
+        assert_eq!(out.commands.iter().map(|cmd| cmd.args.clone()).collect::<Vec<_>>(), vec![strings(&["plugin", "remove", "jm-stack@jm"])]);
+    }
+
+    #[test]
     fn the_retired_jm_plugins_restore_from_the_commit_before_their_skills_moved_out() {
         let repo = Path::new(env!("CARGO_MANIFEST_DIR")).parent().unwrap();
         let git = |args: &[&str]| exec::check(&exec::SystemExec, "git", &strings(&[&["-C", &repo.to_string_lossy()], args].concat()), None).ok().map(|out| out.trim().to_string());
-        let Some(parent) = git(&["rev-parse", "--verify", "-q", "8b08520^{commit}^"]) else { return };
+        let Some(parent) = git(&["rev-parse", "--verify", "-q", "54f7c48^{commit}^"]) else { return };
         for plugin in ["jm-games", "jm-tools"] {
             for harness in [Harness::Claude, Harness::Codex] {
                 assert_eq!(restorable_commit(repo, manifest_path(harness), plugin), Some(parent.clone()), "{plugin} {harness:?}");
