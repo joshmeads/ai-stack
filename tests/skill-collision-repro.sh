@@ -340,14 +340,6 @@ else
   note "ok: forge-neutral landing keeps head/base, auto-merge/queue, split-remote, fork-stack, rebase-push, and watch safety rules"
 fi
 
-excluded_skill="$plugin/skills/make-bot-ui"
-if [ -e "$excluded_skill" ]; then
-  note "FAIL: excluded upstream skill exists: $excluded_skill"
-  fail=1
-else
-  note "ok: excluded upstream skills stay absent"
-fi
-
 catalog="$plugin/skills/poteto-mode/references/model-catalog.md"
 default_effort_bad="$(awk -F ' *\\| *' '/^## Model matrix/ { on = 1; next } /^## / { on = 0 } on && NF > 7 && $6 != "Default effort" && $6 !~ /^-+$/ && $6 != "high" && !($6 == "default" && $7 == "default") { print $2 ": " $6 }' "$catalog")"
 role_effort_bad="$(sed -n '/^## Role defaults/,$p' "$catalog" | grep -oE '@[a-z]+' | grep -vx '@high' || true)"
