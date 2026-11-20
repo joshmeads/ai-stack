@@ -27,6 +27,7 @@ Model and provider facts for [`provider-dispatch.md`](provider-dispatch.md), whi
 | gemini-3.7-flash | Gemini 3.7 Flash (Cursor) | cursor | gemini-3.7-flash | high | low medium high | - | optional | - |
 | grok-4.7 | Grok 4.7 (Cursor) | cursor | grok-4.7 | high | low medium high xhigh | - | optional | - |
 | cursor-gemini-4-argon | Gemini 4 Argon (Cursor) | cursor | gemini-4-argon | high | low medium high | - | optional | - |
+| cursor-gemini-4-neon | Gemini 4 Neon (Cursor) | cursor | gemini-4-neon | high | low medium high xhigh | - | optional | gemini-4-neon-xhigh |
 | gemini-4-argon | Gemini 4 Argon (Antigravity) | agy | gemini-4-argon | high | low medium high | - | optional | - |
 | pi-gemini-pro-latest | Gemini Pro, latest (OpenRouter through pi) | pi | openrouter/~google/gemini-pro-latest | high | low medium high xhigh max | - | optional | - |
 
@@ -55,6 +56,10 @@ Effort in the model ID: for these families the effort selects the CLI model, and
 | cursor-gemini-4-argon | low | `gemini-4-argon-low` |
 | cursor-gemini-4-argon | medium | `gemini-4-argon-medium` |
 | cursor-gemini-4-argon | high | `gemini-4-argon-high` |
+| cursor-gemini-4-neon | low | `gemini-4-neon-low` |
+| cursor-gemini-4-neon | medium | `gemini-4-neon-medium` |
+| cursor-gemini-4-neon | high | `gemini-4-neon-high` |
+| cursor-gemini-4-neon | xhigh | `gemini-4-neon-xhigh` |
 | gemini-4-argon | low | `gemini-4-argon-low` |
 | gemini-4-argon | medium | `gemini-4-argon-medium` |
 | gemini-4-argon | high | `gemini-4-argon-high` |

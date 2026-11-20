@@ -316,6 +316,19 @@
       "revisionPrefix": null
     },
     {
+      "provider": "cursor",
+      "name": "cursor-gemini-4-neon",
+      "model": "gemini-4-neon",
+      "efforts": [
+        "low",
+        "medium",
+        "high",
+        "xhigh"
+      ],
+      "kept": [],
+      "revisionPrefix": null
+    },
+    {
       "provider": "agy",
       "name": "gemini-4-argon",
       "model": "gemini-4-argon",

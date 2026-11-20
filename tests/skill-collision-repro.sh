@@ -340,14 +340,6 @@ else
   note "ok: forge-neutral landing keeps head/base, auto-merge/queue, split-remote, fork-stack, rebase-push, and watch safety rules"
 fi
 
-excluded_skill="$plugin/skills/make-bot-ui"
-if [ -e "$excluded_skill" ]; then
-  note "FAIL: excluded upstream skill exists: $excluded_skill"
-  fail=1
-else
-  note "ok: excluded upstream skills stay absent"
-fi
-
 catalog="$plugin/skills/poteto-mode/references/model-catalog.md"
 default_effort_bad="$(awk -F ' *\\| *' '/^## Model matrix/ { on = 1; next } /^## / { on = 0 } on && NF > 7 && $6 != "Default effort" && $6 !~ /^-+$/ && $6 != "high" && !($6 == "default" && $7 == "default") { print $2 ": " $6 }' "$catalog")"
 role_effort_bad="$(sed -n '/^## Role defaults/,$p' "$catalog" | grep -oE '@[a-z]+' | grep -vx '@high' || true)"
@@ -359,7 +351,7 @@ else
   note "ok: every family and first-run role defaults to high, or to the only effort it lists"
 fi
 
-routed_model_skills=(how why unslop typescript-best-practices create-formal-verification-skill ketchup)
+routed_model_skills=(how why unslop typescript-best-practices create-formal-verification-skill ketchup statechart)
 routed_model_bad=""
 for name in "${routed_model_skills[@]}"; do
   routed_skill="$plugin/skills/$name/SKILL.md"
@@ -374,6 +366,48 @@ if [ -n "$routed_model_bad" ]; then
   fail=1
 else
   note "ok: routed skills stay model-invocable"
+fi
+
+typed_only_bad=""
+for skill_file in "$plugin"/skills/*/SKILL.md; do
+  skill_dir="$(dirname "$skill_file")"
+  front="$(sed -n '2,/^---$/p' "$skill_file")"
+  typed=0
+  if printf '%s\n' "$front" | grep -q '^disable-model-invocation: true$'; then typed=1; fi
+  hidden=0
+  if [ -f "$skill_dir/agents/openai.yaml" ] && grep -q '^  allow_implicit_invocation: false$' "$skill_dir/agents/openai.yaml"; then hidden=1; fi
+  if [ "$typed" != "$hidden" ]; then
+    typed_only_bad="${typed_only_bad}${skill_dir}"$'\n'
+  fi
+done
+if [ -n "$typed_only_bad" ]; then
+  note "FAIL: a typed-only skill needs agents/openai.yaml with allow_implicit_invocation: false for Codex, and only typed-only skills may have it:"
+  note "$typed_only_bad"
+  fail=1
+else
+  note "ok: typed-only skills are hidden from implicit invocation on Codex"
+fi
+
+statechart_scripts="$plugin/skills/statechart/scripts"
+statechart_offline="$(grep '"test:offline"' "$statechart_scripts/package.json" || true)"
+statechart_test_bad=""
+for test_file in "$statechart_scripts"/test/*.test.ts; do
+  name="test/$(basename "$test_file")"
+  [ "$name" = "test/render.test.ts" ] && continue
+  case "$statechart_offline" in
+    *" $name"*) ;;
+    *) statechart_test_bad="${statechart_test_bad}$name is missing from test:offline"$'\n' ;;
+  esac
+done
+case "$statechart_offline" in
+  *render.test.ts*) statechart_test_bad="${statechart_test_bad}test/render.test.ts installs Pele and Mermaid from npm, so it stays out of test:offline"$'\n' ;;
+esac
+if [ -n "$statechart_test_bad" ]; then
+  note "FAIL: statechart's test:offline must run every test file except render.test.ts:"
+  note "$statechart_test_bad"
+  fail=1
+else
+  note "ok: statechart's test:offline runs every test file except the npm-installing render test"
 fi
 
 codex_manifest="$plugin/.codex-plugin/plugin.json"

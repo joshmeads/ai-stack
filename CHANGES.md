@@ -2,6 +2,20 @@
 
 This port applies the Cursor → Claude Code substitutions in skill bodies. Earlier drafts left them flagged; this revision resolves them. A later pass added a Codex build that shares the same skills; see [Codex port](#codex-port) below.
 
+## 1.16.0+jm.8 applies Cursor pstack 0.15.46 and adds statechart, ketchup-video and make-bot-ui
+
+This distribution applies Cursor pstack 0.15.44 to 0.15.46 at `aaeb0ea3a0584995aa8f55ce44c6c5259414b896`. `UPSTREAM.md` decides each commit and each imported skill.
+
+**New skills.** `/statechart` checks a TLA+ model with TLC and draws it as a Mermaid statechart, with the shortest path to each state that breaks a rule. It runs on Node 22.18 to 22.x or 23.6 or later, Bun 1.1.5 or later, or Deno 2.0 or later, and its first run installs TLC and Java with `mise`. `create-formal-verification-skill` now tells a generated TLA+ verify skill to read every result with it, so it stays model-invocable. `/ketchup-video` gives the `/ketchup` catch-up as a short subtitled video, and names the video's file where the harness cannot embed it. `/make-bot-ui` builds a page whose buttons wake a Claude Code cloud scheduled task through its API trigger, with the token kept in a key file the user fills, and puts the page on Tailscale. On Codex, which has no task an HTTP POST starts, it builds the page, server and tailnet steps only. Its task ends with API as its only trigger, its key file lives under `~/.config/<ui name>/`, outside any checkout, and is created only when absent, a T3 Code secret card fills it when the harness has one, and the server replays only clicks that never reached the endpoint, because the endpoint has no idempotency key. Both run only when typed.
+
+**Typed-only skills on Codex.** Each skill with `disable-model-invocation: true` now also has `agents/openai.yaml` with `allow_implicit_invocation: false`, so Codex no longer offers it on unrelated prompts. `tests/skill-collision-repro.sh` holds the two flags together.
+
+**Gemini 4 Neon.** `cursor:gemini-4-neon` runs at `low` to `xhigh` and defaults to `high`, from `cursor-agent models` on Cursor CLI 2026.11.05-86047df. It is read-only, like every Cursor family, and no role default or panel uses it. No Antigravity Neon row is registered, because no `agy` model list shows one.
+
+**Tests.** CI and the pre-PR checks run statechart's tests with `bun install --frozen-lockfile` and `bun run test:offline` in `skills/statechart/scripts/`. That runs every test file except `render.test.ts`, which installs Pele and Mermaid from npm at test time. Tests that need TLC skip unless `TLA2TOOLS` is set.
+
+**Left out.** Upstream's Gemini 4 Neon panel defaults, setup's rewrite of saved Gemini panel entries and its Neon budget target, the Cursor manifests and upstream's Claude Code tree. Role defaults and panels are unchanged.
+
 ## 1.16.0+jm.7 publishes the model family table
 
 **Family table.** `registry/render.ts --write` also writes `references/model-families.json`: each provider and whether it is read-only, and each family with its provider, current model, efforts, kept predecessors and rolling-alias prefix. The ai-stack CLI reads that file from the stack checkout, so a model release is one edit to `registry/models.ts` that `ai-stack update` installs on every machine with no CLI rebuild. `render.ts --check` reports the file stale or missing like the catalog.

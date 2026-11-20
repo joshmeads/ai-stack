@@ -8,12 +8,12 @@ The `pstack` plugin tracks [Cursor's pstack](https://github.com/cursor/plugins/t
 | --- | --- |
 | Repository | `https://github.com/cursor/plugins.git` |
 | Path | `pstack/` |
-| Commit | `2f87c854fe3e2fcda44ca86b46ede35aad3c46b7` |
-| Upstream version | `0.15.43` |
-| port version | `1.16.0+jm.7` |
+| Commit | `aaeb0ea3a0584995aa8f55ce44c6c5259414b896` |
+| Upstream version | `0.15.46` |
+| port version | `1.16.0+jm.8` |
 | Open Pstack merge | `b4c5e3d` (1.16.0) |
 
-The table above is the current Cursor sync point and the Open Pstack release merged here. Open Pstack 1.16.0 imported the 0.15.29 sync at `88d47514b82e7c44f00f2b2a72ff6dd12158038c`, and [Cursor 0.15.30 to 0.15.36 sync](#cursor-01530-to-01536-sync) and [Cursor 0.15.37 to 0.15.43 sync](#cursor-01537-to-01543-sync) record what this repository applied on top. `README-UPSTREAM.md` preserves the upstream pstack README verbatim. `CHANGES.md` and `NOTICE.md` describe the adaptations and provenance.
+The table above is the current Cursor sync point and the Open Pstack release merged here. Open Pstack 1.16.0 imported the 0.15.29 sync at `88d47514b82e7c44f00f2b2a72ff6dd12158038c`, and [Cursor 0.15.30 to 0.15.36 sync](#cursor-01530-to-01536-sync), [Cursor 0.15.37 to 0.15.43 sync](#cursor-01537-to-01543-sync) and [Cursor 0.15.44 to 0.15.46 sync](#cursor-01544-to-01546-sync) record what this repository applied on top. `README-UPSTREAM.md` preserves the upstream pstack README verbatim. `CHANGES.md` and `NOTICE.md` describe the adaptations and provenance.
 
 ## pstack divergence
 
@@ -151,12 +151,33 @@ pstack applies these two commits on top of the 0.15.36 sync, directly from Curso
 
 Upstream retires the `how explorer`, `why investigators, synthesizer`, `reflect tooling, judgment, divergent, synthesizer`, `architect runners` and `hardest tasks` roles. pstack keeps all five in `registry/models.ts`, `/setup-stack` and the ai-stack CLI's role list, because the CLI validates its role list, its default sheets carry the owner's explicit choices for them, and the owner's installed sheets name them. `architect runners` and `hardest tasks` still have readers. The other three now have none: How reads only `how explainer`, Why starts no lane, and Reflect starts no lane. Retiring them is the owner's decision, and needs the registry, setup, the CLI's role list and default sheets, and their tests in one change.
 
+## Cursor 0.15.44 to 0.15.46 sync
+
+pstack applies these three commits on top of the 0.15.43 sync, directly from Cursor, with target `cursor/main` at `aaeb0ea3a0584995aa8f55ce44c6c5259414b896`. `scripts/upstream-merge.py` took `README-UPSTREAM.md` verbatim and left three review rows, in `arena`, `poteto-mode` and `setup-stack`. Every conflict hunk there was a role-pointer or setup-default line, so each keeps the port's line.
+
+| Commit | Decision | Reason |
+| --- | --- | --- |
+| `e58dd04` | adapt | Upstream's panels move to Gemini 4 Neon at `high`. The model change goes in `registry/models.ts`: `cursor:gemini-4-neon` is registered at `low`, `medium`, `high` and `xhigh`, default `high`, from `cursor-agent models` on Cursor CLI 2026.11.05-86047df, which lists `gemini-4-neon-low` to `gemini-4-neon-xhigh`. Its Upstream choice cell records `gemini-4-neon-xhigh`. No role default or panel uses it, as for every read-only family. No Antigravity row is registered: `agy` is not run here because it replaces itself, and its captured model list has no Neon, so there is no evidence it offers Neon. The role-pointer lines in `arena` and `poteto-mode` stay the port's. Setup's step that moves saved non-Neon `gemini-4-*` panel entries to Neon stays out, because no port default ever seated a Gemini, so a Gemini panel entry is always the owner's choice. `README-UPSTREAM.md` takes the README line verbatim. The version bump and harness tree stay out. |
+| `dd24b67` | adapt | The Neon seat moves to `xhigh`. The registry row already lists `xhigh`, so a sheet can name `cursor:gemini-4-neon@xhigh`. The panel defaults, setup's move of saved `gemini-4-neon-high` entries to `xhigh`, and its Neon budget target stay out, because setup has no budget and the owner's role defaults and panels are unchanged. Poteto-mode's "A Gemini seat runs at `xhigh`" is covered by the port's rule that panel seats keep their listed level. |
+| `0b46ec3` | adopt | Statechart's Windows and CRLF fix, taken with the skill at its current content below. The version bump and harness tree stay out. |
+
+**Skills imported at `aaeb0ea`.** By the owner's decision, the three upstream skills the port lacked are imported at upstream's current content. This supersedes the statechart, ketchup-video and `make-bot-ui` exclusions in the 0.15.30 to 0.15.36 and 0.15.37 to 0.15.43 tables, `00d5dec` included.
+
+| Skill | Decision | Adaptation |
+| --- | --- | --- |
+| `statechart` | adapt | Body, references, scripts, tests and corpus are upstream's. The skill drops `disable-model-invocation: true`, because `create-formal-verification-skill` now tells the next agent to read every TLA+ result with it, and the flag blocks that route on Claude Code. `tests/skill-collision-repro.sh` lists it in `routed_model_skills`. The port adds `scripts/bun.lock` and a `test:offline` script that runs every test file except `render.test.ts`, which installs Pele and Mermaid from npm into `~/.cache/statechart` at test time. CI and `AGENTS.md` run `bun install --frozen-lockfile` and `bun run test:offline` there, and the static test fails when a test file other than `render.test.ts` is missing from `test:offline`. Tests that need TLC skip unless `TLA2TOOLS` is set, as upstream. |
+| `00d5dec` | adopt | `create-formal-verification-skill` takes upstream's current `/statechart` paragraph verbatim. |
+| `ketchup-video` | adapt | Upstream's text, typed only. The reply gives the video's absolute file path where the harness cannot embed a video, such as a terminal. |
+| `make-bot-ui` | adapt | Typed only. Cursor's webhook routine becomes a Claude Code cloud scheduled task with an API trigger: the user creates it at claude.ai/code/routines with API as its only trigger (a `/schedule` task's schedule trigger is removed) and copies the Fire URL and token on the web, and the server POSTs `{"text": ...}` with the bearer token and the `anthropic-beta` and `anthropic-version` headers. The wake is a new cloud session whose `<routine-fire-payload>` block holds the JSON, and the task prompt must name that block. `SendToUser`'s secret-request card maps to T3 Code's `request_secret` with file delivery where the harness has it, and otherwise the user writes the token from their own terminal through `bash -c`, so fish works too. The `0600` key file lives under `~/.config/<ui name>/`, outside any checkout, and is created only when absent. The run is in Anthropic's cloud, so it cannot drain a local log; the server replays only clicks that never reached the endpoint, because the endpoint has no idempotency key. The page, server and Tailscale steps are upstream's. Codex has no task an HTTP POST starts, so there the skill builds only the page, server and tailnet steps. `codex-tools.md` lists `schedule` among the Claude built-ins. |
+| `poteto-help` rows | adapt | The three rows are upstream's, the `make-bot-ui` row naming a Claude Code scheduled task, and the "not ported" line is gone. |
+
+`scripts/upstream-audit.py` no longer lists any skill in `EXCLUDED_SKILLS`, so the next audit maps the three skills like any other.
+
 ## Upstream-only exclusions
 
-- Upstream's statechart skill (`eb4db2b`, `7698375`, `4ec7ffa`, `076f4b2`, `34b1b7c`, `740d2c0`, `519d36a`, and `bf0c7cd`'s SANY and Mermaid-border fixes) and `00d5dec`'s pointer to it, and the ketchup-video skill (`3c0fdb4` and its `ab1f702` bullet), are not imported. `scripts/upstream-audit.py` lists them with `make-bot-ui` in `EXCLUDED_SKILLS`, so a merge leaves them unmapped. The owner may adopt statechart later.
-- The 0.15.30 to 0.15.43 Cursor manifest bumps and `pstack/docs/guide/` edits are not applied, as for the earlier bumps below.
+- The 0.15.30 to 0.15.46 Cursor manifest bumps and `pstack/docs/guide/` edits are not applied, as for the earlier bumps below.
+- The Gemini 4 Neon panel defaults from `e58dd04` and `dd24b67` are not applied, and neither is setup's rule that rewrites a saved non-Neon `gemini-4-*` or `gemini-4-neon-high` panel entry as an old default, nor the Neon budget target. The owner's role defaults and panels stay as the Models divergence says, so a Gemini entry in a sheet is the owner's choice and stays. `cursor:gemini-4-neon` is registered as a read-only Cursor family. No Antigravity Neon row is registered until an `agy models` capture lists it.
 - `pstack/automations/benny/` is not imported. It is a Cursor Automations setup with no Claude Code or Codex consumer. That covers `bf0c7cd`'s edits, which trace code directly instead of requiring `how`.
-- Commits `799151d` and `6fecddb` add and relocate `make-bot-ui`, and `a968159` renames it after its folder. It depends on Cursor routines, webhook events, and UI primitives that Claude Code and Codex do not share. `a968159`'s other hunk names `poteto-mode` after its folder, which the port's `poteto-mode/SKILL.md` already does.
 - Four `disable-model-invocation: true` lines from `73f8be4` are not applied to `how`, `why`, `unslop`, or `typescript-best-practices`. Poteto-mode invokes those skills by name, and the flag blocks that route on Claude Code.
 - The default-model hunks for `bug-fix`, `perf-issue`, and `hillclimb` from `23a56e2`, `889ec4b`, and `70b2dc8` are not applied. Those frequent code-writing roles stay on Sol, `codex:gpt-6.2-sol@high` in pstack.
 - `5bf2b15`'s setup budget question, its `# budget` line, and its step down to a lower detected effort are not applied. Setup already asks one requested effort per assigned family, and the step-down would silently lower a requested effort.
@@ -174,7 +195,7 @@ Upstream retires the `how explorer`, `why investigators, synthesizer`, `reflect 
 - The root Agent Plugins v1 `pstack/plugin.json` from `e5a02f8` and its version bumps through 0.15.43 are not applied. The port keeps its current Claude manifest at `plugins/pstack/.claude-plugin/plugin.json` and Codex manifest at `plugins/pstack/.codex-plugin/plugin.json`. Agent Plugins v1 is revisited with #13.
 - `unslop` takes `bc697d0`'s description without its `disable-model-invocation: true` line, as for `73f8be4` above.
 - `pstack/.cursor-plugin/plugin.json` and `pstack/docs/guide/` are not imported. The Cursor manifest has no Claude Code or Codex consumer, and the guide shows Cursor's interface; `poteto-help` links to the guide upstream. That covers the 0.15.21 to 0.15.25 version bumps and `e5136d8`'s guide edit.
-- Upstream's own Claude Code install is not applied. That covers `182f2ce`'s and `1b80080`'s generated tree under `harness/pstack/claude-code/`, `scripts/generate-pstack-harness-trees.mjs`, `scripts/validate-plugins.mjs`, the root `.claude-plugin/marketplace.json` entry, the adapter at `pstack/docs/harness/claude-code.md`, `a968159`'s generator change, the adapter edits in `bf0c7cd` and `2f87c85`, and `2f87c85`'s regenerated tree. That install runs `grok-*` and `gpt-*` roles on the session's Claude model, has no Codex, and maps Cursor names at runtime from the adapter, which would be a second mapping layer on top of the port's own. `README-UPSTREAM.md` takes the README text from `182f2ce`, `1b80080` and `019a6a2` verbatim.
+- Upstream's own Claude Code install is not applied. That covers `182f2ce`'s and `1b80080`'s generated tree under `harness/pstack/claude-code/`, `scripts/generate-pstack-harness-trees.mjs`, `scripts/validate-plugins.mjs`, the root `.claude-plugin/marketplace.json` entry, the adapter at `pstack/docs/harness/claude-code.md`, `a968159`'s generator change, the adapter edits in `bf0c7cd`, `2f87c85`, `e58dd04` and `dd24b67`, and the trees that `2f87c85`, `e58dd04`, `dd24b67` and `0b46ec3` regenerate. That install runs `grok-*` and `gpt-*` roles on the session's Claude model, has no Codex, and maps Cursor names at runtime from the adapter, which would be a second mapping layer on top of the port's own. `README-UPSTREAM.md` takes the README text from `182f2ce`, `1b80080` and `019a6a2` verbatim.
 - `019a6a2`'s guide refresh and `scripts/check-pstack-docs.mjs` are not applied. The port does not import `pstack/docs/guide/`, so that check has nothing to compare. The same covers the guide edits in `7b353f7`, `f9be7aa` and `d457567`.
 - The two harness paragraphs that `f9be7aa` puts in `poteto-help/SKILL.md`, which install upstream's Claude Code tree and describe other tools, are not applied. The port keeps its own paragraph on Claude Code and Codex.
 - The 0.15.26 to 0.15.29 manifest bumps in `pstack/plugin.json` and `pstack/.cursor-plugin/plugin.json` from `0b8e952`, `0148b78` and `d457567` are not applied, as for the earlier bumps above.
@@ -200,6 +221,12 @@ Upstream retires the `how explorer`, `why investigators, synthesizer`, `reflect 
 
 - **`ketchup` is model-invocable**: upstream's `ketchup` carries `disable-model-invocation: true`, but Autopilot-full and Autopilot-stack route through it, and the flag blocks that route on Claude Code. The port drops the flag and shortens the description, since it now costs context. `tests/skill-collision-repro.sh` lists it in `routed_model_skills`. Keep both during syncs.
 
+- **`statechart` is model-invocable and tested offline**: upstream's `statechart` carries `disable-model-invocation: true`, but `create-formal-verification-skill` tells the next agent to read every TLA+ result with it, and the flag blocks that route on Claude Code. The port drops the flag, and `tests/skill-collision-repro.sh` lists it in `routed_model_skills`. The port's `scripts/bun.lock` and `test:offline` script run every test file except `render.test.ts`, which installs npm packages at test time, and the static test fails when a new upstream test file is missing from `test:offline`. Keep all three during syncs, and add each new offline test file to `test:offline`.
+
+- **Typed-only skills on Codex**: Claude Code reads `disable-model-invocation: true`; Codex reads `agents/openai.yaml` with `policy.allow_implicit_invocation: false`. Every typed-only skill carries both, and `tests/skill-collision-repro.sh` fails when one is missing. Give any typed-only skill a sync brings in the same file.
+
+- **`make-bot-ui` on Claude Code scheduled tasks**: Cursor's webhook routine, routine panel, `SendToUser` secret card and `<webhook_event>` wake map to a Claude Code cloud scheduled task with an API trigger, the claude.ai/code/routines edit dialog, a `0600` key file outside the checkout that a secret card or the user's own terminal fills, and the run's `<routine-fire-payload>` block. Codex builds only the page, server and tailnet steps. Map any new routine, webhook or secret-card line the same way, and keep upstream's page, server and Tailscale text.
+
 - **Prefixed agent names on Claude Code**: Claude Code registers plugin agents as `pstack:<agent>` and refuses a bare name with "Agent type not found". Text that tells Claude Code to dispatch an agent uses the prefix (`pstack:stack-<family>-<effort>`, `pstack:poteto-agent`, `pstack:comment-sicko`), and `registry/render.ts` generates the catalog's column the same way. Agent file names and the `name` frontmatter stay bare, and Codex text keeps its own names. Apply the prefix to any upstream `subagent_type` or agent name a sync brings in.
 
 - **Skill authoring without `plugin-dev`**: Cursor routes authoring to `/create-skill`, which the port once mapped to `plugin-dev:skill-development`. That skill is in a separate plugin, so it is often not installed, and a plugin skill must not depend on it. `create-skill` now maps to `playbooks/authoring-a-skill.md`, whose step 1 states the frontmatter and body rules. `poteto-mode` lists it as a playbook, `automate-me` authors through it, and `reflect` makes each approved edit through it. Map any new `create-skill` line the same way.
@@ -216,8 +243,8 @@ Fetch and inspect only commits that touched pstack after the recorded sync point
 
 ```shell
 git fetch cursor main
-git log --oneline c742dd61706fbacc1b95f1a20b7b988cf096ce6c..cursor/main -- pstack
-git diff --stat c742dd61706fbacc1b95f1a20b7b988cf096ce6c..cursor/main -- pstack
+git log --oneline aaeb0ea3a0584995aa8f55ce44c6c5259414b896..cursor/main -- pstack
+git diff --stat aaeb0ea3a0584995aa8f55ce44c6c5259414b896..cursor/main -- pstack
 ```
 
 No output means the tracked pstack tree has not changed. This comparison does not need a polling service or generated mirror branch.
