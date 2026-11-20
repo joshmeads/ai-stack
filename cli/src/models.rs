@@ -155,7 +155,7 @@ impl Migration<'_> {
     }
 
     fn lane(&mut self, harness: &str, row: &str, value: &Value, registry: &Registry) -> Result<()> {
-        let Some(lane) = value.as_str() else { return Ok(()) };
+        let Some(lane) = value.as_str().map(str::trim) else { return Ok(()) };
         let Some((provider, (model, effort))) = lane
             .split_once(':')
             .filter(|(provider, _)| matches!(*provider, "claude" | "codex"))
@@ -471,7 +471,7 @@ mod tests {
                 ("prompt_runner = [\"claude\", \"-p\", \"--permission-mode\", \"acceptEdits\"]", example),
                 ("\"bug-fix\" = \"codex:sol@medium\"", "\"bug-fix\" = 'codex:gpt-6.1-sol@medium' # was \"codex:gpt-6.1-sol@high\""),
                 ("\"architect runners\" = [\"codex:astra@xhigh\", \"codex:sol@medium\"]", "\"architect runners\" = [\n  \"codex:gpt-6-astra@xhigh\",\n  'codex:gpt-6.2-sol@medium', # current\n]"),
-                ("\"judgment and prose\" = \"claude:opus@xhigh\"", "\"judgment and prose\" = \"claude:claude-opus-5-5@xhigh\""),
+                ("\"judgment and prose\" = \"claude:opus@xhigh\"", "\"judgment and prose\" = \"  claude:claude-opus-5-5@xhigh \""),
             ],
         );
         let error = config::test_config(&pinned, Path::new("/h")).unwrap_err().to_string();
@@ -486,7 +486,7 @@ mod tests {
             ("id = 'gpt-6.1-terra'", "family = 'terra'"),
             ("'codex:gpt-6.1-sol@medium' # was", "'codex:sol@medium' # was"),
             ("  \"codex:gpt-6-astra@xhigh\",\n  'codex:gpt-6.2-sol@medium',", "  \"codex:astra@xhigh\",\n  'codex:sol@medium',"),
-            ("\"claude:claude-opus-5-5@xhigh\"", "\"claude:opus@xhigh\""),
+            ("\"  claude:claude-opus-5-5@xhigh \"", "\"claude:opus@xhigh\""),
         ]);
         assert_eq!(bumped.text, expected);
         assert!(bumped.text.contains(example));

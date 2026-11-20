@@ -124,8 +124,8 @@ enum Commands {
         #[arg(long, value_name = "BRANCH")]
         branch: Option<String>,
     },
-    /// Report configured models against the provider catalogs. `newer: <id>` means the
-    /// stack's model registry lags the catalog.
+    /// Report configured models against the provider catalogs. `newer: <id>` on a family means
+    /// the stack's model registry lags the catalog; on a pinned id, the pin is behind.
     Models {
         /// Rewrite exact model IDs in [models.*] and [sheet.*] as their families, then report.
         #[arg(long)]
@@ -619,14 +619,14 @@ fn cmd_fleet(ctx: &Context, command: FleetCommand) -> Result<i32> {
         println!("Wrote {}", path.display());
         return Ok(0);
     }
-    let cfg = load_config(ctx)?;
+    let stack = config::parse(&config::read(&ctx.config_path)?, &ctx.home, ctx.stack_override.as_deref())?.stack().clone();
     let self_bin = std::env::current_exe().context("cannot find this ai-stack binary")?.to_string_lossy().into_owned();
     let fleet = fleet::Fleet {
         exec: &exec::SystemExec,
         home: &ctx.home,
-        local_stack: &cfg.stack.path,
-        remote: &cfg.stack.remote,
-        machines: fleet::load(&path, &cfg.stack.configured, matches!(command, FleetCommand::Login { .. }))?,
+        local_stack: &stack.path,
+        remote: &stack.remote,
+        machines: fleet::load(&path, &stack.configured, matches!(command, FleetCommand::Login { .. }))?,
         self_bin: &self_bin,
         local_flags: &ctx.explicit_flags,
     };

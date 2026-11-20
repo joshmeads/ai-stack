@@ -57,7 +57,7 @@ esac
     };
     let run = |args: &[&str]| command().args(args).output().unwrap();
     let init = run(&["init"]);
-    assert!(init.status.success());
+    assert!(init.status.success(), "{}", String::from_utf8_lossy(&init.stderr));
     let log = home.join(".local/state/ai-stack/incidents.md");
     assert_eq!(fs::metadata(&log).unwrap().mode() & 0o777, 0o600);
     let payload = root.join("submission.json");
