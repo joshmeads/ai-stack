@@ -24,7 +24,7 @@ def tree(ref, prefix):
 
 
 # UPSTREAM.md records why each of these skills stays out of the port.
-EXCLUDED_SKILLS = ("skills/make-bot-ui/", "skills/statechart/", "skills/ketchup-video/")
+EXCLUDED_SKILLS = ()
 
 
 def port_path(path):
