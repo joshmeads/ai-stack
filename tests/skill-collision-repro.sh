@@ -368,6 +368,26 @@ else
   note "ok: routed skills stay model-invocable"
 fi
 
+typed_only_bad=""
+for skill_file in "$plugin"/skills/*/SKILL.md; do
+  skill_dir="$(dirname "$skill_file")"
+  front="$(sed -n '2,/^---$/p' "$skill_file")"
+  typed=0
+  if printf '%s\n' "$front" | grep -q '^disable-model-invocation: true$'; then typed=1; fi
+  hidden=0
+  if [ -f "$skill_dir/agents/openai.yaml" ] && grep -q '^  allow_implicit_invocation: false$' "$skill_dir/agents/openai.yaml"; then hidden=1; fi
+  if [ "$typed" != "$hidden" ]; then
+    typed_only_bad="${typed_only_bad}${skill_dir}"$'\n'
+  fi
+done
+if [ -n "$typed_only_bad" ]; then
+  note "FAIL: a typed-only skill needs agents/openai.yaml with allow_implicit_invocation: false for Codex, and only typed-only skills may have it:"
+  note "$typed_only_bad"
+  fail=1
+else
+  note "ok: typed-only skills are hidden from implicit invocation on Codex"
+fi
+
 statechart_scripts="$plugin/skills/statechart/scripts"
 statechart_offline="$(grep '"test:offline"' "$statechart_scripts/package.json" || true)"
 statechart_test_bad=""
