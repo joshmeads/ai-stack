@@ -153,6 +153,8 @@ The table uses the short upstream names. Claude Code exposes each native skill w
 | `/benchmark-checklist` | vet a measured performance number before reporting or acting on it |
 | `/correct` | turn mistakes agents keep repeating in a repo into checks that make them impossible (typed only) |
 | `/ketchup` | catch up on everything in this session since your last message |
+| `/ketchup-video` | the `/ketchup` catch-up as a short subtitled video of slides, with the waiting calls as text under it (typed only) |
+| `/make-bot-ui` | build a page whose buttons wake a Claude Code scheduled task through its API trigger, with the token handoff and Tailscale (typed only) |
 | `/poteto-help` | find the skill, playbook, or principle for a question about pstack (typed only) |
 | `/in-your-own-words` | play back your goal and the problem before work starts (typed only) |
 | `/sharpen` | rewrite a prompt deeper, not bigger, before you send it; returns the rewritten prompt and does not do the task (typed only) |
@@ -195,6 +197,8 @@ The port is editorial, not mechanical. Anywhere upstream pstack assumed Cursor-s
 | Skill paths `.cursor/skills/`, `~/.cursor/plugins/` | `.claude/skills/`, `~/.claude/plugins/` |
 | MCP discovery via Cursor's `mcps/` directory | Tool list at top of system prompt (`mcp__<server>__<name>` entries), or `.mcp.json`, or `claude mcp list` |
 | Cursor cloud agents (`environment: "cloud"`, `cloud_base_branch`) | Local background subagents (`run_in_background: true`), isolated by git worktree |
+| Cursor webhook routine (`update_state`, `<webhook_event>` wake) in `make-bot-ui` | A Claude Code cloud scheduled task with an API trigger; the POST's `text` reaches the run in a `<routine-fire-payload>` block. Codex has no equivalent, so only the page, server and tailnet steps run there |
+| `SendToUser` secret-request card | The user writes the token into a `0600` key file from their own terminal; neither harness has a secret card |
 | Model rule `~/.cursor/rules/pstack-models.mdc` | Override sheet `~/.claude/pstack-models.md`, included from `CLAUDE.md` |
 | Multi-model panels (arena, architect, interrogate) | Provider dispatch runs a default two-model panel, Opus then Sol for arena and architect runners and Opus then Astra for the arena judge and interrogate reviewers, from the model catalog's [role defaults](../plugins/pstack/skills/poteto-mode/references/model-catalog.md#role-defaults). Same-provider lanes stay native; external lanes use the bundled runner. |
 
@@ -213,7 +217,6 @@ The earlier port collapsed panels to Claude-only models. The bundled runner rest
 
 - **`automations/benny/`** (upstream `0452e08`, the only pstack change between `e46364b` and v0.10.0) — a dormant Slack issue-triage and reproduce-and-fix automation pack built on Cursor's event-triggered automations. It registers no slash skills even upstream, so excluding it changes nothing about the ported plugin's behavior. Porting it would require Cursor's event-trigger runtime, Slack, and tracker plumbing that pstack does not provide.
 - **`docs/guide/`** (upstream `02c03a9`, `0b7ef5b`, `424829e`) — the ten-chapter usage tutorial and its six screenshots (2.3 MB). It teaches pstack through Cursor's UI, sticky mode, and cloud agents, so a faithful port would be a rewrite rather than a sync, and none of it ships as skill content. Read it upstream at [cursor/plugins/pstack/docs/guide](https://github.com/cursor/plugins/tree/main/pstack/docs/guide); the concepts map through the substitution table above.
-- **`make-bot-ui`** (upstream `799151d`, relocated by `6fecddb`) uses Cursor routines, webhook events, hosted bot state, and Cursor UI primitives that have no shared Claude Code and Codex mapping. A provider-specific rewrite would be a separate feature, not an upstream sync.
 - **Solo code defaults** (upstream `23a56e2` moved them to Fable; `889ec4b` and `70b2dc8` move them to Grok). pstack keeps `bug-fix`, `perf-issue`, and `hillclimb` on Sol, and ships no Grok route.
 - **The Sol removal** (upstream `df58112`, pstack 0.15.15) drops Sol from every default and moves Opus to `xhigh`. pstack keeps Sol in its defaults and two-model panels, so that commit is not applied. pstack's own defaults run both at `high`.
 - **Merging without a rebase after trunk moves** (upstream `23e4138`, pstack 0.15.6). Autopilot-full would merge a green head with an unchanged patch ID when `git merge-tree` is clean and trunk touched none of the PR's paths. Those checks miss a trunk change that breaks the PR's code from another file, so the port keeps re-verifying after any trunk move. `UPSTREAM.md` records the reason.

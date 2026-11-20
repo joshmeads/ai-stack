@@ -97,6 +97,7 @@ Some triggers name skills that ship with Claude Code, not pstack. They do not ex
 |---------------------------------|----------|
 | `run` (drive a CLI/TUI to see a change work) | Run the app yourself via `shell` and observe the real output. |
 | `loop` (recurring/self-paced re-invocation, used by `babysit`) | Codex has no `loop` skill. Re-run the step yourself on a cadence, or use a Codex scheduled task if available. |
+| `schedule` (cloud scheduled tasks with an API trigger, used by `make-bot-ui`) | Codex has no task that an HTTP POST starts. `make-bot-ui` builds only the page, the server and the tailnet steps there. |
 
 UI proof names no skill on either harness. Drive the UI with whatever automation you have, or hand the user a concrete manual check. Do not claim done without observing the artifact. A manual check does not replace the live lane a verdict needs.
 
