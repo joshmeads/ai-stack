@@ -2,6 +2,10 @@
 
 This port applies the Cursor → Claude Code substitutions in skill bodies. Earlier drafts left them flagged; this revision resolves them. A later pass added a Codex build that shares the same skills; see [Codex port](#codex-port) below.
 
+## 1.16.0+jm.7 publishes the model family table
+
+**Family table.** `registry/render.ts --write` also writes `references/model-families.json`: each provider and whether it is read-only, and each family with its provider, current model, efforts, kept predecessors and rolling-alias prefix. The ai-stack CLI reads that file from the stack checkout, so a model release is one edit to `registry/models.ts` that `ai-stack update` installs on every machine with no CLI rebuild. `render.ts --check` reports the file stale or missing like the catalog.
+
 ## 1.16.0+jm.6 moves Sol to GPT-6.2 and adds Astra and Terra
 
 **GPT-6.2 Sol default.** The Sol row now uses `gpt-6.2-sol`, so every first-run role and panel that names Sol names `codex:gpt-6.2-sol@high`. `gpt-6.1-sol` joins `gpt-5.6-sol` as a kept predecessor: a sheet that names it keeps running it, and `/setup-stack` proposes `gpt-6.2-sol` at the same effort.

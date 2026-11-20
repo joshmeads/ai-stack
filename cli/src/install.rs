@@ -308,7 +308,7 @@ pub(crate) mod tests {
             put(&stack.join("skills").join(skill).join("SKILL.md"), &format!("---\nname: {skill}\ndescription: The {skill} skill.\n---\n"));
         }
         put(&stack.join("stack.toml"), STACK_TOML);
-        let mut cfg = config::from_str(config::default_config_text(), &home).unwrap();
+        let mut cfg = config::test_config(config::default_config_text(), &home).unwrap();
         cfg.stack.path = stack.clone();
         cfg.stack.legacy_paths = vec![root.join("legacy")];
         let runner = FakeRunner::default();

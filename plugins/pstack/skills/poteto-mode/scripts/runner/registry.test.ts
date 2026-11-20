@@ -15,6 +15,7 @@ import {
   CATALOG_PATH,
   driftMessage,
   driftReport,
+  FAMILIES_PATH,
   main,
   renderCatalog,
   renderNativeAgents,
@@ -200,35 +201,21 @@ describe("ai-stack CLI sheets", () => {
   });
 });
 
-describe("ai-stack CLI matrix", () => {
+describe("ai-stack CLI rules", () => {
   const source = readFileSync(join(PLUGIN_ROOT, "../../cli/src/config.rs"), "utf8");
   const constant = (name: string): string => source.split(new RegExp(`(?:const|static) ${name}:`))[1]!.split("];")[0]!;
 
-  it("lists every registered family's provider, name, current model, efforts and kept predecessors", () => {
-    const named: Record<string, string> = { FIVE: constant("FIVE"), SIX: constant("SIX") };
-    const efforts = (text: string) => [...(named[text] ?? text).matchAll(/"([^"]+)"/g)].map(([, effort]) => effort!);
-    const row = /Family::new\("([^"]+)", "([^"]+)", "([^"]+)", ([A-Z]+|&\[[^\]]*\])\)(?:\.keeping\(&\[(.*)\]\))?,$/gm;
-    const rows = [...constant("MATRIX").matchAll(row)].map(([, provider, name, model, own, kept]) => [name!, {
-      provider, model, efforts: efforts(own!),
-      kept: [...(kept ?? "").matchAll(/kept\("([^"]+)", ([A-Z]+|&\[[^\]]*\])\)/g)].map(([, slug, list]) => [slug, efforts(list!)]),
-    }] as const);
-    const families = REGISTRY.families.map((entry) => [entry.name, {
-      provider: entry.provider, model: entry.model, efforts: [...effortsOf(entry)],
-      kept: (entry.predecessors ?? []).map((kept) => [kept.model, [...kept.efforts]]),
-    }] as const);
-    expect(rows.length).toBe(families.length);
-    expect(new Map<string, unknown>(rows)).toEqual(new Map<string, unknown>(families));
+  it("loads the generated family table from the stack checkout", () => {
+    expect(source).toContain(`"plugins/pstack/${FAMILIES_PATH}"`);
   });
 
-  it("refuses read-only providers on the rows setup-stack names as writers", () => {
+  it("names the writer rows setup-stack names", () => {
     const setup = readFileSync(join(PLUGIN_ROOT, "skills/setup-stack/SKILL.md"), "utf8");
     const line = setup.split("\n").find((text) => text.startsWith("Lanes for these roles write files"))!;
     const named = (name: string): string[] => [...constant(name).split("=")[1]!.matchAll(/"([^"]+)"/g)].map(([, value]) => value!);
     const writers = line.split(" Refuse any of those roles")[0]!;
     expect(new Set([...writers.matchAll(/`([^`]+)`/g)].map(([, row]) => row!).filter((row) => row !== "isolated-write")))
       .toEqual(new Set(named("WRITER_ROWS")));
-    const readOnly = REGISTRY.adapters.filter((adapter) => !adapter.launch.supports.includes("isolated-write")).map((adapter) => adapter.id);
-    expect(new Set(named("READ_ONLY_PROVIDERS"))).toEqual(new Set(readOnly));
   });
 });
 

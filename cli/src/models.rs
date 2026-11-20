@@ -1,11 +1,12 @@
 use std::cmp::Ordering;
+use std::ops::Range;
 use std::path::Path;
 use std::process::Command;
 
 use anyhow::{Context, Result, anyhow, bail};
-use serde_json::Value;
+use toml_edit::{Document, Item, TableLike, Value};
 
-use crate::config::{self, Config, ModelRef, Provider};
+use crate::config::{self, Config, Provider, Registry};
 
 const ANTHROPIC_DOCS_URL: &str = "https://platform.claude.com/docs/en/about-claude/models/overview";
 
@@ -37,10 +38,11 @@ pub fn check(
                 Provider::Openai => openai,
                 Provider::Anthropic => anthropic,
             };
-            let status = match (catalog, model.reference) {
-                (Err(reason), _) => Status::Unknown(reason.to_string()),
-                (Ok(list), ModelRef::Pinned { model: id, .. }) if !list.iter().any(|slug| slug == id) => Status::Missing,
-                (Ok(list), reference) => match newer_than(reference.id(), list) {
+            let status = match catalog {
+                Err(reason) => Status::Unknown(reason.to_string()),
+                Ok(_) if model.reference.is_rolling_alias() => Status::Current,
+                Ok(list) if !list.iter().any(|slug| slug == model.id()) => Status::Missing,
+                Ok(list) => match newer_than(model.id(), list) {
                     Some(latest) => Status::Newer { latest },
                     None => Status::Current,
                 },
@@ -82,10 +84,9 @@ pub fn newer_than(id: &str, catalog: &[String]) -> Option<String> {
     best.map(|(_, _, latest)| latest.clone())
 }
 
-pub fn openai_catalog(codex_home: Option<&Path>) -> Result<Vec<String>> {
-    let env: Vec<(&str, &Path)> = codex_home.map(|home| ("CODEX_HOME", home)).into_iter().collect();
-    let body = run_command("codex", &["debug", "models"], &env)?;
-    let value: Value =
+pub fn openai_catalog(codex_home: &Path) -> Result<Vec<String>> {
+    let body = run_command("codex", &["debug", "models"], &[("CODEX_HOME", codex_home)])?;
+    let value: serde_json::Value =
         serde_json::from_slice(&body).context("codex debug models did not return JSON")?;
     let models = value["models"]
         .as_array()
@@ -117,79 +118,110 @@ pub struct Bumped {
     pub changes: Vec<String>,
 }
 
-pub fn bump(config_text: &str) -> Bumped {
-    let mut table = "";
-    let mut text = String::with_capacity(config_text.len());
-    let mut changes = Vec::new();
-    for line in config_text.split_inclusive('\n') {
-        let body = line.trim_end_matches(['\n', '\r']);
-        let trimmed = body.trim_start();
-        if trimmed.starts_with('[') {
-            table = trimmed.split_inclusive(']').next().unwrap_or(trimmed);
-        }
-        let rewritten = if table.starts_with("[models.") && is_id_line(trimmed) {
-            id_as_family(body)
-        } else if table.starts_with("[sheet.") {
-            lanes_as_families(body)
-        } else {
-            None
+struct Migration<'a> {
+    source: &'a str,
+    edits: Vec<(Range<usize>, String)>,
+    changes: Vec<String>,
+    stuck: Vec<String>,
+}
+
+impl Migration<'_> {
+    fn replace(&mut self, span: Option<Range<usize>>, text: String) -> Result<()> {
+        let span = span.ok_or_else(|| anyhow!("toml_edit gave no source span"))?;
+        self.edits.push((span, text));
+        Ok(())
+    }
+
+    fn replace_string(&mut self, value: &Value, text: &str) -> Result<()> {
+        let quote = match value.span().and_then(|span| self.source.get(span)) {
+            Some(raw) if raw.starts_with('\'') => '\'',
+            _ => '"',
         };
-        match rewritten {
-            Some((new_body, line_changes)) => {
-                text.push_str(&new_body);
-                text.push_str(&line[body.len()..]);
-                changes.extend(line_changes.into_iter().map(|change| format!("{table} {change}")));
+        self.replace(value.span(), format!("{quote}{text}{quote}"))
+    }
+
+    fn model(&mut self, alias: &str, entry: &dyn TableLike, registry: &Registry) -> Result<()> {
+        let Some((key, Item::Value(value))) = entry.get_key_value("id") else { return Ok(()) };
+        let Some(id) = value.as_str() else { return Ok(()) };
+        let label = format!("[models.{alias}] id \"{id}\"");
+        let Some(family) = ["claude", "codex"].into_iter().find_map(|provider| registry.family_of_slug(provider, id)) else {
+            self.stuck.push(label);
+            return Ok(());
+        };
+        self.replace(key.span(), "family".to_owned())?;
+        self.replace_string(value, &family.name)?;
+        self.changes.push(format!("{label} -> family \"{}\"", family.name));
+        Ok(())
+    }
+
+    fn lane(&mut self, harness: &str, row: &str, value: &Value, registry: &Registry) -> Result<()> {
+        let Some(lane) = value.as_str() else { return Ok(()) };
+        let Some((provider, (model, effort))) = lane
+            .split_once(':')
+            .filter(|(provider, _)| matches!(*provider, "claude" | "codex"))
+            .and_then(|(provider, rest)| Some((provider, rest.split_once('@')?)))
+        else {
+            return Ok(());
+        };
+        if registry.has_family(provider, model) {
+            return Ok(());
+        }
+        match registry.family_of_slug(provider, model).filter(|family| family.efforts.iter().any(|allowed| allowed == effort)) {
+            Some(family) => {
+                let renamed = format!("{provider}:{}@{effort}", family.name);
+                self.replace_string(value, &renamed)?;
+                self.changes.push(format!("[sheet.{harness}] {lane} -> {renamed}"));
             }
-            None => text.push_str(line),
+            None => self.stuck.push(format!("[sheet.{harness}] \"{row}\" lane \"{lane}\"")),
+        }
+        Ok(())
+    }
+
+    fn apply(mut self) -> (String, Vec<String>, Vec<String>) {
+        self.edits.sort_by_key(|(span, _)| std::cmp::Reverse(span.start));
+        let mut text = self.source.to_owned();
+        for (span, replacement) in self.edits {
+            text.replace_range(span, &replacement);
+        }
+        (text, self.changes, self.stuck)
+    }
+}
+
+pub fn bump(source: &str, home: &Path, registry: &Registry) -> Result<Bumped> {
+    let document = Document::parse(source)?;
+    let mut migration = Migration { source, edits: Vec::new(), changes: Vec::new(), stuck: Vec::new() };
+    if let Some(models) = document.get("models").and_then(Item::as_table_like) {
+        for (alias, entry) in models.iter() {
+            if let Some(entry) = entry.as_table_like() {
+                migration.model(alias, entry, registry)?;
+            }
         }
     }
-    Bumped { text, changes }
-}
-
-fn is_id_line(trimmed: &str) -> bool {
-    trimmed
-        .strip_prefix("id")
-        .is_some_and(|rest| rest.trim_start().starts_with('='))
-}
-
-fn id_as_family(body: &str) -> Option<(String, Vec<String>)> {
-    let trimmed = body.trim_start();
-    let indent = &body[..body.len() - trimmed.len()];
-    let mut changes = Vec::new();
-    let value = rewrite_strings(&trimmed["id".len()..], |id| {
-        let family = ["claude", "codex"].into_iter().find_map(|provider| config::family_of_slug(provider, id))?;
-        changes.push(format!("id \"{id}\" -> family \"{}\"", family.name));
-        Some(family.name.to_string())
-    });
-    (!changes.is_empty()).then(|| (format!("{indent}family{value}"), changes))
-}
-
-fn lanes_as_families(body: &str) -> Option<(String, Vec<String>)> {
-    let mut changes = Vec::new();
-    let text = rewrite_strings(body, |lane| {
-        let (provider, rest) = lane.split_once(':').filter(|(provider, _)| matches!(*provider, "claude" | "codex"))?;
-        let (slug, effort) = rest.split_once('@')?;
-        let family = config::family_of_slug(provider, slug).filter(|family| family.name != slug && family.efforts.contains(&effort))?;
-        let renamed = format!("{provider}:{}@{effort}", family.name);
-        changes.push(format!("{lane} -> {renamed}"));
-        Some(renamed)
-    });
-    (!changes.is_empty()).then_some((text, changes))
-}
-
-fn rewrite_strings(text: &str, mut rewrite: impl FnMut(&str) -> Option<String>) -> String {
-    let mut out = String::with_capacity(text.len());
-    let mut rest = text;
-    while let Some(open) = rest.find(['"', '#']).filter(|&open| rest.as_bytes()[open] == b'"') {
-        let Some(len) = rest[open + 1..].find('"') else { break };
-        let value = &rest[open + 1..open + 1 + len];
-        out.push_str(&rest[..=open]);
-        out.push_str(&rewrite(value).unwrap_or_else(|| value.to_string()));
-        out.push('"');
-        rest = &rest[open + 2 + len..];
+    if let Some(sheets) = document.get("sheet").and_then(Item::as_table_like) {
+        for (harness, rows) in sheets.iter() {
+            let Some(rows) = rows.as_table_like() else { continue };
+            for (row, lanes) in rows.iter() {
+                let values: Vec<&Value> = match lanes {
+                    Item::Value(Value::Array(lanes)) => lanes.iter().collect(),
+                    Item::Value(lane) => vec![lane],
+                    _ => Vec::new(),
+                };
+                for value in values {
+                    migration.lane(harness, row, value, registry)?;
+                }
+            }
+        }
     }
-    out.push_str(rest);
-    out
+    let (text, changes, stuck) = migration.apply();
+    if (!changes.is_empty() || !stuck.is_empty())
+        && let Err(err) = config::parse(&text, home, None).and_then(|parsed| parsed.resolve(registry))
+    {
+        if stuck.is_empty() {
+            bail!("the migrated config does not load, so the config is unchanged: {err:#}");
+        }
+        bail!("cannot migrate {}, so the config is unchanged: {err:#}", stuck.join(", "));
+    }
+    Ok(Bumped { text, changes })
 }
 
 fn parse_version(id: &str) -> Option<(String, Vec<u64>, Option<u64>)> {
@@ -284,7 +316,7 @@ fn anthropic_api_ids(key: &str) -> Result<Vec<String>> {
         bail!("Anthropic Models API request failed ({}): {}", output.status, String::from_utf8_lossy(&output.stderr).trim());
     }
     let body = output.stdout;
-    let value: Value = serde_json::from_slice(&body).context("Anthropic Models API did not return JSON")?;
+    let value: serde_json::Value = serde_json::from_slice(&body).context("Anthropic Models API did not return JSON")?;
     let data = value["data"]
         .as_array()
         .ok_or_else(|| anyhow!("Anthropic Models API response has no data array"))?;
@@ -368,8 +400,11 @@ mod tests {
         format!("{}{models}\n{}", &text[..start], &text[end..])
     }
 
-    fn config_with(models: &str) -> Config {
-        config::from_str(&with_models(models), Path::new("/h")).unwrap()
+    fn replaced(text: &str, pairs: &[(&str, &str)]) -> String {
+        pairs.iter().fold(text.to_owned(), |text, (from, to)| {
+            assert_eq!(text.matches(from).count(), 1, "{from}");
+            text.replace(from, to)
+        })
     }
 
     #[test]
@@ -389,75 +424,103 @@ mod tests {
 
     #[test]
     fn check_reports_current_newer_missing_and_unknown() {
-        let cfg = config_with(concat!(
+        let text = with_models(concat!(
             "[models.astra]\nfamily = \"astra\"\n",
+            "[models.haiku]\nid = \"haiku\"\n",
             "[models.old]\nid = \"gpt-6.1-sol\"\n",
             "[models.opus]\nfamily = \"opus\"\n",
             "[models.sol]\nfamily = \"sol\"\n",
+            "[models.terra]\nfamily = \"terra\"\n",
         ));
+        let cfg = config::test_config(&text, Path::new("/h")).unwrap();
         let openai = strings(&["gpt-6.2-astra", "gpt-6.2-sol", "gpt-6.3-sol"]);
-        let reports = check(&cfg, Ok(openai.as_slice()), Err("offline"));
-        let summary: Vec<(&str, &str, Status)> = reports
-            .iter()
-            .map(|report| (report.alias.as_str(), report.id.as_str(), report.status.clone()))
-            .collect();
-        assert_eq!(
-            summary,
-            vec![
-                ("astra", "gpt-6.2-astra", Status::Current),
-                ("old", "gpt-6.1-sol", Status::Missing),
-                ("opus", "opus", Status::Unknown("offline".into())),
-                ("sol", "gpt-6.2-sol", Status::Newer { latest: "gpt-6.3-sol".into() }),
-            ]
-        );
+        let anthropic = strings(&["claude-opus-5-5", "claude-haiku-5-5"]);
+        let summary = |anthropic: Result<&[String], &str>| -> Vec<(String, String, Status)> {
+            check(&cfg, Ok(openai.as_slice()), anthropic)
+                .into_iter()
+                .map(|report| (report.alias, report.id, report.status))
+                .collect()
+        };
+        let row = |alias: &str, id: &str, status: Status| (alias.to_owned(), id.to_owned(), status);
+        assert_eq!(summary(Ok(anthropic.as_slice())), vec![
+            row("astra", "gpt-6.2-astra", Status::Current),
+            row("haiku", "haiku", Status::Current),
+            row("old", "gpt-6.1-sol", Status::Missing),
+            row("opus", "opus", Status::Current),
+            row("sol", "gpt-6.2-sol", Status::Newer { latest: "gpt-6.3-sol".into() }),
+            row("terra", "gpt-6.1-terra", Status::Missing),
+        ]);
+        let offline = summary(Err("offline"));
+        assert_eq!(offline[1], row("haiku", "haiku", Status::Unknown("offline".into())));
+        assert_eq!(offline[3], row("opus", "opus", Status::Unknown("offline".into())));
     }
 
     #[test]
-    fn bump_rewrites_exact_ids_and_lanes_as_families_and_nothing_else() {
-        let pinned = with_models(concat!(
-            "[models.sol]\nprovider = \"openai\"\n  id = \"gpt-6.1-sol\"   # pinned\n\n",
-            "[models.luna]\nid = \"gpt-6-luna\"\n\n",
-            "[models.astra]\nfamily = \"astra\"\n\n",
-            "[models.opus]\nprovider = \"anthropic\"\nid = \"claude-opus-5-5\"\n\n",
-            "[models.haiku]\nid = \"haiku\"\ncontext = 100000\n",
-        ))
-        .replace("\"bug-fix\" = \"codex:sol@medium\"", "\"bug-fix\" = \"codex:gpt-6.1-sol@medium\" # was \"codex:gpt-6.1-sol@high\"")
-        .replace("\"architect runners\" = [\"codex:astra@xhigh\", \"codex:sol@medium\"]", "\"architect runners\" = [\n  \"codex:gpt-6-astra@xhigh\",\n  \"codex:gpt-6.2-sol@medium\",\n]")
-        .replace("\"how explorer\" = \"codex:terra@xhigh\"", "\"how explorer\" = \"codex:gpt-6-luna@xhigh\"");
-        let error = config::from_str(&pinned, Path::new("/h")).unwrap_err().to_string();
+    fn bump_migrates_ids_and_lanes_in_every_toml_form_and_nothing_else() {
+        let example = "prompt_runner = [\"claude\", \"-p\", \"\"\"\nExample:\n[models.sol]\nid = \"gpt-6.1-sol\"\n\"bug-fix\" = 'codex:gpt-6.1-sol@medium'\n\"\"\"]";
+        let pinned = replaced(
+            &with_models(concat!(
+                "[models]\n",
+                "opus = { id = 'claude-opus-5-5' }\n",
+                "haiku = { id = \"haiku\", context = 100000 }\n\n",
+                "[models.sol]\nprovider = \"openai\"\n  id = \"gpt-6.1-sol\"   # pinned\n\n",
+                "[models.astra]\nfamily = \"astra\"\n\n",
+                "[models.terra]\nid = 'gpt-6.1-terra'\n",
+            )),
+            &[
+                ("prompt_runner = [\"claude\", \"-p\", \"--permission-mode\", \"acceptEdits\"]", example),
+                ("\"bug-fix\" = \"codex:sol@medium\"", "\"bug-fix\" = 'codex:gpt-6.1-sol@medium' # was \"codex:gpt-6.1-sol@high\""),
+                ("\"architect runners\" = [\"codex:astra@xhigh\", \"codex:sol@medium\"]", "\"architect runners\" = [\n  \"codex:gpt-6-astra@xhigh\",\n  'codex:gpt-6.2-sol@medium', # current\n]"),
+                ("\"judgment and prose\" = \"claude:opus@xhigh\"", "\"judgment and prose\" = \"claude:claude-opus-5-5@xhigh\""),
+            ],
+        );
+        let error = config::test_config(&pinned, Path::new("/h")).unwrap_err().to_string();
         assert!(error.contains("run `ai-stack models --bump`"), "{error}");
 
-        let bumped = bump(&pinned);
-        let expected = with_models(concat!(
-            "[models.sol]\nprovider = \"openai\"\n  family = \"sol\"   # pinned\n\n",
-            "[models.luna]\nfamily = \"luna\"\n\n",
-            "[models.astra]\nfamily = \"astra\"\n\n",
-            "[models.opus]\nprovider = \"anthropic\"\nfamily = \"opus\"\n\n",
-            "[models.haiku]\nfamily = \"haiku\"\ncontext = 100000\n",
-        ))
-        .replace("\"bug-fix\" = \"codex:sol@medium\"", "\"bug-fix\" = \"codex:sol@medium\" # was \"codex:gpt-6.1-sol@high\"")
-        .replace("\"architect runners\" = [\"codex:astra@xhigh\", \"codex:sol@medium\"]", "\"architect runners\" = [\n  \"codex:astra@xhigh\",\n  \"codex:sol@medium\",\n]")
-        .replace("\"how explorer\" = \"codex:terra@xhigh\"", "\"how explorer\" = \"codex:luna@xhigh\"");
+        let registry = config::fixture_registry();
+        let bumped = bump(&pinned, Path::new("/h"), &registry).unwrap();
+        let expected = replaced(&pinned, &[
+            ("opus = { id = 'claude-opus-5-5' }", "opus = { family = 'opus' }"),
+            ("haiku = { id = \"haiku\", context", "haiku = { family = \"haiku\", context"),
+            ("  id = \"gpt-6.1-sol\"   # pinned", "  family = \"sol\"   # pinned"),
+            ("id = 'gpt-6.1-terra'", "family = 'terra'"),
+            ("'codex:gpt-6.1-sol@medium' # was", "'codex:sol@medium' # was"),
+            ("  \"codex:gpt-6-astra@xhigh\",\n  'codex:gpt-6.2-sol@medium',", "  \"codex:astra@xhigh\",\n  'codex:sol@medium',"),
+            ("\"claude:claude-opus-5-5@xhigh\"", "\"claude:opus@xhigh\""),
+        ]);
         assert_eq!(bumped.text, expected);
+        assert!(bumped.text.contains(example));
         assert_eq!(bumped.changes, [
-            "[models.sol] id \"gpt-6.1-sol\" -> family \"sol\"",
-            "[models.luna] id \"gpt-6-luna\" -> family \"luna\"",
             "[models.opus] id \"claude-opus-5-5\" -> family \"opus\"",
             "[models.haiku] id \"haiku\" -> family \"haiku\"",
+            "[models.sol] id \"gpt-6.1-sol\" -> family \"sol\"",
+            "[models.terra] id \"gpt-6.1-terra\" -> family \"terra\"",
+            "[sheet.claude] claude:claude-opus-5-5@xhigh -> claude:opus@xhigh",
             "[sheet.codex] codex:gpt-6.1-sol@medium -> codex:sol@medium",
-            "[sheet.codex] codex:gpt-6-luna@xhigh -> codex:luna@xhigh",
             "[sheet.codex] codex:gpt-6-astra@xhigh -> codex:astra@xhigh",
             "[sheet.codex] codex:gpt-6.2-sol@medium -> codex:sol@medium",
         ]);
-        assert!(config::from_str(&bumped.text, Path::new("/h")).is_ok());
-        assert!(bump(&bumped.text).changes.is_empty());
-        assert!(bump(config::default_config_text()).changes.is_empty());
+        assert!(config::test_config(&bumped.text, Path::new("/h")).is_ok());
+        assert!(bump(&bumped.text, Path::new("/h"), &registry).unwrap().changes.is_empty());
+        assert!(bump(config::default_config_text(), Path::new("/h"), &registry).unwrap().changes.is_empty());
+    }
+
+    #[test]
+    fn bump_refuses_a_config_it_cannot_migrate_and_names_the_entry() {
+        let registry = config::fixture_registry();
+        let text = with_models("[models.sol]\nid = \"gpt-6.1-sol\"\n[models.astra]\nid = \"gpt-6.12-astra\"\n[models.opus]\nfamily = \"opus\"\n[models.haiku]\nfamily = \"haiku\"\n[models.terra]\nfamily = \"terra\"\n");
+        let error = format!("{:#}", bump(&text, Path::new("/h"), &registry).err().unwrap());
+        assert!(error.contains("cannot migrate [models.astra] id \"gpt-6.12-astra\", so the config is unchanged"), "{error}");
+        let lane = config::default_config_text().replace("\"bug-fix\" = \"codex:sol@medium\"", "\"bug-fix\" = \"codex:gpt-6.12-sol@medium\"");
+        let error = format!("{:#}", bump(&lane, Path::new("/h"), &registry).err().unwrap());
+        assert!(error.contains("cannot migrate [sheet.codex] \"bug-fix\" lane \"codex:gpt-6.12-sol@medium\""), "{error}");
     }
 
     #[test]
     #[ignore = "needs codex on PATH and network access"]
     fn live_catalogs_are_listed() {
-        let openai = openai_catalog(None).expect("openai catalog");
+        let codex_home = std::env::var_os("CODEX_HOME").map(std::path::PathBuf::from).unwrap_or_else(|| Path::new(&std::env::var_os("HOME").unwrap()).join(".codex"));
+        let openai = openai_catalog(&codex_home).expect("openai catalog");
         let anthropic = anthropic_catalog().expect("anthropic catalog");
         println!("openai: {} ids, first {:?}", openai.len(), &openai[..openai.len().min(10)]);
         println!("anthropic: {} ids, first {:?}", anthropic.len(), &anthropic[..anthropic.len().min(10)]);

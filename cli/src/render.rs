@@ -68,7 +68,7 @@ mod tests {
 
     #[test]
     fn routing_block_names_lead_sheet_review_points_haiku_limit_and_review_model() {
-        let cfg = config::from_str(config::default_config_text(), Path::new("/h")).unwrap();
+        let cfg = config::test_config(config::default_config_text(), Path::new("/h")).unwrap();
         let claude = routing(&cfg, Harness::Claude, Path::new("/h/.claude/pstack-models.md"));
         assert_eq!(claude, concat!(
             "## Model routing\n\n",

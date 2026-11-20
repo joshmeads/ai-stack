@@ -9,7 +9,7 @@
       "name": "pstack",
       "source": "./plugins/pstack",
       "description": "Lauren Tan's pstack for Claude Code and Codex, with Josh Meads's model routing. Ports cursor/plugins/pstack.",
-      "version": "1.16.0+jm.6",
+      "version": "1.16.0+jm.7",
       "author": {
         "name": "Lauren Tan (original)"
       },

@@ -369,17 +369,11 @@ fn resolve_context(cli: &Cli) -> Result<Context> {
 }
 
 fn load_config(ctx: &Context) -> Result<Config> {
-    let mut cfg = config::load(&ctx.config_path, &ctx.home)?;
-    if let Some(stack) = &ctx.stack_override {
-        cfg.stack.configured = stack.to_string_lossy().into_owned();
-        let configured = std::mem::replace(&mut cfg.stack.path, paths::absolute(&cfg.stack.configured, &ctx.home)?);
-        cfg.stack.legacy_paths.push(configured);
-    }
-    Ok(cfg)
+    config::load(&ctx.config_path, &ctx.home, ctx.stack_override.as_deref())
 }
 
 fn ctx_flat(ctx: &Context) -> Result<drift::Flat> {
-    config::flat(&fs::read_to_string(&ctx.config_path).with_context(|| format!("cannot read config {}", ctx.config_path.display()))?, &ctx.home)
+    config::flat(&config::read(&ctx.config_path)?, &ctx.home, ctx.stack_override.as_deref())
 }
 
 fn write_config(flat: drift::Flat, json: bool, out: &mut dyn Write) -> Result<()> {
@@ -506,11 +500,7 @@ fn apply_plan(ctx: &Context, plan: &Plan, runner: &dyn plugins::Runner) -> Resul
 }
 
 fn cmd_update(ctx: &Context, yes: bool, force: bool, plain: bool, bump: bool, branch: Option<String>) -> Result<i32> {
-    if bump {
-        bump_config(&ctx.config_path)?;
-    }
-    let cfg = load_config(ctx)?;
-    let mut stack = cfg.stack.clone();
+    let mut stack = config::parse(&config::read(&ctx.config_path)?, &ctx.home, ctx.stack_override.as_deref())?.stack().clone();
     if let Some(branch) = branch {
         exec::check_branch(&branch)?;
         stack.branch = branch;
@@ -518,10 +508,14 @@ fn cmd_update(ctx: &Context, yes: bool, force: bool, plain: bool, bump: bool, br
     if git_pull(&exec::SystemExec, &stack)? {
         println!(
             "note: this pull changed files under cli/. Nothing was installed. Rebuild with `cargo install --path {}`, then rerun the same command.",
-            exec::shell_quote(&cfg.stack.path.join("cli").to_string_lossy())
+            exec::shell_quote(&stack.path.join("cli").to_string_lossy())
         );
         return Ok(REBUILD_NEEDED);
     }
+    if bump {
+        bump_config(ctx)?;
+    }
+    let cfg = load_config(ctx)?;
 
     let catalogs = fetch_catalogs(&cfg);
     let reports = check_models(&cfg, &catalogs);
@@ -650,7 +644,7 @@ fn cmd_fleet(ctx: &Context, command: FleetCommand) -> Result<i32> {
 
 fn cmd_models(ctx: &Context, bump: bool) -> Result<i32> {
     if bump {
-        bump_config(&ctx.config_path)?;
+        bump_config(ctx)?;
     }
     let cfg = load_config(ctx)?;
     let catalogs = fetch_catalogs(&cfg);
@@ -659,9 +653,8 @@ fn cmd_models(ctx: &Context, bump: bool) -> Result<i32> {
 }
 
 fn fetch_catalogs(cfg: &Config) -> Catalogs {
-    let codex_home = cfg.harnesses.iter().find(|hc| hc.harness == Harness::Codex).map(|hc| hc.home.as_path());
     Catalogs {
-        openai: models::openai_catalog(codex_home).map_err(|e| format!("{e:#}")),
+        openai: models::openai_catalog(&cfg.codex_home).map_err(|e| format!("{e:#}")),
         anthropic: models::anthropic_catalog().map_err(|e| format!("{e:#}")),
     }
 }
@@ -695,15 +688,15 @@ fn status_text(status: &Status) -> String {
     }
 }
 
-fn bump_config(config_path: &Path) -> Result<()> {
-    let text = fs::read_to_string(config_path)
-        .with_context(|| format!("cannot read {}", config_path.display()))?;
-    let bumped = models::bump(&text);
+fn bump_config(ctx: &Context) -> Result<()> {
+    let text = config::read(&ctx.config_path)?;
+    let registry = config::Registry::load(&config::parse(&text, &ctx.home, ctx.stack_override.as_deref())?.stack().path)?;
+    let bumped = models::bump(&text, &ctx.home, &registry)?;
     if bumped.changes.is_empty() {
         println!("bump: the config already names families");
         return Ok(());
     }
-    fs::write(config_path, bumped.text).with_context(|| format!("cannot write {}", config_path.display()))?;
+    fs::write(&ctx.config_path, bumped.text).with_context(|| format!("cannot write {}", ctx.config_path.display()))?;
     for change in &bumped.changes {
         println!("bumped {change}");
     }
@@ -748,7 +741,7 @@ mod tests {
             let runner = FakeRunner { missing: missing.iter().copied().collect(), ..FakeRunner::default() };
             let detected = init_config_at(&path, false, &runner).unwrap();
             let text = fs::read_to_string(&path).unwrap();
-            let cfg = config::from_str(&text, dir.path()).unwrap();
+            let cfg = config::test_config(&text, dir.path()).unwrap();
             assert_eq!(text, config::default_config_text());
             for (harness, available) in detected {
                 assert_eq!(available, !missing.contains(&harness));
@@ -787,7 +780,10 @@ mod config_show_tests {
         let path = fixture.path().join("config.toml");
         let text = config::default_config_text();
         fs::write(&path, text).unwrap();
-        let ctx = Context { home: fixture.path().into(), config_path: path.clone(), stack_override: Some("/override".into()), explicit_flags: vec![] };
+        let stack = fixture.path().join("override");
+        fs::create_dir_all(stack.join(config::FAMILIES_FILE).parent().unwrap()).unwrap();
+        fs::write(stack.join(config::FAMILIES_FILE), include_str!("../tests/fixtures/model-families.json")).unwrap();
+        let ctx = Context { home: fixture.path().into(), config_path: path.clone(), stack_override: Some(stack.clone()), explicit_flags: vec![] };
         let expected = ctx_flat(&ctx).unwrap();
         fs::write(&path, &text[..text.find("[clean]").unwrap()]).unwrap();
         assert_eq!(ctx_flat(&ctx).unwrap(), expected);
@@ -795,7 +791,7 @@ mod config_show_tests {
         assert_eq!(expected["stack.path"], "~/Documents/Projects/@joshmeads/ai-stack");
         assert!(expected["sheet.claude.arena runners"].is_array());
         assert!(!expected.contains_key("home"));
-        let disabled = config::flat(&text.replace("enabled = true", "enabled = false"), fixture.path()).unwrap();
+        let disabled = config::flat(&text.replace("enabled = true", "enabled = false"), fixture.path(), Some(&stack)).unwrap();
         assert_eq!(disabled["harness.codex.enabled"], false);
         assert_eq!(disabled["harness.codex.home"], "~/.codex");
         let mut out = Vec::new();
