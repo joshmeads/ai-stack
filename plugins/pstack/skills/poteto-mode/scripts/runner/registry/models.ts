@@ -188,6 +188,15 @@ export const FAMILIES = [
     upstream: null,
   }),
   family({
+    name: "cursor-gemini-4-neon",
+    label: "Gemini 4 Neon (Cursor)",
+    provider: "cursor",
+    model: "gemini-4-neon",
+    efforts: { low: "gemini-4-neon-low", medium: "gemini-4-neon-medium", high: "gemini-4-neon-high", xhigh: "gemini-4-neon-xhigh" },
+    defaultEffort: "high",
+    upstream: "gemini-4-neon-xhigh",
+  }),
+  family({
     name: "gemini-4-argon",
     label: "Gemini 4 Argon (Antigravity)",
     provider: "agy",
@@ -254,4 +263,5 @@ export const RELEASED_PAIRS = [
   { pair: "codex:gpt-6.2-sol", family: "sol" },
   { pair: "codex:gpt-6.2-astra", family: "astra" },
   { pair: "codex:gpt-6.1-terra", family: "terra" },
+  { pair: "cursor:gemini-4-neon", family: "cursor-gemini-4-neon" },
 ] as const satisfies readonly ReleasedPair<FamilyName>[];

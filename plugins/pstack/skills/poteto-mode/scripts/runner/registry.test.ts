@@ -108,6 +108,7 @@ describe("registry data", () => {
       ["gemini-3.7-flash", "high"],
       ["grok-4.7", "high"],
       ["cursor-gemini-4-argon", "high"],
+      ["cursor-gemini-4-neon", "high"],
       ["gemini-4-argon", "high"],
       ["pi-gemini-pro-latest", "high"],
     ]);
