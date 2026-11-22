@@ -81,6 +81,7 @@ pub fn settings(config_path: &Path, home: &Path, stack_override: Option<&Path>) 
 }
 
 pub struct Request {
+    pub cwd: PathBuf,
     pub paths: Vec<PathBuf>,
     pub base: String,
     pub scope: Option<Scope>,
@@ -95,11 +96,18 @@ pub fn run(settings: &Settings, request: Request, out: &mut dyn Write, err: &mut
             return Ok(LOAD_ERROR);
         }
     };
-    let cwd = std::env::current_dir()?;
-    let paths = if request.paths.is_empty() { vec![cwd.clone()] } else { request.paths };
+    let cwd = request.cwd;
+    let paths = match (request.paths.is_empty(), Repo::discover(&cwd)) {
+        (false, _) => request.paths,
+        (true, Some(repo)) => vec![repo.root],
+        (true, None) => {
+            writeln!(err, "error: {} is not inside a git repository", cwd.display())?;
+            return Ok(LOAD_ERROR);
+        }
+    };
     let mut groups: Vec<(Repo, Vec<PathBuf>)> = Vec::new();
     for path in paths {
-        let absolute = crate::paths::normalize(&std::path::absolute(&path)?);
+        let absolute = crate::paths::normalize(&cwd.join(&path));
         if std::fs::symlink_metadata(&absolute).is_err() {
             writeln!(err, "error: {} does not exist", path.display())?;
             return Ok(LOAD_ERROR);
@@ -109,17 +117,25 @@ pub fn run(settings: &Settings, request: Request, out: &mut dyn Write, err: &mut
             writeln!(err, "error: {} is not inside a git repository", path.display())?;
             return Ok(LOAD_ERROR);
         };
-        let rel = repo.relative(&absolute).unwrap_or_default();
+        let spec = repo.root.join(repo.relative(&absolute).unwrap_or_default());
         match groups.iter_mut().find(|(known, _)| *known == repo) {
-            Some((_, specs)) => specs.push(rel),
-            None => groups.push((repo, vec![rel])),
+            Some((_, specs)) => specs.push(spec),
+            None => groups.push((repo, vec![spec])),
         }
     }
-    let mut files = Vec::new();
+    let mut files: Vec<scan::Change> = Vec::new();
     for (repo, specs) in groups {
-        let wanted = |rel: &Path| scan::language_of(rel).is_some() && specs.iter().any(|spec| rel.starts_with(spec));
-        match repo.changes(&request.base, wanted) {
-            Ok(changes) => files.extend(changes.into_iter().filter_map(|(rel, baseline)| scan::Change::read(repo.root.join(rel), &baseline))),
+        let wanted = |path: &Path| scan::language_of(path).is_some() && specs.iter().any(|spec| path.starts_with(spec));
+        match repo.changes(&request.base, &wanted) {
+            Ok(changes) => {
+                for (path, baseline) in changes {
+                    if !files.iter().any(|known| known.path == path)
+                        && let Some(change) = scan::Change::read(path, &baseline)
+                    {
+                        files.push(change);
+                    }
+                }
+            }
             Err(error) => {
                 writeln!(err, "error: {error:#}")?;
                 return Ok(LOAD_ERROR);
@@ -225,8 +241,12 @@ pub(crate) mod tests {
     }
 
     fn lint(settings: &Settings, path: &Path, base: &str, scope: Option<Scope>) -> (i32, Vec<(String, u32, String)>) {
+        lint_from(settings, Path::new("/"), vec![path.to_path_buf()], base, scope)
+    }
+
+    fn lint_from(settings: &Settings, cwd: &Path, paths: Vec<PathBuf>, base: &str, scope: Option<Scope>) -> (i32, Vec<(String, u32, String)>) {
         let (mut out, mut err) = (Vec::new(), Vec::new());
-        let code = run(settings, Request { paths: vec![path.to_path_buf()], base: base.into(), scope, json: true }, &mut out, &mut err).unwrap();
+        let code = run(settings, Request { cwd: cwd.to_path_buf(), paths, base: base.into(), scope, json: true }, &mut out, &mut err).unwrap();
         let value: serde_json::Value = serde_json::from_slice(&out).unwrap_or_else(|_| panic!("{}", String::from_utf8_lossy(&err)));
         let findings = value["findings"]
             .as_array()
@@ -245,7 +265,7 @@ pub(crate) mod tests {
     }
 
     #[test]
-    fn cli_lints_only_what_changed_widens_on_request_and_owns_nothing_a_rename_carried() {
+    fn cli_lints_only_what_changed_widens_on_request_and_owns_only_what_a_rename_or_removal_changed() {
         let tmp = tempfile::tempdir().unwrap();
         let root = std::fs::canonicalize(tmp.path()).unwrap();
         let settings = settings(&root.join("home"), LintSection::default());
@@ -255,6 +275,10 @@ pub(crate) mod tests {
         put(&repo.join("c.ts"), "// legacy\nexport function f() {\n  // kept\n  return 1;\n}\n");
         put(&repo.join("d.ts"), "// legacy d\nexport const d = 1;\n");
         put(&repo.join("gone.ts"), "// legacy gone\nexport const gone = 1;\n");
+        let legacy: String = std::iter::once("// legacy prose a human wrote\n".to_string()).chain((1..=10).map(|n| format!("export const v{n} = {n};\n"))).collect();
+        put(&repo.join("src/old.ts"), &legacy);
+        put(&repo.join("h.ts"), "export const h = 1;\n");
+        put(&repo.join("keep.ts"), "// pre-existing\nexport const k = 1;\n");
         git(&repo, &["init", "-q"]);
         git(&repo, &["add", "-A"]);
         git(&repo, &["commit", "-qm", "base"]);
@@ -267,8 +291,16 @@ pub(crate) mod tests {
         put(&repo.join("new.spec.ts"), "export const n = 1; // agent prose\n");
         put(&repo.join("empty.spec.ts"), "");
         std::fs::write(repo.join(std::ffi::OsStr::from_bytes(b"test-\xff.py")), "# agent prose\n").unwrap();
+        std::fs::remove_file(repo.join("src/old.ts")).unwrap();
+        put(&repo.join("src/new.ts"), &legacy.replace("v5 = 5;", "v5 = 50;"));
+        std::fs::rename(repo.join("h.ts"), repo.join("h1.spec.ts")).unwrap();
+        std::fs::copy(repo.join("h1.spec.ts"), repo.join("h2.spec.ts")).unwrap();
+        git(&repo, &["rm", "-q", "--cached", "keep.ts"]);
+        put(&repo.join("keep.ts"), "// pre-existing\nexport const k = 2;\n");
 
         let (code, lines) = lint(&settings, &repo, "HEAD", None);
+        let (copies, lines): (Vec<_>, Vec<_>) = lines.into_iter().partition(|(name, ..)| name.starts_with("h"));
+        assert!(matches!(&copies[..], [(_, 1, rule)] if rule == "test-file-names"), "one deleted file exempts only one of its copies: {copies:?}");
         assert_eq!(lines, [
             found("empty.spec.ts", 1, "test-file-names"),
             found("new.spec.ts", 1, "test-file-names"),
@@ -277,7 +309,8 @@ pub(crate) mod tests {
         ]);
         assert_eq!(code, 1);
         assert_eq!(lint(&settings, &repo.join("gone.ts"), "HEAD", Some(Scope::File)).1, [found("gone.ts", 1, "no-comments")], "a file whose edit only deleted lines is scanned whole");
-        for bad in [Request { paths: vec![repo.join("missing.ts")], base: "HEAD".into(), scope: None, json: true }, Request { paths: vec![repo.clone()], base: "absent".into(), scope: None, json: true }] {
+        let request = |path: PathBuf, base: &str| Request { cwd: root.clone(), paths: vec![path], base: base.into(), scope: None, json: true };
+        for bad in [request(repo.join("missing.ts"), "HEAD"), request(repo.clone(), "absent")] {
             assert_eq!(run(&settings, bad, &mut Vec::new(), &mut Vec::new()).unwrap(), LOAD_ERROR);
         }
         let fresh = root.join("fresh");
@@ -292,6 +325,50 @@ pub(crate) mod tests {
         assert_eq!(file, [found("c.ts", 1, "no-comments"), found("c.ts", 3, "no-comments")]);
         let (code, none) = lint(&settings, &repo.join("b.ts"), "HEAD", Some(Scope::Function));
         assert_eq!((code, none), (0, vec![]));
+    }
+
+    #[test]
+    fn cli_lints_the_whole_repository_by_default_and_follows_changed_submodules() {
+        let tmp = tempfile::tempdir().unwrap();
+        let root = std::fs::canonicalize(tmp.path()).unwrap();
+        let settings_with = settings;
+        let settings = settings_with(&root.join("home"), LintSection::default());
+        let upstream = root.join("upstream");
+        put(&upstream.join("a.ts"), "export {};\n");
+        git(&upstream, &["init", "-q"]);
+        git(&upstream, &["add", "-A"]);
+        git(&upstream, &["commit", "-qm", "base"]);
+        let repo = root.join("repo");
+        put(&repo.join("web/w.ts"), "export const w = 1;\n");
+        put(&repo.join("cli/c.ts"), "export const c = 1;\n");
+        git(&repo, &["init", "-q"]);
+        for name in ["vendorlib", "oldlib"] {
+            git(&repo, &["-c", "protocol.file.allow=always", "submodule", "add", "-q", upstream.to_str().unwrap(), name]);
+        }
+        git(&repo, &["add", "-A"]);
+        git(&repo, &["commit", "-qm", "base"]);
+        put(&repo.join("web/w.ts"), "export const w = 2; // prose in web\n");
+        put(&repo.join("vendorlib/a.ts"), "export {}; // edited in the submodule\n");
+        git(&repo, &["rm", "-q", "oldlib"]);
+
+        let both = (1, vec![found("a.ts", 1, "no-comments"), found("w.ts", 1, "no-comments")]);
+        assert_eq!(lint_from(&settings, &repo.join("cli"), Vec::new(), "HEAD", None), both, "from a subdirectory with no PATH");
+        assert_eq!(lint_from(&settings, &repo, vec![repo.join("vendorlib")], "HEAD", None), (1, vec![found("a.ts", 1, "no-comments")]));
+
+        let primary = root.join("primary");
+        std::fs::create_dir_all(&primary).unwrap();
+        git(&primary, &["init", "-q", "--separate-git-dir", root.join("store").to_str().unwrap()]);
+        put(&primary.join("a.ts"), "export {};\n");
+        git(&primary, &["add", "-A"]);
+        git(&primary, &["commit", "-qm", "base"]);
+        git(&primary, &["worktree", "add", "-q", "-b", "second", root.join("secondary").to_str().unwrap()]);
+        let off = LintProject { path: primary.to_string_lossy().into_owned(), paths: Default::default(), ignore: Vec::new(), scope: None, enabled: Some(false) };
+        let off = settings_with(&root.join("home"), LintSection { project: vec![off], ..LintSection::default() });
+        for checkout in [primary.clone(), root.join("secondary")] {
+            put(&checkout.join("a.ts"), "export {}; // new\n");
+            assert_eq!(lint(&settings, &checkout, "HEAD", None).0, 1);
+            assert_eq!(lint(&off, &checkout, "HEAD", None), (0, vec![]), "a project set by its main checkout covers {}", checkout.display());
+        }
     }
 
     #[test]

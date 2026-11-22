@@ -376,7 +376,7 @@ fn main() -> Result<()> {
         Commands::Groups { json } => cmd_groups(&ctx, json)?,
         Commands::Fleet { command } => cmd_fleet(&ctx, command)?,
         Commands::Private { command } => cmd_private(&ctx, command)?,
-        Commands::Lint { command, paths, base, scope, json } => cmd_lint(&ctx, command, lint::Request { paths, base, scope, json })?,
+        Commands::Lint { command, paths, base, scope, json } => cmd_lint(&ctx, command, lint::Request { cwd: std::env::current_dir()?, paths, base, scope, json })?,
     };
     io::stdout().flush()?;
     std::process::exit(code);

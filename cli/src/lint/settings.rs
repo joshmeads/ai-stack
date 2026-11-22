@@ -1,5 +1,6 @@
 use std::collections::{BTreeMap, BTreeSet};
 use std::path::{Path, PathBuf};
+use std::sync::OnceLock;
 
 use anyhow::{Context as _, Result};
 use globset::GlobSet;
@@ -24,7 +25,8 @@ pub struct Settings {
 }
 
 struct Project {
-    key: PathBuf,
+    path: PathBuf,
+    key: OnceLock<PathBuf>,
     paths: BTreeMap<String, GlobSet>,
     ignore: GlobSet,
     scope: Option<Scope>,
@@ -39,7 +41,8 @@ impl Settings {
             .map(|project| {
                 let context = || format!("[[lint.project]] {}", project.path);
                 Ok(Project {
-                    key: paths::resolve(&paths::absolute(&project.path, home).with_context(context)?),
+                    path: paths::resolve(&paths::absolute(&project.path, home).with_context(context)?),
+                    key: OnceLock::new(),
                     paths: project.paths.iter().map(|(id, globs)| Ok((id.clone(), glob_set(globs)?))).collect::<Result<_>>().with_context(context)?,
                     ignore: glob_set(&project.ignore).with_context(context)?,
                     scope: project.scope,
@@ -72,8 +75,14 @@ impl Settings {
     }
 
     pub fn policy(&self, repo: Option<&Repo>) -> Policy<'_> {
-        let project = repo.and_then(|repo| self.projects.iter().find(|project| project.key == repo.project_key));
+        let project = repo.and_then(|repo| self.projects.iter().find(|project| *project.key() == repo.project_key));
         Policy { settings: self, project }
+    }
+}
+
+impl Project {
+    fn key(&self) -> &PathBuf {
+        self.key.get_or_init(|| Repo::discover(&self.path).filter(|repo| repo.root == self.path).map_or_else(|| self.path.clone(), |repo| repo.project_key))
     }
 }
 

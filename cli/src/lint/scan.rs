@@ -188,8 +188,14 @@ fn relative(target: &Target) -> PathBuf {
     target.repo.as_ref().and_then(|repo| repo.relative(&target.change.path)).unwrap_or_else(|| target.change.path.clone())
 }
 
-pub fn display_path(path: &Path, base: &Path) -> String {
-    path.strip_prefix(base).unwrap_or(path).to_string_lossy().into_owned()
+fn display_path(path: &Path, base: &Path) -> String {
+    let shared = path.components().zip(base.components()).take_while(|(a, b)| a == b).count();
+    if shared <= 1 {
+        return path.to_string_lossy().into_owned();
+    }
+    let up = base.components().count() - shared;
+    let shown: PathBuf = std::iter::repeat_n(std::path::Component::ParentDir.as_os_str(), up).chain(path.components().skip(shared).map(|part| part.as_os_str())).collect();
+    shown.to_string_lossy().into_owned()
 }
 
 fn function_kinds(language: SupportLang) -> &'static [&'static str] {
