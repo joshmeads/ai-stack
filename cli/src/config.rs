@@ -545,6 +545,7 @@ pub struct Config {
     pub prompt_runner: Vec<String>,
     pub incidents: Incidents,
     pub exe: PathBuf,
+    pub exe_flags: Vec<String>,
 }
 
 pub fn default_config_text() -> &'static str {
@@ -771,7 +772,7 @@ impl Unresolved {
         let incident_path = crate::paths::expand(&file.incidents.path, &home);
         let incident_path = if incident_path.is_absolute() { incident_path } else { home.join(incident_path) };
         let incidents = Incidents { path: crate::paths::normalize(&incident_path), worker: file.incidents.worker };
-        Ok(Config { home, stack, harnesses, codex_home, models, leads, review, sheets, clean, prompt_runner: file.skills.prompt_runner, incidents, exe: std::env::current_exe().unwrap_or_else(|_| PathBuf::from("ai-stack")) })
+        Ok(Config { home, stack, harnesses, codex_home, models, leads, review, sheets, clean, prompt_runner: file.skills.prompt_runner, incidents, exe: std::env::current_exe().unwrap_or_else(|_| PathBuf::from("ai-stack")), exe_flags: Vec::new() })
     }
 }
 

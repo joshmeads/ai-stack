@@ -343,6 +343,7 @@ struct Context {
     config_path: PathBuf,
     stack_override: Option<PathBuf>,
     explicit_flags: Vec<String>,
+    hook_flags: Vec<String>,
 }
 
 struct Catalogs {
@@ -398,11 +399,27 @@ fn resolve_context(cli: &Cli) -> Result<Context> {
             explicit_flags.extend([flag.to_string(), std::path::absolute(value)?.to_string_lossy().into_owned()]);
         }
     }
-    Ok(Context { home: paths::normalize(&std::path::absolute(home)?), config_path, stack_override: cli.stack.clone(), explicit_flags })
+    let home = paths::normalize(&std::path::absolute(home)?);
+    let absolute = |path: &Path| std::path::absolute(path).map(|path| paths::normalize(&path));
+    let env_home = std::env::var_os("HOME").map(|home| absolute(Path::new(&home))).transpose()?;
+    let config = absolute(&config_path)?;
+    let mut hook_flags = Vec::new();
+    for (flag, value) in [
+        ("--home", (env_home.as_ref() != Some(&home)).then(|| home.clone())),
+        ("--config", (config != home.join(".config/ai-stack/config.toml")).then_some(config)),
+        ("--stack", cli.stack.as_deref().map(absolute).transpose()?),
+    ] {
+        if let Some(value) = value {
+            hook_flags.extend([flag.to_string(), value.to_string_lossy().into_owned()]);
+        }
+    }
+    Ok(Context { home, config_path, stack_override: cli.stack.clone(), explicit_flags, hook_flags })
 }
 
 fn load_config(ctx: &Context) -> Result<Config> {
-    config::load(&ctx.config_path, &ctx.home, ctx.stack_override.as_deref())
+    let mut cfg = config::load(&ctx.config_path, &ctx.home, ctx.stack_override.as_deref())?;
+    cfg.exe_flags = ctx.hook_flags.clone();
+    Ok(cfg)
 }
 
 fn ctx_flat(ctx: &Context) -> Result<drift::Flat> {
@@ -844,7 +861,7 @@ mod config_show_tests {
         let stack = fixture.path().join("override");
         fs::create_dir_all(stack.join(config::FAMILIES_FILE).parent().unwrap()).unwrap();
         fs::write(stack.join(config::FAMILIES_FILE), include_str!("../tests/fixtures/model-families.json")).unwrap();
-        let ctx = Context { home: fixture.path().into(), config_path: path.clone(), stack_override: Some(stack.clone()), explicit_flags: vec![] };
+        let ctx = Context { home: fixture.path().into(), config_path: path.clone(), stack_override: Some(stack.clone()), explicit_flags: vec![], hook_flags: vec![] };
         let expected = ctx_flat(&ctx).unwrap();
         fs::write(&path, &text[..text.find("[clean]").unwrap()]).unwrap();
         assert_eq!(ctx_flat(&ctx).unwrap(), expected);

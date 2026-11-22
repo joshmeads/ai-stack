@@ -194,7 +194,7 @@ fn plan_hooks(cfg: &Config, hc: &HarnessConfig, folders: &links::Index, out: &mu
     };
     let roots: Vec<&Path> = std::iter::once(cfg.stack.path.as_path()).chain(cfg.stack.legacy_paths.iter().map(PathBuf::as_path)).collect();
     let removed = hc.harness == Harness::Claude && remove_owned_hooks(&mut root, &roots);
-    match ensure_lint_hooks(&mut root, hc.harness, &cfg.exe) {
+    match ensure_lint_hooks(&mut root, hc.harness, &cfg.exe, &cfg.exe_flags) {
         Ok(added) if removed || added => {
             let mut text = serde_json::to_string_pretty(&root)?;
             text.push('\n');
@@ -214,13 +214,23 @@ fn lint_hooks(harness: Harness) -> [(&'static str, Option<&'static str>, HookEve
     [("PreToolUse", Some(edits), HookEvent::PreEdit), ("PostToolUse", Some(edits), HookEvent::PostEdit), ("Stop", None, HookEvent::Stop), ("SubagentStop", None, HookEvent::Stop)]
 }
 
-fn lint_command(exe: &Path, harness: Harness, event: HookEvent) -> String {
-    format!("{} lint hook {} {}", exec::shell_quote(&exe.to_string_lossy()), harness.as_str(), event.as_str())
+const HOOK_FLAGS: [&str; 3] = ["--config", "--home", "--stack"];
+
+fn lint_command(exe: &Path, flags: &[String], harness: Harness, event: HookEvent) -> String {
+    let words: Vec<String> = std::iter::once(exe.to_string_lossy().into_owned()).chain(flags.iter().cloned()).map(|word| exec::shell_quote(&word)).collect();
+    format!("{} lint hook {} {}", words.join(" "), harness.as_str(), event.as_str())
 }
 
 fn lint_hook_of(command: &str) -> Option<(Harness, HookEvent)> {
     let words = shell_words(command)?;
-    let [program, lint, hook, harness, event] = words.as_slice() else { return None };
+    let (program, mut rest) = words.split_first()?;
+    while let [flag, value, tail @ ..] = rest
+        && HOOK_FLAGS.contains(&flag.as_str())
+        && !value.is_empty()
+    {
+        rest = tail;
+    }
+    let [lint, hook, harness, event] = rest else { return None };
     let ours = Path::new(program).file_name().is_some_and(|name| name == "ai-stack") && lint == "lint" && hook == "hook";
     ours.then(|| Some((Harness::from_str(harness, false).ok()?, HookEvent::from_str(event, false).ok()?))).flatten()
 }
@@ -240,6 +250,21 @@ fn shell_words(command: &str) -> Option<Vec<String>> {
                     }
                 }
             }
+            '"' => {
+                let current = word.get_or_insert_with(String::new);
+                loop {
+                    match chars.next()? {
+                        '"' => break,
+                        '$' | '`' => return None,
+                        '\\' => match chars.next()? {
+                            escaped @ ('$' | '`' | '"' | '\\') => current.push(escaped),
+                            '\n' => {}
+                            other => current.extend(['\\', other]),
+                        },
+                        inner => current.push(inner),
+                    }
+                }
+            }
             '\\' => word.get_or_insert_with(String::new).push(chars.next()?),
             c if c.is_whitespace() => words.extend(word.take()),
             c if "\"$`;&|<>(){}*?".contains(c) => return None,
@@ -250,12 +275,12 @@ fn shell_words(command: &str) -> Option<Vec<String>> {
     Some(words)
 }
 
-fn ensure_lint_hooks(root: &mut Value, harness: Harness, exe: &Path) -> Result<bool, String> {
+fn ensure_lint_hooks(root: &mut Value, harness: Harness, exe: &Path, flags: &[String]) -> Result<bool, String> {
     let hooks = root.as_object_mut().ok_or("the file is not a JSON object")?.entry("hooks").or_insert_with(|| Value::Object(Default::default()));
     let hooks = hooks.as_object_mut().ok_or("`hooks` is not an object")?;
     let mut changed = false;
     for (event, matcher, lint_event) in lint_hooks(harness) {
-        let wanted = lint_command(exe, harness, lint_event);
+        let wanted = lint_command(exe, flags, harness, lint_event);
         let groups = hooks.entry(event).or_insert_with(|| Value::Array(Vec::new())).as_array_mut().ok_or_else(|| format!("`hooks.{event}` is not a list"))?;
         let existing = groups
             .iter_mut()
@@ -1062,7 +1087,7 @@ pub(crate) mod tests {
     fn lint_hooks_are_appended_once_repointed_in_place_and_never_move_another_hook() {
         let mut f = fixture();
         let foreign = |command: &str| json!({"matcher": "apply_patch", "hooks": [{"type": "command", "command": command, "timeout": 30}]});
-        let ours_moved = json!({"hooks": [{"type": "command", "command": "'/old place/ai-stack' lint hook codex stop"}]});
+        let ours_moved = json!({"hooks": [{"type": "command", "command": "\"/old place/ai-stack\" lint hook codex stop"}]});
         put(&f.home.join(".codex/hooks.json"), &json!({
             "hooks": {
                 "PostToolUse": [foreign("/usr/local/bin/format-hook")],
@@ -1096,5 +1121,14 @@ pub(crate) mod tests {
         assert_eq!(moved["hooks"]["Stop"][1], codex["hooks"]["Stop"][1]);
         assert_eq!(moved["hooks"]["Stop"].as_array().unwrap().len(), 2);
         assert!(f.plan().is_empty(), "{}", f.plan().render_text(&f.home));
+
+        f.cfg.exe_flags = vec!["--config".into(), "/cfg dir/selected.toml".into()];
+        f.apply(&f.plan());
+        let flagged: Value = serde_json::from_str(&f.read(".codex/hooks.json")).unwrap();
+        assert_eq!(command(&flagged, "Stop", 0), format!("'{}' --config '/cfg dir/selected.toml' lint hook codex stop", f.cfg.exe.display()));
+        f.cfg.exe_flags.clear();
+        f.apply(&f.plan());
+        let plain: Value = serde_json::from_str(&f.read(".codex/hooks.json")).unwrap();
+        assert_eq!(plain, moved, "an entry carrying flags is still ours and is repointed in place");
     }
 }
