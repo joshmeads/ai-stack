@@ -1,5 +1,8 @@
+use std::borrow::Cow;
 use std::ops::RangeInclusive;
+use std::sync::LazyLock;
 
+use regex::Regex;
 use similar::{Algorithm, DiffOp};
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -15,7 +18,7 @@ impl Owned {
     pub fn between(baseline: &Baseline, current: &str) -> Owned {
         let Baseline::Text(before) = baseline else { return Owned::whole(current) };
         let mut owned = Owned::default();
-        for op in similar::capture_diff_slices(Algorithm::Patience, &lines(before), &lines(current)) {
+        for op in similar::capture_diff_slices(Algorithm::Patience, &comparable(before), &comparable(current)) {
             if let DiffOp::Insert { new_index, new_len, .. } | DiffOp::Replace { new_index, new_len, .. } = op
                 && new_len > 0
             {
@@ -85,6 +88,11 @@ fn line_number(index: usize) -> u32 {
     u32::try_from(index + 1).unwrap_or(u32::MAX)
 }
 
+fn comparable(text: &str) -> Vec<Cow<'_, str>> {
+    static EXPANDED_ID: LazyLock<Regex> = LazyLock::new(|| Regex::new(r"\$Id:[^$\n]*\$").unwrap());
+    lines(text).into_iter().map(|line| EXPANDED_ID.replace_all(line, "$$Id$$")).collect()
+}
+
 fn lines(text: &str) -> Vec<&str> {
     if text.is_empty() {
         return Vec::new();
@@ -136,6 +144,7 @@ mod tests {
         assert_eq!(owned(None, ""), []);
         assert_eq!(owned(Some(""), "x"), [1..=1]);
         assert_eq!(owned(Some("same\n"), "same\n"), []);
+        assert_eq!(owned(Some("// $Id$\nx\n"), "// $Id: 3b18e512dba79e4c8300dd08aeb37f8e728b8dad $\ny\n"), [2..=2], "an expanded ident keyword owns nothing");
     }
 
     #[test]
