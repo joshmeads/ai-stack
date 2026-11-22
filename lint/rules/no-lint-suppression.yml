@@ -1,0 +1,33 @@
+id: no-lint-suppression
+language: [TypeScript, Tsx, JavaScript]
+severity: warning
+message: "Fix what the linter or type checker reports instead of suppressing it. Suppress only when the rule is wrong for this line, and say why in the PR."
+rule:
+  kind: comment
+  regex: '(eslint-disable|oxlint-disable|biome-ignore|@ts-ignore|@ts-expect-error|@ts-nocheck)'
+---
+id: no-lint-suppression
+language: Rust
+severity: warning
+message: "Fix what the compiler or clippy reports instead of allowing it. Allow a lint only when its rule is wrong, pedantic or style-only for this item."
+rule:
+  any:
+    - kind: attribute_item
+    - kind: inner_attribute_item
+  regex: '^#!?\[\s*(allow|expect)\s*\('
+---
+id: no-lint-suppression
+language: Python
+severity: warning
+message: "Fix what the linter or type checker reports instead of suppressing it. Suppress only when the rule is wrong for this line, and say why in the PR."
+rule:
+  kind: comment
+  regex: '^#\s*(type:\s*ignore|noqa|pylint:\s*disable|pyright:\s*ignore|mypy:\s*ignore)'
+---
+id: no-lint-suppression
+language: Go
+severity: warning
+message: "Fix what the linter reports instead of suppressing it. Suppress only when the rule is wrong for this line, and say why in the PR."
+rule:
+  kind: comment
+  regex: '^//\s*nolint'

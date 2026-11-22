@@ -178,7 +178,85 @@ pub fn glob_set(patterns: &[String]) -> Result<GlobSet> {
 
 #[cfg(test)]
 pub(crate) mod tests {
+    use std::collections::BTreeSet;
+
+    use ast_grep_config::CombinedScan;
+    use ast_grep_core::tree_sitter::LanguageExt as _;
+
     use super::*;
+    use crate::lint::owned::LineIndex;
+
+    pub(crate) fn shipped() -> PathBuf {
+        Path::new(env!("CARGO_MANIFEST_DIR")).parent().unwrap().join("lint/rules")
+    }
+
+    fn fixture_languages(path: &Path) -> Vec<SupportLang> {
+        match path.extension().and_then(|ext| ext.to_str()) {
+            Some("js") => vec![SupportLang::JavaScript, SupportLang::TypeScript, SupportLang::Tsx],
+            Some("ts") => vec![SupportLang::TypeScript, SupportLang::Tsx],
+            _ => crate::lint::scan::language_of(path).into_iter().collect(),
+        }
+    }
+
+    #[test]
+    fn shipped_rules_hit_exactly_the_marked_lines_of_their_fixtures_in_every_language() {
+        let rules = Rules::load(&[shipped()]).unwrap();
+        let fixtures = shipped().parent().unwrap().join("tests");
+        let mut entries: Vec<PathBuf> = std::fs::read_dir(&fixtures).unwrap().map(|entry| entry.unwrap().path()).collect();
+        entries.sort();
+        let mut covered = BTreeSet::new();
+        let mut failures = Vec::new();
+        for fixture in entries {
+            let name = fixture.file_name().unwrap().to_string_lossy().into_owned();
+            let id = name.split('.').next().unwrap().to_string();
+            let source = std::fs::read_to_string(&fixture).unwrap();
+            let expected: BTreeSet<u32> = source.lines().enumerate().filter(|(_, line)| line.contains("@hit")).map(|(at, _)| at as u32 + 1).collect();
+            for language in fixture_languages(&fixture) {
+                let active: Vec<&RuleConfig<SupportLang>> =
+                    rules.for_language(language).filter(|rule| rule.key.id == id && rule.applies_to_source(&source)).map(|rule| &rule.config).collect();
+                covered.insert((id.clone(), language.to_string()));
+                let root = language.ast_grep(&source);
+                let index = LineIndex::new(&source);
+                let found: BTreeSet<u32> = CombinedScan::new(active).scan(&root, false).matches.into_iter().flat_map(|(_, found)| found).map(|found| index.line(found.range().start)).collect();
+                if found != expected {
+                    failures.push(format!("{name} as {language}: expected {expected:?}, found {found:?}"));
+                }
+            }
+        }
+        for rule in &rules.rules {
+            if !covered.contains(&(rule.key.id.clone(), rule.key.language.to_string())) {
+                failures.push(format!("{} for {} has no fixture", rule.key.id, rule.key.language));
+            }
+        }
+        assert!(failures.is_empty(), "{}", failures.join("\n"));
+    }
+
+    #[test]
+    fn shipped_rules_never_relate_a_node_to_the_whole_program() {
+        fn walk(value: &Value, relational: bool, trail: &str, offenders: &mut Vec<String>) {
+            match value {
+                Value::Object(map) => {
+                    if relational && map.get("kind").and_then(Value::as_str) == Some("program") {
+                        offenders.push(trail.to_string());
+                    }
+                    for (key, child) in map {
+                        let nested = relational || ["inside", "has", "follows", "precedes", "stopBy"].contains(&key.as_str());
+                        walk(child, nested, &format!("{trail}.{key}"), offenders);
+                    }
+                }
+                Value::Array(items) => items.iter().for_each(|item| walk(item, relational, trail, offenders)),
+                _ => {}
+            }
+        }
+        let mut offenders = Vec::new();
+        for entry in std::fs::read_dir(shipped()).unwrap() {
+            let path = entry.unwrap().path();
+            for doc in ast_grep_config::from_multiple::<Value>(&std::fs::read_to_string(&path).unwrap()).unwrap() {
+                walk(&doc, false, &path.file_name().unwrap().to_string_lossy(), &mut offenders);
+            }
+        }
+        assert!(offenders.is_empty(), "file-level facts belong in metadata.unless_file or when_file: {offenders:?}");
+    }
 
     #[test]
     fn rule_identity_is_the_id_and_language_and_a_clash_across_files_is_a_load_error() {

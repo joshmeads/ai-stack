@@ -1,0 +1,134 @@
+id: no-fixed-sleep
+language: [TypeScript, Tsx, JavaScript]
+severity: error
+message: "Replace this fixed sleep with a signal: await the operation itself or a promise its handler resolves. To move time, use vi.useFakeTimers() and advance it. A sleep guesses how long real work takes and fails under CPU load."
+metadata:
+  unless_file: 'vi\.useFakeTimers\('
+utils:
+  set-timeout:
+    regex: '^((globalThis|window)\.)?setTimeout$'
+  sleep:
+    any:
+      - pattern: new Promise(($R) => $T($R, $$$))
+      - pattern: new Promise($R => $T($R, $$$))
+      - pattern: new Promise(($R) => $T(() => $R(), $$$))
+      - pattern: new Promise($R => $T(() => $R(), $$$))
+      - pattern: "new Promise(($R) => { $T($R, $$$) })"
+      - pattern: "new Promise(($R) => { $T(() => $R(), $$$) })"
+      - pattern: "new Promise($R => { $T($R, $$$) })"
+      - pattern: "new Promise($R => { $T(() => $R(), $$$) })"
+      - pattern: Bun.sleep($$$)
+      - pattern: scheduler.wait($$$)
+  in-test-body:
+    inside:
+      stopBy:
+        any:
+          - kind: arrow_function
+          - kind: function_expression
+          - kind: function_declaration
+          - kind: method_definition
+      any:
+        - kind: arrow_function
+        - kind: function_expression
+      inside:
+        kind: arguments
+        inside:
+          kind: call_expression
+          any:
+            - has:
+                field: function
+                regex: '^(test|it|beforeEach|afterEach|beforeAll|afterAll)\b'
+            - all:
+                - has:
+                    field: function
+                    regex: '(^|\.)(act|waitFor|then|catch|finally|step)$'
+                - matches: in-test-body
+rule:
+  kind: await_expression
+  has:
+    matches: sleep
+  matches: in-test-body
+constraints:
+  T:
+    matches: set-timeout
+---
+id: no-fixed-sleep
+language: [TypeScript, Tsx, JavaScript]
+severity: error
+message: "Replace this fixed sleep with a signal: await the operation itself or a promise its handler resolves. To move time, use vi.useFakeTimers() and advance it. A sleep guesses how long real work takes and fails under CPU load."
+metadata:
+  when_file: 'import\s*\{[^}]*\bsetTimeout\b[^}]*\}\s*from\s*["''](node:)?timers/promises["'']'
+  unless_file: 'vi\.useFakeTimers\('
+utils:
+  in-test-body:
+    inside:
+      stopBy:
+        any:
+          - kind: arrow_function
+          - kind: function_expression
+          - kind: function_declaration
+          - kind: method_definition
+      any:
+        - kind: arrow_function
+        - kind: function_expression
+      inside:
+        kind: arguments
+        inside:
+          kind: call_expression
+          any:
+            - has:
+                field: function
+                regex: '^(test|it|beforeEach|afterEach|beforeAll|afterAll)\b'
+            - all:
+                - has:
+                    field: function
+                    regex: '(^|\.)(act|waitFor|then|catch|finally|step)$'
+                - matches: in-test-body
+rule:
+  kind: await_expression
+  has:
+    kind: call_expression
+    has:
+      field: function
+      kind: identifier
+      regex: '^(setTimeout|sleep|delay|wait|pause|setTimeoutPromise|setTimeoutAsync|timeout)$'
+  matches: in-test-body
+---
+id: no-fixed-sleep
+language: Python
+severity: error
+message: "Replace this fixed sleep with a signal: wait on the event, future or condition the test depends on. A sleep guesses how long real work takes and fails under CPU load."
+rule:
+  kind: call
+  has:
+    field: function
+    regex: '^(time|asyncio|trio|anyio|gevent)\.sleep$'
+  inside:
+    stopBy:
+      kind: function_definition
+    kind: function_definition
+    has:
+      field: name
+      regex: '^test'
+---
+id: no-fixed-sleep
+language: Rust
+severity: error
+message: "Replace this fixed sleep with a signal: wait on the channel, notify or join handle the test depends on, or use tokio::time::pause() to move time. A sleep guesses how long real work takes and fails under CPU load."
+rule:
+  kind: call_expression
+  has:
+    field: function
+    regex: '(^|::)(thread::sleep|time::sleep|sleep)$'
+  inside:
+    stopBy: end
+    kind: function_item
+    follows:
+      stopBy:
+        not:
+          any:
+            - kind: attribute_item
+            - kind: line_comment
+            - kind: block_comment
+      kind: attribute_item
+      regex: '^#\[(tokio::|async_std::)?test\b'

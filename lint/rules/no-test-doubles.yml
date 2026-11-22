@@ -1,0 +1,30 @@
+id: no-test-doubles
+language: [TypeScript, Tsx, JavaScript]
+severity: error
+message: "Do not replace test dependency behavior. Use the real implementation and MSW for network responses; spies must only observe."
+note: "Name-based approximation of the landmines rule: it has no scope analysis, so a local function that happens to share a mock method's name also fires."
+rule:
+  kind: call_expression
+  any:
+    - has:
+        field: function
+        kind: member_expression
+        has:
+          field: property
+          regex: '^(mockImplementation|mockImplementationOnce|mockReturnValue|mockReturnValueOnce|mockResolvedValue|mockResolvedValueOnce|mockRejectedValue|mockRejectedValueOnce|mockReturnThis|withImplementation|mockStepResult|mockStepError)$'
+    - has:
+        field: function
+        regex: '^(vi|jest)\.(stubGlobal|mock|doMock|unstable_mockModule|importMock|mockObject|createMockFromModule|genMockFromModule|setMock|replaceProperty|enableAutomock)$'
+    - has:
+        field: function
+        regex: '^(mockIPC|mockWindows|mockConvertFileSrc)$'
+    - all:
+        - has:
+            field: function
+            regex: '^(vi|jest)\.fn$'
+        - has:
+            field: arguments
+            has:
+              nthChild: 1
+              not:
+                kind: comment

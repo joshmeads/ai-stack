@@ -1,0 +1,153 @@
+id: no-comments
+language: [TypeScript, Tsx, JavaScript]
+severity: error
+message: "Remove this comment; express meaning in code (names, types, structure) and rationale in the PR. Keep tool directives, license headers, a single-line WARNING: or SAFETY: comment for a dangerous footgun, and doc comments on exported API."
+utils:
+  directive:
+    any:
+      - regex: '^(//|/\*)[!*]?\s*(eslint|oxlint|biome-ignore|@ts-|prettier-ignore|oxfmt-ignore|istanbul\s|c8\s|v8\s|@vite-ignore|webpack[A-Z]|@jsx|@__PURE__|#__PURE__|@__NO_SIDE_EFFECTS__|nosemgrep|ast-grep-ignore|#\s*source(Mapping)?URL=)'
+      - regex: '^///\s*<(reference|amd-module|amd-dependency)\s'
+      - regex: '(SPDX-License-Identifier:|@license\b|Copyright\s)'
+  footgun:
+    regex: '^//\s*(WARNING|SAFETY):\s*\S[^\n]*$'
+  doc:
+    regex: '^/\*\*'
+  doc-on-export:
+    all:
+      - matches: doc
+      - precedes:
+          stopBy:
+            not:
+              kind: comment
+          kind: export_statement
+  doc-on-exported-member:
+    all:
+      - matches: doc
+      - precedes:
+          stopBy:
+            not:
+              kind: comment
+          not:
+            kind: comment
+      - inside:
+          stopBy:
+            kind: statement_block
+          kind: export_statement
+rule:
+  kind: comment
+  not:
+    any:
+      - matches: directive
+      - matches: footgun
+      - matches: doc-on-export
+      - matches: doc-on-exported-member
+---
+id: no-comments
+language: Rust
+severity: error
+message: "Remove this comment; express meaning in code (names, types, structure) and rationale in the PR. Keep license headers, a single-line WARNING: or SAFETY: comment, and doc comments on pub items."
+utils:
+  pub-item:
+    has:
+      kind: visibility_modifier
+      regex: '^pub$'
+  doc:
+    regex: '^(///|/\*\*)'
+  decoration:
+    any:
+      - kind: line_comment
+      - kind: block_comment
+      - kind: attribute_item
+rule:
+  any:
+    - kind: line_comment
+    - kind: block_comment
+  not:
+    any:
+      - regex: '^//\s*(WARNING|SAFETY):\s*\S[^\n]*\n?$'
+      - regex: '(SPDX-License-Identifier:|Copyright\s)'
+      - all:
+          - matches: doc
+          - precedes:
+              stopBy:
+                not:
+                  matches: decoration
+              matches: pub-item
+      - all:
+          - matches: doc
+          - precedes:
+              stopBy:
+                not:
+                  matches: decoration
+              not:
+                matches: decoration
+          - inside:
+              any:
+                - kind: enum_variant_list
+                - kind: declaration_list
+              inside:
+                any:
+                  - kind: enum_item
+                  - kind: trait_item
+                matches: pub-item
+---
+id: no-comments
+language: Python
+severity: error
+message: "Remove this comment; express meaning in code (names, types, structure) and rationale in the PR. Keep tool directives, license headers and a single-line WARNING: or SAFETY: comment."
+rule:
+  kind: comment
+  not:
+    any:
+      - regex: '^#!'
+      - regex: '^#.*coding[:=]'
+      - regex: '^#\s*(type:|noqa|pragma|pylint:|mypy:|pyright:|fmt:|isort:|ruff:|nosec|pyre-)'
+      - regex: '(SPDX-License-Identifier:|Copyright\s)'
+      - regex: '^#\s*(WARNING|SAFETY):\s*\S'
+---
+id: no-comments
+language: Go
+severity: error
+message: "Remove this comment; express meaning in code (names, types, structure) and rationale in the PR. Keep directives, license headers, a single-line WARNING: or SAFETY: comment, and doc comments on exported identifiers."
+utils:
+  exported-name:
+    has:
+      field: name
+      regex: '^[A-Z]'
+  exported-declaration:
+    any:
+      - kind: package_clause
+      - kind: function_declaration
+        matches: exported-name
+      - kind: method_declaration
+        matches: exported-name
+      - kind: field_declaration
+        matches: exported-name
+      - kind: type_declaration
+        has:
+          any:
+            - kind: type_spec
+            - kind: type_alias
+          matches: exported-name
+      - kind: const_declaration
+        has:
+          kind: const_spec
+          matches: exported-name
+      - kind: var_declaration
+        has:
+          kind: var_spec
+          matches: exported-name
+rule:
+  kind: comment
+  not:
+    any:
+      - regex: '^//(go:|line |export |extern |nolint)'
+      - regex: '^//\s*\+build'
+      - regex: '^//\s*Code generated .* DO NOT EDIT\.$'
+      - regex: '(SPDX-License-Identifier:|Copyright\s)'
+      - regex: '^//\s*(WARNING|SAFETY):\s*\S[^\n]*$'
+      - precedes:
+          stopBy:
+            not:
+              kind: comment
+          matches: exported-declaration
