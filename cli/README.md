@@ -7,7 +7,8 @@
 3. writes the pstack model sheet `<home>/pstack-models.md` and wires it into `CLAUDE.md` (an `@` import) or `AGENTS.md` (a mirror of the sheet);
 4. writes one `ai-stack:routing` block into `CLAUDE.md` or `AGENTS.md`;
 5. writes your own global instructions from `<stack>/instructions/` into an `ai-stack:instructions` block in the same file, including Anthropic guidance for Claude (see [Global instructions](#global-instructions));
-6. removes what older ai-stack installs left behind.
+6. registers the `ai-stack lint` hooks in `settings.json` or `hooks.json` (see [Lint](#lint));
+7. removes what older ai-stack installs left behind.
 
 It shows the plan before changing anything, backs up every file or link it replaces or removes, and is idempotent: a second run reports `No changes.` Installation for Cursor and OpenCode is not handled.
 
@@ -51,6 +52,9 @@ Restart Claude Code and Codex sessions after the first install.
 | `ai-stack skills status` | Print `name  installed-name  <commit>  current \| behind: <latest> \| missing \| unknown: <reason>` per vendored skill. `missing` means the installed directory is gone; `skills update` rebuilds it. Exit 0 when every entry is current, 1 otherwise. A network error is `unknown`. |
 | `ai-stack skills update [NAME...] [--ref REF] [--reprocess] [--force]` | Rebuild the named entries (default all) whose upstream ref moved. `--ref` retargets the named entries to another upstream branch or tag and records it. `--reprocess` rebuilds every selected entry even when upstream has not moved, from the commit its ref names now; when the ref cannot be resolved (offline, or the branch is gone) it rebuilds from the pinned `commit` and says so. A missing skill directory is always rebuilt. Refuses to replace a skill directory with uncommitted, untracked or ignored files unless `--force`; a directory gitignored as a whole is download-only and is always replaced. One failure does not stop the rest; exit 1 if any failed. |
 | `ai-stack private init \| seal [--stage] \| open [--force] [--hook] \| check` | Manage the gitignored `private/` folder and its encrypted copy `private.age`, in the git repository of the current directory (or `--stack`). `init` sets `core.hooksPath` to `.githooks` and opens the bundle. `seal` encrypts `private/` for the keys in `private.recipients` when it changed. `open` decrypts it with the key from `fnox get AI_STACK_PRIVATE_KEY`, and refuses to overwrite changes that are not sealed unless `--force`. `check` reads pre-push lines on stdin and exits 1 when an outgoing commit holds a `private/` path, a private skill name or a word in `private/guard.txt`. See [Private skills](../skills/README.md#private-skills). |
+| `ai-stack lint [PATH...] [--base REV] [--scope lines \| function \| file] [--json]` | Lint the lines changed since the merge base of `REV` (default `HEAD`) and `HEAD`, in the repository of each `PATH` (default the current directory). Prints `path:line:col severity rule: message` and the source line. `--json` prints `{"version":1,"findings":[...]}`. Exit 0 with no error findings, 1 with any, 2 when the config, the rules or a path cannot be loaded. See [Lint](#lint). |
+| `ai-stack lint rules [--json]` | List every loaded rule per language, its source file, and its severity in the project of the current directory. Exit 0, or 2 on a load error. |
+| `ai-stack lint hook <claude \| codex> <pre-edit \| post-edit \| stop>` | The hook command that `install` registers. Reads the hook payload on stdin, answers on stdout and always exits 0. |
 | `ai-stack auth status [--json]` | Report local Claude Code, Codex, Cursor Agent and OpenCode login status. Read-only; exit 0 even when a provider is unavailable. |
 | `ai-stack fleet auth [--json]` | Report those providers on every enabled fleet machine. Exit 0 when every machine reports successfully and every installed provider is logged in with no expired access token that lacks a refresh token; otherwise 1. |
 | `ai-stack fleet login <MACHINE> <PROVIDER>` | Run a supported provider’s headless login on one fleet machine through your terminal, then print its status. Requires terminal stdin and stdout; exit 0 only when login succeeds and the provider reports logged in. |
@@ -114,6 +118,7 @@ The provider owns credential storage. Login codes and tokens never pass through 
 - `[sheet.claude]`, `[sheet.codex]`: the 15 pstack model-sheet rows for that harness. Each lane is a provider-qualified descriptor `<provider>:<family>@<effort>`, such as `codex:sol@medium`, an exact `<provider>:<model>@<effort>` from the pstack provider-dispatch reference, such as `codex:gpt-6.1-sol@medium`, or `inherit-parent` / `auto`. The sheet that install writes names a family's current model (`codex:gpt-6.2-sol@medium`) and an exact model as written. The loader accepts the providers, families, current models, kept predecessors and efforts in the family table, which the pstack model catalog lists. A model the table does not list, such as `codex:gpt-6.12-sol`, is a load error. Providers the table marks read-only (today `devin`, `opencode`, `dsh`, `amp`, `agy`, `cursor` and `pi`) fit only rows that do not write files. `pi` also takes any `openrouter/<id>` model at efforts `low` to `max`, where `<id>` uses only letters, digits and `._~:/-`; the loader checks only that shape, and the runner's preflight decides availability at dispatch. `arena runners` is one of those rows, because a read-only family's seat returns its candidate to the parent. The rows that write files (`feature, refactoring`, `bug-fix`, `perf-issue`, `hillclimb`, `hardest tasks`, `architect runners`, `swarm workers`) refuse them, as `/setup-stack` does. The four panel rows (`arena runners`, `arena cross-judge pool`, `architect runners`, `interrogate reviewers`) accept arrays. The Why and Reflect rows must be `inherit-parent` or `auto`, because those roles need the parent's MCP servers.
 
 - `[skills]`: `prompt_runner`, the argv that runs a `type = "prompt"` process step, with the prompt appended as the last argument. Default `["claude", "-p", "--permission-mode", "acceptEdits"]`. A config without `[skills]` gets the default.
+- `[lint]` and `[[lint.project]]`: see [Lint](#lint). `ai-stack lint` reads only `[stack]` and `[lint]`, so a config whose other tables do not load still lints.
 - `[clean]`: what `--clean` keeps. `skill_roots` (default `~/.claude/skills`, `~/.codex/skills`, `~/.agents/skills`, resolved against `--home`), `keep_skills` (globs over entry names) and `keep_plugins` (globs over `name@marketplace`; the defaults keep `github@claude-plugins-official`, `chrome-devtools-mcp@claude-plugins-official` and Codex's built-in `*@openai-*`). `--clean` never touches a `jm` plugin: install owns that marketplace. Globs use `*` and `?`. A config without `[clean]`, or without one of its keys, gets the defaults that `init` writes.
 
 A config from an older ai-stack (with `[roles]`, `[stack.models]` or `[install]`) is rejected with a message to run `ai-stack init --force` and re-apply your edits.
@@ -153,6 +158,7 @@ Per enabled harness, with `<home>` the harness home:
   - Codex: the exact sheet bytes between `<!-- pstack:models:begin -->` and `<!-- pstack:models:end -->`.
 - **Standalone skills.** A symlink `<folder>/<name>` -> `<stack>/skills/<name>` for every skill of the global groups, in the harness's user skill folder (see [Skills and groups](#skills-and-groups)).
 - **Plugins.** `claude plugin marketplace add <stack>` and `claude plugin install pstack@jm`, or `codex plugin marketplace add <stack>` and `codex plugin add pstack@jm`. ai-stack owns the `jm` marketplace, so an installed `<name>@jm` that the stack's marketplace manifest no longer lists (the retired `jm-games` and `jm-tools`) is removed by every install, the same way `--clean` removes a plugin (user-scope uninstall, disable for a `synced` Claude plugin, `codex plugin remove`). No CLI can reinstall it from a marketplace that dropped it, so its `removed-plugins.json` entry has `"reinstall": null` and a `note` naming the newest stack commit whose marketplace manifest lists it and whose copy of the plugin's directory still holds its skills. Apply works the commit out from the stack's git history when it writes the record; `diff` and `stray` never run `git`. A step is skipped when the CLI's `list --json` output shows it done: the `jm` marketplace already points at the stack checkout, and the plugin is installed at the version the checkout declares. Both CLIs record an installed version; a mismatch with the plugin's `.claude-plugin/plugin.json` or `.codex-plugin/plugin.json` plans `claude plugin update pstack@jm --scope user` or `codex plugin add pstack@jm`. Claude's marketplace-entry version is not used. Only a Claude user-scope install (or an older listing without scope) satisfies this check; a project, local or synced install does not replace the global user install. Updating a disabled plugin preserves its disabled state. A `jm` marketplace from another source is a conflict. When the harness home is not the CLI's default, the command sets `CLAUDE_CONFIG_DIR` or `CODEX_HOME`. Commands run after every file change, because the CLIs edit `settings.json` and `config.toml` themselves.
+- **Lint hooks.** Claude's `settings.json` and Codex's `hooks.json` get one `<abs ai-stack> lint hook <harness> <event>` command each for `PreToolUse` and `PostToolUse` (matcher `Edit|Write` for Claude, `apply_patch` for Codex), `Stop` and `SubagentStop`. See [Lint](#lint).
 - **Leftovers of older installs.**
   - Symlinks in `<home>/skills` and `<home>/agents` that point into the stack or a legacy root. When one of those folders is a user skill folder (Claude's `<home>/skills`, or a `~/.codex/skills` that links to `~/.agents/skills`), the skill links decide instead.
   - Role agent files older ai-stack builds wrote (`agents/*.md` containing the managed marker, `agents/*.toml` starting with it).
@@ -262,6 +268,85 @@ Each machine sets exactly one of `ssh` or `local = true`. Remote commands run as
 - Branch names are checked before use (no `HEAD`, `refs/` prefix, leading `-` or `+`, whitespace, control characters, `..` or other characters git refuses). A failing machine is reported with its stderr and the next one still runs. There is no timeout and no retry. `fleet update` does not run `skills update`.
 - `update` and `switch` never pass `--force`, so a machine with stray skills in a link's way stops with a conflict there. Run `ai-stack install --force` on that machine once.
 
+## Lint
+
+`ai-stack lint` checks agent-written code with [ast-grep](https://ast-grep.github.io) rules, and reports a finding only when it touches a line the agent changed. It runs from user-level agent hooks, so no repository gets a config file, a git hook or a dependency.
+
+### Owned lines
+
+A file's baseline is its content before the change. The owned lines are the lines of the current content that a line diff against the baseline marks inserted or replaced. Line endings do not count, so a CRLF to LF change owns nothing and appending to a file without a final newline owns only the new line.
+
+- **Hooks.** The `pre-edit` hook saves each file's content before the session first edits it. A file the session creates has an absent baseline and is owned whole. Commits during the session do not change ownership, and lines a human staged or wrote before the agent's first edit are never owned. A human who edits the same file while the agent works is blamed for the agent's lines.
+- **CLI.** The baseline is the file at `git merge-base REV HEAD`. A renamed file's baseline is its old path there, so a pure rename owns nothing. An untracked file has an absent baseline.
+
+`scope` widens the owned lines: `lines` (default) keeps them, `function` adds the innermost enclosing function of each owned line, and `file` lints the whole file. Files that `.gitattributes` marks `linguist-generated` or `linguist-vendored` are skipped. Each file is checked in its own repository, so submodules, other worktrees and other repositories work.
+
+### Rules
+
+Rules load from `<stack>/lint/rules/*.yml`, which `ai-stack update` pulls, and from `<config dir>/lint/rules/*.yml` for your own. A rule is one ast-grep YAML document with these additions:
+
+- `language` takes one name or a list, such as `[TypeScript, Tsx, JavaScript]`. The loader makes one rule per language. The compiled-in languages are TypeScript, Tsx, JavaScript, Rust, Python and Go. Any other language is a load error naming the rule.
+- One `id` can have several documents in one file, for example one per language or per variant. The same `id` and language in two files is a load error.
+- `metadata.unless_file` and `metadata.when_file` are regexes over the whole file. The rule is skipped when `unless_file` matches or `when_file` does not. Use them for file-level facts, such as `vi.useFakeTimers(` being called anywhere. A relational rule over `kind: program` re-walks the file for every candidate node, and a test refuses one in a shipped rule.
+- `metadata.default_off: true` (or `severity: off`) leaves the rule off until `[lint] enable` names it.
+- `files` and `ignores` match paths relative to the repository root.
+
+The shipped rules, ported from [landmines](https://github.com/interfere-inc/landmines):
+
+| Rule | Languages | Default |
+| --- | --- | --- |
+| `no-comments` | ts, tsx, js, rust, python, go | error. Allows tool directives, shebangs, license headers, a single-line `WARNING:` or `SAFETY:` comment, and doc comments on exported or `pub` items. Python docstrings are not checked. |
+| `no-fixed-sleep` | ts, tsx, js, python, rust | error. In test bodies only. TS and JS skip files that call `vi.useFakeTimers(`. |
+| `no-flake-masking` | ts, tsx, js, python | error. Test retries and raised test timeouts. |
+| `no-unsignaled-poll` | ts, tsx, js | error. `expect.poll` and `vi.waitFor` on mock calls, lengths and sizes. |
+| `no-test-doubles` | ts, tsx, js | error. Matches mock method names, with no scope analysis. |
+| `no-lint-suppression` | ts, tsx, js, rust, python, go | warning. New `eslint-disable`, `@ts-ignore`, `#[allow(...)]`, `# type: ignore`, `# noqa` and `//nolint`. |
+| `test-file-names` | path | error. New files only. Built in. |
+| `no-explicit-return-types` | ts, tsx | off. |
+
+Each rule has a fixture in `<stack>/lint/tests/<rule>[.<variant>].<ext>`. A line containing `@hit` must match, and no other line may. A `.js` fixture also runs as TypeScript and Tsx, and a `.ts` fixture also runs as Tsx.
+
+### Configuration
+
+```toml
+[lint]
+enabled = true
+scope = "lines"
+disable = []
+enable = ["no-explicit-return-types"]
+severity = { "no-lint-suppression" = "warning" }
+ignore = ["**/vendor/**", "**/node_modules/**"]
+
+[[lint.project]]
+path = "~/Documents/Projects/@joshmeads/ai-stack"
+paths = { "no-comments" = ["cli/**", "skills/devtools-perf/**"] }
+ignore = ["plugins/t3stack/**"]
+scope = "lines"
+enabled = true
+```
+
+- `disable` and `enable` name rule ids and apply to every language of the id. `severity` sets `error`, `warning` or `off` per id, and turns on a default-off rule.
+- `ignore` globs skip files. The default ignores `vendor` and `node_modules` directories.
+- `[[lint.project]]` matches the repository's main checkout, the parent of `git rev-parse --git-common-dir`, so it also covers that repository's linked worktrees. `paths` limits a rule to the listed globs, `ignore` skips more files, and `scope` and `enabled` override the global values for the project.
+
+### Hooks
+
+`ai-stack install` registers the hooks for Claude Code in `~/.claude/settings.json` and for Codex in `~/.codex/hooks.json`:
+
+| Event | Command | Effect |
+| --- | --- | --- |
+| `PreToolUse` | `lint hook <harness> pre-edit` | Saves the baseline of each file the edit names: Claude's `tool_input.file_path`, or the `*** Add File:`, `*** Update File:`, `*** Delete File:` and `*** Move to:` lines of a Codex `apply_patch`. The first baseline of a file in a session wins. A moved file's baseline is the source file's baseline. Prints nothing. |
+| `PostToolUse` | `lint hook <harness> post-edit` | Lints the owned lines of the edited files and returns the findings to the agent as `additionalContext`. Never blocks. |
+| `Stop`, `SubagentStop` | `lint hook <harness> stop` | Lints the owned lines of every file the session edited. New error findings block the stop with `{"decision":"block"}`. Warnings never block. |
+
+The stop hook gives up on a finding the agent keeps. When Claude Code or Codex reports `stop_hook_active` and the blocking findings are the same as on the last block, or after 3 blocks in a row, the stop is allowed and a `systemMessage` names the findings for you. Those findings never block again in the session; a new finding does.
+
+Hooks fail open: an error exits 0 without blocking, and a rule load error is shown once per session as a `systemMessage`. `[lint] enabled = false` makes every hook call a silent no-op, and install still keeps the hook entries. Session state lives in `~/.local/state/ai-stack/lint/<session_id>/`, and a session folder untouched for 14 days is deleted when a new session starts. No hook sets a timeout.
+
+Install appends each missing hook group at the end of its event's list and never removes or reorders an entry. When the `ai-stack` binary moves, install rewrites only the command string of its own entry. An entry is ai-stack's when its command's first word has the base name `ai-stack` and the other words are exactly `lint hook <harness> <event>`. Codex keys hook trust by file, event and position, so this keeps your own hooks and the lint hooks trusted. Codex asks you once, in its startup review, to trust the new hooks, and again after the command string changes. ai-stack never writes trust entries.
+
+Edits made through a shell command, such as `sed -i` or a heredoc, have no baseline, so the hooks do not lint them. Run `ai-stack lint` to check them.
+
 ## Safety
 
 - Apply re-reads every target before making any change. If a file changed since review, apply refuses the whole plan.
@@ -279,6 +364,8 @@ stack.toml             skill groups and vendored skills
 private/               gitignored private groups (private/stack.toml) and skills
 private.age            private/, encrypted for the keys in private.recipients
 .githooks/             hooks that seal, open and guard private/
+lint/rules/            ast-grep rules for `ai-stack lint`
+lint/tests/            one fixture per rule, `@hit` on each line that must match
 cli/
   Cargo.toml
   config.default.toml  reference config written by `ai-stack init`
@@ -296,7 +383,8 @@ cli/
     auth.rs     provider descriptors and login argv, status parsers, safe expiry readers
     render.rs   model sheet and routing block text
     blocks.rs   marker-bounded blocks in instruction files
-    install.rs  the plan: sheet, blocks (including instructions), settings hooks
+    install.rs  the plan: sheet, blocks (including instructions), settings and lint hooks
+    lint/       ai-stack lint: owned lines, rule loading, scanning, settings, hooks
     links.rs    skill folders: canonical index, link ownership, links, leftovers, strays
     ledger.rs   links.json: the skill links ai-stack made
     paths.rs    ~ expansion, lexical normalize, resolve through the filesystem

@@ -16,6 +16,7 @@ The CLI turns one config into a per-harness setup of the stack: the `jm` plugin 
 - `auth status [--json]`: local AI CLI login status, without loading config (see Login status).
 - `fleet login <MACHINE> <PROVIDER>`: run one provider’s headless login with inherited terminal streams, then report its status (see Fleet login).
 - `fleet init|status|auth|drift|update|switch`: machines in `<config dir>/fleet.toml` (see Fleet).
+- `lint [PATH...] [--base REV] [--scope S] [--json]`, `lint rules [--json]`, `lint hook <harness> <event>`: diff-scoped ast-grep lint (see Lint). Reads only `[stack]` and `[lint]`.
 
 ## Config
 
@@ -24,6 +25,7 @@ The CLI turns one config into a per-harness setup of the stack: the `jm` plugin 
 - `[models.<alias>]`: exactly one of `family` or `id`, optional `provider` (`anthropic` | `openai`) that must agree, optional `efforts`, optional `context`.
 - `[leads]`, `[review]`: `"alias@effort"` per harness; effort required, and it must be in the model's `efforts` when set.
 - `[skills]`: `prompt_runner` argv, default `claude -p --permission-mode acceptEdits`; optional.
+- `[lint]`: `enabled`, `scope`, `disable`, `enable`, `severity`, `ignore`, and `[[lint.project]]` with `path`, `paths`, `ignore`, `scope`, `enabled`; all optional. `config::parse_lint` deserializes only `[stack]` and `[lint]`.
 - `[sheet.claude]`, `[sheet.codex]`: all 15 rows, lanes as descriptors. The accepted rows, panel rows, parent-only rows and writer rows live in constants at the top of `config.rs`. Sheet descriptors are not tied to `[models]`.
 
 The family table is data, not code. `config::Registry::load` reads `<stack>/plugins/pstack/skills/poteto-mode/references/model-families.json` (`FAMILIES_FILE`), which `registry/render.ts --write` generates from `registry/models.ts` and `registry/providers.ts`: each provider with `readOnly`, and each family with `provider`, `name`, `model`, `efforts`, `kept` (model and efforts) and `revisionPrefix` for a Claude rolling alias. Unknown fields are ignored, so the table can grow without a rebuild. `config::parse` reads the TOML and the stack path (with `--stack` applied); `Unresolved::resolve` then checks models, routes and sheets against the table: a family resolves to its current model, an `id` or lane model must be a current model or kept predecessor, efforts come from the table, and a read-only provider is refused on a writer row. `config::load` does both, so every command that loads the config needs the table, and a missing or unreadable table is an error naming its path. A model release is therefore one registry edit outside `cli/`: `update` pulls it, `git diff -- cli` is empty, and the running binary resolves the new model.
@@ -38,7 +40,7 @@ The family table is data, not code. `config::Registry::load` reads `<stack>/plug
 
 1. **Sheet.** `<home>/pstack-models.md` from `render::sheet`. First line `render::MANAGED_MD`; setup-stack's managed-sheet check matches its `<!-- Managed by ai-stack` prefix. Absent or managed: write if changed. A symlink into the stack or a legacy root (`Owner::owns`): replace. Anything else: conflict, or replace with `--force`.
 2. **Instruction file** (`Harness::instruction_file`). Resolve a symlink to its target (write-through). Validate markers. Remove `open-pstack:local` and every `ai-stack:*` block except `instructions`, `routing` and `pstack-models`, including the old `anthropic-guidance` block. Claude: remove other `@` lines that resolve to this sheet. Upsert `instructions` from `<stack>/instructions/common.md` and `<stack>/instructions/<Harness::instructions_stem>.md` (each trimmed, blank or absent skipped, joined by a blank line), or remove it when both are absent; a source containing an `<!-- ai-stack:`, `<!-- pstack:` or `<!-- open-pstack:` marker is a conflict naming the file. The text is always inlined, never `@`-imported, so every harness gets the same mechanism. `instructions/claude.md` carries the Anthropic guidance verbatim and reaches only Claude through `instructions`; no separate guidance block is written. Upsert `routing` (`render::routing`). Claude: upsert `pstack-models` with `@<abs sheet path>`. Codex: upsert the `pstack:models` mirror with the exact sheet bytes.
-3. **Claude settings.json.** Write-through as above. Unparsable JSON is a conflict and the file is untouched. Remove hook commands that exactly match the old forms (`bash <root>/plugins/pstack/hooks/session-start`, optionally quoted and followed by `| sed 's/pstack://g'`; `python3 <root>/scripts/task-context.py`, optionally quoted) for the stack or a legacy root. A group loses only those commands; a group or event list emptied by the removal is dropped. Written only when something was removed.
+3. **Hook file** (Claude `settings.json`, Codex `hooks.json`; `plan_hooks`). Write-through as above; an absent file starts as `{}`. Unparsable JSON, a non-object root, `hooks` that is not an object or an event that is not a list is a conflict and the file is untouched. Claude only: remove hook commands that exactly match the old forms (`bash <root>/plugins/pstack/hooks/session-start`, optionally quoted and followed by `| sed 's/pstack://g'`; `python3 <root>/scripts/task-context.py`, optionally quoted) for the stack or a legacy root. A group loses only those commands; a group or event list emptied by the removal is dropped. Then `ensure_lint_hooks` makes sure each of `PreToolUse`, `PostToolUse`, `Stop` and `SubagentStop` holds one `lint_command(cfg.exe, harness, event)`: an existing owned entry (`lint_hook_of`) anywhere in the event's list keeps its position and gets only its `command` rewritten; a missing one is appended as a new group at the end. Nothing is ever removed or reordered, because Codex keys hook trust by `<file>:<event>:<group index>:<handler index>`. Written only when something changed. `Config::exe` is `std::env::current_exe()`.
 
 Then, once for all harnesses:
 
@@ -154,6 +156,23 @@ Cursor and OpenCode are not handled. Adding a harness needs:
 
 OpenCode reads `~/.config/opencode/AGENTS.md`, so it can reuse the block writer with that home and file name. Cursor keeps global rules as `.mdc` files with frontmatter in a rules directory, so it needs a file writer for whole managed files rather than a block in a markdown file.
 
+## Lint
+
+`src/lint/` lints only the lines an agent changed, with ast-grep (`ast-grep-core`, `ast-grep-config`, `ast-grep-language` 0.51.3, MIT) as a library. Only the TypeScript, Tsx, JavaScript, Rust, Python and Go grammars are compiled in.
+
+Shapes:
+
+- `Baseline { Absent, Text(String) }`: a file before the change. `Owned(Vec<RangeInclusive<u32>>)`: 1-based lines of the current content that `similar`'s patience line diff marks inserted or replaced, compared without `\r`. `Owned::widen` adds the innermost function span of each owned line; `Owned::whole` covers the file.
+- `Repo { root, project_key }`, found per file with `git rev-parse --path-format=absolute --show-toplevel --git-common-dir`. `project_key` is the parent of the common dir when it ends in `.git`, else the top level, so linked worktrees share their main checkout's key. Every git call passes `--literal-pathspecs` and `--no-optional-locks` and reads NUL-separated output.
+- `Rule { key: RuleKey { id, language }, source, config: RuleConfig<SupportLang>, base, default_off, files, ignores, unless_file, when_file }`. `rules::parse` reads each YAML document as JSON, removes `files` and `ignores` (compiled with `globset`), reads `metadata.unless_file`, `metadata.when_file` and `metadata.default_off`, then builds one `RuleConfig` per listed language. `Rules::load` refuses one `(id, language)` in two files.
+- `Settings` (resolved `[lint]`) and `Policy` (settings plus the matching `[[lint.project]]`) decide whether a file is linted, its scope, whether a rule applies to a path, and a rule's severity: `disable`, then `severity`, then `default_off` unless `enable` names it, then the YAML severity.
+- `Finding { path, rule, severity, line, column, end_line, message, snippet }`. `end_line` is the line of the match's last byte, so a Rust doc comment that includes its newline ends on its own line. A finding is kept when `[line, end_line]` intersects the owned lines. Its fingerprint is rule, path and the trimmed first line.
+- `scan::Engine::lint(Vec<(PathBuf, Baseline)>)`: per file, language from the extension, owned lines (skip when empty), repository, `Policy`, `git check-attr linguist-generated linguist-vendored`, `ignore` globs, the native `test-file-names` check for an absent baseline, the rules for that language and path whose file facts hold, one `CombinedScan`, then the owned-lines filter.
+
+The CLI baseline is the blob at `git merge-base REV HEAD`, read with `git cat-file blob`. `git diff --name-status -z -M --no-ext-diff <merge-base>` runs over the whole repository so renames are detected, and the result is filtered to the requested paths; `git ls-files -z --others --exclude-standard` adds untracked files as `Absent`.
+
+Hooks (`hook.rs`): `HookEvent { PreEdit, PostEdit, Stop }`, `HookReply { Silent, Context, Block, Notice }`. A session folder `~/.local/state/ai-stack/lint/<session_id>/` (the id is hashed when it is not a plain name) holds `baselines/<sha256 of the absolute path>`, JSON `{path, content}` with `content: null` for an absent file, written to a temp file and hard-linked into place so the first writer wins and no reader sees a partial file. `stop.json` holds `StopState { blocks, last_fingerprint, acknowledged, load_error_reported }`. `decide` is the loop guard: `stop_hook_active == false` resets `blocks`; unacknowledged error findings block; when active and the set equals `last_fingerprint`, or `blocks >= 3`, the set is acknowledged and released with a `Notice`. Every error is reported on stderr and exits 0.
+
 ## Safety guarantees
 
 - **Atomic writes with the original mode.** A temp file is created exclusively beside the target (`tempfile::Builder`, random name), given the target's permissions when it exists, written, and renamed over the target.
@@ -166,7 +185,7 @@ OpenCode reads `~/.config/opencode/AGENTS.md`, so it can reuse the block writer 
 - **Branch guard.** `update` pulls only into a checkout already on the branch it pulls.
 - **Process steps run arbitrary code by design.** Scripts and prompt runners run with the user's permissions in the staging directory.
 - **Fleet never forces.** `switch` refuses a dirty checkout and never uses `-f` or `-B`; branch names are validated before they reach any command line.
-- **Exact ownership.** Links count as ai-stack's only when the ledger records them with the same target or their target, resolved through the filesystem, lies in the stack or a legacy root; hooks only when the command resolves to one of the exact old forms for those roots; agent files only with the managed marker. In a user skill folder, an owned link a global group wants is kept or repointed, and only an owned link no group wants is unlinked. `--clean` and `stray` never count an owned link.
+- **Exact ownership.** Links count as ai-stack's only when the ledger records them with the same target or their target, resolved through the filesystem, lies in the stack or a legacy root; old hooks only when the command resolves to one of the exact old forms for those roots; lint hooks only when the command's first word has base name `ai-stack` and the rest is exactly `lint hook <harness> <event>`; agent files only with the managed marker. In a user skill folder, an owned link a global group wants is kept or repointed, and only an owned link no group wants is unlinked. `--clean` and `stray` never count an owned link.
 - **One decision per entry.** Each skill folder is resolved once and each entry classified once, so aliases of one folder never plan two actions for one entry, and `stray` and install conflicts read the same classification.
 - **Checkouts are never skill folders.** A skill folder that resolves inside the stack or a legacy root, and a folder entry that holds one, are conflicts, even with `--force`.
 - **Apply stays in the planned folder.** A folder-entry action is refused when its folder now resolves elsewhere or is another directory.
@@ -192,7 +211,8 @@ The code has no comments (see `AGENTS.md`), and no name, type or test holds thes
 - `config.rs`: schema, validation, descriptor rules.
 - `render.rs`: sheet and routing text.
 - `blocks.rs`: marker-bounded blocks.
-- `install.rs`: the plan: the per-harness sheet, instruction blocks and settings hooks, then the skill folders and plugins.
+- `install.rs`: the plan: the per-harness sheet, instruction blocks and hook file, then the skill folders and plugins.
+- `lint/`: `owned.rs` (baselines, owned lines, line index), `repo.rs` (git), `rules.rs` (loader), `settings.rs` (config and project policy), `scan.rs` (the engine), `hook.rs` (hooks and session state), `mod.rs` (CLI and output).
 - `links.rs`: skill folders: the canonical folder index, link ownership, entry classification, links, leftovers and strays.
 - `plugins.rs`: plugin commands and the runner seam.
 - `plan.rs`: actions, diffs, backups, apply.
