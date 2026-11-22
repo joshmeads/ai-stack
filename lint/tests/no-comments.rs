@@ -52,3 +52,30 @@ fn h() {
     let x = 1; // trailing prose @hit
     /* block @hit */
 }
+
+/// The command line, shown by --help.
+#[derive(Parser)]
+#[command(name = "tool")]
+struct Cli {
+    /// Config file to read.
+    #[arg(long)]
+    config: Option<String>,
+    // a plain comment in a clap type @hit
+    #[command(subcommand)]
+    command: Command,
+}
+
+#[derive(Subcommand)]
+enum Command {
+    /// Lint the changed lines.
+    Lint {
+        /// Paths to lint.
+        paths: Vec<String>,
+    },
+}
+
+#[derive(Debug)]
+struct Plain {
+    /// Doc on a field of a type that is not a clap type. @hit
+    field: u8,
+}

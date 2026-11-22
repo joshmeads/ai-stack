@@ -45,7 +45,7 @@ rule:
 id: no-comments
 language: Rust
 severity: error
-message: "Remove this comment; express meaning in code (names, types, structure) and rationale in the PR. Keep license headers, a single-line WARNING: or SAFETY: comment, and doc comments on pub items."
+message: "Remove this comment; express meaning in code (names, types, structure) and rationale in the PR. Keep license headers, a single-line WARNING: or SAFETY: comment, doc comments on pub items, and clap doc text that generates --help."
 utils:
   pub-item:
     has:
@@ -58,6 +58,18 @@ utils:
       - kind: line_comment
       - kind: block_comment
       - kind: attribute_item
+  clap-derive:
+    kind: attribute_item
+    regex: 'derive\([^)]*\b(Parser|Subcommand|Args|ValueEnum)\b'
+  clap-type:
+    any:
+      - kind: struct_item
+      - kind: enum_item
+    follows:
+      stopBy:
+        not:
+          matches: decoration
+      matches: clap-derive
 rule:
   any:
     - kind: line_comment
@@ -90,6 +102,20 @@ rule:
                   - kind: enum_item
                   - kind: trait_item
                 matches: pub-item
+      - all:
+          - matches: doc
+          - precedes:
+              stopBy:
+                not:
+                  matches: decoration
+              any:
+                - matches: clap-derive
+                - matches: clap-type
+      - all:
+          - matches: doc
+          - inside:
+              stopBy: end
+              matches: clap-type
 ---
 id: no-comments
 language: Python

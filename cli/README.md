@@ -295,7 +295,7 @@ The shipped rules, ported from [landmines](https://github.com/interfere-inc/land
 
 | Rule | Languages | Default |
 | --- | --- | --- |
-| `no-comments` | ts, tsx, js, rust, python, go | error. Allows tool directives, shebangs, license headers, a single-line `WARNING:` or `SAFETY:` comment, and doc comments on exported or `pub` items. Python docstrings are not checked. |
+| `no-comments` | ts, tsx, js, rust, python, go | error. Allows tool directives, shebangs, license headers, a single-line `WARNING:` or `SAFETY:` comment, doc comments on exported or `pub` items, and Rust doc comments on clap `Parser`, `Subcommand`, `Args` and `ValueEnum` types, which generate `--help`. Python docstrings are not checked. |
 | `no-fixed-sleep` | ts, tsx, js, python, rust | error. In test bodies only. TS and JS skip files that call `vi.useFakeTimers(`. |
 | `no-flake-masking` | ts, tsx, js, python | error. Test retries and raised test timeouts. |
 | `no-unsignaled-poll` | ts, tsx, js | error. `expect.poll` and `vi.waitFor` on mock calls, lengths and sizes. |
