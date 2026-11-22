@@ -9,6 +9,7 @@ mod incident;
 mod install;
 mod ledger;
 mod links;
+mod lint;
 mod models;
 mod paths;
 mod plan;
