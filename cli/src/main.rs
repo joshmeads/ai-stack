@@ -419,6 +419,10 @@ fn resolve_context(cli: &Cli) -> Result<Context> {
 fn load_config(ctx: &Context) -> Result<Config> {
     let mut cfg = config::load(&ctx.config_path, &ctx.home, ctx.stack_override.as_deref())?;
     cfg.exe_flags = ctx.hook_flags.clone();
+    let relative_stack = !cfg.stack.configured.starts_with('~') && Path::new(&cfg.stack.configured).is_relative();
+    if relative_stack && ctx.stack_override.is_none() {
+        cfg.exe_flags.extend(["--stack".to_string(), cfg.stack.path.to_string_lossy().into_owned()]);
+    }
     Ok(cfg)
 }
 
