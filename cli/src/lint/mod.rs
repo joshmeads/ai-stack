@@ -1,3 +1,4 @@
+mod hook;
 mod owned;
 mod repo;
 mod rules;
@@ -10,6 +11,7 @@ use std::path::{Path, PathBuf};
 use anyhow::{Context as _, Result};
 use serde::{Deserialize, Serialize};
 
+pub use hook::{HookEvent, run as run_hook};
 pub use owned::{Baseline, Owned};
 pub use settings::Settings;
 

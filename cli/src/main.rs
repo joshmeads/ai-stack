@@ -183,6 +183,9 @@ enum LintCommand {
         #[arg(long)]
         json: bool,
     },
+    /// Agent hook entry point that `ai-stack install` registers: reads the hook payload on
+    /// stdin, answers on stdout and always exits 0.
+    Hook { harness: Harness, event: lint::HookEvent },
 }
 
 #[derive(Subcommand)]
@@ -633,6 +636,18 @@ fn cmd_private(ctx: &Context, command: PrivateCommand) -> Result<i32> {
 
 fn cmd_lint(ctx: &Context, command: Option<LintCommand>, request: lint::Request) -> Result<i32> {
     let settings = lint::settings(&ctx.config_path, &ctx.home, ctx.stack_override.as_deref());
+    if let Some(LintCommand::Hook { harness, event }) = command {
+        let mut input = String::new();
+        let reply = io::Read::read_to_string(&mut io::stdin(), &mut input)
+            .map_err(anyhow::Error::from)
+            .and_then(|_| lint::run_hook(harness, event, &settings?, &input));
+        match reply {
+            Ok(Some(json)) => println!("{json}"),
+            Ok(None) => {}
+            Err(err) => eprintln!("ai-stack lint hook: {err:#}"),
+        }
+        return Ok(0);
+    }
     let settings = match settings {
         Ok(settings) => settings,
         Err(err) => {
