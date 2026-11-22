@@ -169,7 +169,9 @@ impl Since<'_> {
                 if times.get(commit).is_some_and(|&committed| committed <= time) {
                     older.insert(line);
                 }
-            } else if let Some(seconds) = row.strip_prefix(b"committer-time ") {
+            } else if let Some(seconds) = row.strip_prefix(b"committer-time ")
+                && commit.iter().any(|&digit| digit != b'0')
+            {
                 times.insert(commit, String::from_utf8_lossy(seconds).trim().parse().unwrap_or(u64::MAX));
             } else {
                 let mut words = row.split(|&byte| byte == b' ');
