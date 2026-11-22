@@ -32,7 +32,7 @@ pub struct Rule {
 }
 
 impl Rule {
-    pub fn applies_to_path(&self, rel: &str) -> bool {
+    pub fn applies_to_path(&self, rel: &Path) -> bool {
         self.files.as_ref().is_none_or(|files| files.is_match(rel)) && !self.ignores.as_ref().is_some_and(|ignores| ignores.is_match(rel))
     }
 

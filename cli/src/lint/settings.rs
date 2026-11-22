@@ -91,11 +91,11 @@ impl Policy<'_> {
         self.project.and_then(|project| project.scope).unwrap_or(self.settings.scope)
     }
 
-    pub fn ignored(&self, rel: &str) -> bool {
+    pub fn ignored(&self, rel: &Path) -> bool {
         self.settings.ignore.is_match(rel) || self.project.is_some_and(|project| project.ignore.is_match(rel))
     }
 
-    pub fn allows(&self, id: &str, rel: &str) -> bool {
+    pub fn allows(&self, id: &str, rel: &Path) -> bool {
         self.project.and_then(|project| project.paths.get(id)).is_none_or(|globs| globs.is_match(rel))
     }
 

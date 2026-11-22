@@ -91,9 +91,13 @@ pub fn run(settings: &Settings, request: Request, out: &mut dyn Write, err: &mut
     };
     let cwd = std::env::current_dir()?;
     let paths = if request.paths.is_empty() { vec![cwd.clone()] } else { request.paths };
-    let mut groups: Vec<(Repo, Vec<String>)> = Vec::new();
+    let mut groups: Vec<(Repo, Vec<PathBuf>)> = Vec::new();
     for path in paths {
         let absolute = crate::paths::normalize(&std::path::absolute(&path)?);
+        if std::fs::symlink_metadata(&absolute).is_err() {
+            writeln!(err, "error: {} does not exist", path.display())?;
+            return Ok(LOAD_ERROR);
+        }
         let dir = if absolute.is_dir() { absolute.clone() } else { absolute.parent().unwrap_or(&absolute).to_path_buf() };
         let Some(repo) = Repo::discover(&dir) else {
             writeln!(err, "error: {} is not inside a git repository", path.display())?;
@@ -107,12 +111,13 @@ pub fn run(settings: &Settings, request: Request, out: &mut dyn Write, err: &mut
     }
     let mut files = Vec::new();
     for (repo, specs) in groups {
-        let wanted = |rel: &str| {
-            scan::language_of(Path::new(rel)).is_some()
-                && specs.iter().any(|spec| spec.is_empty() || rel == spec || rel.strip_prefix(spec.as_str()).is_some_and(|rest| rest.starts_with('/')))
-        };
-        for (rel, baseline) in repo.changes(&request.base, wanted)? {
-            files.push((repo.root.join(&rel), baseline));
+        let wanted = |rel: &Path| scan::language_of(rel).is_some() && specs.iter().any(|spec| rel.starts_with(spec));
+        match repo.changes(&request.base, wanted) {
+            Ok(changes) => files.extend(changes.into_iter().map(|(rel, baseline)| (repo.root.join(rel), baseline))),
+            Err(error) => {
+                writeln!(err, "error: {error:#}")?;
+                return Ok(LOAD_ERROR);
+            }
         }
     }
     let engine = Engine { settings, rules: &rules, scope: request.scope, display: &cwd };
@@ -185,6 +190,7 @@ pub fn list(settings: &Settings, json: bool, out: &mut dyn Write, err: &mut dyn 
 
 #[cfg(test)]
 pub(crate) mod tests {
+    use std::os::unix::ffi::OsStrExt as _;
     use std::process::Command;
 
     use super::*;
@@ -241,17 +247,39 @@ pub(crate) mod tests {
         put(&repo.join("a.ts"), "// legacy prose\nexport const a = 1;\n");
         put(&repo.join("legacy.spec.ts"), "// legacy\nexport {};\n");
         put(&repo.join("c.ts"), "// legacy\nexport function f() {\n  // kept\n  return 1;\n}\n");
+        put(&repo.join("d.ts"), "// legacy d\nexport const d = 1;\n");
+        put(&repo.join("gone.ts"), "// legacy gone\nexport const gone = 1;\n");
         git(&repo, &["init", "-q"]);
         git(&repo, &["add", "-A"]);
         git(&repo, &["commit", "-qm", "base"]);
         git(&repo, &["mv", "a.ts", "b.ts"]);
         git(&repo, &["mv", "legacy.spec.ts", "moved.spec.ts"]);
+        std::fs::rename(repo.join("d.ts"), repo.join("e.spec.ts")).unwrap();
+        std::os::unix::fs::symlink("c.ts", repo.join("alias.ts")).unwrap();
         put(&repo.join("c.ts"), "// legacy\nexport function f() {\n  // kept\n  return 2;\n}\n");
+        put(&repo.join("gone.ts"), "// legacy gone\n");
         put(&repo.join("new.spec.ts"), "export const n = 1; // agent prose\n");
+        put(&repo.join("empty.spec.ts"), "");
+        std::fs::write(repo.join(std::ffi::OsStr::from_bytes(b"test-\xff.py")), "# agent prose\n").unwrap();
 
         let (code, lines) = lint(&settings, &repo, "HEAD", None);
-        assert_eq!(lines, [found("new.spec.ts", 1, "test-file-names"), found("new.spec.ts", 1, "no-comments")]);
+        assert_eq!(lines, [
+            found("empty.spec.ts", 1, "test-file-names"),
+            found("new.spec.ts", 1, "test-file-names"),
+            found("new.spec.ts", 1, "no-comments"),
+            found("test-\u{fffd}.py", 1, "no-comments"),
+        ]);
         assert_eq!(code, 1);
+        assert_eq!(lint(&settings, &repo.join("gone.ts"), "HEAD", Some(Scope::File)).1, [found("gone.ts", 1, "no-comments")], "a file whose edit only deleted lines is scanned whole");
+        for bad in [Request { paths: vec![repo.join("missing.ts")], base: "HEAD".into(), scope: None, json: true }, Request { paths: vec![repo.clone()], base: "absent".into(), scope: None, json: true }] {
+            assert_eq!(run(&settings, bad, &mut Vec::new(), &mut Vec::new()).unwrap(), LOAD_ERROR);
+        }
+        let fresh = root.join("fresh");
+        put(&fresh.join("staged.ts"), "export const s = 1; // staged prose\n");
+        git(&fresh, &["init", "-q"]);
+        git(&fresh, &["add", "-A"]);
+        put(&fresh.join("untracked.ts"), "// untracked prose\n");
+        assert_eq!(lint(&settings, &fresh, "HEAD", None), (1, vec![found("staged.ts", 1, "no-comments"), found("untracked.ts", 1, "no-comments")]), "a repository with no commit lints its files as new");
         let (_, function) = lint(&settings, &repo.join("c.ts"), "HEAD", Some(Scope::Function));
         assert_eq!(function, [found("c.ts", 3, "no-comments")]);
         let (_, file) = lint(&settings, &repo.join("c.ts"), "HEAD", Some(Scope::File));

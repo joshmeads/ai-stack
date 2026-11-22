@@ -36,14 +36,14 @@ impl Engine<'_> {
         let mut repos = Repos::default();
         let mut targets = Vec::new();
         for (path, baseline) in files {
-            if language_of(&path).is_none() {
+            if language_of(&path).is_none() || !std::fs::symlink_metadata(&path).is_ok_and(|meta| meta.is_file()) {
                 continue;
             }
             let Ok(source) = std::fs::read_to_string(&path) else { continue };
-            let owned = Owned::between(&baseline, &source);
-            if owned.is_empty() {
+            if matches!(&baseline, Baseline::Text(before) if *before == source) {
                 continue;
             }
+            let owned = Owned::between(&baseline, &source);
             let repo = repos.of(&path);
             targets.push(Target { path, repo, owned, created: baseline == Baseline::Absent, source });
         }
@@ -60,7 +60,7 @@ impl Engine<'_> {
             if !policy.enabled() {
                 continue;
             }
-            let rels: Vec<String> = group.iter().map(relative).collect();
+            let rels: Vec<PathBuf> = group.iter().map(relative).collect();
             let generated = repo.as_ref().map(|repo| repo.generated(&rels)).unwrap_or_default();
             for (target, rel) in group.iter().zip(&rels) {
                 if generated.contains(rel) || policy.ignored(rel) {
@@ -73,7 +73,7 @@ impl Engine<'_> {
         findings
     }
 
-    fn lint_target(&self, target: &Target, rel: &str, policy: &Policy) -> Vec<Finding> {
+    fn lint_target(&self, target: &Target, rel: &Path, policy: &Policy) -> Vec<Finding> {
         let Some(language) = language_of(&target.path) else { return Vec::new() };
         let shown = display_path(&target.path, self.display);
         let mut findings = Vec::new();
@@ -91,12 +91,13 @@ impl Engine<'_> {
             .filter(|rule| rule.applies_to_path(rel) && policy.allows(&rule.key.id, rel) && rule.applies_to_source(&target.source))
             .filter_map(|rule| policy.severity(&rule.key.id, rule.base, rule.default_off).map(|severity| (rule, severity)))
             .collect();
-        if active.is_empty() {
+        let scope = self.scope.unwrap_or(policy.scope());
+        if active.is_empty() || (target.owned.is_empty() && scope != Scope::File) {
             return findings;
         }
         let root = language.ast_grep(&target.source);
         let index = LineIndex::new(&target.source);
-        let owned = match self.scope.unwrap_or(policy.scope()) {
+        let owned = match scope {
             Scope::Lines => target.owned.clone(),
             Scope::Function => target.owned.widen(&function_spans(&root, language, &index)),
             Scope::File => Owned::whole(&target.source),
@@ -134,8 +135,8 @@ pub fn language_of(path: &Path) -> Option<SupportLang> {
     SupportLang::from_path(path)
 }
 
-fn relative(target: &Target) -> String {
-    target.repo.as_ref().and_then(|repo| repo.relative(&target.path)).unwrap_or_else(|| target.path.to_string_lossy().into_owned())
+fn relative(target: &Target) -> PathBuf {
+    target.repo.as_ref().and_then(|repo| repo.relative(&target.path)).unwrap_or_else(|| target.path.clone())
 }
 
 pub fn display_path(path: &Path, base: &Path) -> String {
