@@ -162,7 +162,7 @@ enum Commands {
     Lint {
         #[command(subcommand)]
         command: Option<LintCommand>,
-        /// Files or directories to lint (default: the repository of the current directory).
+        /// Files or directories to lint (default: the whole repository of the current directory).
         paths: Vec<PathBuf>,
         /// Revision whose merge base with HEAD is the baseline.
         #[arg(long, value_name = "REV", default_value = "HEAD")]
