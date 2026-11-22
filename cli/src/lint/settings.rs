@@ -57,7 +57,7 @@ impl Settings {
             projects,
             shipped_rules: stack.path.join("lint/rules"),
             local_rules: config_dir.join("lint/rules"),
-            state_dir: home.join(".local/state/ai-stack/lint"),
+            state_dir: super::state_dir(home),
         })
     }
 

@@ -1,5 +1,6 @@
 use std::ops::RangeInclusive;
 
+use serde::{Deserialize, Serialize};
 use similar::{Algorithm, DiffOp};
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -8,23 +9,70 @@ pub enum Baseline {
     Text(String),
 }
 
-#[derive(Debug, Clone, Default, PartialEq, Eq)]
+#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
 pub struct Owned(Vec<RangeInclusive<u32>>);
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Author {
+    Agent,
+    Other,
+}
+
 impl Owned {
-    pub fn between(baseline: &Baseline, current: &str) -> Owned {
-        let new = lines(current);
-        let Baseline::Text(before) = baseline else { return Owned::whole(current) };
+    pub fn carried(&self, before: Option<&str>, after: Option<&str>, author: Author) -> Owned {
+        let Some(after) = after else { return Owned::default() };
+        let Some(before) = before else {
+            return match author {
+                Author::Agent => Owned::whole(after),
+                Author::Other => Owned::default(),
+            };
+        };
         let old = lines(before);
-        let mut owned = Owned::default();
-        for op in similar::capture_diff_slices(Algorithm::Patience, &old, &new) {
-            if let DiffOp::Insert { new_index, new_len, .. } | DiffOp::Replace { new_index, new_len, .. } = op
-                && new_len > 0
-            {
-                owned.add(line_number(new_index)..=line_number(new_index + new_len - 1));
+        let new = lines(after);
+        let mut held = vec![false; old.len()];
+        for range in &self.0 {
+            for line in range.clone() {
+                if let Some(slot) = held.get_mut(line as usize - 1) {
+                    *slot = true;
+                }
             }
         }
+        let mut owned = Owned::default();
+        let mut mark = |from: usize, to: usize| owned.0.push(line_number(from)..=line_number(to));
+        for op in similar::capture_diff_slices(Algorithm::Patience, &old, &new) {
+            match op {
+                DiffOp::Equal { old_index, new_index, len } => {
+                    let mut run: Option<usize> = None;
+                    for offset in 0..len {
+                        match (held[old_index + offset], run) {
+                            (true, None) => run = Some(new_index + offset),
+                            (false, Some(start)) => {
+                                mark(start, new_index + offset - 1);
+                                run = None;
+                            }
+                            _ => {}
+                        }
+                    }
+                    if let Some(start) = run {
+                        mark(start, new_index + len - 1);
+                    }
+                }
+                DiffOp::Insert { new_index, new_len, .. } | DiffOp::Replace { new_index, new_len, .. } if author == Author::Agent && new_len > 0 => {
+                    mark(new_index, new_index + new_len - 1);
+                }
+                _ => {}
+            }
+        }
+        owned.normalize();
         owned
+    }
+
+    pub fn between(baseline: &Baseline, current: &str) -> Owned {
+        let before = match baseline {
+            Baseline::Absent => None,
+            Baseline::Text(text) => Some(text.as_str()),
+        };
+        Owned::default().carried(before, Some(current), Author::Agent)
     }
 
     pub fn whole(current: &str) -> Owned {
@@ -64,6 +112,10 @@ impl Owned {
 
     fn add(&mut self, range: RangeInclusive<u32>) {
         self.0.push(range);
+        self.normalize();
+    }
+
+    fn normalize(&mut self) {
         self.0.sort_by_key(|range| *range.start());
         let mut merged: Vec<RangeInclusive<u32>> = Vec::with_capacity(self.0.len());
         for range in self.0.drain(..) {
@@ -133,6 +185,23 @@ mod tests {
         assert_eq!(owned(None, ""), []);
         assert_eq!(owned(Some(""), "x"), [1..=1]);
         assert_eq!(owned(Some("same\n"), "same\n"), []);
+    }
+
+    #[test]
+    fn kept_lines_keep_their_owner_and_only_the_agents_edits_add_lines() {
+        let held = Owned(vec![2..=3]);
+        let cases = [
+            (Some("a\nB\nC\nd\n"), Some("x\na\nB\nC\nd\n"), Author::Other, vec![3..=4]),
+            (Some("a\nB\nC\nd\n"), Some("x\na\nB\nC\nd\n"), Author::Agent, vec![1..=1, 3..=4]),
+            (Some("a\nB\nC\nd\n"), Some("a\nB\ny\nd\n"), Author::Other, vec![2..=2]),
+            (Some("a\nB\nC\nd\n"), Some("a\nB\nC\nd\ne\n"), Author::Other, vec![2..=3]),
+            (Some("a\nB\nC\nd\n"), None, Author::Agent, vec![]),
+            (None, Some("n\nm\n"), Author::Agent, vec![1..=2]),
+            (None, Some("n\nm\n"), Author::Other, vec![]),
+        ];
+        for (before, after, author, expected) in cases {
+            assert_eq!(held.carried(before, after, author).ranges(), expected, "{before:?} -> {after:?} by {author:?}");
+        }
     }
 
     #[test]

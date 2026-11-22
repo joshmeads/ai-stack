@@ -11,7 +11,7 @@ use std::path::{Path, PathBuf};
 use anyhow::{Context as _, Result};
 use serde::{Deserialize, Serialize};
 
-pub use hook::{HookEvent, run as run_hook};
+pub use hook::{HookEvent, config_error as hook_config_error, run as run_hook};
 pub use owned::{Baseline, Owned};
 pub use settings::Settings;
 
@@ -65,6 +65,12 @@ pub struct Finding {
     pub end_line: u32,
     pub message: String,
     pub snippet: String,
+    #[serde(skip)]
+    pub text: String,
+}
+
+pub fn state_dir(home: &Path) -> PathBuf {
+    home.join(".local/state/ai-stack/lint")
 }
 
 pub fn settings(config_path: &Path, home: &Path, stack_override: Option<&Path>) -> Result<Settings> {
@@ -113,7 +119,7 @@ pub fn run(settings: &Settings, request: Request, out: &mut dyn Write, err: &mut
     for (repo, specs) in groups {
         let wanted = |rel: &Path| scan::language_of(rel).is_some() && specs.iter().any(|spec| rel.starts_with(spec));
         match repo.changes(&request.base, wanted) {
-            Ok(changes) => files.extend(changes.into_iter().map(|(rel, baseline)| (repo.root.join(rel), baseline))),
+            Ok(changes) => files.extend(changes.into_iter().filter_map(|(rel, baseline)| scan::Change::read(repo.root.join(rel), &baseline))),
             Err(error) => {
                 writeln!(err, "error: {error:#}")?;
                 return Ok(LOAD_ERROR);

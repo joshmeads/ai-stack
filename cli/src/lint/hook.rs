@@ -8,8 +8,9 @@ use serde::{Deserialize, Serialize};
 use serde_json::{Value, json};
 use sha2::{Digest as _, Sha256};
 
-use super::scan::{Engine, language_of};
-use super::{Baseline, Finding, Settings, Severity, text};
+use super::owned::Author;
+use super::scan::{Change, Engine, language_of};
+use super::{Finding, Owned, Settings, Severity};
 use crate::config::Harness;
 use crate::paths;
 
@@ -87,6 +88,7 @@ pub fn run(harness: Harness, event: HookEvent, settings: &Settings, input: &str)
     let payload: Payload = serde_json::from_str(input).context("hook payload is not the expected JSON")?;
     let cwd = payload.cwd.clone().unwrap_or_else(|| PathBuf::from("/"));
     let agent = Agent { session: &payload.session_id, id: payload.agent_id.as_deref() };
+    Session::at(&settings.state_dir, agent).keep_alive();
     let reply = match event {
         HookEvent::PreEdit => {
             let edits: Vec<Edit> = edits(harness, &payload, &cwd).into_iter().filter(|edit| language_of(edit.target()).is_some() && settings.lints(edit.target())).collect();
@@ -95,21 +97,23 @@ pub fn run(harness: Harness, event: HookEvent, settings: &Settings, input: &str)
             }
             let session = Session::open(&settings.state_dir, agent)?;
             for edit in &edits {
-                record(&session, edit)?;
+                session.before_edit(edit)?;
             }
             HookReply::Silent
         }
         HookEvent::PostEdit => {
             let Some(session) = Session::existing(&settings.state_dir, agent) else { return Ok(None) };
-            let files: Vec<(PathBuf, Baseline)> = edits(harness, &payload, &cwd)
-                .iter()
-                .filter_map(|edit| session.baseline(edit.target()).map(|baseline| (edit.target().to_path_buf(), baseline)))
-                .collect();
-            if files.is_empty() {
+            let mut changes = Vec::new();
+            for edit in edits(harness, &payload, &cwd) {
+                if let Some(state) = session.after_edit(edit.target())? {
+                    changes.extend(state.change());
+                }
+            }
+            if changes.is_empty() {
                 return Ok(None);
             }
             match settings.rules() {
-                Ok(rules) => post_edit_reply(&Engine { settings, rules: &rules, scope: None, display: &cwd }.lint(files)),
+                Ok(rules) => post_edit_reply(&Engine { settings, rules: &rules, scope: None, display: &cwd }.lint(changes)),
                 Err(error) => session.load_error(&error),
             }
         }
@@ -117,7 +121,8 @@ pub fn run(harness: Harness, event: HookEvent, settings: &Settings, input: &str)
             let Some(session) = Session::existing(&settings.state_dir, agent) else { return Ok(None) };
             match settings.rules() {
                 Ok(rules) => {
-                    let findings = Engine { settings, rules: &rules, scope: None, display: &cwd }.lint(session.files());
+                    let changes = session.files().iter().filter_map(FileState::change).collect();
+                    let findings = Engine { settings, rules: &rules, scope: None, display: &cwd }.lint(changes);
                     let mut state = session.stop_state();
                     let reply = decide(&mut state, payload.stop_hook_active, findings);
                     session.save_stop_state(&state)?;
@@ -130,21 +135,57 @@ pub fn run(harness: Harness, event: HookEvent, settings: &Settings, input: &str)
     Ok(reply.render())
 }
 
+pub fn config_error(state_dir: &Path, event: HookEvent, input: &str, error: &anyhow::Error) -> Option<String> {
+    if event == HookEvent::PreEdit {
+        return None;
+    }
+    let payload: Payload = serde_json::from_str(input).ok()?;
+    let session = Session::at(state_dir, Agent { session: &payload.session_id, id: None });
+    std::fs::create_dir_all(&session.root).ok()?;
+    std::fs::OpenOptions::new().write(true).create_new(true).open(session.root.join("config-error-reported")).ok()?;
+    HookReply::Notice(format!("ai-stack lint is not checking this session because its config could not be read: {}", format!("{error:#}").trim_end())).render()
+}
+
 #[derive(Clone, Copy)]
 struct Agent<'a> {
     session: &'a str,
     id: Option<&'a str>,
 }
 
+const CONTEXT_BUDGET: usize = 9_000;
+const SNIPPET_CHARS: usize = 160;
+
 fn post_edit_reply(findings: &[Finding]) -> HookReply {
     if findings.is_empty() {
         return HookReply::Silent;
     }
-    HookReply::Context(format!(
-        "ai-stack lint found {} problem(s) in the lines you just changed. Fix them now; errors block stopping until they are gone.\n{}",
-        findings.len(),
-        text(findings)
+    HookReply::Context(report(
+        &format!("ai-stack lint found {} problem(s) in the lines you just changed. Fix them now; errors block stopping until they are gone.", findings.len()),
+        findings,
     ))
+}
+
+fn report(header: &str, findings: &[Finding]) -> String {
+    let mut rules: Vec<(&str, &str)> = Vec::new();
+    for finding in findings {
+        if !rules.contains(&(finding.rule.as_str(), finding.message.as_str())) {
+            rules.push((&finding.rule, &finding.message));
+        }
+    }
+    let mut text = format!("{header}\n");
+    for (rule, message) in rules {
+        text.push_str(&format!("{rule}: {message}\n"));
+    }
+    for (shown, finding) in findings.iter().enumerate() {
+        let snippet: String = finding.snippet.trim().chars().take(SNIPPET_CHARS).collect();
+        let entry = format!("{}:{}:{} {} {}\n    {snippet}\n", finding.path, finding.line, finding.column, finding.severity.as_str(), finding.rule);
+        if text.len() + entry.len() > CONTEXT_BUDGET {
+            text.push_str(&format!("and {} more\n", findings.len() - shown));
+            break;
+        }
+        text.push_str(&entry);
+    }
+    text
 }
 
 #[derive(Debug, Default, Serialize, Deserialize)]
@@ -159,9 +200,8 @@ fn fingerprinted(findings: Vec<Finding>) -> Vec<(String, Finding)> {
     findings
         .into_iter()
         .map(|finding| {
-            let text = finding.snippet.trim().to_string();
-            let occurrence = seen.entry((finding.rule.clone(), finding.file.clone(), text.clone())).or_insert(0);
-            let fingerprint = format!("{}\u{0}{}\u{0}{text}\u{0}{occurrence}", finding.rule, finding.file.display());
+            let occurrence = seen.entry((finding.rule.clone(), finding.file.clone(), finding.text.clone())).or_insert(0);
+            let fingerprint = format!("{}\u{0}{}\u{0}{}\u{0}{occurrence}", finding.rule, finding.file.display(), finding.text);
             *occurrence += 1;
             (fingerprint, finding)
         })
@@ -172,10 +212,9 @@ fn decide(state: &mut StopState, active: bool, findings: Vec<Finding>) -> HookRe
     if !active {
         state.blocks = 0;
     }
-    let (current, blocking): (BTreeSet<String>, Vec<Finding>) = fingerprinted(findings.into_iter().filter(|finding| finding.severity == Severity::Error).collect())
-        .into_iter()
-        .filter(|(fingerprint, _)| !state.acknowledged.contains(fingerprint))
-        .unzip();
+    let errors = fingerprinted(findings.into_iter().filter(|finding| finding.severity == Severity::Error).collect());
+    state.acknowledged.retain(|fingerprint| errors.iter().any(|(present, _)| present == fingerprint));
+    let (current, blocking): (BTreeSet<String>, Vec<Finding>) = errors.into_iter().filter(|(fingerprint, _)| !state.acknowledged.contains(fingerprint)).unzip();
     if current.is_empty() {
         state.last_fingerprint.clear();
         return HookReply::Silent;
@@ -193,10 +232,7 @@ fn decide(state: &mut StopState, active: bool, findings: Vec<Finding>) -> HookRe
     }
     state.blocks += 1;
     state.last_fingerprint = current;
-    HookReply::Block(format!(
-        "ai-stack lint: fix these errors in lines you changed this session before stopping. If one must stay, say why in your reply.\n{}",
-        text(&blocking)
-    ))
+    HookReply::Block(report("ai-stack lint: fix these errors in lines you changed this session before stopping. If one must stay, say why in your reply.", &blocking))
 }
 
 fn edits(harness: Harness, payload: &Payload, cwd: &Path) -> Vec<Edit> {
@@ -221,29 +257,59 @@ fn edits(harness: Harness, payload: &Payload, cwd: &Path) -> Vec<Edit> {
     }
 }
 
-fn record(session: &Session, edit: &Edit) -> Result<()> {
-    let target = edit.target();
-    let baseline = match edit {
-        Edit::File(path) => current(path),
-        Edit::Move { from, .. } => session.baseline(from).or_else(|| current(from)),
-    };
-    match baseline {
-        Some(baseline) => session.record(target, &baseline),
-        None => Ok(()),
-    }
-}
-
-fn current(path: &Path) -> Option<Baseline> {
+fn current(path: &Path) -> Option<Option<String>> {
     match std::fs::read_to_string(path) {
-        Ok(text) => Some(Baseline::Text(text)),
-        Err(err) if err.kind() == ErrorKind::NotFound => Some(Baseline::Absent),
+        Ok(text) => Some(Some(text)),
+        Err(err) if err.kind() == ErrorKind::NotFound => Some(None),
         Err(_) => None,
     }
 }
 
-#[derive(Serialize, Deserialize)]
-struct Stored {
+#[derive(Debug, Clone, Serialize, Deserialize)]
+struct FileState {
     path: PathBuf,
+    content: Option<String>,
+    owned: Owned,
+    created: bool,
+    edited: bool,
+    pending: Option<String>,
+}
+
+impl FileState {
+    fn new(path: &Path, content: Option<String>) -> FileState {
+        FileState { path: path.to_path_buf(), content, owned: Owned::default(), created: false, edited: false, pending: None }
+    }
+
+    fn observe(&mut self, now: Option<String>) {
+        self.owned = self.owned.carried(self.content.as_deref(), now.as_deref(), Author::Other);
+        self.content = now;
+    }
+
+    fn edit(&mut self, after: Option<String>) {
+        self.owned = self.owned.carried(self.content.as_deref(), after.as_deref(), Author::Agent);
+        self.created |= self.content.is_none() && after.is_some();
+        self.edited |= self.content != after;
+        self.content = after;
+        self.pending = None;
+    }
+
+    fn settled(mut self, handoff: Option<Option<String>>, now: Option<String>) -> FileState {
+        if self.pending.is_some() {
+            self.edit(handoff.unwrap_or_else(|| now.clone()));
+        }
+        self.observe(now);
+        self
+    }
+
+    fn change(&self) -> Option<Change> {
+        let source = self.content.clone()?;
+        let regular = std::fs::symlink_metadata(&self.path).is_ok_and(|meta| meta.is_file());
+        (regular && (self.edited || !self.owned.is_empty())).then(|| Change { path: self.path.clone(), source, owned: self.owned.clone(), created: self.created })
+    }
+}
+
+#[derive(Serialize, Deserialize)]
+struct Handoff {
     content: Option<String>,
 }
 
@@ -270,13 +336,20 @@ impl Session {
             Err(err) if err.kind() == ErrorKind::AlreadyExists => {}
             Err(err) => return Err(err).with_context(|| format!("creating {}", session.root.display())),
         }
-        std::fs::create_dir_all(session.dir.join("baselines"))?;
+        std::fs::create_dir_all(session.dir.join("files"))?;
+        std::fs::create_dir_all(session.root.join("handoffs"))?;
         Ok(session)
     }
 
     fn existing(state_dir: &Path, agent: Agent) -> Option<Session> {
         let session = Session::at(state_dir, agent);
-        session.dir.join("baselines").is_dir().then_some(session)
+        session.dir.join("files").is_dir().then_some(session)
+    }
+
+    fn keep_alive(&self) {
+        if let Ok(root) = std::fs::File::open(&self.root) {
+            let _ = root.set_modified(SystemTime::now());
+        }
     }
 
     fn load_error(&self, error: &anyhow::Error) -> HookReply {
@@ -286,42 +359,129 @@ impl Session {
         }
     }
 
-    fn slot(&self, path: &Path) -> PathBuf {
-        self.dir.join("baselines").join(hex(path.as_os_str().as_encoded_bytes()))
+    fn slot(dir: &Path, path: &Path) -> PathBuf {
+        dir.join("files").join(hex(path.as_os_str().as_encoded_bytes()))
     }
 
-    fn record(&self, path: &Path, baseline: &Baseline) -> Result<()> {
-        let slot = self.slot(path);
-        if slot.exists() {
-            return Ok(());
+    fn lock(&self, path: &Path) -> Result<std::fs::File> {
+        let mut name = Session::slot(&self.dir, path).into_os_string();
+        name.push(".lock");
+        let file = std::fs::OpenOptions::new().create(true).truncate(false).write(true).open(&name).with_context(|| format!("opening {}", name.display()))?;
+        file.lock()?;
+        Ok(file)
+    }
+
+    fn load(dir: &Path, path: &Path) -> Option<FileState> {
+        let mut name = Session::slot(dir, path).into_os_string();
+        name.push(".json");
+        serde_json::from_slice(&std::fs::read(name).ok()?).ok()
+    }
+
+    fn save(&self, state: &FileState) -> Result<()> {
+        let mut name = Session::slot(&self.dir, &state.path).into_os_string();
+        name.push(".json");
+        let mut staged = tempfile::NamedTempFile::new_in(self.dir.join("files"))?;
+        serde_json::to_writer(&mut staged, state)?;
+        staged.persist(&name)?;
+        Ok(())
+    }
+
+    fn forget(&self, path: &Path) {
+        let mut name = Session::slot(&self.dir, path).into_os_string();
+        name.push(".json");
+        let _ = std::fs::remove_file(name);
+    }
+
+    fn handoff(&self, state: &FileState) -> Option<Option<String>> {
+        let id = state.pending.as_ref()?;
+        let stored: Handoff = serde_json::from_slice(&std::fs::read(self.root.join("handoffs").join(id)).ok()?).ok()?;
+        Some(stored.content)
+    }
+
+    fn drop_handoff(&self, state: &FileState) {
+        if let Some(id) = &state.pending {
+            let _ = std::fs::remove_file(self.root.join("handoffs").join(id));
         }
-        let content = match baseline {
-            Baseline::Absent => None,
-            Baseline::Text(text) => Some(text.clone()),
-        };
-        let mut staged = tempfile::NamedTempFile::new_in(self.dir.join("baselines"))?;
-        serde_json::to_writer(&mut staged, &Stored { path: path.to_path_buf(), content })?;
-        match std::fs::hard_link(staged.path(), &slot) {
-            Ok(()) => Ok(()),
-            Err(err) if err.kind() == ErrorKind::AlreadyExists => Ok(()),
-            Err(err) => Err(err).with_context(|| format!("writing {}", slot.display())),
+    }
+
+    fn settle(&self, path: &Path, now: Option<String>) -> FileState {
+        let state = Session::load(&self.dir, path).unwrap_or_else(|| FileState::new(path, now.clone()));
+        let handoff = self.handoff(&state);
+        self.drop_handoff(&state);
+        state.settled(handoff, now)
+    }
+
+    fn before_edit(&self, edit: &Edit) -> Result<()> {
+        match edit {
+            Edit::File(path) => {
+                let Some(now) = current(path) else { return Ok(()) };
+                {
+                    let _lock = self.lock(path)?;
+                    let mut state = self.settle(path, now.clone());
+                    state.pending = Some(pending_id(path));
+                    self.save(&state)?;
+                }
+                self.hand_off(path, &now);
+            }
+            Edit::Move { from, to } => {
+                let Some(now) = current(from) else { return Ok(()) };
+                let mut state = {
+                    let _lock = self.lock(from)?;
+                    let state = self.settle(from, now.clone());
+                    self.forget(from);
+                    state
+                };
+                state.path = to.clone();
+                state.pending = Some(pending_id(to));
+                {
+                    let _lock = self.lock(to)?;
+                    self.save(&state)?;
+                }
+                self.hand_off(from, &now);
+                if let Some(at_destination) = current(to) {
+                    self.hand_off(to, &at_destination);
+                }
+            }
+        }
+        Ok(())
+    }
+
+    fn after_edit(&self, path: &Path) -> Result<Option<FileState>> {
+        let Some(now) = current(path) else { return Ok(None) };
+        let _lock = self.lock(path)?;
+        let Some(mut state) = Session::load(&self.dir, path) else { return Ok(None) };
+        if state.pending.is_some() {
+            self.drop_handoff(&state);
+            state.edit(now);
+        } else {
+            state.observe(now);
+        }
+        self.save(&state)?;
+        Ok(Some(state))
+    }
+
+    fn hand_off(&self, path: &Path, now: &Option<String>) {
+        let agents = std::fs::read_dir(self.root.join("agents")).into_iter().flatten().filter_map(|entry| entry.ok()).map(|entry| entry.path());
+        for dir in std::iter::once(self.root.clone()).chain(agents).filter(|dir| *dir != self.dir) {
+            let Some(id) = Session::load(&dir, path).and_then(|state| state.pending) else { continue };
+            let Ok(mut file) = std::fs::OpenOptions::new().write(true).create_new(true).open(self.root.join("handoffs").join(&id)) else { continue };
+            let _ = serde_json::to_writer(&mut file, &Handoff { content: now.clone() });
         }
     }
 
-    fn baseline(&self, path: &Path) -> Option<Baseline> {
-        let stored: Stored = serde_json::from_slice(&std::fs::read(self.slot(path)).ok()?).ok()?;
-        Some(stored.content.map_or(Baseline::Absent, Baseline::Text))
-    }
-
-    fn files(&self) -> Vec<(PathBuf, Baseline)> {
-        let Ok(entries) = std::fs::read_dir(self.dir.join("baselines")) else { return Vec::new() };
-        let mut files: Vec<(PathBuf, Baseline)> = entries
+    fn files(&self) -> Vec<FileState> {
+        let Ok(entries) = std::fs::read_dir(self.dir.join("files")) else { return Vec::new() };
+        let mut files: Vec<FileState> = entries
             .filter_map(|entry| entry.ok())
-            .filter(|entry| !entry.file_name().to_string_lossy().starts_with('.'))
-            .filter_map(|entry| serde_json::from_slice::<Stored>(&std::fs::read(entry.path()).ok()?).ok())
-            .map(|stored| (stored.path, stored.content.map_or(Baseline::Absent, Baseline::Text)))
+            .filter(|entry| entry.path().extension().is_some_and(|ext| ext == "json"))
+            .filter_map(|entry| serde_json::from_slice::<FileState>(&std::fs::read(entry.path()).ok()?).ok())
+            .filter_map(|state| {
+                let now = current(&state.path)?;
+                let handoff = self.handoff(&state);
+                Some(state.settled(handoff, now))
+            })
             .collect();
-        files.sort_by(|a, b| a.0.cmp(&b.0));
+        files.sort_by(|a, b| a.path.cmp(&b.path));
         files
     }
 
@@ -335,6 +495,11 @@ impl Session {
         staged.persist(self.dir.join("stop.json"))?;
         Ok(())
     }
+}
+
+fn pending_id(path: &Path) -> String {
+    let nanos = SystemTime::now().duration_since(SystemTime::UNIX_EPOCH).map_or(0, |since| since.as_nanos());
+    hex(format!("{}\u{0}{nanos}\u{0}{}", std::process::id(), path.display()).as_bytes())
 }
 
 fn session_name(id: &str) -> String {
@@ -382,9 +547,10 @@ mod tests {
             severity: Severity::Error,
             line,
             column: 1,
-            end_line: line,
+            end_line: line + 2,
             message: "m".into(),
-            snippet: format!("// {line}"),
+            snippet: "/**".into(),
+            text: format!("/**\n * {line}\n */"),
         }
     }
 
@@ -404,28 +570,31 @@ mod tests {
     }
 
     #[test]
-    fn the_first_baseline_of_a_file_wins_even_when_hooks_race() {
+    fn racing_hooks_of_one_agent_leave_one_valid_state_and_agents_never_share_one() {
         let tmp = tempfile::tempdir().unwrap();
         let lead = Agent { session: "race", id: None };
         let session = Session::open(tmp.path(), lead).unwrap();
-        let path = Path::new("/w/a.ts");
+        let path = tmp.path().join("a.ts");
+        put(&path, "export const a = 1;\n");
         std::thread::scope(|scope| {
-            for writer in 0..8 {
-                let session = &session;
-                scope.spawn(move || session.record(path, &Baseline::Text(format!("writer {writer}\n"))).unwrap());
+            for _ in 0..8 {
+                let (session, path) = (&session, &path);
+                scope.spawn(move || {
+                    session.before_edit(&Edit::File(path.clone())).unwrap();
+                    session.after_edit(path).unwrap();
+                });
             }
         });
-        let Some(Baseline::Text(first)) = session.baseline(path) else { panic!("no baseline") };
-        session.record(path, &Baseline::Absent).unwrap();
-        assert_eq!(session.baseline(path), Some(Baseline::Text(first)));
+        let state = Session::load(&session.dir, &path).expect("a readable state");
+        assert_eq!((state.pending, state.owned), (None, Owned::default()));
         assert_eq!(session.files().len(), 1);
         assert!(Session::existing(tmp.path(), Agent { session: "other", id: None }).is_none());
-        assert!(Session::existing(tmp.path(), Agent { id: Some("child"), ..lead }).is_none(), "a subagent never sees the lead's baselines");
+        assert!(Session::existing(tmp.path(), Agent { id: Some("child"), ..lead }).is_none(), "a subagent never sees the lead's state");
         assert_eq!(session_name("../../etc"), hex(b"../../etc"));
     }
 
     #[test]
-    fn stop_guard_blocks_releases_an_unchanged_set_and_never_reblocks_what_it_released() {
+    fn stop_guard_blocks_releases_an_unchanged_set_and_reblocks_only_what_is_new_or_back() {
         let mut state = StopState::default();
         let kept = || vec![finding("a.ts", 1)];
         assert!(matches!(decide(&mut state, false, kept()), HookReply::Block(reason) if reason.contains("a.ts:1:1 error no-comments")));
@@ -433,9 +602,15 @@ mod tests {
         assert_eq!(decide(&mut state, false, kept()), HookReply::Silent, "a later turn with the same kept finding stops at once");
         let from_elsewhere = Finding { path: "../a.ts".into(), ..finding("a.ts", 1) };
         assert_eq!(decide(&mut state, false, vec![from_elsewhere]), HookReply::Silent, "the fingerprint does not depend on the cwd");
-        let copy = Finding { line: 5, end_line: 5, ..finding("a.ts", 1) };
+        let moved = Finding { line: 9, end_line: 11, ..finding("a.ts", 1) };
+        assert_eq!(decide(&mut state, false, vec![moved]), HookReply::Silent, "the fingerprint does not depend on the line");
+        let copy = Finding { line: 5, end_line: 7, ..finding("a.ts", 1) };
         assert!(matches!(decide(&mut state, false, vec![finding("a.ts", 1), copy]), HookReply::Block(reason) if reason.contains("a.ts:5") && !reason.contains("a.ts:1:")), "a new identical occurrence blocks");
+        let same_first_line = Finding { line: 5, end_line: 7, text: "/**\n * other\n */".into(), ..finding("a.ts", 1) };
+        assert!(matches!(decide(&mut state, false, vec![finding("a.ts", 1), same_first_line]), HookReply::Block(reason) if reason.contains("a.ts:5")), "a different block that starts the same way blocks");
         assert!(matches!(decide(&mut state, false, vec![finding("a.ts", 1), finding("b.ts", 2)]), HookReply::Block(reason) if reason.contains("b.ts:2") && !reason.contains("a.ts")));
+        assert_eq!(decide(&mut state, false, Vec::new()), HookReply::Silent);
+        assert!(matches!(decide(&mut state, false, kept()), HookReply::Block(_)), "a finding that went away and came back blocks again");
         let warning = Finding { severity: Severity::Warning, ..finding("w.ts", 3) };
         assert_eq!(decide(&mut StopState::default(), false, vec![warning]), HookReply::Silent);
 
@@ -445,6 +620,10 @@ mod tests {
         }
         assert!(matches!(decide(&mut churn, true, vec![finding("c.ts", 99)]), HookReply::Notice(_)), "the cap releases a set that keeps changing");
         assert_eq!(decide(&mut churn, false, Vec::new()), HookReply::Silent);
+
+        let many: Vec<Finding> = (1..=400).map(|line| Finding { message: "x".repeat(240), snippet: format!("export const v{line} = {line}; // {}", "p".repeat(300)), ..finding("big.ts", line) }).collect();
+        let text = report("header", &many);
+        assert!(text.len() <= CONTEXT_BUDGET && text.matches(&"x".repeat(240)).count() == 1 && text.contains(" more\n"), "{}", text.len());
     }
 
     #[test]
@@ -530,5 +709,57 @@ mod tests {
         assert!(notice["systemMessage"].as_str().unwrap().contains(&root.join("missing/lint/rules").display().to_string()), "{notice}");
         assert_eq!(hook(HookEvent::Stop), None);
         assert!(!broken.state_dir.join("s/stop.json").exists());
+
+        let bad = anyhow::anyhow!("unknown field `scopes`");
+        let reported = |event| config_error(&broken.state_dir, event, &payload("typo", &repo, Value::Null, false), &bad);
+        assert_eq!(reported(HookEvent::PreEdit), None);
+        assert!(reported(HookEvent::PostEdit).is_some_and(|notice| notice.contains("unknown field `scopes`")));
+        assert_eq!(reported(HookEvent::Stop), None, "a config error is reported once per session");
+
+        let old = broken.state_dir.join("s");
+        std::fs::File::open(&old).unwrap().set_modified(SystemTime::now() - 2 * STALE_AFTER).unwrap();
+        hook(HookEvent::Stop);
+        run(Harness::Claude, HookEvent::PreEdit, &broken, &payload("fresh", &repo, edit.clone(), false)).unwrap();
+        assert!(old.is_dir(), "pruning deleted a session that is still running");
+    }
+
+    #[test]
+    fn agents_sharing_a_file_own_only_the_lines_their_own_edits_wrote() {
+        let tmp = tempfile::tempdir().unwrap();
+        let root = std::fs::canonicalize(tmp.path()).unwrap();
+        let settings = settings(&root.join("home"), LintSection::default());
+        let repo = root.join("repo");
+        let shared = repo.join("shared.ts");
+        put(&shared, "export const base = 0;\n");
+        git(&repo, &["init", "-q"]);
+        let edit = json!({"file_path": shared});
+        let hook = |agent: Option<&str>, event, active| {
+            let input = payload("s", &repo, edit.clone(), active);
+            let input = match agent {
+                Some(agent) => subagent(agent, input),
+                None => input,
+            };
+            run(Harness::Claude, event, &settings, &input).unwrap()
+        };
+        let append = |line: &str| put(&shared, &(std::fs::read_to_string(&shared).unwrap() + line + "\n"));
+
+        hook(None, HookEvent::PreEdit, false);
+        put(&shared, "export const base = 1;\n");
+        assert_eq!(hook(None, HookEvent::PostEdit, false), None);
+        hook(Some("child"), HookEvent::PreEdit, false);
+        append("export const c = 1; // child prose");
+        assert!(hook(Some("child"), HookEvent::PostEdit, false).is_some_and(|context| context.contains("shared.ts:2:")));
+        hook(Some("x"), HookEvent::PreEdit, false);
+        append("export const x = 1;");
+        hook(Some("y"), HookEvent::PreEdit, false);
+        append("export const y = 1; // y prose");
+
+        assert_eq!(hook(Some("x"), HookEvent::Stop, false), None, "x stops although y is still writing to the same file");
+        let blocked = |agent| hook(agent, HookEvent::Stop, false).map(|reply| serde_json::from_str::<Value>(&reply).unwrap()["reason"].as_str().unwrap().to_string()).unwrap_or_default();
+        let y = blocked(Some("y"));
+        assert!(y.contains("shared.ts:4:") && !y.contains("shared.ts:2:"), "{y}");
+        let child = blocked(Some("child"));
+        assert!(child.contains("shared.ts:2:") && !child.contains("shared.ts:4:"), "{child}");
+        assert_eq!(hook(None, HookEvent::Stop, false), None, "the lead's own line is clean");
     }
 }

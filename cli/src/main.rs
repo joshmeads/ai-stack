@@ -655,9 +655,10 @@ fn cmd_lint(ctx: &Context, command: Option<LintCommand>, request: lint::Request)
     let settings = lint::settings(&ctx.config_path, &ctx.home, ctx.stack_override.as_deref());
     if let Some(LintCommand::Hook { harness, event }) = command {
         let mut input = String::new();
-        let reply = io::Read::read_to_string(&mut io::stdin(), &mut input)
-            .map_err(anyhow::Error::from)
-            .and_then(|_| lint::run_hook(harness, event, &settings?, &input));
+        let reply = io::Read::read_to_string(&mut io::stdin(), &mut input).map_err(anyhow::Error::from).and_then(|_| match settings {
+            Ok(settings) => lint::run_hook(harness, event, &settings, &input),
+            Err(error) => Ok(lint::hook_config_error(&lint::state_dir(&ctx.home), event, &input, &error)),
+        });
         match reply {
             Ok(Some(json)) => println!("{json}"),
             Ok(None) => {}

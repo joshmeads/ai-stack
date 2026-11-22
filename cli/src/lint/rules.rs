@@ -1,4 +1,5 @@
 use std::collections::BTreeMap;
+use std::ops::RangeInclusive;
 use std::path::{Path, PathBuf};
 use std::str::FromStr as _;
 
@@ -10,6 +11,7 @@ use regex::Regex;
 use serde_json::{Map, Value};
 
 use super::Severity;
+use super::owned::LineIndex;
 
 pub const COMPILED: [SupportLang; 6] = [SupportLang::TypeScript, SupportLang::Tsx, SupportLang::JavaScript, SupportLang::Rust, SupportLang::Python, SupportLang::Go];
 
@@ -29,9 +31,17 @@ pub struct Rule {
     ignores: Option<GlobSet>,
     unless_file: Option<Regex>,
     when_file: Option<Regex>,
+    allow_license_header: bool,
+    allow_in: Option<Regex>,
 }
 
 impl Rule {
+    pub fn allowed_regions(&self, source: &str, index: &LineIndex, license: Option<&RangeInclusive<u32>>) -> Vec<RangeInclusive<u32>> {
+        let license = license.filter(|_| self.allow_license_header).cloned();
+        let marked = self.allow_in.iter().flat_map(|regions| regions.find_iter(source)).map(|region| index.span(region.range()));
+        license.into_iter().chain(marked).collect()
+    }
+
     pub fn applies_to_path(&self, rel: &Path) -> bool {
         self.files.as_ref().is_none_or(|files| files.is_match(rel)) && !self.ignores.as_ref().is_some_and(|ignores| ignores.is_match(rel))
     }
@@ -98,7 +108,9 @@ pub fn parse(text: &str, source: &Path) -> Result<Vec<Rule>> {
         let metadata = doc.get("metadata").and_then(Value::as_object).cloned().unwrap_or_default();
         let unless_file = fact(&metadata, "unless_file").with_context(context)?;
         let when_file = fact(&metadata, "when_file").with_context(context)?;
-        let default_off = metadata.get("default_off").and_then(Value::as_bool).unwrap_or(false);
+        let default_off = flag(&metadata, "default_off").with_context(context)?;
+        let allow_license_header = flag(&metadata, "allow_license_header").with_context(context)?;
+        let allow_in = fact(&metadata, "allow_in").with_context(context)?;
         for language in languages {
             let mut one = doc.clone();
             one.insert("language".into(), Value::String(language.to_string()));
@@ -119,6 +131,8 @@ pub fn parse(text: &str, source: &Path) -> Result<Vec<Rule>> {
                 ignores: ignores.clone(),
                 unless_file: unless_file.clone(),
                 when_file: when_file.clone(),
+                allow_license_header,
+                allow_in: allow_in.clone(),
             });
         }
     }
@@ -169,6 +183,14 @@ fn fact(metadata: &Map<String, Value>, key: &str) -> Result<Option<Regex>> {
     }
 }
 
+fn flag(metadata: &Map<String, Value>, key: &str) -> Result<bool> {
+    match metadata.get(key) {
+        None => Ok(false),
+        Some(Value::Bool(value)) => Ok(*value),
+        Some(_) => bail!("metadata.{key} must be true or false"),
+    }
+}
+
 pub fn glob_set(patterns: &[String]) -> Result<GlobSet> {
     let mut builder = GlobSetBuilder::new();
     for pattern in patterns {
@@ -181,11 +203,9 @@ pub fn glob_set(patterns: &[String]) -> Result<GlobSet> {
 pub(crate) mod tests {
     use std::collections::BTreeSet;
 
-    use ast_grep_config::CombinedScan;
     use ast_grep_core::tree_sitter::LanguageExt as _;
 
     use super::*;
-    use crate::lint::owned::LineIndex;
 
     pub(crate) fn shipped() -> PathBuf {
         Path::new(env!("CARGO_MANIFEST_DIR")).parent().unwrap().join("lint/rules")
@@ -214,15 +234,11 @@ pub(crate) mod tests {
             let source = std::fs::read_to_string(&fixture).unwrap();
             let expected: BTreeSet<u32> = source.lines().enumerate().filter(|(_, line)| line.contains("@hit")).map(|(at, _)| at as u32 + 1).collect();
             for language in fixture_languages(&fixture) {
-                let active: Vec<&RuleConfig<SupportLang>> = rules
-                    .for_language(language)
-                    .filter(|rule| rule.key.id == id && rule.applies_to_path(Path::new(rel)) && rule.applies_to_source(&source))
-                    .map(|rule| &rule.config)
-                    .collect();
+                let active: Vec<&Rule> = rules.for_language(language).filter(|rule| rule.key.id == id && rule.applies_to_path(Path::new(rel)) && rule.applies_to_source(&source)).collect();
                 covered.insert((id.clone(), language.to_string()));
                 let root = language.ast_grep(&source);
                 let index = LineIndex::new(&source);
-                let found: BTreeSet<u32> = CombinedScan::new(active).scan(&root, false).matches.into_iter().flat_map(|(_, found)| found).map(|found| index.line(found.range().start)).collect();
+                let found: BTreeSet<u32> = crate::lint::scan::scan(&active, &root, &source, &index).into_iter().map(|(_, found)| index.line(found.range().start)).collect();
                 if found != expected {
                     failures.push(format!("{name} as {language}: expected {expected:?}, found {found:?}"));
                 }
