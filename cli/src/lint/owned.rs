@@ -40,6 +40,7 @@ impl Owned {
         self.0.is_empty()
     }
 
+    #[cfg(test)]
     pub fn ranges(&self) -> &[RangeInclusive<u32>] {
         &self.0
     }

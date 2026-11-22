@@ -25,8 +25,6 @@ pub enum HookEvent {
 }
 
 impl HookEvent {
-    pub const ALL: [HookEvent; 3] = [HookEvent::PreEdit, HookEvent::PostEdit, HookEvent::Stop];
-
     pub fn as_str(self) -> &'static str {
         match self {
             HookEvent::PreEdit => "pre-edit",

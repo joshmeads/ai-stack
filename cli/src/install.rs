@@ -3,11 +3,14 @@ use std::io;
 use std::path::{Path, PathBuf};
 
 use anyhow::{Context as _, Result, ensure};
+use clap::ValueEnum as _;
 use serde_json::Value;
 
 use crate::blocks;
 use crate::config::{Config, Harness, HarnessConfig};
+use crate::exec;
 use crate::links;
+use crate::lint::HookEvent;
 use crate::paths;
 use crate::plan::{self, Action, Plan};
 use crate::plugins::{self, Runner};
@@ -45,9 +48,7 @@ pub fn plan(cfg: &Config, opts: Options, runner: &dyn Runner) -> Result<Plan> {
         warn_if_arena_judge_skipped(cfg, hc, &mut out);
         plan_sheet(cfg, &owner, hc, opts, &folders, &mut out)?;
         plan_instructions(cfg, hc, &folders, &mut out)?;
-        if hc.harness == Harness::Claude {
-            plan_settings(cfg, hc, &folders, &mut out)?;
-        }
+        plan_hooks(cfg, hc, &folders, &mut out)?;
     }
     links::plan(cfg, &owner, &folders, &stack_file, opts, &mut out)?;
     if opts.clean {
@@ -166,25 +167,119 @@ fn remove_sheet_imports(text: &str, cfg: &Config, hc: &HarnessConfig) -> String 
     if kept.len() == text.len() { kept } else { format!("{}\n", kept.trim_end()) }
 }
 
-fn plan_settings(cfg: &Config, hc: &HarnessConfig, folders: &links::Index, out: &mut Plan) -> Result<()> {
-    let requested = hc.home.join("settings.json");
+fn hook_file(harness: Harness) -> &'static str {
+    match harness {
+        Harness::Claude => "settings.json",
+        Harness::Codex => "hooks.json",
+    }
+}
+
+fn plan_hooks(cfg: &Config, hc: &HarnessConfig, folders: &links::Index, out: &mut Plan) -> Result<()> {
+    let file = hook_file(hc.harness);
+    let requested = hc.home.join(file);
     if folders.blocks_write(&requested, out) { return Ok(()); }
     let path = paths::write_through(&requested)?;
-    let Some(text) = read_optional(&path)? else { return Ok(()) };
-    let mut root: Value = match serde_json::from_str(&text) {
-        Ok(root) => root,
-        Err(err) => {
-            out.conflicts.push(format!("{} is not valid JSON ({err}); ai-stack never rewrites a malformed settings.json, so fix it and run again", path.display()));
+    let text = read_optional(&path)?;
+    let mut root: Value = match text.as_deref().map(serde_json::from_str::<Value>) {
+        None => Value::Object(Default::default()),
+        Some(Ok(root)) if root.is_object() => root,
+        Some(Ok(_)) => {
+            out.conflicts.push(format!("{} is not a JSON object; ai-stack never rewrites a malformed {file}, so fix it and run again", path.display()));
+            return Ok(());
+        }
+        Some(Err(err)) => {
+            out.conflicts.push(format!("{} is not valid JSON ({err}); ai-stack never rewrites a malformed {file}, so fix it and run again", path.display()));
             return Ok(());
         }
     };
     let roots: Vec<&Path> = std::iter::once(cfg.stack.path.as_path()).chain(cfg.stack.legacy_paths.iter().map(PathBuf::as_path)).collect();
-    if remove_owned_hooks(&mut root, &roots) {
-        let mut text = serde_json::to_string_pretty(&root)?;
-        text.push('\n');
-        out.actions.extend(plan::write_if_changed(&path, text)?);
+    let removed = hc.harness == Harness::Claude && remove_owned_hooks(&mut root, &roots);
+    match ensure_lint_hooks(&mut root, hc.harness, &cfg.exe) {
+        Ok(added) if removed || added => {
+            let mut text = serde_json::to_string_pretty(&root)?;
+            text.push('\n');
+            out.actions.extend(plan::write_if_changed(&path, text)?);
+        }
+        Ok(_) => {}
+        Err(conflict) => out.conflicts.push(format!("{}: {conflict}; fix it and run again", path.display())),
     }
     Ok(())
+}
+
+fn lint_hooks(harness: Harness) -> [(&'static str, Option<&'static str>, HookEvent); 4] {
+    let edits = match harness {
+        Harness::Claude => "Edit|Write",
+        Harness::Codex => "apply_patch",
+    };
+    [("PreToolUse", Some(edits), HookEvent::PreEdit), ("PostToolUse", Some(edits), HookEvent::PostEdit), ("Stop", None, HookEvent::Stop), ("SubagentStop", None, HookEvent::Stop)]
+}
+
+fn lint_command(exe: &Path, harness: Harness, event: HookEvent) -> String {
+    format!("{} lint hook {} {}", exec::shell_quote(&exe.to_string_lossy()), harness.as_str(), event.as_str())
+}
+
+fn lint_hook_of(command: &str) -> Option<(Harness, HookEvent)> {
+    let words = shell_words(command)?;
+    let [program, lint, hook, harness, event] = words.as_slice() else { return None };
+    let ours = Path::new(program).file_name().is_some_and(|name| name == "ai-stack") && lint == "lint" && hook == "hook";
+    ours.then(|| Some((Harness::from_str(harness, false).ok()?, HookEvent::from_str(event, false).ok()?))).flatten()
+}
+
+fn shell_words(command: &str) -> Option<Vec<String>> {
+    let mut words = Vec::new();
+    let mut word: Option<String> = None;
+    let mut chars = command.chars();
+    while let Some(c) = chars.next() {
+        match c {
+            '\'' => {
+                let current = word.get_or_insert_with(String::new);
+                loop {
+                    match chars.next()? {
+                        '\'' => break,
+                        inner => current.push(inner),
+                    }
+                }
+            }
+            '\\' => word.get_or_insert_with(String::new).push(chars.next()?),
+            c if c.is_whitespace() => words.extend(word.take()),
+            c if "\"$`;&|<>(){}*?".contains(c) => return None,
+            c => word.get_or_insert_with(String::new).push(c),
+        }
+    }
+    words.extend(word);
+    Some(words)
+}
+
+fn ensure_lint_hooks(root: &mut Value, harness: Harness, exe: &Path) -> Result<bool, String> {
+    let hooks = root.as_object_mut().ok_or("the file is not a JSON object")?.entry("hooks").or_insert_with(|| Value::Object(Default::default()));
+    let hooks = hooks.as_object_mut().ok_or("`hooks` is not an object")?;
+    let mut changed = false;
+    for (event, matcher, lint_event) in lint_hooks(harness) {
+        let wanted = lint_command(exe, harness, lint_event);
+        let groups = hooks.entry(event).or_insert_with(|| Value::Array(Vec::new())).as_array_mut().ok_or_else(|| format!("`hooks.{event}` is not a list"))?;
+        let existing = groups
+            .iter_mut()
+            .filter_map(|group| group.get_mut("hooks").and_then(Value::as_array_mut))
+            .flatten()
+            .find(|hook| hook["command"].as_str().and_then(lint_hook_of) == Some((harness, lint_event)));
+        match existing {
+            Some(hook) if hook["command"] == wanted.as_str() => {}
+            Some(hook) => {
+                hook["command"] = Value::String(wanted);
+                changed = true;
+            }
+            None => {
+                let mut group = serde_json::Map::new();
+                if let Some(matcher) = matcher {
+                    group.insert("matcher".into(), Value::String(matcher.into()));
+                }
+                group.insert("hooks".into(), serde_json::json!([{"type": "command", "command": wanted}]));
+                groups.push(Value::Object(group));
+                changed = true;
+            }
+        }
+    }
+    Ok(changed)
 }
 
 fn remove_owned_hooks(root: &mut Value, roots: &[&Path]) -> bool {
@@ -311,6 +406,7 @@ pub(crate) mod tests {
         let mut cfg = config::test_config(config::default_config_text(), &home).unwrap();
         cfg.stack.path = stack.clone();
         cfg.stack.legacy_paths = vec![root.join("legacy")];
+        cfg.exe = root.join("bin/ai-stack");
         let runner = FakeRunner::default();
         Fixture { _tmp: tmp, root, stack, home, cfg, runner }
     }
@@ -959,6 +1055,46 @@ pub(crate) mod tests {
         let claude = f.read(".claude/CLAUDE.md");
         assert!(!claude.contains(&alias.display().to_string()), "{claude}");
         let settings: Value = serde_json::from_str(&f.read(".claude/settings.json")).unwrap();
-        assert_eq!(settings, json!({"hooks": {}}));
+        assert!(settings["hooks"].get("SessionStart").is_none(), "{settings}");
+    }
+
+    #[test]
+    fn lint_hooks_are_appended_once_repointed_in_place_and_never_move_another_hook() {
+        let mut f = fixture();
+        let foreign = |command: &str| json!({"matcher": "apply_patch", "hooks": [{"type": "command", "command": command, "timeout": 30}]});
+        let ours_moved = json!({"hooks": [{"type": "command", "command": "'/old place/ai-stack' lint hook codex stop"}]});
+        put(&f.home.join(".codex/hooks.json"), &json!({
+            "hooks": {
+                "PostToolUse": [foreign("/usr/local/bin/format-hook")],
+                "Stop": [ours_moved.clone(), foreign("my-stop-hook")],
+                "SessionStart": [foreign("ai-stack lint hook codex stop --extra")]
+            }
+        }).to_string());
+        f.apply(&f.plan());
+        let codex: Value = serde_json::from_str(&f.read(".codex/hooks.json")).unwrap();
+        let exe = f.cfg.exe.display().to_string();
+        let command = |hooks: &Value, event: &str, index: usize| hooks["hooks"][event][index]["hooks"][0]["command"].as_str().unwrap().to_string();
+        assert_eq!(codex["hooks"]["PostToolUse"][0], foreign("/usr/local/bin/format-hook"));
+        assert_eq!(command(&codex, "PostToolUse", 1), format!("{exe} lint hook codex post-edit"));
+        assert_eq!(codex["hooks"]["PostToolUse"][1]["matcher"], "apply_patch");
+        assert_eq!(command(&codex, "PreToolUse", 0), format!("{exe} lint hook codex pre-edit"));
+        assert_eq!(command(&codex, "Stop", 0), format!("{exe} lint hook codex stop"), "an entry already ours is repointed where it stands");
+        assert_eq!(codex["hooks"]["Stop"][1], foreign("my-stop-hook"));
+        assert_eq!(codex["hooks"]["Stop"].as_array().unwrap().len(), 2);
+        assert_eq!(codex["hooks"]["SessionStart"], json!([foreign("ai-stack lint hook codex stop --extra")]));
+        assert_eq!(command(&codex, "SubagentStop", 0), format!("{exe} lint hook codex stop"));
+        let claude: Value = serde_json::from_str(&f.read(".claude/settings.json")).unwrap();
+        assert_eq!(claude["hooks"]["PreToolUse"][0]["matcher"], "Edit|Write");
+        assert_eq!(command(&claude, "SubagentStop", 0), format!("{exe} lint hook claude stop"));
+        assert!(f.plan().is_empty(), "{}", f.plan().render_text(&f.home));
+
+        f.cfg.exe = f.root.join("new bin/ai-stack");
+        f.apply(&f.plan());
+        let moved: Value = serde_json::from_str(&f.read(".codex/hooks.json")).unwrap();
+        assert_eq!(command(&moved, "PostToolUse", 1), format!("'{}' lint hook codex post-edit", f.cfg.exe.display()));
+        assert_eq!(moved["hooks"]["PostToolUse"][0], codex["hooks"]["PostToolUse"][0]);
+        assert_eq!(moved["hooks"]["Stop"][1], codex["hooks"]["Stop"][1]);
+        assert_eq!(moved["hooks"]["Stop"].as_array().unwrap().len(), 2);
+        assert!(f.plan().is_empty(), "{}", f.plan().render_text(&f.home));
     }
 }

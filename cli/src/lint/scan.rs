@@ -60,7 +60,7 @@ impl Engine<'_> {
             if !policy.enabled() {
                 continue;
             }
-            let rels: Vec<String> = group.iter().map(|target| relative(target)).collect();
+            let rels: Vec<String> = group.iter().map(relative).collect();
             let generated = repo.as_ref().map(|repo| repo.generated(&rels)).unwrap_or_default();
             for (target, rel) in group.iter().zip(&rels) {
                 if generated.contains(rel) || policy.ignored(rel) {
