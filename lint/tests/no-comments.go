@@ -12,6 +12,9 @@ func helper() {}
 // Kind is exported.
 type Kind int
 
+// État is exported through a non-ASCII capital.
+type État string
+
 // T is exported.
 type T struct {
 	// Name is exported.

@@ -1,4 +1,4 @@
-use std::ops::RangeInclusive;
+use std::ops::{Range, RangeInclusive};
 use std::path::{Path, PathBuf};
 use std::sync::LazyLock;
 
@@ -144,8 +144,8 @@ impl Engine<'_> {
 }
 
 pub fn scan<'t>(rules: &[&Rule], root: &'t AstGrep<StrDoc<SupportLang>>, source: &str, index: &LineIndex, owned: &Owned) -> Vec<(usize, NodeMatch<'t, StrDoc<SupportLang>>)> {
-    let license = license_header(root, index);
-    let allowed: Vec<Vec<RangeInclusive<u32>>> = rules.iter().map(|rule| rule.allowed_regions(source, index, license.as_ref())).collect();
+    let license = license_header(root);
+    let allowed: Vec<Vec<Range<usize>>> = rules.iter().map(|rule| rule.allowed_regions(source, license.as_ref())).collect();
     let mut by_kind: Vec<Vec<usize>> = Vec::new();
     for (at, rule) in rules.iter().enumerate() {
         for kind in rule.config.matcher.potential_kinds().iter().flat_map(|kinds| kinds.iter()) {
@@ -163,8 +163,8 @@ pub fn scan<'t>(rules: &[&Rule], root: &'t AstGrep<StrDoc<SupportLang>>, source:
         }
         for &at in candidates {
             if let Some(matched) = rules[at].config.matcher.match_node(node.clone()) {
-                let span = index.span(matched.range());
-                if allowed[at].iter().any(|region| region.contains(span.start()) && region.contains(span.end())) {
+                let bytes = matched.range();
+                if allowed[at].iter().any(|region| region.start <= bytes.start && bytes.end <= region.end) {
                     continue;
                 }
                 found.push((at, matched));
@@ -174,12 +174,12 @@ pub fn scan<'t>(rules: &[&Rule], root: &'t AstGrep<StrDoc<SupportLang>>, source:
     found
 }
 
-fn license_header(root: &AstGrep<StrDoc<SupportLang>>, index: &LineIndex) -> Option<RangeInclusive<u32>> {
+fn license_header(root: &AstGrep<StrDoc<SupportLang>>) -> Option<Range<usize>> {
     static LICENSE: LazyLock<Regex> = LazyLock::new(|| Regex::new(r"Copyright|SPDX-License-Identifier|License").unwrap());
     let leading: Vec<_> = root.root().children().take_while(|node| node.kind().contains("comment")).collect();
     let licensed = leading.iter().any(|node| LICENSE.is_match(&node.text()));
     let (first, last) = (leading.first()?, leading.last()?);
-    licensed.then(|| *index.span(first.range()).start()..=*index.span(last.range()).end())
+    licensed.then(|| first.range().start..last.range().end)
 }
 
 pub fn language_of(path: &Path) -> Option<SupportLang> {

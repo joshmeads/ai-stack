@@ -1,5 +1,5 @@
 use std::collections::BTreeMap;
-use std::ops::RangeInclusive;
+use std::ops::Range;
 use std::path::{Path, PathBuf};
 use std::str::FromStr as _;
 
@@ -11,7 +11,6 @@ use regex::Regex;
 use serde_json::{Map, Value};
 
 use super::Severity;
-use super::owned::LineIndex;
 
 pub const COMPILED: [SupportLang; 6] = [SupportLang::TypeScript, SupportLang::Tsx, SupportLang::JavaScript, SupportLang::Rust, SupportLang::Python, SupportLang::Go];
 
@@ -36,9 +35,9 @@ pub struct Rule {
 }
 
 impl Rule {
-    pub fn allowed_regions(&self, source: &str, index: &LineIndex, license: Option<&RangeInclusive<u32>>) -> Vec<RangeInclusive<u32>> {
+    pub fn allowed_regions(&self, source: &str, license: Option<&Range<usize>>) -> Vec<Range<usize>> {
         let license = license.filter(|_| self.allow_license_header).cloned();
-        let marked = self.allow_in.iter().flat_map(|regions| regions.find_iter(source)).map(|region| index.span(region.range()));
+        let marked = self.allow_in.iter().flat_map(|regions| regions.find_iter(source)).map(|region| region.range());
         license.into_iter().chain(marked).collect()
     }
 
@@ -206,6 +205,7 @@ pub(crate) mod tests {
     use ast_grep_core::tree_sitter::LanguageExt as _;
 
     use super::*;
+    use crate::lint::owned::LineIndex;
 
     pub(crate) fn shipped() -> PathBuf {
         Path::new(env!("CARGO_MANIFEST_DIR")).parent().unwrap().join("lint/rules")

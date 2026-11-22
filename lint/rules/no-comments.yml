@@ -187,7 +187,7 @@ severity: error
 message: "Remove this comment; express meaning in code (names, types, structure) and rationale in the PR. Keep tool directives, license headers, PEP 723 script metadata and a single-line WARNING: or SAFETY: comment."
 metadata:
   allow_license_header: true
-  allow_in: '(?m)^# /// [a-zA-Z0-9-]+$\n(?:^#(?: .*)?$\n)*?^# ///$'
+  allow_in: '(?m)^# /// [a-zA-Z0-9-]+\r?\n(?:#(?: [^\r\n]*)?\r?\n)*?# ///\r?$'
 rule:
   kind: comment
   not:
@@ -206,7 +206,7 @@ utils:
   exported-name:
     has:
       field: name
-      regex: '^[A-Z]'
+      regex: '^\p{Lu}'
   exported-declaration:
     any:
       - kind: package_clause

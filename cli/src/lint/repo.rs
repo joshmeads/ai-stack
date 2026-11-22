@@ -63,24 +63,27 @@ impl Repo {
         Some(String::from_utf8_lossy(&out).trim().to_string())
     }
 
-    pub fn changes(&self, base: &str, wanted: &dyn Fn(&Path) -> bool) -> Result<Vec<(PathBuf, Baseline)>> {
+    pub fn changes(&self, base: &str) -> Result<Vec<(PathBuf, Baseline)>> {
         let Some(head) = self.head() else {
             if base != "HEAD" {
                 bail!("{} has no commits yet, so --base {base} cannot be resolved", self.root.display());
             }
             let all = git(&self.root, &["ls-files", "-z", "--cached", "--others", "--exclude-standard"])?;
-            return Ok(nul_paths(&all).map(|rel| self.root.join(rel)).filter(|path| wanted(path)).map(|path| (path, Baseline::Absent)).collect());
+            return Ok(nul_paths(&all).map(|rel| self.root.join(rel)).filter(|path| lintable(path)).map(|path| (path, Baseline::Absent)).collect());
         };
         let merge_base = String::from_utf8(git(&self.root, &["merge-base", base, &head])?)?.trim().to_string();
+        self.changes_from(&head, &merge_base)
+    }
+
+    fn changes_from(&self, head: &str, base: &str) -> Result<Vec<(PathBuf, Baseline)>> {
         let work = Workspace::new(self, None)?;
-        work.track_untracked(Some(&head), wanted)?;
-        work.changes(&merge_base, Submodules::Follow, wanted)
+        work.track_untracked(Some(head), &lintable)?;
+        work.changes(base, Submodules::Follow, &lintable)
     }
 
     pub fn snapshot(&self, store: &Path) -> Result<Snapshot> {
         let head = self.head();
         let work = Workspace::new(self, Some(store))?;
-        let lintable = |path: &Path| language_of(path).is_some();
         let dirty = match &head {
             Some(head) => {
                 work.track_untracked(Some(head), &lintable)?;
@@ -124,17 +127,16 @@ impl Repo {
     pub fn changes_since(&self, snapshot: &Snapshot, store: &Path) -> Result<Vec<(PathBuf, Baseline)>> {
         let work = Workspace::new(self, Some(store))?;
         let skipped: HashSet<PathBuf> = snapshot.skipped.iter().map(|rel| self.root.join(rel)).collect();
-        let wanted = |path: &Path| language_of(path).is_some() && !skipped.contains(path);
+        let wanted = |path: &Path| lintable(path) && !skipped.contains(path);
         work.track_untracked(self.head().as_deref(), &wanted)?;
         work.changes(&snapshot.tree, Submodules::Skip, &wanted)
     }
 
-    fn submodule_changes(&self, rel: &Path, recorded: &str, wanted: &dyn Fn(&Path) -> bool) -> Vec<(PathBuf, Baseline)> {
+    fn submodule_changes(&self, rel: &Path, recorded: &str) -> Vec<(PathBuf, Baseline)> {
         let dir = self.root.join(rel);
-        match Repo::discover(&dir) {
-            Some(submodule) if submodule.root == paths::resolve(&dir) => submodule.changes(recorded, wanted).unwrap_or_default(),
-            _ => Vec::new(),
-        }
+        let Some(submodule) = Repo::discover(&dir).filter(|submodule| submodule.root == paths::resolve(&dir)) else { return Vec::new() };
+        let Some(head) = submodule.head() else { return Vec::new() };
+        submodule.changes_from(&head, recorded).unwrap_or_default()
     }
 }
 
@@ -200,7 +202,7 @@ impl<'a> Workspace<'a> {
             let second = if status.starts_with(['R', 'C']) { Some(path_of(fields.next().context("git diff --raw ended early")?)) } else { None };
             if old_mode == GITLINK || new_mode == GITLINK {
                 if submodules == Submodules::Follow && old_mode == new_mode && status == "M" {
-                    changes.extend(self.repo.submodule_changes(&first, old_id, wanted));
+                    changes.extend(self.repo.submodule_changes(&first, old_id));
                 }
                 continue;
             }
@@ -231,6 +233,10 @@ impl Repos {
         let dir = file.parent().unwrap_or(file).to_path_buf();
         self.0.entry(dir).or_insert_with_key(|dir| Repo::discover(dir)).clone()
     }
+}
+
+fn lintable(path: &Path) -> bool {
+    language_of(path).is_some()
 }
 
 fn quoted(bytes: &[u8]) -> Vec<u8> {

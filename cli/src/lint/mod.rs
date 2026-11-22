@@ -127,11 +127,11 @@ pub fn run(settings: &Settings, request: Request, out: &mut dyn Write, err: &mut
     }
     let mut files: Vec<scan::Change> = Vec::new();
     for (repo, specs) in groups {
-        let wanted = |path: &Path| scan::language_of(path).is_some() && specs.iter().any(|spec| path.starts_with(spec));
-        match repo.changes(&request.base, &wanted) {
+        match repo.changes(&request.base) {
             Ok(changes) => {
                 for (path, baseline) in changes {
-                    if !files.iter().any(|known| known.path == path)
+                    if specs.iter().any(|spec| path.starts_with(spec))
+                        && !files.iter().any(|known| known.path == path)
                         && let Some(change) = scan::Change::read(path, &baseline)
                     {
                         files.push(change);
@@ -303,6 +303,10 @@ pub(crate) mod tests {
         let (code, lines) = lint(&settings, &repo, "HEAD", None);
         let (copies, lines): (Vec<_>, Vec<_>) = lines.into_iter().partition(|(name, ..)| name.starts_with("h"));
         assert!(matches!(&copies[..], [(_, 1, rule)] if rule == "test-file-names"), "one deleted file exempts only one of its copies: {copies:?}");
+        for copy in ["h1.spec.ts", "h2.spec.ts"] {
+            let alone = lint(&settings, &repo.join(copy), "HEAD", None).1;
+            assert_eq!(alone, copies.iter().filter(|(name, ..)| name == copy).cloned().collect::<Vec<_>>(), "renames pair over the whole repository before PATH narrows it");
+        }
         assert_eq!(lines, [
             found("empty.spec.ts", 1, "test-file-names"),
             found("new.spec.ts", 1, "test-file-names"),
@@ -357,6 +361,19 @@ pub(crate) mod tests {
         assert_eq!(lint_from(&settings, &repo.join("cli"), Vec::new(), "HEAD", None), both, "from a subdirectory with no PATH");
         assert_eq!(lint_from(&settings, &repo, vec![repo.join("vendorlib")], "HEAD", None), (1, vec![found("a.ts", 1, "no-comments")]));
 
+        put(&upstream.join("a.ts"), "export {}; // older prose\n");
+        git(&upstream, &["commit", "-qam", "older"]);
+        let older = String::from_utf8(Command::new("git").args(["rev-parse", "HEAD"]).current_dir(&upstream).output().unwrap().stdout).unwrap();
+        put(&upstream.join("a.ts"), "export {};\n");
+        git(&upstream, &["commit", "-qam", "newer"]);
+        let rolled = root.join("rolled");
+        std::fs::create_dir_all(&rolled).unwrap();
+        git(&rolled, &["init", "-q"]);
+        git(&rolled, &["-c", "protocol.file.allow=always", "submodule", "add", "-q", upstream.to_str().unwrap(), "lib"]);
+        git(&rolled, &["commit", "-qm", "records the newer commit"]);
+        git(&rolled.join("lib"), &["checkout", "-q", older.trim()]);
+        assert_eq!(lint(&settings, &rolled, "HEAD", None), (1, vec![found("a.ts", 1, "no-comments")]), "a submodule's baseline is the commit its parent records");
+
         let primary = root.join("primary");
         std::fs::create_dir_all(&primary).unwrap();
         git(&primary, &["init", "-q", "--separate-git-dir", root.join("store").to_str().unwrap()]);
@@ -371,6 +388,21 @@ pub(crate) mod tests {
             assert_eq!(lint(&settings, &checkout, "HEAD", None).0, 1);
             assert_eq!(lint(&off, &checkout, "HEAD", None), (0, vec![]), "a project set by its main checkout covers {}", checkout.display());
         }
+    }
+
+    #[test]
+    fn allowances_excuse_exactly_the_bytes_they_match() {
+        let tmp = tempfile::tempdir().unwrap();
+        let root = std::fs::canonicalize(tmp.path()).unwrap();
+        let home = root.join("home");
+        let rule = "id: console-local\nlanguage: TypeScript\nmessage: use the logger\nseverity: error\nmetadata:\n  allow_in: 'console.log\\(1\\)'\nrule:\n  pattern: console.log($A)\n";
+        put(&home.join(".config/ai-stack/lint/rules/console.yml"), rule);
+        let settings = settings(&home, LintSection::default());
+        let repo = root.join("repo");
+        put(&repo.join("a.ts"), "console.log(1); console.log(2);\nconsole.log(3);\n");
+        put(&repo.join("script.py"), "# /// script\r\n# requires-python = \">=3.11\"\r\n# ///\r\nprint(42)\r\n");
+        git(&repo, &["init", "-q"]);
+        assert_eq!(lint(&settings, &repo, "HEAD", None), (1, vec![found("a.ts", 1, "console-local"), found("a.ts", 2, "console-local")]));
     }
 
     #[test]
