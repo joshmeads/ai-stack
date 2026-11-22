@@ -206,12 +206,23 @@ fn plan_hooks(cfg: &Config, hc: &HarnessConfig, folders: &links::Index, out: &mu
     Ok(())
 }
 
-fn lint_hooks(harness: Harness) -> [(&'static str, Option<&'static str>, HookEvent); 4] {
+#[derive(Clone, Copy, PartialEq, Eq)]
+enum Registration {
+    Ensure,
+    RepointOnly,
+}
+
+fn lint_hooks(harness: Harness) -> [(&'static str, Option<&'static str>, HookEvent, Registration); 4] {
     let edits = match harness {
         Harness::Claude => "Edit|Write",
         Harness::Codex => "apply_patch",
     };
-    [("PreToolUse", Some(edits), HookEvent::PreEdit), ("PostToolUse", Some(edits), HookEvent::PostEdit), ("Stop", None, HookEvent::Stop), ("SubagentStop", None, HookEvent::Stop)]
+    [
+        ("PreToolUse", Some(edits), HookEvent::PreEdit, Registration::Ensure),
+        ("PostToolUse", Some(edits), HookEvent::PostEdit, Registration::Ensure),
+        ("Stop", None, HookEvent::Stop, Registration::Ensure),
+        ("SubagentStop", None, HookEvent::Stop, Registration::RepointOnly),
+    ]
 }
 
 const HOOK_FLAGS: [&str; 3] = ["--config", "--home", "--stack"];
@@ -279,8 +290,11 @@ fn ensure_lint_hooks(root: &mut Value, harness: Harness, exe: &Path, flags: &[St
     let hooks = root.as_object_mut().ok_or("the file is not a JSON object")?.entry("hooks").or_insert_with(|| Value::Object(Default::default()));
     let hooks = hooks.as_object_mut().ok_or("`hooks` is not an object")?;
     let mut changed = false;
-    for (event, matcher, lint_event) in lint_hooks(harness) {
+    for (event, matcher, lint_event, registration) in lint_hooks(harness) {
         let wanted = lint_command(exe, flags, harness, lint_event);
+        if registration == Registration::RepointOnly && !hooks.contains_key(event) {
+            continue;
+        }
         let groups = hooks.entry(event).or_insert_with(|| Value::Array(Vec::new())).as_array_mut().ok_or_else(|| format!("`hooks.{event}` is not a list"))?;
         let existing = groups
             .iter_mut()
@@ -293,6 +307,7 @@ fn ensure_lint_hooks(root: &mut Value, harness: Harness, exe: &Path, flags: &[St
                 hook["command"] = Value::String(wanted);
                 changed = true;
             }
+            None if registration == Registration::RepointOnly => {}
             None => {
                 let mut group = serde_json::Map::new();
                 if let Some(matcher) = matcher {
@@ -1092,6 +1107,7 @@ pub(crate) mod tests {
             "hooks": {
                 "PostToolUse": [foreign("/usr/local/bin/format-hook")],
                 "Stop": [ours_moved.clone(), foreign("my-stop-hook")],
+                "SubagentStop": [foreign("my-subagent-hook"), ours_moved.clone()],
                 "SessionStart": [foreign("ai-stack lint hook codex stop --extra")]
             }
         }).to_string());
@@ -1107,10 +1123,11 @@ pub(crate) mod tests {
         assert_eq!(codex["hooks"]["Stop"][1], foreign("my-stop-hook"));
         assert_eq!(codex["hooks"]["Stop"].as_array().unwrap().len(), 2);
         assert_eq!(codex["hooks"]["SessionStart"], json!([foreign("ai-stack lint hook codex stop --extra")]));
-        assert_eq!(command(&codex, "SubagentStop", 0), format!("{exe} lint hook codex stop"));
+        assert_eq!(codex["hooks"]["SubagentStop"][0], foreign("my-subagent-hook"));
+        assert_eq!(command(&codex, "SubagentStop", 1), format!("{exe} lint hook codex stop"), "an existing SubagentStop entry is repointed, never removed");
         let claude: Value = serde_json::from_str(&f.read(".claude/settings.json")).unwrap();
         assert_eq!(claude["hooks"]["PreToolUse"][0]["matcher"], "Edit|Write");
-        assert_eq!(command(&claude, "SubagentStop", 0), format!("{exe} lint hook claude stop"));
+        assert!(claude["hooks"].get("SubagentStop").is_none(), "a new install registers no SubagentStop hook");
         assert!(f.plan().is_empty(), "{}", f.plan().render_text(&f.home));
 
         f.cfg.exe = f.root.join("new bin/ai-stack");

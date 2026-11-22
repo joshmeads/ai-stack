@@ -97,7 +97,7 @@ impl Engine<'_> {
         {
             let snippet = source.lines().next().unwrap_or_default().to_string();
             let text = change.path.to_string_lossy().into_owned();
-            findings.push(Finding { file: change.path.clone(), path: shown.clone(), rule: TEST_FILE_NAMES.into(), severity, line: 1, column: 1, end_line: 1, message: message.into(), snippet, text });
+            findings.push(Finding { file: change.path.clone(), path: shown.clone(), rule: TEST_FILE_NAMES.into(), severity, line: 1, column: 1, end_line: 1, message: message.into(), snippet, text, occurrence: 0 });
         }
         let active: Vec<(&Rule, Severity)> = self
             .rules
@@ -124,6 +124,7 @@ impl Engine<'_> {
             let line_start = index.start(*span.start());
             let column = source[line_start..bytes.start].chars().count() as u32 + 1;
             let line_end = source[line_start..].find('\n').map_or(source.len(), |at| line_start + at);
+            let text = found.text().into_owned();
             findings.push(Finding {
                 file: change.path.clone(),
                 path: shown.clone(),
@@ -134,7 +135,8 @@ impl Engine<'_> {
                 end_line: *span.end(),
                 message: rule.config.get_message(&found),
                 snippet: source[line_start..line_end].trim_end_matches('\r').to_string(),
-                text: found.text().into_owned(),
+                occurrence: source[..bytes.start].matches(text.as_str()).count(),
+                text,
             });
         }
         findings

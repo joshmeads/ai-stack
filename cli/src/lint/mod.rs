@@ -67,6 +67,8 @@ pub struct Finding {
     pub snippet: String,
     #[serde(skip)]
     pub text: String,
+    #[serde(skip)]
+    pub occurrence: usize,
 }
 
 pub fn state_dir(home: &Path) -> PathBuf {
