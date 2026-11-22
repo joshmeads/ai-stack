@@ -47,16 +47,17 @@ pub struct Rules {
 }
 
 impl Rules {
-    pub fn load(dirs: &[PathBuf]) -> Result<Rules> {
+    pub fn load(shipped: &Path, local: Option<&Path>) -> Result<Rules> {
         let mut rules: Vec<Rule> = Vec::new();
         let mut owners: BTreeMap<(String, String), PathBuf> = BTreeMap::new();
-        for dir in dirs {
+        for (dir, required) in std::iter::once((shipped, true)).chain(local.map(|local| (local, false))) {
             let mut files: Vec<PathBuf> = match std::fs::read_dir(dir) {
                 Ok(entries) => entries
                     .filter_map(|entry| entry.ok().map(|entry| entry.path()))
                     .filter(|path| path.extension().is_some_and(|ext| ext == "yml" || ext == "yaml"))
                     .collect(),
-                Err(err) if err.kind() == std::io::ErrorKind::NotFound => continue,
+                Err(err) if err.kind() == std::io::ErrorKind::NotFound && !required => continue,
+                Err(err) if err.kind() == std::io::ErrorKind::NotFound => bail!("the shipped lint rules directory {} does not exist; check [stack] path or pass --stack", dir.display()),
                 Err(err) => return Err(err).with_context(|| format!("reading {}", dir.display())),
             };
             files.sort();
@@ -200,7 +201,7 @@ pub(crate) mod tests {
 
     #[test]
     fn shipped_rules_hit_exactly_the_marked_lines_of_their_fixtures_in_every_language() {
-        let rules = Rules::load(&[shipped()]).unwrap();
+        let rules = Rules::load(&shipped(), None).unwrap();
         let fixtures = shipped().parent().unwrap().join("tests");
         let mut entries: Vec<PathBuf> = std::fs::read_dir(&fixtures).unwrap().map(|entry| entry.unwrap().path()).collect();
         entries.sort();
@@ -263,13 +264,13 @@ pub(crate) mod tests {
         let dir = tempfile::tempdir().unwrap();
         let rule = "id: local\nlanguage: [TypeScript, Rust]\nseverity: warning\nmessage: m\nrule:\n  kind: identifier\n";
         std::fs::write(dir.path().join("a.yml"), rule).unwrap();
-        let rules = Rules::load(&[dir.path().to_path_buf()]).unwrap();
+        let rules = Rules::load(dir.path(), None).unwrap();
         assert_eq!(rules.rules.iter().map(|rule| rule.key.language).collect::<Vec<_>>(), [SupportLang::TypeScript, SupportLang::Rust]);
         std::fs::write(dir.path().join("b.yml"), rule.replace("[TypeScript, Rust]", "Rust")).unwrap();
-        let clash = format!("{:#}", Rules::load(&[dir.path().to_path_buf()]).err().unwrap());
+        let clash = format!("{:#}", Rules::load(dir.path(), None).err().unwrap());
         assert!(clash.contains("`local` for Rust is defined in both"), "{clash}");
         std::fs::write(dir.path().join("b.yml"), rule.replace("[TypeScript, Rust]", "Kotlin")).unwrap();
-        let missing = format!("{:#}", Rules::load(&[dir.path().to_path_buf()]).err().unwrap());
+        let missing = format!("{:#}", Rules::load(dir.path(), None).err().unwrap());
         assert!(missing.contains("rule `local`") && missing.contains("`Kotlin` is not compiled into ai-stack"), "{missing}");
     }
 }

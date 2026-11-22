@@ -1,4 +1,4 @@
-use std::collections::BTreeSet;
+use std::collections::{BTreeSet, HashMap};
 use std::io::ErrorKind;
 use std::path::{Path, PathBuf};
 use std::time::{Duration, SystemTime};
@@ -8,7 +8,6 @@ use serde::{Deserialize, Serialize};
 use serde_json::{Value, json};
 use sha2::{Digest as _, Sha256};
 
-use super::rules::Rules;
 use super::scan::{Engine, language_of};
 use super::{Baseline, Finding, Settings, Severity, text};
 use crate::config::Harness;
@@ -58,6 +57,8 @@ impl HookReply {
 struct Payload {
     session_id: String,
     #[serde(default)]
+    agent_id: Option<String>,
+    #[serde(default)]
     cwd: Option<PathBuf>,
     #[serde(default)]
     tool_input: Value,
@@ -85,16 +86,21 @@ pub fn run(harness: Harness, event: HookEvent, settings: &Settings, input: &str)
     }
     let payload: Payload = serde_json::from_str(input).context("hook payload is not the expected JSON")?;
     let cwd = payload.cwd.clone().unwrap_or_else(|| PathBuf::from("/"));
+    let agent = Agent { session: &payload.session_id, id: payload.agent_id.as_deref() };
     let reply = match event {
         HookEvent::PreEdit => {
-            let session = Session::open(&settings.state_dir, &payload.session_id)?;
-            for edit in edits(harness, &payload, &cwd) {
-                record(&session, &edit)?;
+            let edits: Vec<Edit> = edits(harness, &payload, &cwd).into_iter().filter(|edit| language_of(edit.target()).is_some() && settings.lints(edit.target())).collect();
+            if edits.is_empty() {
+                return Ok(None);
+            }
+            let session = Session::open(&settings.state_dir, agent)?;
+            for edit in &edits {
+                record(&session, edit)?;
             }
             HookReply::Silent
         }
         HookEvent::PostEdit => {
-            let Some(session) = Session::existing(&settings.state_dir, &payload.session_id) else { return Ok(None) };
+            let Some(session) = Session::existing(&settings.state_dir, agent) else { return Ok(None) };
             let files: Vec<(PathBuf, Baseline)> = edits(harness, &payload, &cwd)
                 .iter()
                 .filter_map(|edit| session.baseline(edit.target()).map(|baseline| (edit.target().to_path_buf(), baseline)))
@@ -102,29 +108,32 @@ pub fn run(harness: Harness, event: HookEvent, settings: &Settings, input: &str)
             if files.is_empty() {
                 return Ok(None);
             }
-            let mut state = session.state();
-            let reply = match Rules::load(&settings.rule_dirs) {
+            match settings.rules() {
                 Ok(rules) => post_edit_reply(&Engine { settings, rules: &rules, scope: None, display: &cwd }.lint(files)),
-                Err(error) => load_error(&mut state, &error),
-            };
-            session.save(&state)?;
-            reply
+                Err(error) => session.load_error(&error),
+            }
         }
         HookEvent::Stop => {
-            let Some(session) = Session::existing(&settings.state_dir, &payload.session_id) else { return Ok(None) };
-            let mut state = session.state();
-            let reply = match Rules::load(&settings.rule_dirs) {
+            let Some(session) = Session::existing(&settings.state_dir, agent) else { return Ok(None) };
+            match settings.rules() {
                 Ok(rules) => {
                     let findings = Engine { settings, rules: &rules, scope: None, display: &cwd }.lint(session.files());
-                    decide(&mut state, payload.stop_hook_active, findings)
+                    let mut state = session.stop_state();
+                    let reply = decide(&mut state, payload.stop_hook_active, findings);
+                    session.save_stop_state(&state)?;
+                    reply
                 }
-                Err(error) => load_error(&mut state, &error),
-            };
-            session.save(&state)?;
-            reply
+                Err(error) => session.load_error(&error),
+            }
         }
     };
     Ok(reply.render())
+}
+
+#[derive(Clone, Copy)]
+struct Agent<'a> {
+    session: &'a str,
+    id: Option<&'a str>,
 }
 
 fn post_edit_reply(findings: &[Finding]) -> HookReply {
@@ -138,28 +147,35 @@ fn post_edit_reply(findings: &[Finding]) -> HookReply {
     ))
 }
 
-fn load_error(state: &mut StopState, error: &anyhow::Error) -> HookReply {
-    if state.load_error_reported {
-        return HookReply::Silent;
-    }
-    state.load_error_reported = true;
-    HookReply::Notice(format!("ai-stack lint could not load its rules, so it is not checking this session: {error:#}"))
-}
-
 #[derive(Debug, Default, Serialize, Deserialize)]
 struct StopState {
     blocks: u32,
     last_fingerprint: BTreeSet<String>,
     acknowledged: BTreeSet<String>,
-    load_error_reported: bool,
+}
+
+fn fingerprinted(findings: Vec<Finding>) -> Vec<(String, Finding)> {
+    let mut seen: HashMap<(String, PathBuf, String), usize> = HashMap::new();
+    findings
+        .into_iter()
+        .map(|finding| {
+            let text = finding.snippet.trim().to_string();
+            let occurrence = seen.entry((finding.rule.clone(), finding.file.clone(), text.clone())).or_insert(0);
+            let fingerprint = format!("{}\u{0}{}\u{0}{text}\u{0}{occurrence}", finding.rule, finding.file.display());
+            *occurrence += 1;
+            (fingerprint, finding)
+        })
+        .collect()
 }
 
 fn decide(state: &mut StopState, active: bool, findings: Vec<Finding>) -> HookReply {
     if !active {
         state.blocks = 0;
     }
-    let blocking: Vec<Finding> = findings.into_iter().filter(|finding| finding.severity == Severity::Error && !state.acknowledged.contains(&finding.fingerprint())).collect();
-    let current: BTreeSet<String> = blocking.iter().map(Finding::fingerprint).collect();
+    let (current, blocking): (BTreeSet<String>, Vec<Finding>) = fingerprinted(findings.into_iter().filter(|finding| finding.severity == Severity::Error).collect())
+        .into_iter()
+        .filter(|(fingerprint, _)| !state.acknowledged.contains(fingerprint))
+        .unzip();
     if current.is_empty() {
         state.last_fingerprint.clear();
         return HookReply::Silent;
@@ -207,9 +223,6 @@ fn edits(harness: Harness, payload: &Payload, cwd: &Path) -> Vec<Edit> {
 
 fn record(session: &Session, edit: &Edit) -> Result<()> {
     let target = edit.target();
-    if language_of(target).is_none() {
-        return Ok(());
-    }
     let baseline = match edit {
         Edit::File(path) => current(path),
         Edit::Move { from, .. } => session.baseline(from).or_else(|| current(from)),
@@ -235,25 +248,42 @@ struct Stored {
 }
 
 struct Session {
+    root: PathBuf,
     dir: PathBuf,
 }
 
 impl Session {
-    fn open(state_dir: &Path, id: &str) -> Result<Session> {
-        std::fs::create_dir_all(state_dir).with_context(|| format!("creating {}", state_dir.display()))?;
-        let dir = state_dir.join(session_name(id));
-        match std::fs::create_dir(&dir) {
-            Ok(()) => prune(state_dir, &dir),
-            Err(err) if err.kind() == ErrorKind::AlreadyExists => {}
-            Err(err) => return Err(err).with_context(|| format!("creating {}", dir.display())),
-        }
-        std::fs::create_dir_all(dir.join("baselines"))?;
-        Ok(Session { dir })
+    fn at(state_dir: &Path, agent: Agent) -> Session {
+        let root = state_dir.join(session_name(agent.session));
+        let dir = match agent.id {
+            None => root.clone(),
+            Some(id) => root.join("agents").join(session_name(id)),
+        };
+        Session { root, dir }
     }
 
-    fn existing(state_dir: &Path, id: &str) -> Option<Session> {
-        let dir = state_dir.join(session_name(id));
-        dir.join("baselines").is_dir().then_some(Session { dir })
+    fn open(state_dir: &Path, agent: Agent) -> Result<Session> {
+        std::fs::create_dir_all(state_dir).with_context(|| format!("creating {}", state_dir.display()))?;
+        let session = Session::at(state_dir, agent);
+        match std::fs::create_dir(&session.root) {
+            Ok(()) => prune(state_dir, &session.root),
+            Err(err) if err.kind() == ErrorKind::AlreadyExists => {}
+            Err(err) => return Err(err).with_context(|| format!("creating {}", session.root.display())),
+        }
+        std::fs::create_dir_all(session.dir.join("baselines"))?;
+        Ok(session)
+    }
+
+    fn existing(state_dir: &Path, agent: Agent) -> Option<Session> {
+        let session = Session::at(state_dir, agent);
+        session.dir.join("baselines").is_dir().then_some(session)
+    }
+
+    fn load_error(&self, error: &anyhow::Error) -> HookReply {
+        match std::fs::OpenOptions::new().write(true).create_new(true).open(self.root.join("load-error-reported")) {
+            Ok(_) => HookReply::Notice(format!("ai-stack lint could not load its rules, so it is not checking this session: {error:#}")),
+            Err(_) => HookReply::Silent,
+        }
     }
 
     fn slot(&self, path: &Path) -> PathBuf {
@@ -295,11 +325,11 @@ impl Session {
         files
     }
 
-    fn state(&self) -> StopState {
+    fn stop_state(&self) -> StopState {
         std::fs::read(self.dir.join("stop.json")).ok().and_then(|bytes| serde_json::from_slice(&bytes).ok()).unwrap_or_default()
     }
 
-    fn save(&self, state: &StopState) -> Result<()> {
+    fn save_stop_state(&self, state: &StopState) -> Result<()> {
         let mut staged = tempfile::NamedTempFile::new_in(&self.dir)?;
         serde_json::to_writer(&mut staged, state)?;
         staged.persist(self.dir.join("stop.json"))?;
@@ -331,15 +361,31 @@ fn prune(state_dir: &Path, keep: &Path) {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::config::LintSection;
+    use crate::config::{LintProject, LintSection};
     use crate::lint::tests::{git, put, settings};
 
     fn payload(session: &str, cwd: &Path, tool_input: Value, active: bool) -> String {
         json!({"session_id": session, "cwd": cwd, "hook_event_name": "x", "tool_input": tool_input, "stop_hook_active": active}).to_string()
     }
 
+    fn subagent(agent: &str, payload: String) -> String {
+        let mut value: Value = serde_json::from_str(&payload).unwrap();
+        value["agent_id"] = json!(agent);
+        value.to_string()
+    }
+
     fn finding(path: &str, line: u32) -> Finding {
-        Finding { path: path.into(), rule: "no-comments".into(), severity: Severity::Error, line, column: 1, end_line: line, message: "m".into(), snippet: format!("// {line}") }
+        Finding {
+            file: Path::new("/w").join(path),
+            path: path.into(),
+            rule: "no-comments".into(),
+            severity: Severity::Error,
+            line,
+            column: 1,
+            end_line: line,
+            message: "m".into(),
+            snippet: format!("// {line}"),
+        }
     }
 
     #[test]
@@ -360,7 +406,8 @@ mod tests {
     #[test]
     fn the_first_baseline_of_a_file_wins_even_when_hooks_race() {
         let tmp = tempfile::tempdir().unwrap();
-        let session = Session::open(tmp.path(), "race").unwrap();
+        let lead = Agent { session: "race", id: None };
+        let session = Session::open(tmp.path(), lead).unwrap();
         let path = Path::new("/w/a.ts");
         std::thread::scope(|scope| {
             for writer in 0..8 {
@@ -372,7 +419,8 @@ mod tests {
         session.record(path, &Baseline::Absent).unwrap();
         assert_eq!(session.baseline(path), Some(Baseline::Text(first)));
         assert_eq!(session.files().len(), 1);
-        assert!(Session::existing(tmp.path(), "other").is_none());
+        assert!(Session::existing(tmp.path(), Agent { session: "other", id: None }).is_none());
+        assert!(Session::existing(tmp.path(), Agent { id: Some("child"), ..lead }).is_none(), "a subagent never sees the lead's baselines");
         assert_eq!(session_name("../../etc"), hex(b"../../etc"));
     }
 
@@ -383,6 +431,10 @@ mod tests {
         assert!(matches!(decide(&mut state, false, kept()), HookReply::Block(reason) if reason.contains("a.ts:1:1 error no-comments")));
         assert!(matches!(decide(&mut state, true, kept()), HookReply::Notice(message) if message.contains("a.ts:1 no-comments")));
         assert_eq!(decide(&mut state, false, kept()), HookReply::Silent, "a later turn with the same kept finding stops at once");
+        let from_elsewhere = Finding { path: "../a.ts".into(), ..finding("a.ts", 1) };
+        assert_eq!(decide(&mut state, false, vec![from_elsewhere]), HookReply::Silent, "the fingerprint does not depend on the cwd");
+        let copy = Finding { line: 5, end_line: 5, ..finding("a.ts", 1) };
+        assert!(matches!(decide(&mut state, false, vec![finding("a.ts", 1), copy]), HookReply::Block(reason) if reason.contains("a.ts:5") && !reason.contains("a.ts:1:")), "a new identical occurrence blocks");
         assert!(matches!(decide(&mut state, false, vec![finding("a.ts", 1), finding("b.ts", 2)]), HookReply::Block(reason) if reason.contains("b.ts:2") && !reason.contains("a.ts")));
         let warning = Finding { severity: Severity::Warning, ..finding("w.ts", 3) };
         assert_eq!(decide(&mut StopState::default(), false, vec![warning]), HookReply::Silent);
@@ -396,13 +448,14 @@ mod tests {
     }
 
     #[test]
-    fn hooks_blame_only_the_agents_lines_through_commits_moves_and_both_harnesses() {
+    fn hooks_blame_only_each_agents_own_lines_through_commits_moves_and_both_harnesses() {
         let tmp = tempfile::tempdir().unwrap();
         let root = std::fs::canonicalize(tmp.path()).unwrap();
         let settings = settings(&root.join("home"), LintSection::default());
         let repo = root.join("repo");
         let body: String = (1..=10).map(|n| format!("export const v{n} = {n};\n")).collect();
         put(&repo.join("foo.ts"), &body);
+        put(&repo.join("bar.ts"), "export const bar = 1;\n");
         put(&repo.join("src/old.ts"), "// legacy prose\nexport const old = 1;\n");
         git(&repo, &["init", "-q"]);
         git(&repo, &["add", "-A"]);
@@ -420,15 +473,25 @@ mod tests {
         let text = context["hookSpecificOutput"]["additionalContext"].as_str().unwrap();
         assert!(text.contains("foo.ts:2:") && !text.contains("foo.ts:8:"), "{text}");
 
+        let child_edit = json!({"file_path": repo.join("bar.ts")});
+        assert_eq!(hook(Harness::Claude, HookEvent::PreEdit, subagent("worker", payload("s1", &repo, child_edit, false))), None);
+        put(&repo.join("bar.ts"), "export const bar = 1; // child prose\n");
+        assert_eq!(hook(Harness::Claude, HookEvent::Stop, subagent("explorer", payload("s1", &repo, Value::Null, false))), None, "a read-only subagent stops at once");
+        let child: Value = serde_json::from_str(&hook(Harness::Claude, HookEvent::Stop, subagent("worker", payload("s1", &repo, Value::Null, false))).unwrap()).unwrap();
+        let reason = child["reason"].as_str().unwrap();
+        assert!(reason.contains("bar.ts:1:") && !reason.contains("foo.ts"), "{reason}");
+        assert!(hook(Harness::Claude, HookEvent::Stop, subagent("worker", payload("s1", &repo, Value::Null, true))).unwrap().contains("systemMessage"));
+
         git(&repo, &["commit", "-qam", "agent commits before stopping"]);
-        let stop = |active| hook(Harness::Claude, HookEvent::Stop, payload("s1", &repo, Value::Null, active));
-        let blocked: Value = serde_json::from_str(&stop(false).unwrap()).unwrap();
+        let stop = |active, cwd: &Path| hook(Harness::Claude, HookEvent::Stop, payload("s1", cwd, Value::Null, active));
+        let blocked: Value = serde_json::from_str(&stop(false, &repo).unwrap()).unwrap();
         let reason = blocked["reason"].as_str().unwrap();
         assert_eq!(blocked["decision"], "block");
-        assert!(reason.contains("foo.ts:2:") && !reason.contains("foo.ts:8:"), "{reason}");
-        let released: Value = serde_json::from_str(&stop(true).unwrap()).unwrap();
+        assert!(reason.contains("foo.ts:2:") && !reason.contains("foo.ts:8:") && !reason.contains("bar.ts"), "{reason}");
+        let released: Value = serde_json::from_str(&stop(true, &repo).unwrap()).unwrap();
         assert!(released["systemMessage"].as_str().unwrap().contains("foo.ts:2 no-comments"));
-        assert_eq!(stop(false), None);
+        assert_eq!(stop(false, &repo), None);
+        assert_eq!(stop(false, &repo.join("src")), None, "a cd does not revive an acknowledged finding");
 
         let patch = "*** Begin Patch\n*** Update File: src/old.ts\n*** Move to: src/new.ts\n@@\n-export const old = 1;\n+export const renamed = 1; // codex prose\n*** End Patch\n";
         let codex = |event| hook(Harness::Codex, event, payload("s2", &repo, json!({"command": patch}), false));
@@ -443,5 +506,29 @@ mod tests {
         let mut disabled = settings;
         disabled.enabled = false;
         assert_eq!(run(Harness::Codex, HookEvent::Stop, &disabled, &payload("s2", &repo, Value::Null, false)).unwrap(), None);
+    }
+
+    #[test]
+    fn a_disabled_project_stores_nothing_and_missing_rules_are_reported_once_without_touching_stop_state() {
+        let tmp = tempfile::tempdir().unwrap();
+        let root = std::fs::canonicalize(tmp.path()).unwrap();
+        let repo = root.join("repo");
+        std::fs::create_dir_all(&repo).unwrap();
+        git(&repo, &["init", "-q"]);
+        let edit = json!({"file_path": repo.join("a.ts")});
+        let off = LintProject { path: repo.to_string_lossy().into_owned(), paths: Default::default(), ignore: Vec::new(), scope: None, enabled: Some(false) };
+        let disabled = settings(&root.join("home"), LintSection { project: vec![off], ..LintSection::default() });
+        assert_eq!(run(Harness::Claude, HookEvent::PreEdit, &disabled, &payload("s", &repo, edit.clone(), false)).unwrap(), None);
+        assert!(!disabled.state_dir.exists(), "pre-edit stored state for a disabled project");
+
+        let mut broken = settings(&root.join("home"), LintSection::default());
+        broken.shipped_rules = root.join("missing/lint/rules");
+        let hook = |event| run(Harness::Claude, event, &broken, &payload("s", &repo, edit.clone(), false)).unwrap();
+        assert_eq!(hook(HookEvent::PreEdit), None);
+        put(&repo.join("a.ts"), "// prose\n");
+        let notice: Value = serde_json::from_str(&hook(HookEvent::PostEdit).unwrap()).unwrap();
+        assert!(notice["systemMessage"].as_str().unwrap().contains(&root.join("missing/lint/rules").display().to_string()), "{notice}");
+        assert_eq!(hook(HookEvent::Stop), None);
+        assert!(!broken.state_dir.join("s/stop.json").exists());
     }
 }

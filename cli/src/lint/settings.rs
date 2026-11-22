@@ -5,7 +5,7 @@ use anyhow::{Context as _, Result};
 use globset::GlobSet;
 
 use super::repo::Repo;
-use super::rules::glob_set;
+use super::rules::{Rules, glob_set};
 use super::{Level, Scope, Severity};
 use crate::config::{LintSection, Stack};
 use crate::paths;
@@ -18,7 +18,8 @@ pub struct Settings {
     severity: BTreeMap<String, Level>,
     ignore: GlobSet,
     projects: Vec<Project>,
-    pub rule_dirs: Vec<PathBuf>,
+    pub shipped_rules: PathBuf,
+    pub local_rules: PathBuf,
     pub state_dir: PathBuf,
 }
 
@@ -54,9 +55,20 @@ impl Settings {
             severity: section.severity,
             ignore: glob_set(&section.ignore).context("[lint] ignore")?,
             projects,
-            rule_dirs: vec![stack.path.join("lint/rules"), config_dir.join("lint/rules")],
+            shipped_rules: stack.path.join("lint/rules"),
+            local_rules: config_dir.join("lint/rules"),
             state_dir: home.join(".local/state/ai-stack/lint"),
         })
+    }
+
+    pub fn rules(&self) -> Result<Rules> {
+        Rules::load(&self.shipped_rules, Some(&self.local_rules))
+    }
+
+    pub fn lints(&self, file: &Path) -> bool {
+        self.enabled
+            && (self.projects.iter().all(|project| project.enabled != Some(false))
+                || self.policy(Repo::discover(file.parent().unwrap_or(file)).as_ref()).enabled())
     }
 
     pub fn policy(&self, repo: Option<&Repo>) -> Policy<'_> {

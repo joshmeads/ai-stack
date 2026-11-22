@@ -83,7 +83,7 @@ impl Engine<'_> {
             && let Some(severity) = policy.severity(TEST_FILE_NAMES, Some(Severity::Error), false)
         {
             let snippet = target.source.lines().next().unwrap_or_default().to_string();
-            findings.push(Finding { path: shown.clone(), rule: TEST_FILE_NAMES.into(), severity, line: 1, column: 1, end_line: 1, message: message.into(), snippet });
+            findings.push(Finding { file: target.path.clone(), path: shown.clone(), rule: TEST_FILE_NAMES.into(), severity, line: 1, column: 1, end_line: 1, message: message.into(), snippet });
         }
         let active: Vec<(&Rule, Severity)> = self
             .rules
@@ -114,6 +114,7 @@ impl Engine<'_> {
                 let column = target.source[line_start..bytes.start].chars().count() as u32 + 1;
                 let line_end = target.source[line_start..].find('\n').map_or(target.source.len(), |at| line_start + at);
                 findings.push(Finding {
+                    file: target.path.clone(),
                     path: shown.clone(),
                     rule: rule.key.id.clone(),
                     severity: *severity,

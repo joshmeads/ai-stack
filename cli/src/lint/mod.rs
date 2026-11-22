@@ -16,7 +16,6 @@ pub use owned::{Baseline, Owned};
 pub use settings::Settings;
 
 use repo::Repo;
-use rules::Rules;
 use scan::Engine;
 
 pub const LOAD_ERROR: i32 = 2;
@@ -56,6 +55,8 @@ pub enum Level {
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize)]
 pub struct Finding {
+    #[serde(skip)]
+    pub file: PathBuf,
     pub path: String,
     pub rule: String,
     pub severity: Severity,
@@ -64,12 +65,6 @@ pub struct Finding {
     pub end_line: u32,
     pub message: String,
     pub snippet: String,
-}
-
-impl Finding {
-    pub fn fingerprint(&self) -> String {
-        format!("{}\u{0}{}\u{0}{}", self.rule, self.path, self.snippet.trim())
-    }
 }
 
 pub fn settings(config_path: &Path, home: &Path, stack_override: Option<&Path>) -> Result<Settings> {
@@ -87,7 +82,7 @@ pub struct Request {
 }
 
 pub fn run(settings: &Settings, request: Request, out: &mut dyn Write, err: &mut dyn Write) -> Result<i32> {
-    let rules = match Rules::load(&settings.rule_dirs) {
+    let rules = match settings.rules() {
         Ok(rules) => rules,
         Err(error) => {
             writeln!(err, "error: {error:#}")?;
@@ -156,7 +151,7 @@ struct Listed {
 }
 
 pub fn list(settings: &Settings, json: bool, out: &mut dyn Write, err: &mut dyn Write) -> Result<i32> {
-    let rules = match Rules::load(&settings.rule_dirs) {
+    let rules = match settings.rules() {
         Ok(rules) => rules,
         Err(error) => {
             writeln!(err, "error: {error:#}")?;
