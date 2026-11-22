@@ -71,7 +71,7 @@ impl Repo {
             let all = git(&self.root, &["ls-files", "-z", "--cached", "--others", "--exclude-standard"])?;
             return Ok(nul_paths(&all).map(|rel| self.root.join(rel)).filter(|path| lintable(path)).map(|path| (path, Baseline::Absent)).collect());
         };
-        let merge_base = String::from_utf8(git(&self.root, &["merge-base", base, &head])?)?.trim().to_string();
+        let merge_base = String::from_utf8(git(&self.root, &["merge-base", base, "HEAD"])?)?.trim().to_string();
         self.changes_from(&head, &merge_base)
     }
 
