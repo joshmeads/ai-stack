@@ -1,4 +1,5 @@
 use std::borrow::Cow;
+use std::collections::HashSet;
 use std::ops::RangeInclusive;
 use std::sync::LazyLock;
 
@@ -49,6 +50,12 @@ impl Owned {
 
     pub fn intersects(&self, lines: RangeInclusive<u32>) -> bool {
         self.0.iter().any(|owned| owned.start() <= lines.end() && lines.start() <= owned.end())
+    }
+
+    pub fn without(&self, lines: &HashSet<u32>) -> Owned {
+        let mut kept = Owned(self.0.iter().flat_map(Clone::clone).filter(|line| !lines.contains(line)).map(|line| line..=line).collect());
+        kept.normalize();
+        kept
     }
 
     pub fn widen(&self, spans: &[RangeInclusive<u32>]) -> Owned {

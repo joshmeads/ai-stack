@@ -212,7 +212,7 @@ enum Registration {
     RepointOnly,
 }
 
-fn lint_hooks(harness: Harness) -> [(&'static str, Option<&'static str>, HookEvent, Registration); 4] {
+fn lint_hooks(harness: Harness) -> [(&'static str, Option<&'static str>, HookEvent, Registration); 5] {
     let edits = match harness {
         Harness::Claude => "Edit|Write",
         Harness::Codex => "apply_patch",
@@ -222,6 +222,7 @@ fn lint_hooks(harness: Harness) -> [(&'static str, Option<&'static str>, HookEve
         ("PostToolUse", Some(edits), HookEvent::PostEdit, Registration::Ensure),
         ("Stop", None, HookEvent::Stop, Registration::Ensure),
         ("SubagentStop", None, HookEvent::Stop, Registration::RepointOnly),
+        ("UserPromptSubmit", None, HookEvent::Prompt, Registration::Ensure),
     ]
 }
 
@@ -1108,7 +1109,8 @@ pub(crate) mod tests {
                 "PostToolUse": [foreign("/usr/local/bin/format-hook")],
                 "Stop": [ours_moved.clone(), foreign("my-stop-hook")],
                 "SubagentStop": [foreign("my-subagent-hook"), ours_moved.clone()],
-                "SessionStart": [foreign("ai-stack lint hook codex stop --extra")]
+                "SessionStart": [foreign("ai-stack lint hook codex stop --extra")],
+                "UserPromptSubmit": [foreign("my-prompt-hook")]
             }
         }).to_string());
         f.apply(&f.plan());
@@ -1125,8 +1127,13 @@ pub(crate) mod tests {
         assert_eq!(codex["hooks"]["SessionStart"], json!([foreign("ai-stack lint hook codex stop --extra")]));
         assert_eq!(codex["hooks"]["SubagentStop"][0], foreign("my-subagent-hook"));
         assert_eq!(command(&codex, "SubagentStop", 1), format!("{exe} lint hook codex stop"), "an existing SubagentStop entry is repointed, never removed");
+        assert_eq!(codex["hooks"]["UserPromptSubmit"][0], foreign("my-prompt-hook"));
+        assert_eq!(command(&codex, "UserPromptSubmit", 1), format!("{exe} lint hook codex prompt"));
+        assert!(codex["hooks"]["UserPromptSubmit"][1].get("matcher").is_none());
         let claude: Value = serde_json::from_str(&f.read(".claude/settings.json")).unwrap();
         assert_eq!(claude["hooks"]["PreToolUse"][0]["matcher"], "Edit|Write");
+        assert_eq!(command(&claude, "UserPromptSubmit", 0), format!("{exe} lint hook claude prompt"));
+        assert_eq!(claude["hooks"].as_object().unwrap().keys().next_back().unwrap(), "UserPromptSubmit", "new events are appended after existing ones");
         assert!(claude["hooks"].get("SubagentStop").is_none(), "a new install registers no SubagentStop hook");
         assert!(f.plan().is_empty(), "{}", f.plan().render_text(&f.home));
 

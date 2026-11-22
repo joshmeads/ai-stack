@@ -1,4 +1,4 @@
-use std::collections::BTreeSet;
+use std::collections::{BTreeSet, HashSet};
 use std::io::ErrorKind;
 use std::os::unix::ffi::OsStrExt as _;
 use std::path::{Path, PathBuf};
@@ -11,18 +11,20 @@ use sha2::{Digest as _, Sha256};
 
 use super::repo::{Repo, Repos, Snapshot, nul_joined, nul_paths, path_of};
 use super::scan::{Change, Engine, language_of};
-use super::{Baseline, Finding, Settings, Severity};
+use super::{Finding, Settings, Severity};
 use crate::config::Harness;
 use crate::paths;
 
 const MAX_BLOCKS: u32 = 3;
 const STALE_AFTER: Duration = Duration::from_secs(14 * 24 * 60 * 60);
+const AGENT_TASKS: [&str; 3] = ["subagent", "teammate", "workflow"];
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, clap::ValueEnum)]
 pub enum HookEvent {
     PreEdit,
     PostEdit,
     Stop,
+    Prompt,
 }
 
 impl HookEvent {
@@ -31,6 +33,7 @@ impl HookEvent {
             HookEvent::PreEdit => "pre-edit",
             HookEvent::PostEdit => "post-edit",
             HookEvent::Stop => "stop",
+            HookEvent::Prompt => "prompt",
         }
     }
 }
@@ -44,13 +47,20 @@ enum HookReply {
 }
 
 impl HookReply {
-    fn render(self) -> Option<String> {
-        let value = match self {
-            HookReply::Silent => return None,
+    fn render(self, mut notes: Vec<String>) -> Option<String> {
+        let mut value = match self {
+            HookReply::Silent if notes.is_empty() => return None,
+            HookReply::Silent => json!({}),
             HookReply::Context(text) => json!({"hookSpecificOutput": {"hookEventName": "PostToolUse", "additionalContext": text}}),
             HookReply::Block(reason) => json!({"decision": "block", "reason": reason}),
-            HookReply::Notice(message) => json!({"systemMessage": message}),
+            HookReply::Notice(message) => {
+                notes.insert(0, message);
+                json!({})
+            }
         };
+        if !notes.is_empty() {
+            value["systemMessage"] = json!(notes.join("\n"));
+        }
         Some(value.to_string())
     }
 }
@@ -61,6 +71,8 @@ struct Payload {
     #[serde(default)]
     agent_id: Option<String>,
     #[serde(default)]
+    turn_id: Option<String>,
+    #[serde(default)]
     hook_event_name: Option<String>,
     #[serde(default)]
     cwd: Option<PathBuf>,
@@ -68,15 +80,31 @@ struct Payload {
     tool_input: Value,
     #[serde(default)]
     stop_hook_active: bool,
+    #[serde(default)]
+    background_tasks: Option<Vec<BackgroundTask>>,
+}
+
+#[derive(Deserialize)]
+struct BackgroundTask {
+    #[serde(default, rename = "type")]
+    kind: String,
 }
 
 impl Payload {
     fn is_subagent(&self) -> bool {
         self.agent_id.is_some() || self.hook_event_name.as_deref() == Some("SubagentStop")
     }
+
+    fn waits_on_agents(&self) -> bool {
+        self.background_tasks.iter().flatten().any(|task| AGENT_TASKS.contains(&task.kind.as_str()))
+    }
 }
 
 pub fn run(harness: Harness, event: HookEvent, settings: &Settings, input: &str) -> Result<Option<String>> {
+    if event == HookEvent::Prompt {
+        close_prompted_turn(&settings.state_dir, input);
+        return Ok(None);
+    }
     if !settings.enabled {
         return Ok(None);
     }
@@ -87,16 +115,22 @@ pub fn run(harness: Harness, event: HookEvent, settings: &Settings, input: &str)
     let cwd = payload.cwd.clone().unwrap_or_else(|| PathBuf::from("/"));
     let session = Session::at(&settings.state_dir, &payload.session_id);
     session.keep_alive();
+    let turn_id = payload.turn_id.as_deref().filter(|_| payload.agent_id.is_none());
     let lint = |changes| settings.rules().map(|rules| Engine { settings, rules: &rules, scope: None, display: &cwd }.lint(changes));
+    let mut notes = Vec::new();
     let reply = match event {
+        HookEvent::Prompt => HookReply::Silent,
         HookEvent::PreEdit => {
             let edited = by_repo(settings, edited(harness, &payload, &cwd));
             if edited.is_empty() {
                 return Ok(None);
             }
             let session = Session::open(&settings.state_dir, &payload.session_id)?;
+            session.enter_turn(turn_id);
             for (repo, _) in &edited {
-                session.baseline(repo)?;
+                if let Err(error) = session.baseline(repo) {
+                    notes.extend(session.repo_error(repo, &error));
+                }
             }
             HookReply::Silent
         }
@@ -106,38 +140,44 @@ pub fn run(harness: Harness, event: HookEvent, settings: &Settings, input: &str)
                 return Ok(None);
             }
             let session = Session::open(&settings.state_dir, &payload.session_id)?;
+            session.enter_turn(turn_id);
             let mut changes = Vec::new();
             for (repo, files) in &edited {
-                let since = session.baseline(repo)?.changes(repo)?;
-                changes.extend(since.into_iter().filter(|(path, _)| files.contains(path)).filter_map(|(path, baseline)| Change::read(path, &baseline)));
+                let only: HashSet<PathBuf> = files.iter().filter(|file| language_of(file).is_some()).cloned().collect();
+                let checked = session.baseline(repo).and_then(|turn| if only.is_empty() { Ok(Vec::new()) } else { turn.changes(repo, Some(&only)) });
+                match checked {
+                    Ok(found) => changes.extend(found),
+                    Err(error) => notes.extend(session.repo_error(repo, &error)),
+                }
             }
             if changes.is_empty() {
-                return Ok(None);
-            }
-            match lint(changes) {
-                Ok(findings) => post_edit_reply(&findings),
-                Err(error) => session.load_error(&error),
+                HookReply::Silent
+            } else {
+                match lint(changes) {
+                    Ok(findings) => post_edit_reply(&findings),
+                    Err(error) => session.load_error(&error),
+                }
             }
         }
         HookEvent::Stop => {
+            session.enter_turn(turn_id);
             let turns = session.turns();
             if turns.is_empty() && !session.root.join(STOP_STATE).exists() {
                 return Ok(None);
             }
-            let reply = stop(&session, &turns, payload.stop_hook_active, lint);
-            if !matches!(reply, Ok(HookReply::Block(_))) {
-                session.close_turn();
-            }
-            reply?
+            stop(&session, &turns, &payload, &mut notes, lint)?
         }
     };
-    Ok(reply.render())
+    Ok(reply.render(notes))
 }
 
-fn stop(session: &Session, turns: &[(Repo, Turn)], active: bool, lint: impl FnOnce(Vec<Change>) -> Result<Vec<Finding>>) -> Result<HookReply> {
+fn stop(session: &Session, turns: &[(Repo, Turn)], payload: &Payload, notes: &mut Vec<String>, lint: impl FnOnce(Vec<Change>) -> Result<Vec<Finding>>) -> Result<HookReply> {
     let mut changes = Vec::new();
     for (repo, turn) in turns {
-        changes.extend(turn.changes(repo)?.into_iter().filter_map(|(path, baseline)| Change::read(path, &baseline)));
+        match turn.changes(repo, None) {
+            Ok(found) => changes.extend(found),
+            Err(error) => notes.extend(session.repo_error(repo, &error)),
+        }
     }
     let findings = if changes.is_empty() {
         Vec::new()
@@ -147,21 +187,41 @@ fn stop(session: &Session, turns: &[(Repo, Turn)], active: bool, lint: impl FnOn
             Err(error) => return Ok(session.load_error(&error)),
         }
     };
+    if payload.waits_on_agents() {
+        let errors: Vec<Finding> = findings.into_iter().filter(|finding| finding.severity == Severity::Error).collect();
+        if errors.is_empty() {
+            return Ok(HookReply::Silent);
+        }
+        return Ok(HookReply::Notice(report("ai-stack lint did not block this stop because background agents are still running. Errors so far in lines changed this turn:", &errors)));
+    }
     let mut state = session.stop_state();
-    let reply = decide(&mut state, active, findings);
+    let reply = decide(&mut state, payload.stop_hook_active, findings);
     session.save_stop_state(&state)?;
     Ok(reply)
 }
 
 pub fn config_error(state_dir: &Path, event: HookEvent, input: &str, error: &anyhow::Error) -> Option<String> {
-    if event == HookEvent::PreEdit {
-        return None;
+    match event {
+        HookEvent::Prompt => {
+            close_prompted_turn(state_dir, input);
+            return None;
+        }
+        HookEvent::PreEdit => return None,
+        HookEvent::PostEdit | HookEvent::Stop => {}
     }
     let payload: Payload = serde_json::from_str(input).ok()?;
     let session = Session::at(state_dir, &payload.session_id);
     std::fs::create_dir_all(&session.root).ok()?;
     std::fs::OpenOptions::new().write(true).create_new(true).open(session.root.join("config-error-reported")).ok()?;
-    HookReply::Notice(format!("ai-stack lint is not checking this session because its config could not be read: {}", format!("{error:#}").trim_end())).render()
+    HookReply::Notice(format!("ai-stack lint is not checking this session because its config could not be read: {}", format!("{error:#}").trim_end())).render(Vec::new())
+}
+
+fn close_prompted_turn(state_dir: &Path, input: &str) {
+    if let Ok(payload) = serde_json::from_str::<Payload>(input)
+        && payload.agent_id.is_none()
+    {
+        Session::at(state_dir, &payload.session_id).close_turn();
+    }
 }
 
 const CONTEXT_BUDGET: usize = 9_000;
@@ -228,7 +288,7 @@ fn decide(state: &mut StopState, active: bool, findings: Vec<Finding>) -> HookRe
         state.blocks = 0;
         let named: Vec<String> = blocking.iter().map(|finding| format!("{}:{} {}", finding.path, finding.line, finding.rule)).collect();
         return HookReply::Notice(format!(
-            "ai-stack lint let the agent stop with {} unresolved error(s) it was asked to fix; they will not block again this session: {}",
+            "ai-stack lint let the agent stop with {} unresolved error(s) it was asked to fix; they will not block again this turn: {}",
             blocking.len(),
             named.join(", ")
         ));
@@ -253,7 +313,7 @@ fn edited(harness: Harness, payload: &Payload, cwd: &Path) -> Vec<PathBuf> {
 fn by_repo(settings: &Settings, files: Vec<PathBuf>) -> Vec<(Repo, Vec<PathBuf>)> {
     let mut repos = Repos::default();
     let mut grouped: Vec<(Repo, Vec<PathBuf>)> = Vec::new();
-    for file in files.into_iter().filter(|file| language_of(file).is_some() && settings.lints(file)) {
+    for file in files.into_iter().filter(|file| settings.lints(file)) {
         let Some(repo) = repos.of(&file) else { continue };
         let Some(rel) = repo.relative(&file) else { continue };
         let file = repo.root.join(rel);
@@ -266,6 +326,7 @@ fn by_repo(settings: &Settings, files: Vec<PathBuf>) -> Vec<(Repo, Vec<PathBuf>)
 }
 
 const STOP_STATE: &str = "stop.json";
+const TURN_ID: &str = "turn-id";
 
 struct Turn {
     dir: PathBuf,
@@ -274,13 +335,34 @@ struct Turn {
 
 impl Turn {
     fn load(dir: &Path) -> Option<Turn> {
-        let tree = String::from_utf8(std::fs::read(dir.join("tree")).ok()?).ok()?;
+        let read = |name: &str| String::from_utf8(std::fs::read(dir.join(name)).ok()?).ok();
+        let tree = read("tree")?;
+        let head = read("head")?;
+        let taken = read("taken")?.parse().ok()?;
         let skipped = nul_paths(&std::fs::read(dir.join("skipped")).ok()?).collect();
-        Some(Turn { dir: dir.to_path_buf(), snapshot: Snapshot { tree, skipped } })
+        Some(Turn { dir: dir.to_path_buf(), snapshot: Snapshot { tree, skipped, head: (!head.is_empty()).then_some(head), taken } })
     }
 
-    fn changes(&self, repo: &Repo) -> Result<Vec<(PathBuf, Baseline)>> {
-        repo.changes_since(&self.snapshot, &self.dir.join("objects"))
+    fn changes(&self, repo: &Repo, only: Option<&HashSet<PathBuf>>) -> Result<Vec<Change>> {
+        let head = repo.head();
+        let since = repo.changes_since(&self.snapshot, &self.dir.join("objects"), head.as_deref(), only)?;
+        let moved = head != self.snapshot.head;
+        let mut changes = Vec::new();
+        for (path, baseline) in &since.changes {
+            let Some(mut change) = Change::read(path.clone(), baseline) else { continue };
+            if moved && !change.owned.is_empty() {
+                let older = since.committed_by(&change.path, self.snapshot.taken);
+                if !older.is_empty() {
+                    change.owned = change.owned.without(&older);
+                    change.created = false;
+                    if change.owned.is_empty() {
+                        continue;
+                    }
+                }
+            }
+            changes.push(change);
+        }
+        Ok(changes)
     }
 }
 
@@ -317,8 +399,26 @@ impl Session {
         }
     }
 
+    fn repo_error(&self, repo: &Repo, error: &anyhow::Error) -> Option<String> {
+        std::fs::create_dir_all(self.turn_dir()).ok()?;
+        let marker = self.turn_dir().join(format!(".error-{}", hex(repo.root.as_os_str().as_bytes())));
+        std::fs::OpenOptions::new().write(true).create_new(true).open(marker).ok()?;
+        Some(format!("ai-stack lint could not check {}: {error:#}", repo.root.display()))
+    }
+
     fn turn_dir(&self) -> PathBuf {
         self.root.join("turn")
+    }
+
+    fn enter_turn(&self, id: Option<&str>) {
+        let Some(id) = id else { return };
+        let marker = self.root.join(TURN_ID);
+        match std::fs::read(&marker) {
+            Ok(known) if known == id.as_bytes() => return,
+            Ok(_) => self.close_turn(),
+            Err(_) => {}
+        }
+        let _ = std::fs::write(&marker, id);
     }
 
     fn baseline(&self, repo: &Repo) -> Result<Turn> {
@@ -331,6 +431,8 @@ impl Session {
         let snapshot = repo.snapshot(&staged.path().join("objects"))?;
         std::fs::write(staged.path().join("root"), repo.root.as_os_str().as_bytes())?;
         std::fs::write(staged.path().join("skipped"), nul_joined(&snapshot.skipped))?;
+        std::fs::write(staged.path().join("head"), snapshot.head.as_deref().unwrap_or_default())?;
+        std::fs::write(staged.path().join("taken"), snapshot.taken.to_string())?;
         std::fs::write(staged.path().join("tree"), &snapshot.tree)?;
         if std::fs::rename(staged.path(), &dir).is_ok() {
             let _ = staged.keep();
@@ -355,6 +457,8 @@ impl Session {
 
     fn close_turn(&self) {
         let _ = std::fs::remove_dir_all(self.turn_dir());
+        let _ = std::fs::remove_file(self.root.join(STOP_STATE));
+        let _ = std::fs::remove_file(self.root.join(TURN_ID));
     }
 
     fn stop_state(&self) -> StopState {
@@ -394,16 +498,16 @@ fn prune(state_dir: &Path, keep: &Path) {
 mod tests {
     use super::*;
     use crate::config::{LintProject, LintSection};
-    use crate::lint::tests::{git, put, settings};
+    use crate::lint::tests::{git, git_dated, put, settings};
 
     fn payload(session: &str, cwd: &Path, tool_input: Value, active: bool) -> String {
         json!({"session_id": session, "cwd": cwd, "hook_event_name": "x", "tool_input": tool_input, "stop_hook_active": active}).to_string()
     }
 
-    fn subagent(agent: &str, payload: String) -> String {
-        let mut value: Value = serde_json::from_str(&payload).unwrap();
-        value["agent_id"] = json!(agent);
-        value.to_string()
+    fn with(payload: String, field: &str, value: Value) -> String {
+        let mut parsed: Value = serde_json::from_str(&payload).unwrap();
+        parsed[field] = value;
+        parsed.to_string()
     }
 
     fn finding(path: &str, line: u32) -> Finding {
@@ -420,6 +524,12 @@ mod tests {
             text: format!("/**\n * {line}\n */"),
             occurrence: 0,
         }
+    }
+
+    fn blocked_at(reply: Option<String>) -> Vec<String> {
+        let reply: Value = serde_json::from_str(&reply.expect("the stop blocked")).unwrap();
+        assert_eq!(reply["decision"], "block", "{reply}");
+        reply["reason"].as_str().unwrap().lines().filter(|line| line.contains(" error ")).map(String::from).collect()
     }
 
     #[test]
@@ -439,7 +549,7 @@ mod tests {
         let kept = || vec![finding("a.ts", 1)];
         assert!(matches!(decide(&mut state, false, kept()), HookReply::Block(reason) if reason.contains("a.ts:1:1 error no-comments")));
         assert!(matches!(decide(&mut state, true, kept()), HookReply::Notice(message) if message.contains("a.ts:1 no-comments")));
-        assert_eq!(decide(&mut state, false, kept()), HookReply::Silent, "a later turn with the same kept finding stops at once");
+        assert_eq!(decide(&mut state, false, kept()), HookReply::Silent, "a later stop in the turn with the same kept finding stops at once");
         let from_elsewhere = Finding { path: "../a.ts".into(), ..finding("a.ts", 1) };
         assert_eq!(decide(&mut state, false, vec![from_elsewhere]), HookReply::Silent, "the fingerprint does not depend on the cwd");
         let moved = Finding { line: 9, end_line: 11, ..finding("a.ts", 1) };
@@ -468,7 +578,7 @@ mod tests {
     }
 
     #[test]
-    fn a_turn_owns_what_changed_since_its_first_edit_through_formatters_renames_commits_failed_edits_and_subagents() {
+    fn a_turn_runs_from_one_prompt_to_the_next_and_owns_what_changed_since_its_first_edit() {
         let tmp = tempfile::tempdir().unwrap();
         let root = std::fs::canonicalize(tmp.path()).unwrap();
         let settings = settings(&root.join("home"), LintSection::default());
@@ -480,57 +590,94 @@ mod tests {
         git(&repo, &["init", "-q"]);
         git(&repo, &["add", "-A"]);
         git(&repo, &["commit", "-qm", "base"]);
+        git(&repo, &["switch", "-qc", "teammate"]);
+        put(&repo.join("team.ts"), "// a teammate's prose\nexport const team = 1;\n");
+        git(&repo, &["add", "team.ts"]);
+        git_dated(&repo, "2020-01-01T00:00:00Z", &["commit", "-qm", "pushed before the turn began"]);
+        git(&repo, &["switch", "-q", "main"]);
         let human = body.replace("export const v8 = 8;\n", "export const v8 = 8; // human prose\n");
         put(&repo.join("foo.ts"), &human);
         git(&repo, &["add", "foo.ts"]);
+        put(&repo.join("notes.txt"), "# notes from before the turn\n");
 
         let hook = |harness, event, input: String| run(harness, event, &settings, &input).unwrap();
         let edit = |event, file: &str| hook(Harness::Claude, event, payload("s", &repo, json!({"file_path": repo.join(file)}), false));
         let stop = |input: String| hook(Harness::Claude, HookEvent::Stop, input);
         let lead_stop = |active| stop(payload("s", &repo, Value::Null, active));
+        let prompt = || hook(Harness::Claude, HookEvent::Prompt, payload("s", &repo, Value::Null, false));
 
-        assert_eq!(edit(HookEvent::PreEdit, "foo.ts"), None);
+        assert_eq!(edit(HookEvent::PreEdit, "README.md"), None, "an edit of any file records the baseline");
+        put(&repo.join("README.md"), "# readme\n");
         put(&repo.join("foo.ts"), &human.replace("export const v2 = 2;\n", "export const v2 = [1, 2].map((n) => n * 2).length; // agent prose\n"));
+        assert_eq!(edit(HookEvent::PreEdit, "foo.ts"), None);
         let context = edit(HookEvent::PostEdit, "foo.ts").unwrap();
         assert!(context.contains("PostToolUse") && context.contains("foo.ts:2:") && !context.contains("foo.ts:8:"), "{context}");
 
-        let child_edit = |event| hook(Harness::Claude, event, subagent("worker", payload("s", &repo, json!({"file_path": repo.join("bar.ts")}), false)));
+        let child_edit = |event| hook(Harness::Claude, event, with(payload("s", &repo, json!({"file_path": repo.join("bar.ts")}), false), "agent_id", json!("worker")));
         assert_eq!(child_edit(HookEvent::PreEdit), None);
         put(&repo.join("bar.ts"), "export const bar = 1; // child prose\n");
         assert!(child_edit(HookEvent::PostEdit).is_some_and(|context| context.contains("bar.ts:1:")));
-        assert_eq!(stop(subagent("worker", payload("s", &repo, Value::Null, false))), None, "a subagent's stop is silent");
-        let mut named_only: Value = serde_json::from_str(&payload("s", &repo, Value::Null, false)).unwrap();
-        named_only["hook_event_name"] = json!("SubagentStop");
-        assert_eq!(stop(named_only.to_string()), None);
+        assert_eq!(stop(with(payload("s", &repo, Value::Null, false), "agent_id", json!("worker"))), None, "a subagent's stop is silent");
+        assert_eq!(stop(with(payload("s", &repo, Value::Null, false), "hook_event_name", json!("SubagentStop"))), None);
+        let waiting = stop(with(payload("s", &repo, Value::Null, false), "background_tasks", json!([{"id": "t", "type": "subagent", "status": "running"}]))).unwrap();
+        assert!(waiting.contains("systemMessage") && waiting.contains("bar.ts:1:") && !waiting.contains("decision"), "a stop while a background agent runs reports and does not block: {waiting}");
 
-        let failed_move = "*** Begin Patch\n*** Update File: src/old.ts\n*** Move to: src/new.ts\n@@\n-export const gone = 1;\n+export const moved = 1;\n*** End Patch\n";
-        assert_eq!(hook(Harness::Codex, HookEvent::PreEdit, payload("s", &repo, json!({"command": failed_move}), false)), None);
-
-        edit(HookEvent::PreEdit, "helper.spec.ts");
-        put(&repo.join("helper.spec.ts"), "export const helper = 1; // helper prose\n");
-        assert!(edit(HookEvent::PostEdit, "helper.spec.ts").is_some_and(|context| context.contains("test-file-names")));
-        std::fs::rename(repo.join("helper.spec.ts"), repo.join("helper.test.ts")).unwrap();
+        std::fs::rename(repo.join("notes.txt"), repo.join("helper.spec.ts")).unwrap();
         put(&repo.join("foo.ts"), &human.replace("export const v2 = 2;\n", "export const v2 = [1, 2]\n  .map((n) => n * 2)\n  .length; // agent prose\n"));
-        git(&repo, &["commit", "-qam", "the agent commits"]);
+        git_dated(&repo, "2090-01-01T00:00:00Z", &["commit", "-qam", "the agent commits"]);
+        git(&repo, &["merge", "-q", "--no-edit", "teammate"]);
 
-        let blocked: Value = serde_json::from_str(&lead_stop(false).unwrap()).unwrap();
-        let reason = blocked["reason"].as_str().unwrap();
-        assert_eq!(blocked["decision"], "block");
-        let located: Vec<&str> = reason.lines().filter(|line| line.contains(" error ")).collect();
-        assert_eq!(located, ["bar.ts:1:23 error no-comments", "foo.ts:4:12 error no-comments", "helper.test.ts:1:26 error no-comments"], "{reason}");
+        assert_eq!(blocked_at(lead_stop(false)), ["bar.ts:1:23 error no-comments", "foo.ts:4:12 error no-comments"], "a merged commit from before the turn and a renamed file from before it are not owned");
         assert!(lead_stop(true).unwrap().contains("systemMessage"), "the loop guard releases an unchanged set");
+        put(&repo.join("bar.ts"), "export const bar = 2; // more prose in the same turn\n");
+        assert_eq!(blocked_at(lead_stop(false)), ["bar.ts:1:23 error no-comments"], "a released stop does not end the turn");
 
+        assert_eq!(prompt(), None);
         put(&repo.join("foo.ts"), &(std::fs::read_to_string(repo.join("foo.ts")).unwrap() + "// human between turns\n"));
-        assert_eq!(lead_stop(false), None, "a human's edit between turns is not the agent's");
+        assert_eq!(lead_stop(false), None, "a human's edit before the next prompt is not the agent's");
         assert_eq!(edit(HookEvent::PreEdit, "foo.ts"), None);
         let current = std::fs::read_to_string(repo.join("foo.ts")).unwrap();
         put(&repo.join("foo.ts"), &current.replace("export const v1 = 1;", "export const v1 = 100;"));
-        assert_eq!(edit(HookEvent::PostEdit, "foo.ts"), None);
-        assert_eq!(lead_stop(false), None, "the next turn's baseline holds every earlier line");
+        assert_eq!(edit(HookEvent::PostEdit, "foo.ts"), None, "the interrupted turn ends with no stop");
+        assert_eq!(prompt(), None);
+        put(&repo.join("src/old.ts"), "// legacy prose\nexport const old = 1; // human prose after an interrupted turn\n");
+        assert_eq!(lead_stop(false), None, "a turn with no edit owns nothing");
+
+        let codex = |event, turn: &str| hook(Harness::Codex, event, with(payload("c", &repo, json!({"command": "*** Begin Patch\n*** Update File: bar.ts\n@@\n*** End Patch\n"}), false), "turn_id", json!(turn)));
+        assert_eq!(codex(HookEvent::PreEdit, "t1"), None);
+        put(&repo.join("bar.ts"), "export const bar = 3; // the human again\n");
+        assert_eq!(codex(HookEvent::PreEdit, "t2"), None, "a new Codex turn id starts a new turn without a prompt hook");
+        assert_eq!(codex(HookEvent::Stop, "t2"), None);
     }
 
     #[test]
-    fn a_disabled_project_stores_nothing_and_missing_rules_are_reported_once_and_close_the_turn() {
+    fn one_repository_that_cannot_be_read_never_hides_another_ones_findings() {
+        let tmp = tempfile::tempdir().unwrap();
+        let root = std::fs::canonicalize(tmp.path()).unwrap();
+        let settings = settings(&root.join("home"), LintSection::default());
+        let [first, second] = ["first", "second"].map(|name| root.join(name));
+        for repo in [&first, &second] {
+            put(&repo.join("a.ts"), "export const a = 1;\n");
+            git(repo, &["init", "-q"]);
+            git(repo, &["add", "-A"]);
+            git(repo, &["commit", "-qm", "base"]);
+        }
+        let hook = |event, file: &Path| run(Harness::Claude, event, &settings, &payload("s", &first, json!({"file_path": file}), false)).unwrap();
+        for repo in [&first, &second] {
+            assert_eq!(hook(HookEvent::PreEdit, &repo.join("a.ts")), None);
+            put(&repo.join("a.ts"), "export const a = 2; // agent prose\n");
+        }
+        let broken = settings.state_dir.join("s/turn").join(hex(second.as_os_str().as_bytes()));
+        std::fs::write(broken.join("tree"), "0123456789abcdef0123456789abcdef01234567").unwrap();
+        let reply: Value = serde_json::from_str(&hook(HookEvent::Stop, &first).unwrap()).unwrap();
+        assert_eq!(reply["decision"], "block");
+        assert!(reply["reason"].as_str().unwrap().contains("a.ts:1:21"), "{reply}");
+        assert!(reply["systemMessage"].as_str().unwrap().contains(&second.display().to_string()), "{reply}");
+        assert!(!hook(HookEvent::Stop, &first).unwrap().contains("systemMessage"), "a failing repository is reported once a turn");
+    }
+
+    #[test]
+    fn a_disabled_project_stores_nothing_and_missing_rules_are_reported_once() {
         let tmp = tempfile::tempdir().unwrap();
         let root = std::fs::canonicalize(tmp.path()).unwrap();
         let repo = root.join("repo");
@@ -550,7 +697,10 @@ mod tests {
         let notice: Value = serde_json::from_str(&hook(HookEvent::PostEdit).unwrap()).unwrap();
         assert!(notice["systemMessage"].as_str().unwrap().contains(&root.join("missing/lint/rules").display().to_string()), "{notice}");
         assert_eq!(hook(HookEvent::Stop), None);
-        assert!(!broken.state_dir.join("s/turn").exists() && !broken.state_dir.join("s").join(STOP_STATE).exists());
+        let mut all_off = settings(&root.join("home"), LintSection::default());
+        all_off.enabled = false;
+        assert_eq!(run(Harness::Claude, HookEvent::Prompt, &all_off, &payload("s", &repo, Value::Null, false)).unwrap(), None);
+        assert!(!broken.state_dir.join("s/turn").exists(), "a prompt ends the turn even with lint disabled");
 
         let bad = anyhow::anyhow!("unknown field `scopes`");
         let reported = |event| config_error(&broken.state_dir, event, &payload("typo", &repo, Value::Null, false), &bad);

@@ -221,8 +221,16 @@ pub(crate) mod tests {
     use crate::config::{LintProject, LintSection, Stack};
 
     pub(crate) fn git(dir: &Path, args: &[&str]) {
+        git_with(dir, &[], args);
+    }
+
+    pub(crate) fn git_dated(dir: &Path, date: &str, args: &[&str]) {
+        git_with(dir, &[("GIT_AUTHOR_DATE", date), ("GIT_COMMITTER_DATE", date)], args);
+    }
+
+    fn git_with(dir: &Path, env: &[(&str, &str)], args: &[&str]) {
         let config = ["-c", "user.name=t", "-c", "user.email=t@t", "-c", "commit.gpgsign=false", "-c", "core.hooksPath=/dev/null", "-c", "init.defaultBranch=main"];
-        let output = Command::new("git").args(config).args(args).current_dir(dir).output().unwrap();
+        let output = Command::new("git").args(config).args(args).envs(env.iter().copied()).current_dir(dir).output().unwrap();
         assert!(output.status.success(), "git {args:?}: {}", String::from_utf8_lossy(&output.stderr));
     }
 
