@@ -1,0 +1,1029 @@
+{
+  "version": 1,
+  "name": "NACRE (VEYL-shaped fixture)",
+  "source": {
+    "prompt": null,
+    "kind": "code"
+  },
+  "facts": [
+    "Plain HTML with no build step: index.html, style.css, app.js.",
+    "Colours and sizes are CSS variables in :root at the top of style.css.",
+    "mobile.css loads after style.css: at phone width (max-width 700px) a rule there wins over a rule of equal weight in style.css.",
+    "The prologue is pinned (position: sticky inside a 300vh section); app.js switches its second line on halfway through.",
+    "The story is pinned for nine screens: app.js switches its picture on a screen in, then one line at a time."
+  ],
+  "tokensFile": "style.css",
+  "content": null,
+  "extraFiles": [
+    "app.js"
+  ],
+  "groups": [
+    "Header",
+    "Prologue",
+    "Sections",
+    "Story",
+    "Founders",
+    "Scene",
+    "Crowd",
+    "Pile",
+    "Steps",
+    "Archive",
+    "Colony",
+    "Contact"
+  ],
+  "parts": [
+    {
+      "id": "header",
+      "label": "Header",
+      "group": "Header",
+      "kind": "section",
+      "prompt": [
+        {
+          "where": "index.html",
+          "text": "The fixed bar at the top: the brand and the section menu."
+        }
+      ],
+      "tokens": [
+        "--paper"
+      ],
+      "files": [
+        "index.html",
+        "style.css"
+      ],
+      "edit": [
+        "index.html",
+        "style.css"
+      ],
+      "targets": [
+        {
+          "file": "index.html",
+          "find": "class=\"site-header\""
+        }
+      ]
+    },
+    {
+      "id": "header-nav",
+      "label": "Section menu",
+      "group": "Header",
+      "parent": "header",
+      "kind": "list",
+      "prompt": [
+        {
+          "where": "index.html",
+          "text": "Four links to the sections."
+        }
+      ],
+      "tokens": [
+        "--ink"
+      ],
+      "files": [
+        "index.html",
+        "style.css"
+      ],
+      "edit": [
+        "index.html",
+        "style.css"
+      ],
+      "targets": [
+        {
+          "file": "index.html",
+          "find": "class=\"header-nav\""
+        }
+      ]
+    },
+    {
+      "id": "drawer",
+      "label": "Menu drawer",
+      "group": "Header",
+      "kind": "frame",
+      "prompt": [
+        {
+          "where": "index.html",
+          "text": "A panel fixed to the right edge. Hidden until its button is pressed; this page never opens it."
+        }
+      ],
+      "tokens": [
+        "--ink",
+        "--paper"
+      ],
+      "files": [
+        "index.html",
+        "style.css"
+      ],
+      "edit": [
+        "index.html",
+        "style.css"
+      ],
+      "note": "Fixed to the screen and hidden: no scroll position shows it.",
+      "targets": [
+        {
+          "file": "index.html",
+          "find": "class=\"drawer\""
+        }
+      ]
+    },
+    {
+      "id": "prologue",
+      "label": "Prologue",
+      "group": "Prologue",
+      "kind": "section",
+      "prompt": [
+        {
+          "where": "index.html",
+          "text": "A pinned opening: three screens of scroll while the stage stays put."
+        }
+      ],
+      "tokens": [],
+      "files": [
+        "index.html",
+        "style.css"
+      ],
+      "edit": [
+        "index.html",
+        "style.css",
+        "app.js"
+      ],
+      "targets": [
+        {
+          "file": "index.html",
+          "find": "class=\"prologue\""
+        }
+      ]
+    },
+    {
+      "id": "prologue-line",
+      "label": "Prologue line",
+      "group": "Prologue",
+      "parent": "prologue",
+      "kind": "text",
+      "prompt": [
+        {
+          "where": "index.html",
+          "text": "The first line, on screen from the start."
+        }
+      ],
+      "tokens": [
+        "--title"
+      ],
+      "files": [
+        "index.html",
+        "style.css"
+      ],
+      "edit": [
+        "index.html",
+        "style.css"
+      ],
+      "targets": [
+        {
+          "file": "index.html",
+          "find": "class=\"prologue__line\""
+        }
+      ]
+    },
+    {
+      "id": "prologue-sub",
+      "label": "Prologue second line",
+      "group": "Prologue",
+      "parent": "prologue",
+      "kind": "text",
+      "prompt": [
+        {
+          "where": "index.html",
+          "text": "The second line: it fades in once the pinned stage is half scrolled through."
+        }
+      ],
+      "tokens": [
+        "--muted"
+      ],
+      "files": [
+        "index.html",
+        "style.css"
+      ],
+      "edit": [
+        "index.html",
+        "style.css",
+        "app.js"
+      ],
+      "note": "Only on screen in the second half of the prologue's scroll.",
+      "targets": [
+        {
+          "file": "index.html",
+          "find": "class=\"prologue__sub\""
+        }
+      ]
+    },
+    {
+      "id": "silk",
+      "label": "Spun silk",
+      "group": "Sections",
+      "kind": "section",
+      "prompt": [
+        {
+          "where": "index.html",
+          "text": "The first band."
+        }
+      ],
+      "tokens": [
+        "--title"
+      ],
+      "files": [
+        "index.html",
+        "style.css"
+      ],
+      "edit": [
+        "index.html",
+        "style.css"
+      ],
+      "targets": [
+        {
+          "file": "index.html",
+          "find": "class=\"band silk\""
+        }
+      ]
+    },
+    {
+      "id": "thermal",
+      "label": "Thermal monitor",
+      "group": "Sections",
+      "kind": "section",
+      "prompt": [
+        {
+          "where": "index.html",
+          "text": "The second band, on a warmer ground."
+        }
+      ],
+      "tokens": [
+        "--title"
+      ],
+      "files": [
+        "index.html",
+        "style.css"
+      ],
+      "edit": [
+        "index.html",
+        "style.css"
+      ],
+      "targets": [
+        {
+          "file": "index.html",
+          "find": "class=\"band thermal\""
+        }
+      ]
+    },
+    {
+      "id": "press",
+      "label": "Outside voices",
+      "group": "Sections",
+      "kind": "section",
+      "prompt": [
+        {
+          "where": "index.html",
+          "text": "The third band: a quote, light on dark."
+        }
+      ],
+      "tokens": [
+        "--ink",
+        "--paper"
+      ],
+      "files": [
+        "index.html",
+        "style.css"
+      ],
+      "edit": [
+        "index.html",
+        "style.css"
+      ],
+      "targets": [
+        {
+          "file": "index.html",
+          "find": "class=\"band press\""
+        }
+      ]
+    },
+    {
+      "id": "nature",
+      "label": "Nature of the fibre",
+      "group": "Sections",
+      "kind": "section",
+      "prompt": [
+        {
+          "where": "index.html",
+          "text": "The fourth band."
+        }
+      ],
+      "tokens": [
+        "--title"
+      ],
+      "files": [
+        "index.html",
+        "style.css"
+      ],
+      "edit": [
+        "index.html",
+        "style.css"
+      ],
+      "targets": [
+        {
+          "file": "index.html",
+          "find": "class=\"band nature\""
+        }
+      ]
+    },
+    {
+      "id": "story",
+      "label": "Story",
+      "group": "Story",
+      "kind": "section",
+      "prompt": [
+        {
+          "where": "index.html",
+          "text": "A long pinned story: a picture and nine lines, one at a time. Nothing of it shows for its first screen."
+        }
+      ],
+      "tokens": [],
+      "files": [
+        "index.html",
+        "style.css"
+      ],
+      "edit": [
+        "index.html",
+        "style.css",
+        "app.js"
+      ],
+      "targets": [
+        {
+          "file": "index.html",
+          "find": "class=\"story\""
+        }
+      ]
+    },
+    {
+      "id": "woven-title",
+      "label": "Woven title",
+      "group": "Story",
+      "kind": "text",
+      "prompt": [
+        {
+          "where": "index.html",
+          "text": "A title whose letters wait, transparent, for a reveal."
+        }
+      ],
+      "tokens": [],
+      "files": [
+        "index.html",
+        "style.css"
+      ],
+      "edit": [
+        "index.html",
+        "style.css"
+      ],
+      "targets": [
+        {
+          "file": "index.html",
+          "find": "class=\"woven__title\""
+        }
+      ]
+    },
+    {
+      "id": "founders",
+      "label": "Founders",
+      "group": "Founders",
+      "kind": "section",
+      "prompt": [
+        {
+          "where": "index.html",
+          "text": "Two cards side by side; one column on phones."
+        }
+      ],
+      "tokens": [
+        "--edge"
+      ],
+      "files": [
+        "index.html",
+        "style.css"
+      ],
+      "edit": [
+        "index.html",
+        "style.css"
+      ],
+      "targets": [
+        {
+          "file": "index.html",
+          "find": "class=\"founders\""
+        }
+      ]
+    },
+    {
+      "id": "founder-mara",
+      "label": "Mara Voss",
+      "group": "Founders",
+      "parent": "founders",
+      "prompt": [
+        {
+          "where": "index.html",
+          "text": "The first founder's card."
+        }
+      ],
+      "tokens": [
+        "--muted"
+      ],
+      "files": [
+        "index.html",
+        "style.css"
+      ],
+      "edit": [
+        "index.html",
+        "style.css"
+      ],
+      "targets": [
+        {
+          "file": "index.html",
+          "find": "founder--mara"
+        }
+      ]
+    },
+    {
+      "id": "founder-elias",
+      "label": "Elias Kern",
+      "group": "Founders",
+      "parent": "founders",
+      "prompt": [
+        {
+          "where": "index.html",
+          "text": "The second founder's card."
+        }
+      ],
+      "tokens": [
+        "--muted"
+      ],
+      "files": [
+        "index.html",
+        "style.css"
+      ],
+      "edit": [
+        "index.html",
+        "style.css"
+      ],
+      "targets": [
+        {
+          "file": "index.html",
+          "find": "founder--elias"
+        }
+      ]
+    },
+    {
+      "id": "crowd",
+      "label": "Crowd",
+      "group": "Crowd",
+      "kind": "section",
+      "prompt": [
+        {
+          "where": "index.html",
+          "text": "A heading, six balls and a map."
+        }
+      ],
+      "tokens": [],
+      "files": [
+        "index.html",
+        "style.css"
+      ],
+      "edit": [
+        "index.html",
+        "style.css"
+      ],
+      "targets": [
+        {
+          "file": "index.html",
+          "find": "class=\"crowd\""
+        }
+      ]
+    },
+    {
+      "id": "crowd-field",
+      "label": "Ball field",
+      "group": "Crowd",
+      "parent": "crowd",
+      "kind": "scene",
+      "outline": false,
+      "prompt": [
+        {
+          "where": "index.html",
+          "text": "The field the balls float in: never outlined itself."
+        }
+      ],
+      "tokens": [],
+      "files": [
+        "index.html",
+        "style.css"
+      ],
+      "edit": [
+        "index.html",
+        "style.css"
+      ],
+      "targets": [
+        {
+          "file": "index.html",
+          "find": "class=\"crowd__field\""
+        }
+      ]
+    },
+    {
+      "id": "pile",
+      "label": "Pile",
+      "group": "Pile",
+      "kind": "section",
+      "prompt": [
+        {
+          "where": "index.html",
+          "text": "Two pills, one under a card and one under a veil."
+        }
+      ],
+      "tokens": [],
+      "files": [
+        "index.html",
+        "style.css"
+      ],
+      "edit": [
+        "index.html",
+        "style.css"
+      ],
+      "targets": [
+        {
+          "file": "index.html",
+          "find": "class=\"pile\""
+        }
+      ]
+    },
+    {
+      "id": "pile-under",
+      "label": "Pill under the card",
+      "group": "Pile",
+      "kind": "frame",
+      "prompt": [
+        {
+          "where": "index.html",
+          "text": "A pill a card is painted over."
+        }
+      ],
+      "tokens": [],
+      "files": [
+        "index.html",
+        "style.css"
+      ],
+      "edit": [
+        "index.html",
+        "style.css"
+      ],
+      "targets": [
+        {
+          "file": "index.html",
+          "find": "pile__pill--under"
+        }
+      ],
+      "parent": "pile"
+    },
+    {
+      "id": "pile-veiled",
+      "label": "Pill under the veil",
+      "group": "Pile",
+      "kind": "frame",
+      "prompt": [
+        {
+          "where": "index.html",
+          "text": "A pill under a veil that fades out."
+        }
+      ],
+      "tokens": [],
+      "files": [
+        "index.html",
+        "style.css"
+      ],
+      "edit": [
+        "index.html",
+        "style.css"
+      ],
+      "targets": [
+        {
+          "file": "index.html",
+          "find": "pile__pill--veiled"
+        }
+      ],
+      "parent": "pile"
+    },
+    {
+      "id": "pile-card",
+      "label": "Card on the pile",
+      "group": "Pile",
+      "kind": "frame",
+      "prompt": [
+        {
+          "where": "index.html",
+          "text": "A card with a gradient fill."
+        }
+      ],
+      "tokens": [],
+      "files": [
+        "index.html",
+        "style.css"
+      ],
+      "edit": [
+        "index.html",
+        "style.css"
+      ],
+      "targets": [
+        {
+          "file": "index.html",
+          "find": "class=\"pile__card\""
+        }
+      ],
+      "parent": "pile"
+    },
+    {
+      "id": "steps",
+      "label": "Steps",
+      "group": "Steps",
+      "kind": "section",
+      "prompt": [
+        {
+          "where": "index.html",
+          "text": "Three steps in a row."
+        }
+      ],
+      "tokens": [],
+      "files": [
+        "index.html",
+        "style.css"
+      ],
+      "edit": [
+        "index.html",
+        "style.css"
+      ],
+      "targets": [
+        {
+          "file": "index.html",
+          "find": "class=\"steps\""
+        }
+      ]
+    },
+    {
+      "id": "step",
+      "label": "Step card",
+      "group": "Steps",
+      "kind": "frame",
+      "prompt": [
+        {
+          "where": "index.html",
+          "text": "One card of the row: the same layer on each of the three."
+        }
+      ],
+      "tokens": [],
+      "files": [
+        "index.html",
+        "style.css"
+      ],
+      "edit": [
+        "index.html",
+        "style.css"
+      ],
+      "targets": [
+        {
+          "file": "index.html",
+          "find": "class=\"step\"",
+          "nth": 0
+        },
+        {
+          "file": "index.html",
+          "find": "class=\"step\"",
+          "nth": 1
+        },
+        {
+          "file": "index.html",
+          "find": "class=\"step\"",
+          "nth": 2
+        }
+      ],
+      "parent": "steps"
+    },
+    {
+      "id": "scene",
+      "label": "Scene",
+      "group": "Scene",
+      "kind": "section",
+      "prompt": [
+        {
+          "where": "index.html",
+          "text": "A dark scene with words over it."
+        }
+      ],
+      "tokens": [],
+      "files": [
+        "index.html",
+        "style.css"
+      ],
+      "edit": [
+        "index.html",
+        "style.css"
+      ],
+      "targets": [
+        {
+          "file": "index.html",
+          "find": "class=\"scene\""
+        }
+      ]
+    },
+    {
+      "id": "scene-canvas",
+      "label": "Scene canvas",
+      "group": "Scene",
+      "kind": "scene",
+      "prompt": [
+        {
+          "where": "index.html",
+          "text": "The canvas that fills the scene."
+        }
+      ],
+      "tokens": [],
+      "files": [
+        "index.html",
+        "style.css"
+      ],
+      "edit": [
+        "index.html",
+        "style.css"
+      ],
+      "targets": [
+        {
+          "file": "index.html",
+          "find": "class=\"scene__canvas\""
+        }
+      ],
+      "parent": "scene"
+    },
+    {
+      "id": "archive",
+      "label": "Material archive",
+      "group": "Archive",
+      "kind": "section",
+      "prompt": [
+        {
+          "where": "index.html",
+          "text": "A sticky heading over a grid of thumbnails."
+        }
+      ],
+      "tokens": [],
+      "files": [
+        "index.html",
+        "style.css"
+      ],
+      "edit": [
+        "index.html",
+        "style.css"
+      ],
+      "targets": [
+        {
+          "file": "index.html",
+          "find": "class=\"archive\""
+        }
+      ]
+    },
+    {
+      "id": "archive-strip",
+      "label": "Archive heading",
+      "group": "Archive",
+      "parent": "archive",
+      "prompt": [
+        {
+          "where": "index.html",
+          "text": "The heading strip. It sticks under the header on desktop; mobile.css makes it static with no padding on phones."
+        }
+      ],
+      "tokens": [
+        "--edge",
+        "--paper"
+      ],
+      "files": [
+        "index.html",
+        "style.css"
+      ],
+      "edit": [
+        "index.html",
+        "style.css"
+      ],
+      "targets": [
+        {
+          "file": "index.html",
+          "find": "class=\"archive__strip\""
+        }
+      ]
+    },
+    {
+      "id": "archive-thumbs",
+      "label": "Thumbnails",
+      "group": "Archive",
+      "parent": "archive",
+      "kind": "list",
+      "prompt": [
+        {
+          "where": "index.html",
+          "text": "Four thumbnails, two per row on phones."
+        }
+      ],
+      "tokens": [
+        "--muted"
+      ],
+      "files": [
+        "index.html",
+        "style.css"
+      ],
+      "edit": [
+        "index.html",
+        "style.css"
+      ],
+      "targets": [
+        {
+          "file": "index.html",
+          "find": "class=\"archive__thumbs\""
+        }
+      ]
+    },
+    {
+      "id": "colony",
+      "label": "Colony",
+      "group": "Colony",
+      "kind": "section",
+      "prompt": [
+        {
+          "where": "index.html",
+          "text": "A stage the spider crosses."
+        }
+      ],
+      "tokens": [
+        "--edge"
+      ],
+      "files": [
+        "index.html",
+        "style.css"
+      ],
+      "edit": [
+        "index.html",
+        "style.css"
+      ],
+      "targets": [
+        {
+          "file": "index.html",
+          "find": "class=\"colony\""
+        }
+      ]
+    },
+    {
+      "id": "colony-spider",
+      "label": "Walking spider",
+      "group": "Colony",
+      "parent": "colony",
+      "prompt": [
+        {
+          "where": "index.html",
+          "text": "A dot that crosses the stage forever, fading out at the far side."
+        }
+      ],
+      "tokens": [
+        "--ink"
+      ],
+      "files": [
+        "index.html",
+        "style.css"
+      ],
+      "edit": [
+        "index.html",
+        "style.css"
+      ],
+      "note": "Moves all the time and is transparent at the start and end of each crossing.",
+      "targets": [
+        {
+          "file": "index.html",
+          "find": "class=\"colony__spider\""
+        }
+      ]
+    },
+    {
+      "id": "colony-cocoon",
+      "label": "Cocoon",
+      "group": "Colony",
+      "parent": "colony",
+      "prompt": [
+        {
+          "where": "index.html",
+          "text": "Shown on phones only (mobile.css)."
+        }
+      ],
+      "tokens": [
+        "--muted"
+      ],
+      "files": [
+        "index.html",
+        "style.css"
+      ],
+      "edit": [
+        "index.html",
+        "style.css"
+      ],
+      "note": "Not displayed at desktop sizes.",
+      "targets": [
+        {
+          "file": "index.html",
+          "find": "class=\"colony__cocoon\""
+        }
+      ]
+    },
+    {
+      "id": "contact",
+      "label": "Contact",
+      "group": "Contact",
+      "kind": "section",
+      "prompt": [
+        {
+          "where": "index.html",
+          "text": "The last section: a heading and an address."
+        }
+      ],
+      "tokens": [
+        "--accent",
+        "--title"
+      ],
+      "files": [
+        "index.html",
+        "style.css"
+      ],
+      "edit": [
+        "index.html",
+        "style.css"
+      ],
+      "targets": [
+        {
+          "file": "index.html",
+          "find": "class=\"contact\""
+        }
+      ]
+    },
+    {
+      "id": "contact-note",
+      "label": "Contact note",
+      "group": "Contact",
+      "parent": "contact",
+      "kind": "text",
+      "prompt": [
+        {
+          "where": "index.html",
+          "text": "A line about samples, inside a card."
+        }
+      ],
+      "tokens": [],
+      "files": [
+        "index.html",
+        "style.css"
+      ],
+      "edit": [
+        "index.html",
+        "style.css"
+      ],
+      "targets": [
+        {
+          "file": "index.html",
+          "find": "class=\"contact__note\""
+        }
+      ]
+    }
+  ],
+  "tokens": {
+    "--ink": {
+      "kind": "color",
+      "role": "Text, the dark band, the spider",
+      "label": "Ink black"
+    },
+    "--paper": {
+      "kind": "color",
+      "role": "Page ground",
+      "label": "Paper"
+    },
+    "--accent": {
+      "kind": "color",
+      "role": "Links",
+      "label": "Accent"
+    },
+    "--muted": {
+      "kind": "color",
+      "role": "Secondary text and hairlines",
+      "label": "Muted"
+    },
+    "--edge": {
+      "kind": "size",
+      "role": "Side padding of every section",
+      "label": "Page edge"
+    },
+    "--title": {
+      "kind": "size",
+      "role": "Section headings",
+      "label": "Title size"
+    }
+  }
+}

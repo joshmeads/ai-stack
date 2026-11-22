@@ -1,0 +1,494 @@
+{
+  "version": 1,
+  "name": "Fernhill hero",
+  "source": {
+    "prompt": "prompt.md",
+    "template": null,
+    "kind": "prompt+code"
+  },
+  "facts": [
+    "Design values are CSS variables in src/styles/tokens.css; sizes are written calc(N * var(--u)) in design px.",
+    "Every word on the page is in src/content.json.",
+    "Intro and motion timings are in src/App.tsx.",
+    "The steam over the cup is drawn on a canvas in src/components/Steam.tsx.",
+    "Components are in src/components/, each with a .module.css next to it."
+  ],
+  "tokensFile": "src/styles/tokens.css",
+  "content": {
+    "file": "src/content.json",
+    "labels": {
+      "logo": "Logo",
+      "menu": "Menu links",
+      "book": "Booking pill",
+      "headline1": "Line 1",
+      "headline2": "Line 2",
+      "lead": "Copy",
+      "primary": "Solid button",
+      "secondary": "Outline button"
+    }
+  },
+  "extraFiles": [
+    "src/App.tsx",
+    "src/styles/global.css",
+    "index.html"
+  ],
+  "groups": [
+    "Header",
+    "Hero",
+    "Scene",
+    "Intro"
+  ],
+  "parts": [
+    {
+      "id": "header",
+      "label": "Header",
+      "group": "Header",
+      "kind": "section",
+      "prompt": [
+        {
+          "where": "Layout › 1. Header",
+          "text": "A fixed row across the top, 72 high, 32 from each side (20 on phones): the logo on the left, the menu in the middle, the Book a table pill on the right."
+        },
+        {
+          "where": "Motion › M2 · Reveals",
+          "text": "t = 1.0: the whole row fades in, 0.5 s."
+        }
+      ],
+      "tokens": [
+        "--header-h",
+        "--edge"
+      ],
+      "files": [
+        "src/components/Header.tsx",
+        "src/components/Header.module.css"
+      ],
+      "edit": [
+        "src/components/Header.tsx",
+        "src/components/Header.module.css",
+        "src/styles/tokens.css"
+      ]
+    },
+    {
+      "id": "logo",
+      "label": "Logo",
+      "group": "Header",
+      "parent": "header",
+      "prompt": [
+        {
+          "where": "Layout › 1. Header › Logo",
+          "text": "The name set in the display serif, 22, tracking 0.02em, cream. It links to the top of the page."
+        }
+      ],
+      "tokens": [
+        "--logo-size",
+        "--cream"
+      ],
+      "content": [
+        "logo"
+      ],
+      "files": [
+        "src/components/Header.tsx",
+        "src/components/Header.module.css"
+      ],
+      "edit": [
+        "src/components/Header.tsx",
+        "src/components/Header.module.css",
+        "src/styles/tokens.css",
+        "src/content.json"
+      ]
+    },
+    {
+      "id": "menu",
+      "label": "Menu",
+      "group": "Header",
+      "parent": "header",
+      "kind": "list",
+      "prompt": [
+        {
+          "where": "Layout › 1. Header › Menu",
+          "text": "Four links 28 apart, UI style, cream at 70% opacity. The current one is full cream with a 1 px line 6 below it. On hover a link goes to full opacity."
+        },
+        {
+          "where": "Design tokens › Typography",
+          "text": "UI (menu, pill, buttons): Geist 500, 15, tracking −0.01em."
+        }
+      ],
+      "tokens": [
+        "--ui-size",
+        "--ui-tracking",
+        "--cream",
+        "--hover-duration"
+      ],
+      "content": [
+        "menu"
+      ],
+      "files": [
+        "src/components/Header.tsx",
+        "src/components/Header.module.css"
+      ],
+      "edit": [
+        "src/components/Header.tsx",
+        "src/components/Header.module.css",
+        "src/styles/tokens.css",
+        "src/content.json"
+      ],
+      "note": "Hidden on phones (width < 900)."
+    },
+    {
+      "id": "book",
+      "label": "Booking pill",
+      "group": "Header",
+      "parent": "header",
+      "kind": "button",
+      "prompt": [
+        {
+          "where": "Layout › 1. Header › Right",
+          "text": "A cream pill 44 high, padding: 0 20, bark text, UI style. It lifts 2 px on hover, 180 ms, cubic-bezier(0.2, 0.8, 0.2, 1)."
+        }
+      ],
+      "tokens": [
+        "--cream",
+        "--bark",
+        "--ui-size",
+        "--radius-pill",
+        "--hover-duration",
+        "--ease-out"
+      ],
+      "content": [
+        "book"
+      ],
+      "files": [
+        "src/components/Header.tsx",
+        "src/components/Header.module.css"
+      ],
+      "edit": [
+        "src/components/Header.tsx",
+        "src/components/Header.module.css",
+        "src/styles/tokens.css",
+        "src/content.json"
+      ]
+    },
+    {
+      "id": "hero",
+      "label": "Hero",
+      "group": "Hero",
+      "kind": "section",
+      "prompt": [
+        {
+          "where": "Layout › 2. Hero",
+          "text": "Fills the first screen. The words sit bottom left, 32 from the side and 56 above the bottom edge, at most 620 wide. On phones they are centred, 20 from each side."
+        }
+      ],
+      "tokens": [
+        "--edge"
+      ],
+      "files": [
+        "src/components/Hero.tsx",
+        "src/components/Hero.module.css"
+      ],
+      "edit": [
+        "src/components/Hero.tsx",
+        "src/components/Hero.module.css",
+        "src/styles/tokens.css"
+      ]
+    },
+    {
+      "id": "headline",
+      "label": "Headline",
+      "group": "Hero",
+      "parent": "hero",
+      "prompt": [
+        {
+          "where": "Layout › 2. Hero › Headline",
+          "text": "Two lines in the display serif, cream, line height 1. The second line is italic."
+        },
+        {
+          "where": "Design tokens › Typography",
+          "text": "Display: Fraunces 400, 96 desktop / 52 phones, tracking −0.02em."
+        },
+        {
+          "where": "Motion › M2 · Reveals",
+          "text": "t = 1.2: the two lines rise 24 and fade in, 0.8 s, 0.1 apart."
+        }
+      ],
+      "tokens": [
+        "--display-size",
+        "--display-tracking",
+        "--cream"
+      ],
+      "content": [
+        "headline1",
+        "headline2"
+      ],
+      "files": [
+        "src/components/Hero.tsx",
+        "src/components/Hero.module.css"
+      ],
+      "edit": [
+        "src/components/Hero.tsx",
+        "src/components/Hero.module.css",
+        "src/styles/tokens.css",
+        "src/content.json"
+      ],
+      "note": "Keep it to two short lines."
+    },
+    {
+      "id": "lead",
+      "label": "Copy",
+      "group": "Hero",
+      "parent": "hero",
+      "prompt": [
+        {
+          "where": "Layout › 2. Hero › Copy and buttons",
+          "text": "One paragraph 24 below the headline, body style, cream at 80% opacity, at most 440 wide."
+        },
+        {
+          "where": "Design tokens › Typography",
+          "text": "Body (hero copy): Geist 400, 18, line height 28."
+        },
+        {
+          "where": "Motion › M2 · Reveals",
+          "text": "t = 1.5: the copy fades in, 0.6 s."
+        }
+      ],
+      "tokens": [
+        "--body-size",
+        "--body-leading",
+        "--cream"
+      ],
+      "content": [
+        "lead"
+      ],
+      "files": [
+        "src/components/Hero.tsx",
+        "src/components/Hero.module.css"
+      ],
+      "edit": [
+        "src/components/Hero.tsx",
+        "src/components/Hero.module.css",
+        "src/styles/tokens.css",
+        "src/content.json"
+      ]
+    },
+    {
+      "id": "buttons",
+      "label": "Buttons",
+      "group": "Hero",
+      "parent": "hero",
+      "prompt": [
+        {
+          "where": "Layout › 2. Hero › Copy and buttons",
+          "text": "\"See the menu\" (cream, bark text) and \"Our story\" (transparent, a 1 px cream border, cream text), 52 high, 12 apart, UI style. Both lift 2 px on hover, 180 ms."
+        },
+        {
+          "where": "Motion › M2 · Reveals",
+          "text": "t = 1.7: See the menu fades in, 0.5 s. t = 1.82: Our story, the same."
+        }
+      ],
+      "tokens": [
+        "--cream",
+        "--bark",
+        "--ui-size",
+        "--ui-tracking",
+        "--radius-pill",
+        "--hover-duration",
+        "--ease-out"
+      ],
+      "content": [
+        "primary",
+        "secondary"
+      ],
+      "files": [
+        "src/components/Hero.tsx",
+        "src/components/Hero.module.css"
+      ],
+      "edit": [
+        "src/components/Hero.tsx",
+        "src/components/Hero.module.css",
+        "src/styles/tokens.css",
+        "src/content.json"
+      ]
+    },
+    {
+      "id": "backdrop",
+      "label": "Photograph",
+      "group": "Scene",
+      "kind": "image",
+      "prompt": [
+        {
+          "where": "Layout › 3. Scene › Photograph",
+          "text": "A full-screen photograph of the cup on a dark table (object-fit: cover; object-position: 60% 50%). Over it, a gradient from clear at 40% down to the shade colour at the bottom edge, so the words stay readable."
+        },
+        {
+          "where": "Motion › M1 · Opening",
+          "text": "t = 0.4 → 1.6: the photograph settles from scale(1.08) to scale(1), power2.out."
+        }
+      ],
+      "tokens": [
+        "--shade"
+      ],
+      "files": [
+        "public/assets/cup.webp",
+        "src/components/Scene.tsx",
+        "src/components/Scene.module.css"
+      ],
+      "edit": [
+        "src/components/Scene.module.css",
+        "src/styles/tokens.css"
+      ]
+    },
+    {
+      "id": "steam",
+      "label": "Steam",
+      "group": "Scene",
+      "kind": "scene",
+      "prompt": [
+        {
+          "where": "Layout › 3. Scene › Steam",
+          "text": "Soft steam rising from the cup, drawn on a canvas over the photograph: 40 wisps that drift up and sideways and fade out by the top third of the screen."
+        },
+        {
+          "where": "Motion › M3 · Steam",
+          "text": "Runs from t = 1.0, forever. It pauses while the tab is hidden and doesn't run with reduced motion."
+        }
+      ],
+      "tokens": [],
+      "files": [
+        "src/components/Steam.tsx (the canvas and its constants)",
+        "src/components/Scene.tsx"
+      ],
+      "edit": [
+        "src/components/Steam.tsx"
+      ],
+      "params": [
+        {
+          "file": "src/components/Steam.tsx",
+          "name": "WISPS",
+          "label": "How much steam",
+          "min": 10,
+          "max": 120,
+          "step": 5
+        },
+        {
+          "file": "src/components/Steam.tsx",
+          "name": "RISE",
+          "label": "Rise speed",
+          "min": 0.1,
+          "max": 2,
+          "step": 0.1,
+          "motion": true
+        }
+      ],
+      "note": "Drawn inside a canvas, so it can't be clicked on the page: pick it in the layers list.",
+      "outline": false
+    },
+    {
+      "id": "preloader",
+      "label": "Preloader (intro)",
+      "group": "Intro",
+      "prompt": [
+        {
+          "where": "Layout › 4. Preloader",
+          "text": "A bark screen with the logo in the middle and, 16 under it, a 1 px cream line 120 wide that fills from left to right as the page loads."
+        },
+        {
+          "where": "Motion › M1 · Opening",
+          "text": "t = 0 → 0.4: the line completes, then the whole screen fades out, 0.4 s."
+        }
+      ],
+      "tokens": [
+        "--bark",
+        "--cream"
+      ],
+      "files": [
+        "src/components/Preloader.tsx",
+        "src/components/Preloader.module.css",
+        "src/App.tsx (M1)"
+      ],
+      "edit": [
+        "src/components/Preloader.tsx",
+        "src/components/Preloader.module.css",
+        "src/styles/tokens.css"
+      ],
+      "note": "Only on screen during the intro. Replay the intro to see it.",
+      "outline": false
+    }
+  ],
+  "tokens": {
+    "--cream": {
+      "kind": "color",
+      "role": "Colors › cream: text, the booking pill, the solid button",
+      "label": "Cream"
+    },
+    "--bark": {
+      "kind": "color",
+      "role": "Colors › bark: the preloader, text on cream",
+      "label": "Bark brown"
+    },
+    "--shade": {
+      "kind": "color",
+      "role": "Colors › shade: the bottom of the gradient over the photograph",
+      "label": "Photo shade"
+    },
+    "--display-size": {
+      "kind": "size",
+      "role": "Typography › Display (hero headline), 96",
+      "label": "Headline size"
+    },
+    "--display-tracking": {
+      "kind": "em",
+      "role": "Typography › Display tracking, −0.02em",
+      "label": "Headline spacing"
+    },
+    "--body-size": {
+      "kind": "size",
+      "role": "Typography › Body (hero copy), 18",
+      "label": "Body text size"
+    },
+    "--body-leading": {
+      "kind": "size",
+      "role": "Typography › Body line height, 28",
+      "label": "Body line height"
+    },
+    "--ui-size": {
+      "kind": "size",
+      "role": "Typography › UI (menu, pill, buttons), 15",
+      "label": "Button text size"
+    },
+    "--ui-tracking": {
+      "kind": "em",
+      "role": "Typography › UI tracking, −0.01em",
+      "label": "Button text spacing"
+    },
+    "--logo-size": {
+      "kind": "size",
+      "role": "Typography › Logo, 22",
+      "label": "Logo size"
+    },
+    "--edge": {
+      "kind": "size",
+      "role": "Spacing › page edge: 32 desktop, 20 phones",
+      "label": "Page edge"
+    },
+    "--header-h": {
+      "kind": "size",
+      "role": "Spacing › header height: 72",
+      "label": "Header height"
+    },
+    "--radius-pill": {
+      "kind": "text",
+      "role": "Spacing and shape › pill radius 99px",
+      "label": "Pill corners"
+    },
+    "--hover-duration": {
+      "kind": "ms",
+      "role": "States › hover transitions, 180 ms",
+      "label": "Hover speed"
+    },
+    "--ease-out": {
+      "kind": "text",
+      "role": "States › hover easing, cubic-bezier(0.2, 0.8, 0.2, 1)",
+      "label": "Hover easing"
+    }
+  }
+}

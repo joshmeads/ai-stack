@@ -1,0 +1,1560 @@
+/* The editor's layout (Editor.tsx), like Figma's: a column of layers, the canvas with the site in a frame, a column of
+   properties. Colours and type come from the inspector's own values (--i-* in Inspector.module.css), never from the
+   site's tokens. */
+
+.editor {
+  --e-left: 248px;
+  --e-right: 320px;
+  --e-col: var(--i-panel);
+  --e-canvas: var(--i-canvas);
+  --e-row: 32px;
+  --e-indent: 14px; /* each nested layer steps in this far */
+  --e-select: color-mix(in srgb, var(--i-accent) 18%, transparent);
+  position: fixed;
+  inset: 0;
+  display: grid;
+  grid-template-columns: var(--e-left) minmax(0, 1fr) var(--e-right);
+  grid-template-rows: auto auto minmax(0, 1fr); /* the top bar, the toolbar, then the columns */
+  background: var(--e-canvas);
+  font: 13px/1.45 var(--i-font);
+  color: var(--i-text);
+}
+
+.grow {
+  flex: 1;
+}
+
+/* ---------- the top bar: back, the logo, the templates, the site's name; the theme ---------- */
+
+.topbar,
+.toolbar,
+.previewBar {
+  grid-column: 1 / -1;
+}
+
+.topbar {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  height: 46px;
+  padding: 0 12px 0 8px;
+  border-bottom: 1px solid var(--i-line);
+  background: var(--e-col);
+}
+
+.brand {
+  display: flex;
+  align-items: center;
+  gap: 7px;
+  height: 32px;
+  padding: 0 8px 0 6px;
+  border-radius: 8px;
+  color: var(--i-text);
+  font-size: 17px;
+  font-weight: 500;
+  line-height: 20px;
+  cursor: pointer;
+}
+
+.brand:hover {
+  background: var(--i-fill-1);
+}
+
+.brand svg {
+  width: 20px;
+  height: 20px;
+  fill: currentColor;
+}
+
+.library {
+  display: grid;
+  place-items: center;
+  width: 32px;
+  height: 32px;
+  margin-left: -4px;
+  border-radius: 8px;
+  color: var(--i-dim);
+  cursor: pointer;
+}
+
+.library:hover {
+  background: var(--i-seg);
+  color: var(--i-accent-ink);
+}
+
+.library svg {
+  width: 18px;
+  height: 18px;
+  fill: none;
+  stroke: currentColor;
+  stroke-width: 1.5;
+  stroke-linecap: round;
+  stroke-linejoin: round;
+}
+
+.slash {
+  margin: 0 2px;
+  color: var(--i-faint);
+}
+
+.siteName {
+  min-width: 0;
+  overflow: hidden;
+  font-size: 13px;
+  font-weight: 500;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+/* Focus: the site and the changes; the layers and the picked layer's values belong to Design */
+.editor[data-mode="focus"]:not([data-preview="true"]) {
+  grid-template-columns: minmax(0, 1fr) var(--e-right);
+}
+
+.editor[data-mode="focus"] > .left {
+  display: none;
+}
+
+/* ---------- left: layers ---------- */
+
+.left,
+.right {
+  display: flex;
+  flex-direction: column;
+  min-height: 0;
+  background: var(--e-col);
+}
+
+.left {
+  position: relative; /* the Add new object button floats over the bottom of the list */
+  border-right: 1px solid var(--i-line);
+}
+
+.right {
+  border-left: 1px solid var(--i-line);
+}
+
+.leftHead {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  height: 48px;
+  padding: 0 10px 0 6px;
+  border-bottom: 1px solid var(--i-line);
+}
+
+.leftHead strong {
+  overflow: hidden;
+  font-size: 14px;
+  font-weight: 600;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.back {
+  display: grid;
+  flex: none;
+  place-items: center;
+  width: 28px;
+  height: 32px;
+  border-radius: 8px;
+  color: var(--i-dim);
+  cursor: pointer;
+}
+
+.back:hover {
+  background: var(--i-fill-2);
+  color: var(--i-strong);
+}
+
+.back svg,
+.chevron,
+.icon,
+.deviceIcon {
+  fill: none;
+  stroke: currentColor;
+  stroke-width: 1.4;
+  stroke-linecap: round;
+  stroke-linejoin: round;
+}
+
+.back svg {
+  width: 16px;
+  height: 16px;
+}
+
+.tabs {
+  display: flex;
+  gap: 2px;
+  padding: 8px 8px 6px;
+}
+
+.tabs button {
+  height: 32px;
+  padding: 0 7px;
+  border-radius: 8px;
+  color: var(--i-dim);
+  font-weight: 500;
+  cursor: pointer;
+}
+
+.tabs button:hover {
+  color: var(--i-text);
+}
+
+.tabs button[aria-selected="true"] {
+  background: var(--i-accent-surface);
+  color: var(--i-accent-ink);
+}
+
+.leftScroll,
+.rightScroll {
+  flex: 1;
+  min-height: 0;
+  overflow-y: auto;
+  scrollbar-width: thin;
+}
+
+.leftScroll {
+  padding: 4px 8px 60px; /* room under the last layer, so Add new object never covers it */
+}
+
+.tree,
+.tree ul {
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+
+.groupRow,
+.layerRow {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  width: 100%;
+  height: var(--e-row);
+  padding: 0 8px 0 4px;
+  border-radius: 8px;
+  text-align: left;
+  cursor: pointer;
+}
+
+.groupRow {
+  color: var(--i-text);
+  font-weight: 500;
+}
+
+.groupRow:hover,
+.layerRow:hover,
+.layerRow[data-hover="true"] {
+  background: var(--i-fill-1);
+}
+
+.chevron {
+  flex: none;
+  width: 12px;
+  height: 12px;
+  color: var(--i-dim);
+  transition: transform 120ms ease;
+}
+
+.groupRow[aria-expanded="true"] .chevron {
+  transform: rotate(90deg);
+}
+
+.icon {
+  flex: none;
+  width: 14px;
+  height: 14px;
+  color: var(--i-dim);
+}
+
+.layerRow {
+  gap: 0;
+  padding: 0 0 0 calc(4px + var(--depth, 1) * var(--e-indent));
+  color: var(--i-text);
+  cursor: default;
+}
+
+/* The chevron that opens a layer, or the same space when it has none, so names line up */
+.twist {
+  flex: none;
+  display: grid;
+  place-items: center;
+  width: 18px;
+  height: 100%;
+  cursor: pointer;
+}
+
+.twist[aria-expanded="true"] .chevron {
+  transform: rotate(90deg);
+}
+
+.layerPick {
+  flex: 1;
+  min-width: 0;
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  height: 100%;
+  padding-right: 8px;
+  text-align: left;
+  cursor: pointer;
+}
+
+/* Text layers read as type, as in Figma */
+.icon[data-kind="text"] {
+  stroke-width: 1.6;
+}
+
+.layerRow[data-active="true"] {
+  background: var(--i-accent-surface);
+  color: var(--i-accent-ink);
+  font-weight: 500;
+}
+
+.layerRow[data-active="true"] .icon {
+  color: var(--i-accent-ink);
+}
+
+.layerRow[data-changed="true"] .layerName {
+  color: var(--i-positive);
+}
+
+.layerName {
+  flex: 1;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.off {
+  flex: none;
+  color: var(--i-faint);
+  font-size: 11px;
+}
+
+/* ---------- middle: the canvas ---------- */
+
+.canvas {
+  display: flex;
+  flex-direction: column;
+  min-width: 0;
+  min-height: 0;
+}
+
+/* Preview on the left, the viewport sizes in the middle, Replay on the right */
+.toolbar {
+  display: grid;
+  grid-template-columns: 1fr auto 1fr;
+  align-items: center;
+  gap: 10px;
+  height: 48px;
+  padding: 0 12px;
+  border-bottom: 1px solid var(--i-line);
+  background: var(--e-col);
+}
+
+.toolbarMid {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+}
+
+.toolbarEnd {
+  justify-self: end;
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
+/* Replay: a drawn icon in a square button (a text character sits off-centre in its font) */
+.replay {
+  display: grid;
+  place-items: center;
+  width: 32px;
+  padding: 0;
+}
+
+.replay svg {
+  width: 16px;
+  height: 16px;
+  fill: none;
+  stroke: currentColor;
+  stroke-width: 1.5;
+  stroke-linecap: round;
+  stroke-linejoin: round;
+}
+
+/* Light and dark: two buttons, the chosen one filled */
+.themes {
+  display: flex;
+  gap: 2px;
+  padding: 2px;
+  border-radius: 999px;
+  background: var(--i-seg);
+}
+
+.themes button {
+  display: grid;
+  place-items: center;
+  width: 28px;
+  height: 28px;
+  border-radius: 999px;
+  color: var(--i-dim);
+  cursor: pointer;
+}
+
+.themes button:hover {
+  color: var(--i-text);
+}
+
+.themes button[aria-checked="true"] {
+  background: var(--i-inverse);
+  color: var(--i-on-inverse);
+}
+
+.themes svg {
+  width: 14px;
+  height: 14px;
+  fill: none;
+  stroke: currentColor;
+  stroke-width: 1.4;
+  stroke-linecap: round;
+}
+
+.themes button:last-child svg {
+  fill: currentColor;
+  stroke: none;
+}
+
+/* ---------- the full preview: the site alone, as a visitor has it ---------- */
+
+.editor[data-preview="true"] {
+  grid-template-columns: minmax(0, 1fr);
+  grid-template-rows: auto minmax(0, 1fr);
+}
+
+.editor[data-preview="true"] > aside,
+.editor[data-preview="true"] .chat,
+.topbar[hidden],
+.toolbar[hidden],
+.frameLabel[hidden] {
+  display: none;
+}
+
+.editor[data-preview="true"] .frame {
+  box-shadow: none;
+}
+
+.previewBar {
+  display: grid;
+  grid-template-columns: 1fr auto 1fr;
+  align-items: center;
+  gap: 10px;
+  height: 48px;
+  padding: 0 12px;
+  border-bottom: 1px solid var(--i-line);
+  background: var(--e-col);
+}
+
+.previewStart {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.previewBack {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  padding: 0 12px 0 8px;
+}
+
+.previewBack svg {
+  width: 16px;
+  height: 16px;
+  fill: none;
+  stroke: currentColor;
+  stroke-width: 1.5;
+  stroke-linecap: round;
+  stroke-linejoin: round;
+}
+
+.previewSize {
+  appearance: none;
+  height: 32px;
+  padding: 0 28px 0 10px;
+  border: 0;
+  border-radius: 8px;
+  background: var(--i-seg) var(--i-chevron) no-repeat right 10px center;
+  color: var(--i-text);
+  font-size: 12px;
+  font-weight: 500;
+  cursor: pointer;
+}
+
+/* Preview: use the site like a visitor (clicks go to the site, picking pauses) */
+.preview {
+  justify-self: start;
+  display: flex;
+  align-items: center;
+  gap: 5px;
+  height: 32px;
+  padding: 0 12px 0 14px;
+  border-radius: 6px;
+  background: var(--i-accent);
+  color: #fff;
+  white-space: nowrap;
+  cursor: pointer;
+  font-size: 12px;
+  font-weight: 500;
+}
+
+.preview:hover {
+  background: var(--i-accent-hover);
+}
+
+.preview[aria-pressed="true"] {
+  background: var(--i-inverse);
+  color: var(--i-on-inverse);
+}
+
+.preview svg {
+  width: 12px;
+  height: 12px;
+  fill: currentColor;
+}
+
+.modes {
+  justify-self: start;
+  display: flex;
+  padding: 2px;
+  border-radius: 8px;
+  background: var(--i-seg);
+}
+
+.modes button {
+  height: 28px;
+  padding: 0 10px;
+  border: 1px solid transparent;
+  border-radius: 6px;
+  color: var(--i-dim);
+  font-size: 12px;
+  font-weight: 500;
+  cursor: pointer;
+}
+
+.modes button:hover {
+  color: var(--i-text);
+}
+
+.modes button[aria-checked="true"] {
+  border-color: var(--i-line);
+  background: var(--i-seg-on);
+  color: var(--i-accent-ink);
+}
+
+.devices {
+  display: flex;
+  padding: 2px;
+  border-radius: 8px;
+  background: var(--i-seg);
+}
+
+.devices button {
+  display: flex;
+  align-items: center;
+  gap: 5px;
+  height: 28px;
+  padding: 0 9px;
+  border-radius: 6px;
+  color: var(--i-dim);
+  white-space: nowrap;
+  cursor: pointer;
+  font-size: 12px;
+  font-weight: 500;
+  border: 1px solid transparent;
+}
+
+.devices button:hover {
+  background: transparent;
+  color: var(--i-text);
+}
+
+.devices button[aria-checked="true"] {
+  background: var(--i-seg-on);
+  color: var(--i-accent-ink);
+  font-weight: 500;
+  border-color: var(--i-line);
+}
+
+.devices small {
+  color: var(--i-faint);
+  font-size: 11px;
+  font-weight: 400;
+  font-variant-numeric: tabular-nums;
+}
+
+.devices button[aria-checked="true"] small {
+  color: color-mix(in srgb, var(--i-accent-ink) 70%, transparent);
+}
+
+.deviceIcon {
+  flex: none;
+  width: 14px;
+  height: 14px;
+}
+
+.zoom {
+  min-width: 38px;
+  color: var(--i-dim);
+  font-variant-numeric: tabular-nums;
+}
+
+.stage {
+  position: relative;
+  flex: 1;
+  min-height: 0;
+  overflow: hidden;
+  background-color: var(--e-canvas);
+  background-image: radial-gradient(var(--i-dot) 1px, transparent 1px); /* a dot every 20 px, as in the design */
+  background-size: 20px 20px;
+}
+
+/* On a sharp screen the dots are the design's fine ones (half a point); a 1x screen can't draw less than a pixel */
+@media (min-resolution: 2dppx) {
+  .stage {
+    background-image: radial-gradient(var(--i-dot) 0.6px, transparent 0.6px);
+  }
+}
+
+/* In the editor the reload notice sits at the top of the canvas, under the toolbar (never over its controls) */
+.stage > .reload {
+  position: absolute;
+  top: 12px;
+}
+
+.frameLabel {
+  position: absolute;
+  color: var(--i-dim);
+  font-weight: 500;
+  white-space: nowrap;
+  letter-spacing: 0.1px;
+  font-size: 12px;
+}
+
+.frameLabel span {
+  margin-left: 6px;
+  color: var(--i-faint);
+  font-weight: 400;
+  font-variant-numeric: tabular-nums;
+}
+
+/* The site at its own size, scaled down to fit; --inv undoes the scale for labels so they stay readable */
+.frame {
+  --inv: 1;
+  position: absolute;
+  transform-origin: 0 0;
+  background: #fff;
+  box-shadow: 0 0 0 1px var(--i-line), 0 24px 60px var(--i-shadow);
+}
+
+.frame iframe {
+  display: block;
+  width: 100%;
+  height: 100%;
+  border: 0;
+}
+
+.layer,
+.catcher {
+  position: absolute;
+  inset: 0;
+  overflow: hidden;
+}
+
+.layer {
+  pointer-events: none;
+}
+
+.catcher {
+  cursor: crosshair;
+}
+
+.catcher[data-hovering="true"] {
+  cursor: pointer;
+}
+
+/* The pins take their own clicks, over the layer that catches the pointer for picking; each keeps its size on
+   screen whatever the frame is scaled to, its point (bottom left) on the part's corner; several on one part sit
+   side by side */
+.pins {
+  position: absolute;
+  inset: 0;
+  overflow: hidden;
+  pointer-events: none;
+}
+
+.pinAt {
+  position: absolute;
+  pointer-events: auto;
+  transform: translate(calc(var(--i, 0) * 30px * var(--inv)), -100%) scale(var(--inv));
+  transform-origin: 0 100%;
+}
+
+.frame .label {
+  transform: scale(var(--inv));
+  transform-origin: 0 100%;
+}
+
+/* ---------- the chat bar, under the site ---------- */
+
+.chat {
+  position: absolute;
+  bottom: 14px;
+  left: 50%;
+  z-index: 3;
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  width: min(640px, calc(100% - 28px));
+  transform: translateX(-50%);
+}
+
+.chatBox,
+.chatPop {
+  border-radius: 16px;
+  background: var(--i-panel);
+  box-shadow: 0 16px 22px var(--i-shadow);
+}
+
+.chatBox {
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+  padding: 12px;
+  transition: box-shadow 400ms ease;
+}
+
+/* Lit up for a moment when Add new object puts a request in it */
+.chatBox[data-lit="true"] {
+  box-shadow: 0 0 0 2px var(--i-accent), 0 0 28px color-mix(in srgb, var(--i-accent) 45%, transparent), 0 16px 44px var(--i-shadow);
+}
+
+.chatPop {
+  max-height: 46vh;
+  overflow-y: auto;
+  padding: 12px;
+}
+
+.chatMain {
+  display: flex;
+  align-items: stretch;
+  gap: 8px;
+}
+
+/* The field: the layer it goes to and the request, in one dark pill */
+.chatInput {
+  flex: 1;
+  min-width: 0;
+  display: flex;
+  align-items: flex-end;
+  gap: 8px;
+  padding: 5px;
+  border-radius: 20px;
+  background: var(--i-input);
+}
+
+.chatMain textarea {
+  flex: 1;
+  min-width: 0;
+  height: 32px;
+  min-height: 32px;
+  padding: 6px 4px;
+  border: 0;
+  outline: none;
+  background: transparent;
+  color: var(--i-text);
+  font: 14px/20px var(--i-font);
+  resize: none;
+}
+
+.chatMain textarea::placeholder {
+  color: var(--i-dim);
+}
+
+.target {
+  display: flex;
+  flex: none;
+  align-items: center;
+  gap: 6px;
+  max-width: 180px;
+  height: 28px;
+  margin-bottom: 1px;
+  padding: 0 8px 0 10px;
+  border-radius: 999px;
+  background: var(--i-accent-surface);
+  color: var(--i-accent-ink);
+  cursor: pointer;
+}
+
+.target svg {
+  flex: none;
+  width: 11px;
+  height: 11px;
+  color: var(--i-accent-ink);
+}
+
+.target span {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.target i {
+  color: var(--i-faint);
+  font-style: normal;
+  font-weight: 500;
+}
+
+.target[data-site="true"] {
+  background: var(--i-fill-2);
+  color: var(--i-text);
+  cursor: default;
+}
+
+.send {
+  flex: none;
+  height: auto;
+  min-height: 44px;
+  padding: 0 20px;
+  font-size: 14px;
+}
+
+.chatMeta {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 0 2px;
+  color: var(--i-dim);
+  font-size: 12px;
+}
+
+/* Model, effort and limit: dark boxes with a chevron */
+.chatMeta select {
+  appearance: none;
+  height: 32px;
+  padding: 0 28px 0 10px;
+  border: 0;
+  border-radius: 6px;
+  background: var(--i-well) var(--i-chevron) no-repeat right 10px center;
+  color: var(--i-soft);
+  font-size: 12px;
+  cursor: pointer;
+}
+
+/* What the change would cost; it also opens what it sends */
+.cost {
+  color: var(--i-dim);
+  font-variant-numeric: tabular-nums;
+  cursor: pointer;
+}
+
+.cost:hover,
+.cost[aria-expanded="true"] {
+  color: var(--i-text);
+}
+
+.howLink {
+  color: var(--i-dim);
+  cursor: pointer;
+}
+
+.howLink:hover {
+  color: var(--i-text);
+}
+
+/* Explore 500+ Prompts: uberdesigner's prompt library (asks first, it's another site) */
+.explore {
+  display: flex;
+  align-items: center;
+  gap: 5px;
+  color: var(--i-dim);
+  white-space: nowrap;
+  cursor: pointer;
+}
+
+.explore svg {
+  width: 16px;
+  height: 16px;
+  transform: rotate(90deg);
+}
+
+.explore:hover {
+  color: var(--i-text);
+}
+
+@media (max-width: 1180px) {
+  .explore span {
+    display: none;
+  }
+}
+
+/* ---------- right: properties ---------- */
+
+.rightScroll {
+  padding-bottom: 12px;
+}
+
+.section {
+  padding: 12px 14px 14px;
+  border-bottom: 1px solid var(--i-line);
+}
+
+.sectionHead {
+  display: flex;
+  align-items: baseline;
+  gap: 6px;
+  margin: 0 0 8px;
+  font-size: 14px;
+  font-weight: 600;
+}
+
+.sectionHead small {
+  color: var(--i-dim);
+  font-size: 12px;
+  font-weight: 400;
+}
+
+.sectionNote {
+  margin: -2px 0 8px;
+  color: var(--i-dim);
+}
+
+.tokenGroup {
+  border-top: 1px solid var(--i-line);
+}
+
+.tokenGroup > summary,
+.from > summary {
+  display: flex;
+  align-items: baseline;
+  gap: 6px;
+  padding: 8px 0;
+  font-weight: 500;
+  cursor: pointer;
+  list-style: none;
+}
+
+.tokenGroup > summary::-webkit-details-marker,
+.from > summary::-webkit-details-marker {
+  display: none;
+}
+
+.tokenGroup > summary::before,
+.from > summary::before {
+  content: "›";
+  display: inline-block;
+  width: 10px;
+  color: var(--i-dim);
+  transition: transform 120ms ease;
+}
+
+.tokenGroup[open] > summary::before,
+.from[open] > summary::before {
+  transform: rotate(90deg);
+}
+
+.tokenGroup small {
+  color: var(--i-dim);
+  font-weight: 400;
+}
+
+.from {
+  margin-top: 10px;
+  border-top: 1px solid var(--i-line);
+}
+
+/* Back and Forward through what you picked, before the picked part's name */
+.pickHead {
+  display: flex;
+  align-items: center;
+  gap: 2px;
+  margin: -2px 0 8px -6px;
+}
+
+.pickHead .sectionHead {
+  margin: 0 0 0 4px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.navBtn {
+  display: grid;
+  flex: none;
+  place-items: center;
+  width: 28px;
+  height: 28px;
+  border-radius: 6px;
+  color: var(--i-text);
+  cursor: pointer;
+}
+
+.navBtn:hover:not(:disabled) {
+  background: var(--i-fill-2);
+}
+
+.navBtn:disabled {
+  color: var(--i-faint);
+  cursor: default;
+}
+
+.navBtn svg {
+  width: 14px;
+  height: 14px;
+  fill: none;
+  stroke: currentColor;
+  stroke-width: 1.6;
+  stroke-linecap: round;
+  stroke-linejoin: round;
+}
+
+/* Typing over words an animation splits into letters: a box over them in the site's own type, so the page's letter
+   elements are left alone (Editor.tsx, textEdit.ts) */
+.textBox {
+  position: absolute;
+  z-index: 3;
+  box-sizing: border-box;
+  padding: 6px;
+  border: 2px solid var(--i-hover);
+  border-radius: 6px;
+  background: var(--i-bg);
+  color: var(--i-strong);
+  resize: none;
+  outline: none;
+  overflow: hidden;
+  field-sizing: content;
+}
+
+/* The layers the picked one sits in, outermost first: each picks that layer */
+.crumbs {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 2px;
+  margin: -4px 0 10px;
+  color: var(--i-dim);
+  font-size: 12px;
+}
+
+.crumb {
+  padding: 1px 4px;
+  border-radius: 4px;
+  color: var(--i-dim);
+  cursor: pointer;
+}
+
+.crumb:hover {
+  background: var(--i-fill-2);
+  color: var(--i-text);
+}
+
+.crumb::after {
+  content: "›";
+  margin-left: 6px;
+  color: var(--i-faint);
+}
+
+/* A change added or removed layers: the list is read when the editor loads */
+.layersChanged {
+  display: block;
+  width: 100%;
+  margin: 0 0 8px;
+  padding: 8px 10px;
+  border: 1px solid color-mix(in srgb, var(--i-accent) 35%, transparent);
+  border-radius: 8px;
+  background: color-mix(in srgb, var(--i-accent) 10%, transparent);
+  color: var(--i-text);
+  font-size: 12px;
+  text-align: left;
+  cursor: pointer;
+}
+
+.fromNote {
+  color: var(--i-dim);
+  font-weight: 400;
+}
+
+/* Add new object: floats at the bottom of the layers list */
+.addObject {
+  position: absolute;
+  left: 50%;
+  bottom: 14px;
+  z-index: 2;
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  height: 32px;
+  padding: 0 14px;
+  border: 2px solid #fff;
+  border-radius: 999px;
+  background: var(--i-accent);
+  box-shadow: inset 0 -7px 4px rgba(255, 255, 255, 0.24), 0 8px 24px rgba(0, 0, 0, 0.45);
+  color: #fff;
+  font-weight: 500;
+  white-space: nowrap;
+  transform: translateX(-50%);
+  cursor: pointer;
+  transition: background 120ms ease, transform 120ms ease;
+}
+
+.addObject:hover {
+  background: var(--i-accent-hover);
+  transform: translateX(-50%) translateY(-1px);
+}
+
+.addObject svg {
+  width: 14px;
+  height: 14px;
+  fill: none;
+  stroke: currentColor;
+  stroke-width: 1.8;
+  stroke-linecap: round;
+}
+
+/* ---------- right: Elements (the picked layer's values) and AI changes (the cards) ---------- */
+
+.rightTabs {
+  border-bottom: 1px solid var(--i-line);
+}
+
+.rightTabs button {
+  display: flex;
+  align-items: center;
+  gap: 5px;
+}
+
+/* Something is running, or waiting for you to keep or undo it */
+.dot {
+  width: 6px;
+  height: 6px;
+  border-radius: 50%;
+  background: var(--i-accent);
+}
+
+.changesEmpty {
+  padding: 20px 14px;
+  color: var(--i-dim);
+}
+
+/* ---------- asking before leaving for another site ---------- */
+
+.confirmBack {
+  position: fixed;
+  inset: 0;
+  z-index: 10;
+  display: grid;
+  place-items: center;
+  background: var(--i-scrim);
+}
+
+.confirm {
+  width: min(380px, calc(100vw - 32px));
+  padding: 20px;
+  border: 1px solid var(--i-line);
+  border-radius: 16px;
+  background: var(--i-panel);
+  box-shadow: 0 24px 60px var(--i-shadow);
+}
+
+.confirm h2 {
+  margin: 0 0 8px;
+  color: var(--i-strong);
+  font-size: 15px;
+  font-weight: 600;
+}
+
+.confirm p {
+  margin: 0 0 6px;
+  color: var(--i-soft);
+  font-size: 13px;
+  line-height: 1.45;
+}
+
+.confirm code {
+  color: var(--i-accent-ink);
+  font-size: 13px;
+}
+
+.confirmActions {
+  display: flex;
+  justify-content: flex-end;
+  gap: 8px;
+  margin-top: 16px;
+}
+
+.confirmActions button {
+  height: 32px;
+}
+
+/* ---------- the cover over a pane too narrow for the editor, in the Claude app's own browser (NarrowCover.tsx) ---------- */
+
+.narrowBack {
+  position: fixed;
+  inset: 0;
+  z-index: 20;
+  display: grid;
+  place-items: center;
+  padding: 16px;
+  background: var(--i-scrim);
+  -webkit-backdrop-filter: blur(14px);
+  backdrop-filter: blur(14px);
+}
+
+.narrow {
+  width: min(340px, 100%);
+  text-align: center;
+}
+
+.narrow h2 {
+  font-size: 16px;
+}
+
+.narrow p strong {
+  color: var(--i-strong);
+  font-weight: 600;
+}
+
+.narrow .narrowLink {
+  display: block;
+  margin: 12px 0 8px;
+  padding: 8px 10px;
+  overflow: hidden;
+  border: 1px solid var(--i-line);
+  border-radius: 8px;
+  background: var(--i-input);
+  color: var(--i-text);
+  font-size: 13px;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  user-select: all;
+}
+
+.narrow .narrowNote {
+  margin: 0 0 14px;
+  color: var(--i-dim);
+  font-size: 13px;
+}
+
+.narrow > button {
+  width: 100%;
+  height: 34px;
+}
+
+.narrow .narrowStay {
+  margin-top: 6px;
+  border: 0;
+  background: none;
+  color: var(--i-dim);
+  font: inherit;
+  text-decoration: underline;
+  text-underline-offset: 3px;
+  cursor: pointer;
+}
+
+.narrow .narrowStay:hover {
+  color: var(--i-text);
+}
+
+
+
+/* ---------- the About card (About.tsx), opened by the logo ---------- */
+
+.aboutBack {
+  position: fixed;
+  inset: 0;
+  z-index: 20;
+  display: grid;
+  place-items: center;
+  padding: 24px;
+  background: var(--i-scrim);
+  backdrop-filter: blur(12px);
+  -webkit-backdrop-filter: blur(12px);
+}
+
+.about {
+  position: relative;
+  width: min(520px, 100%);
+  max-height: calc(100dvh - 48px);
+  overflow: auto;
+  padding: 32px;
+  border: 1px solid var(--i-line);
+  border-radius: 24px;
+  background: var(--i-panel);
+  box-shadow: 0 24px 100px var(--i-shadow);
+  color: var(--i-text);
+  animation: aboutEnter 220ms cubic-bezier(0.16, 1, 0.3, 1);
+}
+
+@keyframes aboutEnter {
+  from {
+    opacity: 0;
+    transform: translateY(8px) scale(0.985);
+  }
+}
+
+.aboutClose {
+  position: absolute;
+  top: 23px;
+  right: 23px;
+  display: grid;
+  place-items: center;
+  width: 36px;
+  height: 36px;
+  border-radius: 50%;
+  background: var(--i-seg);
+  color: var(--i-dim);
+  cursor: pointer;
+}
+
+.aboutClose:hover {
+  background: var(--i-fill-3);
+  color: var(--i-text);
+}
+
+.aboutClose svg {
+  width: 18px;
+  height: 18px;
+  fill: none;
+  stroke: currentColor;
+  stroke-width: 1.5;
+  stroke-linecap: round;
+}
+
+.aboutWordmark {
+  display: inline-flex;
+  align-items: center;
+  gap: 7px;
+  color: var(--i-text);
+  font-size: 18px;
+  font-weight: 500;
+  line-height: 24px;
+  letter-spacing: -0.7px;
+  text-decoration: none;
+}
+
+.aboutWordmark svg {
+  width: 25px;
+  height: 25px;
+  fill: currentColor;
+  transition: transform 200ms cubic-bezier(0.16, 1, 0.3, 1);
+}
+
+.aboutWordmark:hover svg {
+  transform: rotate(-12deg);
+}
+
+.aboutIntro {
+  padding: 34px 0 28px;
+}
+
+.aboutIntro p {
+  margin: 0;
+  color: var(--i-dim);
+  font-size: 12px;
+  line-height: 18px;
+  letter-spacing: 0.01em;
+}
+
+.aboutIntro h2 {
+  margin: 0 0 16px;
+  color: var(--i-text);
+  font-size: clamp(38px, 5vw, 52px);
+  font-weight: 500;
+  line-height: 0.99;
+  letter-spacing: -2.4px;
+}
+
+.aboutIntro h2 + p {
+  font-size: 14px;
+  line-height: 21px;
+  letter-spacing: -0.02em;
+}
+
+.aboutTemplates {
+  display: flex;
+  align-items: center;
+  gap: 17px;
+  min-height: 96px;
+  padding: 22px;
+  border: 1px solid #683dca;
+  border-radius: 15px;
+  background: #7548d9;
+  box-shadow: inset 0 1px 0 rgba(255, 255, 255, 0.19);
+  color: #fff;
+  text-decoration: none;
+  transition: background 180ms ease, transform 180ms ease;
+}
+
+.aboutTemplates:hover {
+  background: #8254e3;
+  transform: translateY(-2px);
+}
+
+.aboutTemplates > span:nth-child(2) {
+  flex: 1;
+  min-width: 0;
+}
+
+.aboutTemplates strong {
+  display: block;
+  font-size: 18px;
+  font-weight: 500;
+  line-height: 24px;
+  letter-spacing: -0.4px;
+}
+
+.aboutTemplates small {
+  display: block;
+  margin-top: 4px;
+  color: #efe6ff;
+  font-size: 12px;
+  line-height: 17px;
+}
+
+.aboutTemplatesIcon {
+  flex: none;
+  display: grid;
+  grid-template-columns: 16px 16px;
+  grid-template-rows: 16px 16px;
+  gap: 4px;
+  transform: rotate(-8deg);
+  transition: transform 220ms cubic-bezier(0.16, 1, 0.3, 1);
+}
+
+.aboutTemplates:hover .aboutTemplatesIcon {
+  transform: rotate(0);
+}
+
+.aboutTemplatesIcon i {
+  display: block;
+  border: 1.5px solid rgba(255, 255, 255, 0.6);
+  border-radius: 4px;
+}
+
+.aboutTemplatesIcon i:first-child {
+  grid-row: span 2;
+  background: rgba(255, 255, 255, 0.09);
+}
+
+.aboutTemplatesIcon i:last-child {
+  background: rgba(255, 255, 255, 0.22);
+}
+
+.aboutTemplatesArrow {
+  display: grid;
+  place-items: center;
+  width: 34px;
+  height: 34px;
+  border: 1px solid rgba(255, 255, 255, 0.25);
+  border-radius: 50%;
+  font-size: 22px;
+  line-height: 1;
+}
+
+.aboutSocials {
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  gap: 10px;
+  margin-top: 12px;
+}
+
+.aboutTile {
+  display: grid;
+  grid-template-rows: 24px auto;
+  align-content: start;
+  gap: 22px;
+  min-height: 126px;
+  padding: 17px 15px;
+  border: 1px solid var(--i-line);
+  border-radius: 14px;
+  background: var(--i-panel);
+  color: var(--i-text);
+  text-decoration: none;
+  transition: background 180ms ease, transform 180ms ease, border-color 180ms ease;
+}
+
+.aboutTile:hover {
+  border-color: var(--i-line-strong);
+  background: var(--i-seg);
+  transform: translateY(-2px);
+}
+
+.aboutTile[data-pending="true"] {
+  opacity: 0.48;
+  cursor: default;
+  user-select: none;
+}
+
+.aboutTile[data-pending="true"]:hover {
+  border-color: var(--i-line);
+  background: var(--i-panel);
+  transform: none;
+}
+
+.aboutTileTop {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+}
+
+.aboutTileTop svg {
+  width: 21px;
+  height: 21px;
+  fill: currentColor;
+}
+
+.aboutArrow {
+  color: var(--i-dim);
+  font-size: 18px;
+  line-height: 22px;
+  opacity: 0.6;
+}
+
+.aboutTile[data-pending="true"] .aboutArrow {
+  visibility: hidden;
+}
+
+.aboutTile strong {
+  display: block;
+  font-size: 14px;
+  font-weight: 500;
+  line-height: 20px;
+  letter-spacing: -0.2px;
+}
+
+.aboutTile small {
+  display: block;
+  margin-top: 3px;
+  color: var(--i-dim);
+  font-size: 11px;
+  line-height: 16px;
+  letter-spacing: 0;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .about {
+    animation: none;
+  }
+
+  .aboutTemplates,
+  .aboutTemplatesIcon,
+  .aboutTile,
+  .aboutWordmark svg {
+    transition: none;
+    transform: none !important;
+  }
+}

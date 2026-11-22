@@ -1,0 +1,32 @@
+# Runs on every pull request and on main: the type check of the panel and the server, the panel's build, the unit
+# tests, and the browser test of layer identity. The before/after sites suite (tests/sites/run.mjs) needs real test sites and is run by hand.
+name: test
+on:
+  pull_request:
+  push:
+    branches: [main]
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v4
+      - uses: pnpm/action-setup@v4
+        with:
+          version: 12
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 24 # the server and the scripts run .ts files as they are (Node 23.6 or newer)
+          cache: pnpm
+      - run: pnpm install --frozen-lockfile
+      - name: Type check (panel and server)
+        run: pnpm typecheck
+      - name: Panel build
+        run: pnpm build:panel
+      - name: Unit tests
+        run: pnpm test
+      - name: Browser tests (layer identity, what the panel checks on the page)
+        run: node tests/browser/identity.mjs && node tests/browser/observe.mjs
+        env:
+          CHROME: google-chrome
+          CHROME_FLAGS: --no-sandbox

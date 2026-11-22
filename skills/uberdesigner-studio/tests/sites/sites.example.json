@@ -1,0 +1,5 @@
+[
+  { "name": "bakery", "dir": "/path/to/html-bakery" },
+  { "name": "keycap", "dir": "/path/to/keycap-sphere-ludica" },
+  { "name": "luggage", "dir": "/path/to/ui-luggage-sizer" }
+]

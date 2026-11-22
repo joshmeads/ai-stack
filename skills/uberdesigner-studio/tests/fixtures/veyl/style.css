@@ -1,0 +1,121 @@
+/* NACRE. Desktop first; mobile.css loads after this file and has the last word on phones. */
+:root {
+  --ink: #080808;
+  --paper: #f4f1ea;
+  --accent: #b4542a;
+  --muted: #6f6a60;
+  --edge: 48px;
+  --title: 40px;
+}
+
+* { box-sizing: border-box; }
+body { margin: 0; font-family: Georgia, serif; color: var(--ink); background: var(--paper); }
+h2, h3, p { margin: 0; }
+
+.site-header { position: fixed; top: 0; left: 0; right: 0; z-index: 10; display: flex; justify-content: space-between; align-items: center; padding: 16px var(--edge); background: var(--paper); }
+.brand { color: var(--ink); text-decoration: none; letter-spacing: 0.2em; }
+.header-nav { display: flex; gap: 24px; }
+.header-nav a { color: var(--ink); text-decoration: none; font-size: 14px; }
+
+/* The drawer is fixed to the screen and stays hidden until its button is pressed (a class this page never adds):
+   no scroll position shows it */
+.drawer { position: fixed; top: 0; right: 0; bottom: 0; z-index: 20; width: 280px; padding: 80px 24px; display: grid; align-content: start; gap: 12px; background: var(--ink); color: var(--paper); visibility: hidden; }
+.drawer.is-open { visibility: visible; }
+.drawer a { color: var(--paper); }
+
+/* The prologue is pinned: the page scrolls three screens while the stage stays, and the second line comes in halfway */
+.prologue { height: 300vh; }
+.prologue__stage { position: sticky; top: 0; height: 100vh; display: grid; place-content: center; gap: 12px; text-align: center; }
+.prologue__line { font-size: var(--title); }
+.prologue__sub { color: var(--muted); opacity: 0; transition: opacity 0.4s; }
+.prologue__sub.is-in { opacity: 1; }
+
+.band { padding: 120px var(--edge); display: grid; gap: 16px; }
+.band h2 { font-size: var(--title); font-weight: 400; }
+.thermal { background: #ebe6da; }
+.press { background: var(--ink); color: var(--paper); }
+
+.founders { display: grid; grid-template-columns: 1fr 1fr; gap: 24px; padding: 80px var(--edge); }
+.founder { padding: 32px; border: 1px solid var(--muted); }
+.founder h3 { font-size: 24px; font-weight: 400; }
+.founder p { color: var(--muted); font-size: 14px; }
+
+.archive { padding: 80px 0; }
+.archive__strip { position: sticky; top: 56px; padding: 12px var(--edge); background: var(--paper); }
+.archive__strip h2 { font-size: 12px; text-transform: uppercase; letter-spacing: 0.12em; font-weight: 400; }
+.archive__thumbs { list-style: none; margin: 0; padding: 0 var(--edge); display: grid; grid-template-columns: repeat(4, 1fr); gap: 12px; }
+.archive__thumbs li { aspect-ratio: 1; display: grid; place-content: center; background: #e2dccd; color: var(--muted); }
+
+/* The spider walks forever: it crosses the section, fades out at the far side and starts again */
+.colony { position: relative; height: 420px; overflow: hidden; padding: 80px var(--edge); }
+.colony__spider { position: absolute; top: 180px; left: 0; width: 28px; height: 28px; border-radius: 50%; background: var(--ink); animation: walk 6s linear infinite; }
+@keyframes walk {
+  0% { transform: translateX(-40px); opacity: 0; }
+  10% { opacity: 1; }
+  80% { opacity: 1; }
+  100% { transform: translateX(100vw); opacity: 0; }
+}
+.colony__cocoon { display: none; }
+.colony__caption { color: var(--muted); font-size: 14px; }
+
+.contact { padding: 120px var(--edge); display: grid; gap: 12px; }
+.contact h2 { font-size: var(--title); font-weight: 400; }
+.contact a { color: var(--accent); }
+
+/* A long story: the page scrolls nine screens while the stage stays. Nothing of it shows for the first screen (the
+   scene before still fills the view on the real site); then the picture stays and the nine lines show one at a time */
+.story { height: 900vh; }
+.story__stage { position: sticky; top: 0; height: 100vh; display: grid; place-items: center; }
+.story__pic, .story__scene { grid-area: 1 / 1; opacity: 0; }
+.story__scene { margin-top: 260px; font-size: 20px; }
+.story__stage.is-live .story__pic, .story__stage.is-live .story__scene.is-on { opacity: 1; }
+
+/* A title whose letters wait for a reveal that never comes here: on screen, and nothing of it can be seen */
+.woven { padding: 120px var(--edge); }
+.woven__title { font-size: var(--title); font-weight: 400; }
+.woven__title span { opacity: 0; }
+
+/* Three steps: one layer of the map on three elements (a row of cards). What is inside a card isn't in the map */
+.steps { display: grid; grid-template-columns: repeat(3, 1fr); gap: 24px; padding: 80px var(--edge); }
+.step { padding: 24px; border: 1px solid var(--muted); border-radius: 8px; }
+.step h3 { font-weight: 500; }
+
+/* A scene: a canvas that fills the section, a layer of the map, with words laid over it that are not */
+.scene { position: relative; height: 400px; }
+.scene__canvas { position: absolute; inset: 0; width: 100%; height: 100%; background: #1c1a17; }
+.scene__words { position: relative; padding: 170px var(--edge) 0; color: #f4efe6; font-size: 28px; }
+
+/* A note that is a layer of the map, inside a card with a look of its own that is not: a click on the picked note
+   again must not pick the card around it (going in never picks something bigger) */
+.contact__card { padding: 20px; background: #efe9dd; border-radius: 8px; max-width: 420px; }
+/* A card with a picture, a heading and a line, none of them layers of the map (picking the parts of one card) */
+.contact__maker { display: grid; gap: 8px; padding: 16px; background: #fff; border: 1px solid #d9d2c3; border-radius: 8px; max-width: 420px; }
+.contact__maker h3 { font-weight: 500; }
+
+/* A crowd: six balls of one kind and one map, none of them in the map of layers (what a map leaves out and the
+   editor offers: the six as one layer, the map as another; never the heading, which is typed over where it is) */
+.crowd { padding: 80px var(--edge); display: flex; flex-wrap: wrap; gap: 20px; align-items: center; }
+.crowd h2 { flex: 0 0 100%; font-size: var(--title); font-weight: 400; }
+/* The balls float in a field that lets clicks through and is never outlined itself (a scene, to the map): what it
+   holds is reached all the same */
+.crowd__field { flex: 0 0 100%; display: flex; gap: 20px; pointer-events: none; }
+.crowd__field img { pointer-events: none; }
+/* A second line stacked on the first, waiting its turn: the block is there, its words (each in a span) are not shown.
+   A pick at that spot must land on the line that shows */
+.scene__next { position: absolute; left: 40%; top: 70px; width: 20%; height: 70px; margin: 0; color: #f4efe6; }
+.scene__next span { opacity: 0; }
+
+/* A pile: one pill under a card painted with an opaque gradient (nothing of it can be seen: no outline for it), and
+   one under a veil that fades to nothing (still in view: it keeps its outline) */
+.pile { position: relative; height: 320px; }
+.pile__pill { position: absolute; top: 120px; width: 130px; height: 72px; display: grid; place-content: center; border-radius: 100px; background: #d9cdb8; }
+.pile__pill--under { left: 20%; }
+.pile__pill--veiled { left: 60%; }
+.pile__card { position: absolute; left: calc(20% - 60px); top: 30px; width: 250px; height: 250px; border-radius: 24px; background: linear-gradient(#efdf78, #f163f7 50%, #a92dfa); }
+.pile__veil { position: absolute; left: calc(60% - 60px); top: 30px; width: 250px; height: 250px; background: linear-gradient(rgba(28, 26, 23, 0.25), transparent); }
+
+/* The dock the script adds to the page, outside every layer: ⌘ reaches it from the page, and its pulse is CSS motion */
+.dock { position: fixed; right: 24px; bottom: 24px; z-index: 5; display: flex; gap: 10px; align-items: center; padding: 10px 14px; border-radius: 12px; background: #1c1a17; color: #f4efe6; }
+.dock__light { width: 12px; height: 12px; border-radius: 50%; background: #9be37b; animation: dock-pulse 1.6s ease-in-out infinite; }
+@keyframes dock-pulse { 50% { opacity: 0.35; } }
+.dock__label { margin: 0; font-size: 14px; }
