@@ -9,9 +9,9 @@ use serde::{Deserialize, Serialize};
 use serde_json::{Value, json};
 use sha2::{Digest as _, Sha256};
 
-use super::repo::{Repo, Repos, Snapshot, nul_joined, nul_paths, path_of};
-use super::scan::{Change, Engine, language_of};
-use super::{Finding, Settings, Severity};
+use super::repo::{Repo, Repos, Since, Snapshot, nul_joined, nul_paths, path_of};
+use super::scan::{Change, Engine, language_of, sort};
+use super::{Baseline, Finding, Settings, Severity};
 use crate::config::Harness;
 use crate::paths;
 
@@ -116,7 +116,6 @@ pub fn run(harness: Harness, event: HookEvent, settings: &Settings, input: &str)
     let session = Session::at(&settings.state_dir, &payload.session_id);
     session.keep_alive();
     let turn_id = payload.turn_id.as_deref().filter(|_| payload.agent_id.is_none());
-    let lint = |changes| settings.rules().map(|rules| Engine { settings, rules: &rules, scope: None, display: &cwd }.lint(changes));
     let mut notes = Vec::new();
     let reply = match event {
         HookEvent::Prompt => HookReply::Silent,
@@ -141,51 +140,68 @@ pub fn run(harness: Harness, event: HookEvent, settings: &Settings, input: &str)
             }
             let session = Session::open(&settings.state_dir, &payload.session_id)?;
             session.enter_turn(turn_id);
-            let mut changes = Vec::new();
+            let mut turns = Vec::new();
             for (repo, files) in &edited {
                 let only: HashSet<PathBuf> = files.iter().filter(|file| language_of(file).is_some()).cloned().collect();
-                let checked = session.baseline(repo).and_then(|turn| if only.is_empty() { Ok(Vec::new()) } else { turn.changes(repo, Some(&only)) });
-                match checked {
-                    Ok(found) => changes.extend(found),
+                match session.baseline(repo) {
+                    Ok(turn) if !only.is_empty() => turns.push((repo, turn, only)),
+                    Ok(_) => {}
                     Err(error) => notes.extend(session.repo_error(repo, &error)),
                 }
             }
-            if changes.is_empty() {
-                HookReply::Silent
-            } else {
-                match lint(changes) {
-                    Ok(findings) => post_edit_reply(&findings),
-                    Err(error) => session.load_error(&error),
+            let mut checked = Vec::new();
+            for (repo, turn, only) in &turns {
+                match turn.check(repo, Some(only)) {
+                    Ok(check) => checked.push((*repo, check)),
+                    Err(error) => notes.extend(session.repo_error(repo, &error)),
                 }
+            }
+            match lint_checked(&session, checked, settings, &cwd, &mut notes) {
+                Ok(findings) => post_edit_reply(&findings),
+                Err(reply) => reply,
             }
         }
         HookEvent::Stop => {
             session.enter_turn(turn_id);
+            session.mark_backgrounded(payload.waits_on_agents());
             let turns = session.turns();
             if turns.is_empty() && !session.root.join(STOP_STATE).exists() {
                 return Ok(None);
             }
-            stop(&session, &turns, &payload, &mut notes, lint)?
+            stop(&session, &turns, &payload, &mut notes, settings, &cwd)?
         }
     };
     Ok(reply.render(notes))
 }
 
-fn stop(session: &Session, turns: &[(Repo, Turn)], payload: &Payload, notes: &mut Vec<String>, lint: impl FnOnce(Vec<Change>) -> Result<Vec<Finding>>) -> Result<HookReply> {
-    let mut changes = Vec::new();
-    for (repo, turn) in turns {
-        match turn.changes(repo, None) {
-            Ok(found) => changes.extend(found),
+fn lint_checked(session: &Session, checked: Vec<(&Repo, Checked)>, settings: &Settings, display: &Path, notes: &mut Vec<String>) -> Result<Vec<Finding>, HookReply> {
+    if checked.iter().all(|(_, check)| check.changes.is_empty()) {
+        return Ok(Vec::new());
+    }
+    let rules = settings.rules().map_err(|error| session.load_error(&error))?;
+    let engine = Engine { settings, rules: &rules, scope: None, display };
+    let mut findings = Vec::new();
+    for (repo, check) in checked {
+        match check.findings(&engine) {
+            Ok(found) => findings.extend(found),
             Err(error) => notes.extend(session.repo_error(repo, &error)),
         }
     }
-    let findings = if changes.is_empty() {
-        Vec::new()
-    } else {
-        match lint(changes) {
-            Ok(findings) => findings,
-            Err(error) => return Ok(session.load_error(&error)),
+    sort(&mut findings);
+    Ok(findings)
+}
+
+fn stop(session: &Session, turns: &[(Repo, Turn)], payload: &Payload, notes: &mut Vec<String>, settings: &Settings, display: &Path) -> Result<HookReply> {
+    let mut checked = Vec::new();
+    for (repo, turn) in turns {
+        match turn.check(repo, None) {
+            Ok(check) => checked.push((repo, check)),
+            Err(error) => notes.extend(session.repo_error(repo, &error)),
         }
+    }
+    let findings = match lint_checked(session, checked, settings, display, notes) {
+        Ok(findings) => findings,
+        Err(reply) => return Ok(reply),
     };
     if payload.waits_on_agents() {
         let errors: Vec<Finding> = findings.into_iter().filter(|finding| finding.severity == Severity::Error).collect();
@@ -220,11 +236,15 @@ fn close_prompted_turn(state_dir: &Path, input: &str) {
     if let Ok(payload) = serde_json::from_str::<Payload>(input)
         && payload.agent_id.is_none()
     {
-        Session::at(state_dir, &payload.session_id).close_turn();
+        let session = Session::at(state_dir, &payload.session_id);
+        if !session.keeps_turn(payload.turn_id.as_deref()) {
+            session.close_turn();
+        }
     }
 }
 
-const CONTEXT_BUDGET: usize = 9_000;
+const REPORT_BUDGET: usize = 10_000;
+const TAIL_ROOM: usize = 100;
 const SNIPPET_CHARS: usize = 160;
 
 fn post_edit_reply(findings: &[Finding]) -> HookReply {
@@ -238,24 +258,31 @@ fn post_edit_reply(findings: &[Finding]) -> HookReply {
 }
 
 fn report(header: &str, findings: &[Finding]) -> String {
+    let room = REPORT_BUDGET.saturating_sub(header.len() + 1 + TAIL_ROOM);
+    let fits = |room: &mut usize, text: &str| room.checked_sub(text.len()).map(|left| *room = left).is_some();
     let mut rules: Vec<(&str, &str)> = Vec::new();
     for finding in findings {
         if !rules.contains(&(finding.rule.as_str(), finding.message.as_str())) {
             rules.push((&finding.rule, &finding.message));
         }
     }
-    let mut text = format!("{header}\n");
-    for (rule, message) in rules {
-        text.push_str(&format!("{rule}: {message}\n"));
+    let mut message_room = room / 2;
+    let messages: Vec<String> = rules.iter().map(|(rule, message)| format!("{rule}: {message}\n")).filter(|line| fits(&mut message_room, line)).collect();
+    let mut entry_room = room - messages.iter().map(String::len).sum::<usize>();
+    let entries: Vec<String> = findings
+        .iter()
+        .map(|finding| {
+            let snippet: String = finding.snippet.trim().chars().take(SNIPPET_CHARS).collect();
+            format!("{}:{}:{} {} {}\n    {snippet}\n", finding.path, finding.line, finding.column, finding.severity.as_str(), finding.rule)
+        })
+        .take_while(|entry| fits(&mut entry_room, entry))
+        .collect();
+    let mut text = format!("{header}\n{}{}", messages.concat(), entries.concat());
+    if entries.len() < findings.len() {
+        text.push_str(&format!("and {} more\n", findings.len() - entries.len()));
     }
-    for (shown, finding) in findings.iter().enumerate() {
-        let snippet: String = finding.snippet.trim().chars().take(SNIPPET_CHARS).collect();
-        let entry = format!("{}:{}:{} {} {}\n    {snippet}\n", finding.path, finding.line, finding.column, finding.severity.as_str(), finding.rule);
-        if text.len() + entry.len() > CONTEXT_BUDGET {
-            text.push_str(&format!("and {} more\n", findings.len() - shown));
-            break;
-        }
-        text.push_str(&entry);
+    if messages.len() < rules.len() {
+        text.push_str(&format!("and {} more rule message(s)\n", rules.len() - messages.len()));
     }
     text
 }
@@ -327,6 +354,8 @@ fn by_repo(settings: &Settings, files: Vec<PathBuf>) -> Vec<(Repo, Vec<PathBuf>)
 
 const STOP_STATE: &str = "stop.json";
 const TURN_ID: &str = "turn-id";
+const BACKGROUNDED: &str = "backgrounded";
+const REFLOGS: &str = "reflogs";
 
 struct Turn {
     dir: PathBuf,
@@ -340,29 +369,54 @@ impl Turn {
         let head = read("head")?;
         let taken = read("taken")?.parse().ok()?;
         let skipped = nul_paths(&std::fs::read(dir.join("skipped")).ok()?).collect();
-        Some(Turn { dir: dir.to_path_buf(), snapshot: Snapshot { tree, skipped, head: (!head.is_empty()).then_some(head), taken } })
+        let reflogs = read(REFLOGS).map(|text| text.lines().filter_map(|line| line.split_once('\t')).map(|(name, newest)| (name.to_string(), newest.to_string())).collect());
+        Some(Turn { dir: dir.to_path_buf(), snapshot: Snapshot { tree, skipped, head: (!head.is_empty()).then_some(head), taken, reflogs } })
     }
 
-    fn changes(&self, repo: &Repo, only: Option<&HashSet<PathBuf>>) -> Result<Vec<Change>> {
+    fn check<'a>(&'a self, repo: &'a Repo, only: Option<&HashSet<PathBuf>>) -> Result<Checked<'a>> {
         let head = repo.head();
-        let since = repo.changes_since(&self.snapshot, &self.dir.join("objects"), head.as_deref(), only)?;
-        let moved = head != self.snapshot.head;
-        let mut changes = Vec::new();
-        for (path, baseline) in &since.changes {
-            let Some(mut change) = Change::read(path.clone(), baseline) else { continue };
-            if moved && !change.owned.is_empty() {
-                let older = since.committed_by(&change.path, self.snapshot.taken);
-                if !older.is_empty() {
-                    change.owned = change.owned.without(&older);
+        let mut since = repo.changes_since(&self.snapshot, &self.dir.join("objects"), head.as_deref(), only)?;
+        let changes = std::mem::take(&mut since.changes).into_iter().filter_map(|(path, baseline)| Some((Change::read(path, &baseline)?, baseline))).collect();
+        Ok(Checked { since, snapshot: &self.snapshot, changes })
+    }
+}
+
+struct Checked<'a> {
+    since: Since<'a>,
+    snapshot: &'a Snapshot,
+    changes: Vec<(Change, Baseline)>,
+}
+
+impl Checked<'_> {
+    fn findings(self, engine: &Engine) -> Result<Vec<Finding>> {
+        let Checked { since, snapshot, changes } = self;
+        let mut findings = engine.lint(changes.iter().map(|(change, _)| change));
+        if findings.is_empty() {
+            return Ok(findings);
+        }
+        let Some(history) = since.history(snapshot) else { return Ok(findings) };
+        let flagged: HashSet<PathBuf> = findings.iter().map(|finding| finding.file.clone()).collect();
+        let mut revised = Vec::new();
+        for (mut change, baseline) in changes.into_iter().filter(|(change, _)| flagged.contains(&change.path)) {
+            if change.owned.is_empty() {
+                if since.upstream_only(&change.path, &baseline, &change.source, &history)? {
+                    continue;
+                }
+            } else {
+                let disowned = since.disowned(&change.path, &history.authors)?;
+                if !disowned.is_empty() {
+                    change.owned = change.owned.without(&disowned);
                     change.created = false;
                     if change.owned.is_empty() {
                         continue;
                     }
                 }
             }
-            changes.push(change);
+            revised.push(change);
         }
-        Ok(changes)
+        findings.retain(|finding| !flagged.contains(&finding.file));
+        findings.extend(engine.lint(&revised));
+        Ok(findings)
     }
 }
 
@@ -434,6 +488,8 @@ impl Session {
         std::fs::write(staged.path().join("head"), snapshot.head.as_deref().unwrap_or_default())?;
         std::fs::write(staged.path().join("taken"), snapshot.taken.to_string())?;
         std::fs::write(staged.path().join("tree"), &snapshot.tree)?;
+        let reflogs: String = snapshot.reflogs.iter().flatten().map(|(name, newest)| format!("{name}\t{newest}\n")).collect();
+        std::fs::write(staged.path().join(REFLOGS), reflogs)?;
         if std::fs::rename(staged.path(), &dir).is_ok() {
             let _ = staged.keep();
         }
@@ -459,6 +515,20 @@ impl Session {
         let _ = std::fs::remove_dir_all(self.turn_dir());
         let _ = std::fs::remove_file(self.root.join(STOP_STATE));
         let _ = std::fs::remove_file(self.root.join(TURN_ID));
+        let _ = std::fs::remove_file(self.root.join(BACKGROUNDED));
+    }
+
+    fn keeps_turn(&self, turn_id: Option<&str>) -> bool {
+        self.root.join(BACKGROUNDED).exists() || turn_id.is_some_and(|id| std::fs::read(self.root.join(TURN_ID)).is_ok_and(|known| known == id.as_bytes()))
+    }
+
+    fn mark_backgrounded(&self, waiting: bool) {
+        let marker = self.root.join(BACKGROUNDED);
+        if waiting {
+            let _ = std::fs::create_dir_all(&self.root).and_then(|()| std::fs::write(&marker, b""));
+        } else {
+            let _ = std::fs::remove_file(&marker);
+        }
     }
 
     fn stop_state(&self) -> StopState {
@@ -573,7 +643,13 @@ mod tests {
 
         let many: Vec<Finding> = (1..=400).map(|line| Finding { message: "x".repeat(240), snippet: format!("export const v{line} = {line}; // {}", "p".repeat(300)), ..finding("big.ts", line) }).collect();
         let text = report("header", &many);
-        assert!(text.len() <= CONTEXT_BUDGET && text.matches(&"x".repeat(240)).count() == 1 && text.contains(" more\n"), "{}", text.len());
+        assert!(text.len() <= REPORT_BUDGET && text.matches(&"x".repeat(240)).count() == 1 && text.contains(" more\n"), "{}", text.len());
+        let distinct: Vec<Finding> = (1..=400).map(|line| Finding { message: format!("{line} {}", "y".repeat(90)), ..finding("big.ts", line) }).collect();
+        let text = report("header", &distinct);
+        let shown = text.matches("big.ts:").count();
+        let explained = text.matches(&"y".repeat(90)).count();
+        assert!(text.len() <= REPORT_BUDGET && shown >= 20 && explained >= 20, "messages leave room for locations: {} characters, {shown} shown", text.len());
+        assert!(text.contains(&format!("and {} more\n", 400 - shown)) && text.contains(&format!("and {} more rule message(s)\n", 400 - explained)), "{text}");
         assert_eq!(session_name("../../etc"), hex(b"../../etc"));
     }
 
@@ -621,13 +697,14 @@ mod tests {
         assert_eq!(stop(with(payload("s", &repo, Value::Null, false), "hook_event_name", json!("SubagentStop"))), None);
         let waiting = stop(with(payload("s", &repo, Value::Null, false), "background_tasks", json!([{"id": "t", "type": "subagent", "status": "running"}]))).unwrap();
         assert!(waiting.contains("systemMessage") && waiting.contains("bar.ts:1:") && !waiting.contains("decision"), "a stop while a background agent runs reports and does not block: {waiting}");
+        assert_eq!(prompt(), None, "the background agent's report-back prompt keeps the turn");
 
         std::fs::rename(repo.join("notes.txt"), repo.join("helper.spec.ts")).unwrap();
         put(&repo.join("foo.ts"), &human.replace("export const v2 = 2;\n", "export const v2 = [1, 2]\n  .map((n) => n * 2)\n  .length; // agent prose\n"));
-        git_dated(&repo, "2090-01-01T00:00:00Z", &["commit", "-qam", "the agent commits"]);
+        git_dated(&repo, "2000-01-01T00:00:00Z", &["commit", "-qam", "the agent commits"]);
         git(&repo, &["merge", "-q", "--no-edit", "teammate"]);
 
-        assert_eq!(blocked_at(lead_stop(false)), ["bar.ts:1:23 error no-comments", "foo.ts:4:12 error no-comments"], "a merged commit from before the turn and a renamed file from before it are not owned");
+        assert_eq!(blocked_at(lead_stop(false)), ["bar.ts:1:23 error no-comments", "foo.ts:4:12 error no-comments"], "the reflog, not the commit date, says which commits are the agent's");
         assert!(lead_stop(true).unwrap().contains("systemMessage"), "the loop guard releases an unchanged set");
         put(&repo.join("bar.ts"), "export const bar = 2; // more prose in the same turn\n");
         assert_eq!(blocked_at(lead_stop(false)), ["bar.ts:1:23 error no-comments"], "a released stop does not end the turn");
@@ -645,9 +722,32 @@ mod tests {
 
         let codex = |event, turn: &str| hook(Harness::Codex, event, with(payload("c", &repo, json!({"command": "*** Begin Patch\n*** Update File: bar.ts\n@@\n*** End Patch\n"}), false), "turn_id", json!(turn)));
         assert_eq!(codex(HookEvent::PreEdit, "t1"), None);
-        put(&repo.join("bar.ts"), "export const bar = 3; // the human again\n");
+        put(&repo.join("bar.ts"), "export const bar = 3; // the agent before a steer\n");
+        assert_eq!(codex(HookEvent::Prompt, "t1"), None);
+        assert_eq!(blocked_at(codex(HookEvent::Stop, "t1")), ["bar.ts:1:23 error no-comments"], "a steer with the running turn's id keeps the turn");
         assert_eq!(codex(HookEvent::PreEdit, "t2"), None, "a new Codex turn id starts a new turn without a prompt hook");
         assert_eq!(codex(HookEvent::Stop, "t2"), None);
+
+        let other = root.join("other");
+        put(&other.join("a.ts"), "export const a = 1;\n");
+        put(&other.join("parse.ts"), "export const p = 1;\n");
+        git(&other, &["init", "-q"]);
+        git(&other, &["add", "-A"]);
+        git(&other, &["commit", "-qm", "base"]);
+        git(&other, &["switch", "-qc", "teammate"]);
+        put(&other.join("parse.ts"), "// teammate prose\nexport const p = 1;\n");
+        put(&other.join("empty.spec.ts"), "");
+        git(&other, &["add", "-A"]);
+        git(&other, &["commit", "-qm", "teammate"]);
+        git(&other, &["switch", "-q", "main"]);
+        let merging = |event| hook(Harness::Claude, event, payload("m", &other, json!({"file_path": other.join("a.ts")}), false));
+        assert_eq!(merging(HookEvent::Prompt), None);
+        assert_eq!(merging(HookEvent::PreEdit), None);
+        put(&other.join("a.ts"), "export const a = 1; // agent prose\n");
+        git(&other, &["merge", "-q", "--no-commit", "--no-ff", "teammate"]);
+        assert_eq!(blocked_at(merging(HookEvent::Stop)), ["a.ts:1:21 error no-comments"], "lines and files a merge in progress brings are not the agent's");
+        git(&other, &["commit", "-qm", "merge teammate"]);
+        assert_eq!(blocked_at(merging(HookEvent::Stop)), ["a.ts:1:21 error no-comments"], "a file only upstream commits changed is not changed at all");
     }
 
     #[test]

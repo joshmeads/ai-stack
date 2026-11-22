@@ -9,6 +9,7 @@ use std::time::SystemTime;
 use anyhow::{Context as _, Result, anyhow, bail};
 
 use super::Baseline;
+use super::owned::same_lines;
 use super::scan::language_of;
 use crate::paths;
 
@@ -26,6 +27,33 @@ pub struct Snapshot {
     pub skipped: Vec<PathBuf>,
     pub head: Option<String>,
     pub taken: u64,
+    pub reflogs: Option<Vec<(String, String)>>,
+}
+
+pub enum Authors {
+    Reflog(HashSet<String>),
+    Before(u64),
+}
+
+impl Authors {
+    fn made(&self, id: &str, committed: u64) -> bool {
+        match self {
+            Authors::Reflog(ids) => ids.contains(id),
+            Authors::Before(taken) => committed >= *taken,
+        }
+    }
+}
+
+pub struct History {
+    pub authors: Authors,
+    before: Option<String>,
+    head: Option<String>,
+    applying: Option<Applying>,
+}
+
+struct Applying {
+    tip: String,
+    base: Option<String>,
 }
 
 #[derive(Clone, Copy, PartialEq, Eq)]
@@ -54,9 +82,8 @@ impl Repo {
 
     pub fn generated(&self, rels: &[PathBuf]) -> HashSet<PathBuf> {
         let input = nul_joined(rels);
-        let Ok(scratch) = tempfile::tempdir() else { return HashSet::new() };
-        let no_index = scratch.path().join("index");
-        let Ok(out) = run_git(&self.root, &["check-attr", "-z", "--stdin", "linguist-generated", "linguist-vendored"], &input, &[("GIT_INDEX_FILE", no_index.as_os_str())]) else {
+        let Ok(work) = Workspace::new(self, None, None) else { return HashSet::new() };
+        let Ok(out) = work.git(&work.index(), &["check-attr", "-z", "--stdin", "linguist-generated", "linguist-vendored"], &input) else {
             return HashSet::new();
         };
         let fields: Vec<&[u8]> = out.split(|&byte| byte == 0).collect();
@@ -64,8 +91,49 @@ impl Repo {
     }
 
     pub fn head(&self) -> Option<String> {
-        let out = git(&self.root, &["rev-parse", "--verify", "--quiet", "HEAD^{commit}"]).ok()?;
+        self.commit("HEAD")
+    }
+
+    fn commit(&self, rev: &str) -> Option<String> {
+        let out = git(&self.root, &["rev-parse", "--verify", "--quiet", "--end-of-options", &format!("{rev}^{{commit}}")]).ok()?;
         Some(String::from_utf8_lossy(&out).trim().to_string())
+    }
+
+    fn reflog(&self, name: &str, newest: bool) -> Vec<String> {
+        let mut args = vec!["log", "--walk-reflogs", "--no-show-signature", "--date=unix", "--format=%H %gd %gs"];
+        if newest {
+            args.push("-1");
+        }
+        args.extend([name, "--"]);
+        git(&self.root, &args).map(|out| String::from_utf8_lossy(&out).lines().map(String::from).collect()).unwrap_or_default()
+    }
+
+    fn reflog_tips(&self) -> Vec<(String, String)> {
+        let branch = git(&self.root, &["symbolic-ref", "--quiet", "HEAD"]).ok().map(|out| String::from_utf8_lossy(&out).trim().to_string());
+        std::iter::once("HEAD".to_string())
+            .chain(branch)
+            .map(|name| {
+                let newest = self.reflog(&name, true).into_iter().next().unwrap_or_default();
+                (name, newest)
+            })
+            .collect()
+    }
+
+    fn authors(&self, snapshot: &Snapshot) -> Authors {
+        let fallback = Authors::Before(snapshot.taken);
+        let Some(tips) = &snapshot.reflogs else { return fallback };
+        let mut made = HashSet::new();
+        for (at, (name, newest)) in tips.iter().enumerate() {
+            let entries = self.reflog(name, false);
+            let fresh = match entries.iter().position(|entry| entry == newest) {
+                Some(end) => &entries[..end],
+                None if newest.is_empty() && !entries.is_empty() => &entries[..],
+                None if at == 0 => return fallback,
+                None => continue,
+            };
+            made.extend(fresh.iter().filter_map(|entry| made_here(entry)));
+        }
+        Authors::Reflog(made)
     }
 
     pub fn changes(&self, base: &str) -> Result<Vec<(PathBuf, Baseline)>> {
@@ -130,7 +198,7 @@ impl Repo {
             work.git(&index, &["update-index", "-z", "--force-remove", "--stdin"], &nul_joined(&removed))?;
         }
         let tree = String::from_utf8(work.git(&index, &["write-tree"], &[])?)?.trim().to_string();
-        Ok(Snapshot { tree, skipped, head, taken })
+        Ok(Snapshot { tree, skipped, head, taken, reflogs: Some(self.reflog_tips()) })
     }
 
     pub fn changes_since<'a>(&'a self, snapshot: &Snapshot, store: &Path, head: Option<&str>, only: Option<&HashSet<PathBuf>>) -> Result<Since<'a>> {
@@ -139,7 +207,7 @@ impl Repo {
         let tracked = |path: &Path| lintable(path) && !skipped.contains(path);
         work.track_untracked(&tracked)?;
         let changes = work.changes(&snapshot.tree, Submodules::Skip, &|path| tracked(path) && only.is_none_or(|only| only.contains(path)))?;
-        Ok(Since { work, changes })
+        Ok(Since { work, head: head.map(str::to_string), changes })
     }
 
     fn submodule_changes(&self, rel: &Path, recorded: &str) -> Vec<(PathBuf, Baseline)> {
@@ -152,22 +220,91 @@ impl Repo {
 
 pub struct Since<'a> {
     work: Workspace<'a>,
+    head: Option<String>,
     pub changes: Vec<(PathBuf, Baseline)>,
 }
 
 impl Since<'_> {
-    pub fn committed_by(&self, path: &Path, time: u64) -> HashSet<u32> {
-        let Some(rel) = self.work.repo.relative(path) else { return HashSet::new() };
-        let Ok(out) = self.work.git(&self.work.index(), &[OsStr::new("blame"), OsStr::new("--porcelain"), OsStr::new("--"), rel.as_os_str()], &[]) else {
-            return HashSet::new();
+    pub fn history(&self, snapshot: &Snapshot) -> Option<History> {
+        let applying = self.applying();
+        if self.head == snapshot.head && applying.is_none() {
+            return None;
+        }
+        Some(History { authors: self.work.repo.authors(snapshot), before: snapshot.head.clone(), head: self.head.clone(), applying })
+    }
+
+    fn applying(&self) -> Option<Applying> {
+        let (name, merging) = [("MERGE_HEAD", true), ("CHERRY_PICK_HEAD", false), ("REBASE_HEAD", false)].into_iter().find(|(name, _)| self.work.git_dir.join(name).exists())?;
+        let repo = self.work.repo;
+        let tip = repo.commit(name)?;
+        let base = if merging {
+            self.head.as_ref().and_then(|head| git(&repo.root, &["merge-base", head, &tip]).ok()).map(|out| String::from_utf8_lossy(&out).trim().to_string())
+        } else {
+            repo.commit(&format!("{tip}^"))
         };
+        Some(Applying { tip, base })
+    }
+
+    pub fn upstream_only(&self, path: &Path, baseline: &Baseline, source: &str, history: &History) -> Result<bool> {
+        let Some(rel) = self.work.repo.relative(path) else { return Ok(false) };
+        let before = history.before.as_deref().and_then(|rev| self.blob(rev, &rel));
+        let unchanged_since_capture = match (baseline, &before) {
+            (Baseline::Absent, None) => true,
+            (Baseline::Text(text), Some(blob)) => String::from_utf8_lossy(blob) == text.as_str(),
+            _ => false,
+        };
+        if !unchanged_since_capture {
+            return Ok(false);
+        }
+        let ours = history.head.as_deref().and_then(|head| self.blob(head, &rel));
+        let mut ranges: Vec<String> = history.head.iter().map(|head| history.before.as_ref().map_or_else(|| head.clone(), |before| format!("{before}..{head}"))).collect();
+        let expected = match &history.applying {
+            None => ours,
+            Some(Applying { base: None, .. }) => return Ok(false),
+            Some(Applying { tip, base: Some(base) }) => {
+                ranges.push(format!("{base}..{tip}"));
+                let (based, theirs) = (self.blob(base, &rel), self.blob(tip, &rel));
+                if based == ours {
+                    theirs
+                } else if based == theirs || ours == theirs {
+                    ours
+                } else {
+                    let head = history.head.as_deref().unwrap_or("HEAD");
+                    let args = [OsString::from("merge-file"), "-p".into(), "--object-id".into(), object(head, &rel), object(base, &rel), object(tip, &rel)];
+                    self.work.git(&self.work.index(), &args, &[]).ok()
+                }
+            }
+        };
+        if !expected.is_some_and(|text| same_lines(&String::from_utf8_lossy(&text), source)) {
+            return Ok(false);
+        }
+        for range in ranges {
+            let listed = self.work.git(&self.work.index(), &[OsStr::new("rev-list"), OsStr::new("--timestamp"), OsStr::new(&range), OsStr::new("--"), rel.as_os_str()], &[])?;
+            for row in String::from_utf8_lossy(&listed).lines() {
+                let (time, id) = row.split_once(' ').context("git rev-list --timestamp printed an unexpected line")?;
+                if history.authors.made(id, time.parse().unwrap_or(u64::MAX)) {
+                    return Ok(false);
+                }
+            }
+        }
+        Ok(true)
+    }
+
+    fn blob(&self, rev: &str, rel: &Path) -> Option<Vec<u8>> {
+        self.work.git(&self.work.index(), &[OsStr::new("cat-file"), OsStr::new("blob"), &object(rev, rel)], &[]).ok()
+    }
+
+    pub fn disowned(&self, path: &Path, authors: &Authors) -> Result<HashSet<u32>> {
+        let rel = self.work.repo.relative(path).with_context(|| format!("{} is outside {}", path.display(), self.work.repo.root.display()))?;
+        let args = [OsStr::new("blame"), OsStr::new("--no-ignore-revs-file"), OsStr::new("--porcelain"), OsStr::new("--"), rel.as_os_str()];
+        let out = self.work.git(&self.work.index(), &args, &[])?;
         let mut times: HashMap<&[u8], u64> = HashMap::new();
         let (mut commit, mut line): (&[u8], u32) = (b"", 0);
-        let mut older = HashSet::new();
+        let mut disowned = HashSet::new();
         for row in out.split(|&byte| byte == b'\n') {
             if row.starts_with(b"\t") {
-                if times.get(commit).is_some_and(|&committed| committed <= time) {
-                    older.insert(line);
+                if times.get(commit).is_some_and(|&committed| !authors.made(&String::from_utf8_lossy(commit), committed)) {
+                    disowned.insert(line);
                 }
             } else if let Some(seconds) = row.strip_prefix(b"committer-time ")
                 && commit.iter().any(|&digit| digit != b'0')
@@ -183,8 +320,23 @@ impl Since<'_> {
                 }
             }
         }
-        older
+        Ok(disowned)
     }
+}
+
+fn object(rev: &str, rel: &Path) -> OsString {
+    let mut spec = OsString::from(format!("{rev}:"));
+    spec.push(rel);
+    spec
+}
+
+fn made_here(entry: &str) -> Option<String> {
+    let (id, rest) = entry.split_once(' ')?;
+    let (_, subject) = rest.split_once(' ')?;
+    let action = subject.split_once(": ").map_or(subject, |(action, _)| action);
+    let committed = action == "commit" || action.starts_with("commit (") || matches!(action, "cherry-pick" | "revert");
+    let replayed = ["(pick)", "(reword)", "(edit)", "(squash)", "(fixup)", "(continue)"].iter().any(|step| action.ends_with(step));
+    (committed || replayed).then(|| id.to_string())
 }
 
 struct Workspace<'a> {
@@ -193,6 +345,7 @@ struct Workspace<'a> {
     store: PathBuf,
     alternate: OsString,
     written: Option<SystemTime>,
+    git_dir: PathBuf,
 }
 
 impl<'a> Workspace<'a> {
@@ -203,7 +356,7 @@ impl<'a> Workspace<'a> {
         let out = git(&repo.root, &["rev-parse", "--path-format=absolute", "--git-path", "objects", "--git-path", "index", "--absolute-git-dir", "--git-common-dir"])?;
         let located: Vec<PathBuf> = out.split(|&byte| byte == b'\n').filter(|line| !line.is_empty()).map(path_of).collect();
         let [objects, real, git_dir, common] = &located[..] else { bail!("git rev-parse printed {} paths, not 4", located.len()) };
-        let mut work = Workspace { repo, dir, store, alternate: OsString::from_vec(quoted(objects.as_os_str().as_bytes())), written: None };
+        let mut work = Workspace { repo, dir, store, alternate: OsString::from_vec(quoted(objects.as_os_str().as_bytes())), written: None, git_dir: git_dir.clone() };
         match std::fs::copy(real, work.index()) {
             Ok(_) => {
                 work.written = Some(std::fs::metadata(real)?.modified()?);
@@ -266,10 +419,19 @@ impl<'a> Workspace<'a> {
     }
 
     fn changes(&self, base: &str, submodules: Submodules, wanted: &dyn Fn(&Path) -> bool) -> Result<Vec<(PathBuf, Baseline)>> {
-        let diff = self.git(&self.index(), &["diff", "--raw", "-z", "-M", "--no-abbrev", "--ignore-submodules=none", base], &[])?;
+        let diff = self.git(&self.index(), &["diff", "--raw", "-z", "-M", "--no-abbrev", "--ignore-submodules=all", base], &[])?;
         let mut fields = diff.split(|&byte| byte == 0).filter(|field| !field.is_empty());
         let mut found: Vec<(PathBuf, Option<String>)> = Vec::new();
         let mut nested = Vec::new();
+        if submodules == Submodules::Follow {
+            let listed = self.git(&self.index(), &["ls-tree", "-r", "-z", base], &[])?;
+            for entry in listed.split(|&byte| byte == 0) {
+                let Some(tab) = entry.iter().position(|&byte| byte == b'\t') else { continue };
+                if let Some(recorded) = entry[..tab].strip_prefix(format!("{GITLINK} commit ").as_bytes()) {
+                    nested.extend(self.repo.submodule_changes(&path_of(&entry[tab + 1..]), &String::from_utf8_lossy(recorded)));
+                }
+            }
+        }
         while let Some(header) = fields.next() {
             let header = String::from_utf8_lossy(header);
             let words: Vec<&str> = header.trim_start_matches(':').split(' ').collect();
@@ -277,9 +439,6 @@ impl<'a> Workspace<'a> {
             let first = path_of(fields.next().context("git diff --raw ended early")?);
             let second = if status.starts_with(['R', 'C']) { Some(path_of(fields.next().context("git diff --raw ended early")?)) } else { None };
             if old_mode == GITLINK || new_mode == GITLINK {
-                if submodules == Submodules::Follow && old_mode == new_mode && status == "M" {
-                    nested.extend(self.repo.submodule_changes(&first, old_id));
-                }
                 continue;
             }
             let current = match status.as_bytes().first() {

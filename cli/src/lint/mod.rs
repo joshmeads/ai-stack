@@ -145,7 +145,7 @@ pub fn run(settings: &Settings, request: Request, out: &mut dyn Write, err: &mut
         }
     }
     let engine = Engine { settings, rules: &rules, scope: request.scope, display: &cwd };
-    let findings = engine.lint(files);
+    let findings = engine.lint(&files);
     if request.json {
         writeln!(out, "{}", serde_json::json!({ "version": 1, "findings": findings }))?;
     } else {

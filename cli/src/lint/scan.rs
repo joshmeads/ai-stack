@@ -8,7 +8,7 @@ use ast_grep_core::{AstGrep, Language as _, Matcher as _, NodeMatch};
 use ast_grep_language::SupportLang;
 use regex::Regex;
 
-use super::owned::LineIndex;
+use super::owned::{LineIndex, same_lines};
 use super::repo::{Repo, Repos};
 use super::rules::{Rule, Rules};
 use super::settings::{Policy, Settings};
@@ -26,7 +26,7 @@ pub struct Change {
 impl Change {
     pub fn read(path: PathBuf, baseline: &Baseline) -> Option<Change> {
         let source = read_lintable(&path)?;
-        if matches!(baseline, Baseline::Text(before) if *before == source) {
+        if matches!(baseline, Baseline::Text(before) if same_lines(before, &source)) {
             return None;
         }
         let owned = Owned::between(baseline, &source);
@@ -41,8 +41,8 @@ pub fn read_lintable(path: &Path) -> Option<String> {
     std::fs::read_to_string(path).ok()
 }
 
-struct Target {
-    change: Change,
+struct Target<'c> {
+    change: &'c Change,
     repo: Option<Repo>,
 }
 
@@ -54,7 +54,7 @@ pub struct Engine<'a> {
 }
 
 impl Engine<'_> {
-    pub fn lint(&self, changes: Vec<Change>) -> Vec<Finding> {
+    pub fn lint<'c>(&self, changes: impl IntoIterator<Item = &'c Change>) -> Vec<Finding> {
         let mut repos = Repos::default();
         let mut findings = Vec::new();
         let mut by_repo: Vec<(Option<Repo>, Vec<Target>)> = Vec::new();
@@ -80,12 +80,12 @@ impl Engine<'_> {
                 findings.extend(self.lint_target(target, rel, &policy));
             }
         }
-        findings.sort_by(|a, b| (&a.path, a.line, a.column, &a.rule).cmp(&(&b.path, b.line, b.column, &b.rule)));
+        sort(&mut findings);
         findings
     }
 
     fn lint_target(&self, target: &Target, rel: &Path, policy: &Policy) -> Vec<Finding> {
-        let change = &target.change;
+        let change = target.change;
         let Some(language) = language_of(&change.path) else { return Vec::new() };
         let shown = display_path(&change.path, self.display);
         let source = change.source.as_str();
@@ -141,6 +141,10 @@ impl Engine<'_> {
         }
         findings
     }
+}
+
+pub fn sort(findings: &mut [Finding]) {
+    findings.sort_by(|a, b| (&a.path, a.line, a.column, &a.rule).cmp(&(&b.path, b.line, b.column, &b.rule)));
 }
 
 pub fn scan<'t>(rules: &[&Rule], root: &'t AstGrep<StrDoc<SupportLang>>, source: &str, index: &LineIndex, owned: &Owned) -> Vec<(usize, NodeMatch<'t, StrDoc<SupportLang>>)> {

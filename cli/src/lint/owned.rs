@@ -95,6 +95,10 @@ fn line_number(index: usize) -> u32 {
     u32::try_from(index + 1).unwrap_or(u32::MAX)
 }
 
+pub fn same_lines(a: &str, b: &str) -> bool {
+    comparable(a) == comparable(b)
+}
+
 fn comparable(text: &str) -> Vec<Cow<'_, str>> {
     static EXPANDED_ID: LazyLock<Regex> = LazyLock::new(|| Regex::new(r"\$Id:[^$\n]*\$").unwrap());
     lines(text).into_iter().map(|line| EXPANDED_ID.replace_all(line, "$$Id$$")).collect()
