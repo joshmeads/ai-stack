@@ -27,12 +27,6 @@ utils:
               kind: arguments
               inside:
                 pattern: vi.setConfig($$$)
-      - inside:
-          kind: pair
-          field: value
-          has:
-            field: key
-            regex: '^["'']?test["'']?$'
 rule:
   kind: pair
   has:
@@ -62,21 +56,13 @@ utils:
       kind: arguments
       inside:
         matches: test-call
-  config-options:
+  set-config-options:
     kind: object
-    any:
-      - all:
-          - nthChild: 1
-          - inside:
-              kind: arguments
-              inside:
-                pattern: vi.setConfig($$$)
-      - inside:
-          kind: pair
-          field: value
-          has:
-            field: key
-            regex: '^["'']?test["'']?$'
+    nthChild: 1
+    inside:
+      kind: arguments
+      inside:
+        pattern: vi.setConfig($$$)
 rule:
   any:
     - kind: pair
@@ -90,7 +76,7 @@ rule:
         field: key
         regex: '^["'']?(testTimeout|hookTimeout)["'']?$'
       inside:
-        matches: config-options
+        matches: set-config-options
     - nthChild: 3
       any:
         - kind: number
@@ -108,18 +94,52 @@ rule:
           matches: test-call
 ---
 id: no-flake-masking
+language: [TypeScript, Tsx, JavaScript]
+severity: error
+message: "Do not retry tests or raise their timeouts in the Vitest config. A test that passes on rerun is a flake: wait on the event it depends on and file the failure under the flaky-test tracker."
+files:
+  - "**/vite.config.*"
+  - "**/vite.*.config.*"
+  - "**/vitest.config.*"
+  - "**/vitest.*.config.*"
+  - "**/vitest.workspace.*"
+rule:
+  kind: pair
+  has:
+    field: key
+    regex: '^["'']?(retry|testTimeout|hookTimeout)["'']?$'
+  inside:
+    kind: object
+    inside:
+      kind: pair
+      field: value
+      has:
+        field: key
+        regex: '^["'']?test["'']?$'
+---
+id: no-flake-masking
 language: Python
 severity: error
 message: "Do not rerun or extend flaky tests. A test that passes on rerun is a flake: wait on the event it depends on and file the failure under the flaky-test tracker."
 rule:
-  any:
-    - kind: decorator
-      regex: '^@(pytest\.mark\.flaky|flaky|pytest\.mark\.timeout)\b'
-    - kind: keyword_argument
-      has:
-        field: name
-        regex: '^(reruns|reruns_delay|max_runs)$'
-      not:
-        inside:
-          stopBy: end
-          kind: decorator
+  kind: decorator
+  regex: '^@(pytest\.mark\.flaky|flaky|pytest\.mark\.timeout)\b'
+---
+id: no-flake-masking
+language: Python
+severity: error
+message: "Do not rerun or extend flaky tests. A test that passes on rerun is a flake: wait on the event it depends on and file the failure under the flaky-test tracker."
+files:
+  - "**/test_*.py"
+  - "**/*_test.py"
+  - "**/conftest.py"
+  - "**/tests/**/*.py"
+rule:
+  kind: keyword_argument
+  has:
+    field: name
+    regex: '^(reruns|reruns_delay|max_runs)$'
+  not:
+    inside:
+      stopBy: end
+      kind: decorator

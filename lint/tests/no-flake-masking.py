@@ -16,4 +16,5 @@ def test_c(x):
     pass
 
 
-pytest.main(["-p", "rerunfailures"], reruns=2)  # @hit
+def start_job(queue, max_runs):
+    return queue.enqueue("reindex", max_runs=max_runs, reruns=0)

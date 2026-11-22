@@ -6,6 +6,6 @@ it.each([1])("each", async () => {}, 5000); // @hit
 test.each([1], 5000);
 vi.setConfig({ testTimeout: 20000, retry: 1 }); // @hit
 describe("suite", { retry: 2 }, () => {}); // @hit
-export default { test: { testTimeout: 1, hookTimeout: 2, retry: 1 } }; // @hit
+export const server = { test: { testTimeout: 1, hookTimeout: 2, retry: 1 } };
 setTimeout(() => {}, 10);
 test("fine", async () => {});

@@ -209,12 +209,16 @@ pub(crate) mod tests {
         let mut failures = Vec::new();
         for fixture in entries {
             let name = fixture.file_name().unwrap().to_string_lossy().into_owned();
-            let id = name.split('.').next().unwrap().to_string();
+            let (id, rel) = name.split_once('.').unwrap();
+            let id = id.to_string();
             let source = std::fs::read_to_string(&fixture).unwrap();
             let expected: BTreeSet<u32> = source.lines().enumerate().filter(|(_, line)| line.contains("@hit")).map(|(at, _)| at as u32 + 1).collect();
             for language in fixture_languages(&fixture) {
-                let active: Vec<&RuleConfig<SupportLang>> =
-                    rules.for_language(language).filter(|rule| rule.key.id == id && rule.applies_to_source(&source)).map(|rule| &rule.config).collect();
+                let active: Vec<&RuleConfig<SupportLang>> = rules
+                    .for_language(language)
+                    .filter(|rule| rule.key.id == id && rule.applies_to_path(Path::new(rel)) && rule.applies_to_source(&source))
+                    .map(|rule| &rule.config)
+                    .collect();
                 covered.insert((id.clone(), language.to_string()));
                 let root = language.ast_grep(&source);
                 let index = LineIndex::new(&source);
@@ -233,19 +237,20 @@ pub(crate) mod tests {
     }
 
     #[test]
-    fn shipped_rules_never_relate_a_node_to_the_whole_program() {
-        fn walk(value: &Value, relational: bool, trail: &str, offenders: &mut Vec<String>) {
+    fn shipped_rules_never_search_up_to_the_whole_program() {
+        fn walk(value: &Value, unbounded: bool, trail: &str, offenders: &mut Vec<String>) {
             match value {
                 Value::Object(map) => {
-                    if relational && map.get("kind").and_then(Value::as_str) == Some("program") {
+                    if unbounded && map.get("kind").and_then(Value::as_str).is_some_and(|kind| ["program", "module", "source_file"].contains(&kind)) {
                         offenders.push(trail.to_string());
                     }
                     for (key, child) in map {
-                        let nested = relational || ["inside", "has", "follows", "precedes", "stopBy"].contains(&key.as_str());
+                        let relational = ["inside", "has", "follows", "precedes"].contains(&key.as_str());
+                        let nested = unbounded || (relational && child.get("stopBy").and_then(Value::as_str) == Some("end"));
                         walk(child, nested, &format!("{trail}.{key}"), offenders);
                     }
                 }
-                Value::Array(items) => items.iter().for_each(|item| walk(item, relational, trail, offenders)),
+                Value::Array(items) => items.iter().for_each(|item| walk(item, unbounded, trail, offenders)),
                 _ => {}
             }
         }

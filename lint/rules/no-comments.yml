@@ -7,7 +7,30 @@ utils:
     any:
       - regex: '^(//|/\*)[!*]?\s*(eslint|oxlint|biome-ignore|@ts-|prettier-ignore|oxfmt-ignore|istanbul\s|c8\s|v8\s|@vite-ignore|webpack[A-Z]|@jsx|@__PURE__|#__PURE__|@__NO_SIDE_EFFECTS__|nosemgrep|ast-grep-ignore|#\s*source(Mapping)?URL=)'
       - regex: '^///\s*<(reference|amd-module|amd-dependency)\s'
+      - regex: '^/\*\s*(globals?|exported)\s'
+      - regex: '@(vitest|jest)-environment\s'
       - regex: '(SPDX-License-Identifier:|@license\b|Copyright\s)'
+  license-text:
+    kind: comment
+    regex: '(Copyright|SPDX-License-Identifier|License)'
+  license-header:
+    inside:
+      kind: program
+    not:
+      follows:
+        stopBy: end
+        not:
+          kind: comment
+    any:
+      - matches: license-text
+      - follows:
+          stopBy: end
+          matches: license-text
+      - precedes:
+          stopBy:
+            not:
+              kind: comment
+          matches: license-text
   footgun:
     regex: '^//\s*(WARNING|SAFETY):\s*\S[^\n]*$'
   doc:
@@ -38,6 +61,7 @@ rule:
   not:
     any:
       - matches: directive
+      - matches: license-header
       - matches: footgun
       - matches: doc-on-export
       - matches: doc-on-exported-member
@@ -45,7 +69,7 @@ rule:
 id: no-comments
 language: Rust
 severity: error
-message: "Remove this comment; express meaning in code (names, types, structure) and rationale in the PR. Keep license headers, a single-line WARNING: or SAFETY: comment, doc comments on pub items, and clap doc text that generates --help."
+message: "Remove this comment; express meaning in code (names, types, structure) and rationale in the PR. Keep license headers, a single-line WARNING: or SAFETY: comment, doc comments on pub items, //! module docs, and clap doc text that generates --help."
 utils:
   pub-item:
     has:
@@ -53,6 +77,31 @@ utils:
       regex: '^pub$'
   doc:
     regex: '^(///|/\*\*)'
+  comment:
+    any:
+      - kind: line_comment
+      - kind: block_comment
+  license-text:
+    matches: comment
+    regex: '(Copyright|SPDX-License-Identifier|License)'
+  license-header:
+    inside:
+      kind: source_file
+    not:
+      follows:
+        stopBy: end
+        not:
+          matches: comment
+    any:
+      - matches: license-text
+      - follows:
+          stopBy: end
+          matches: license-text
+      - precedes:
+          stopBy:
+            not:
+              matches: comment
+          matches: license-text
   decoration:
     any:
       - kind: line_comment
@@ -78,6 +127,8 @@ rule:
     any:
       - regex: '^//\s*(WARNING|SAFETY):\s*\S[^\n]*\n?$'
       - regex: '(SPDX-License-Identifier:|Copyright\s)'
+      - regex: '^(//!|/\*!)'
+      - matches: license-header
       - all:
           - matches: doc
           - precedes:
@@ -121,10 +172,33 @@ id: no-comments
 language: Python
 severity: error
 message: "Remove this comment; express meaning in code (names, types, structure) and rationale in the PR. Keep tool directives, license headers and a single-line WARNING: or SAFETY: comment."
+utils:
+  license-text:
+    kind: comment
+    regex: '(Copyright|SPDX-License-Identifier|License)'
+  license-header:
+    inside:
+      kind: module
+    not:
+      follows:
+        stopBy: end
+        not:
+          kind: comment
+    any:
+      - matches: license-text
+      - follows:
+          stopBy: end
+          matches: license-text
+      - precedes:
+          stopBy:
+            not:
+              kind: comment
+          matches: license-text
 rule:
   kind: comment
   not:
     any:
+      - matches: license-header
       - regex: '^#!'
       - regex: '^#.*coding[:=]'
       - regex: '^#\s*(type:|noqa|pragma|pylint:|mypy:|pyright:|fmt:|isort:|ruff:|nosec|pyre-)'
@@ -134,7 +208,7 @@ rule:
 id: no-comments
 language: Go
 severity: error
-message: "Remove this comment; express meaning in code (names, types, structure) and rationale in the PR. Keep directives, license headers, a single-line WARNING: or SAFETY: comment, and doc comments on exported identifiers."
+message: "Remove this comment; express meaning in code (names, types, structure) and rationale in the PR. Keep directives, license headers, a cgo preamble, Example output comments, a single-line WARNING: or SAFETY: comment, and doc comments on exported identifiers."
 utils:
   exported-name:
     has:
@@ -163,10 +237,31 @@ utils:
         has:
           kind: var_spec
           matches: exported-name
+  example-output:
+    kind: comment
+    regex: '^//\s*(Unordered output|Output):'
+    inside:
+      stopBy: end
+      kind: function_declaration
+      has:
+        field: name
+        regex: '^Example'
 rule:
   kind: comment
   not:
     any:
+      - matches: example-output
+      - follows:
+          stopBy:
+            not:
+              kind: comment
+          matches: example-output
+      - precedes:
+          stopBy:
+            not:
+              kind: comment
+          kind: import_declaration
+          regex: '^import\s+"C"\s*$'
       - regex: '^//(go:|line |export |extern |nolint)'
       - regex: '^//\s*\+build'
       - regex: '^//\s*Code generated .* DO NOT EDIT\.$'
