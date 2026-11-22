@@ -1,0 +1,9 @@
+/* Phones. This file loads after style.css, so what it sets here wins over a rule of equal weight there. */
+@media (max-width: 700px) {
+  :root { --edge: 20px; --title: 28px; }
+  .header-nav { gap: 12px; }
+  .founders { grid-template-columns: 1fr; }
+  .archive__strip { position: static; padding: 0; }
+  .archive__thumbs { grid-template-columns: repeat(2, 1fr); }
+  .colony__cocoon { display: block; padding: 12px; border: 1px solid var(--muted); width: max-content; }
+}

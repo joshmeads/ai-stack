@@ -1,0 +1,2879 @@
+/* The inspector is a tool laid over the design, not part of it: its own quiet dark chrome, uberdesigner's type
+   (Instrument Sans, bundled: fonts/OFL.txt) and violet, and its own values below (they never touch the design tokens
+   in tokens.css). The font has its own family name so a site that loads Instrument Sans itself is never affected. */
+
+@font-face {
+  font-family: "Design Inspector Sans";
+  src: url("../fonts/instrument-sans-latin.woff2") format("woff2");
+  font-weight: 400 700;
+  font-stretch: 75% 100%;
+  font-style: normal;
+  font-display: swap;
+}
+
+/* Two themes, from the art director's design (18 Nov 2026): dark (below) and light (the block after). The studio's
+   own chrome follows the theme; what is drawn over the site (outlines, their labels, the pins) and what sits on a
+   fixed bright fill (the violet buttons' white text, the green Keep) stays one colour in both. The theme is set on
+   <html data-studio-theme> by theme.ts, before the panel draws. */
+.root,
+.toggle {
+  --i-font: "Design Inspector Sans", ui-sans-serif, system-ui, -apple-system, sans-serif;
+  --i-canvas: #080808; /* around the site's frame */
+  --i-panel: #111; /* the editor's columns, top bar and chat bar */
+  --i-bg: #202020; /* what floats: menus, pop-ups, the Inspect button on the site */
+  --i-card: #1a1a1a; /* a change card */
+  --i-card-hover: #222;
+  --i-input: #1c1c1c; /* fields, number boxes, selects */
+  --i-well: rgba(0, 0, 0, 0.3); /* a sunken box: a log, a command, a field inside a card */
+  --i-line: #2d2d2d;
+  --i-line-strong: #606060;
+  --i-text: #f7f7f7;
+  --i-strong: #fff; /* a heading, a value, the chosen tab */
+  --i-soft: #d4d4d8; /* body text a step below --i-text */
+  --i-dim: #a6a6ab;
+  --i-faint: rgba(166, 166, 171, 0.6);
+  --i-fill-1: rgba(255, 255, 255, 0.05); /* hover */
+  --i-fill-2: rgba(255, 255, 255, 0.09); /* a chosen tab, a chip */
+  --i-fill-3: rgba(255, 255, 255, 0.18); /* pressed, a strong hover */
+  --i-sheen: rgba(255, 255, 255, 0.08); /* a highlight inside a shadow */
+  --i-inverse: #fff; /* the one chosen item of a switch (the size, Preview on) */
+  --i-on-inverse: #000;
+  --i-shadow: rgba(0, 0, 0, 0.45);
+  --i-shadow-soft: rgba(0, 0, 0, 0.25);
+  --i-scrim: rgba(0, 0, 0, 0.55);
+  --i-accent: #7548d9; /* violet that carries white text: Run, Add new object, sliders, the picked layer */
+  --i-accent-hover: #8558e5;
+  --i-accent-ink: #cab7ff; /* violet text */
+  --i-accent-soft: #a489fa; /* a violet line or ring */
+  --i-accent-surface: #30253f;
+  --i-danger: #ffaaa1;
+  --i-danger-surface: rgba(255, 99, 99, 0.12);
+  --i-positive: #8bddb8;
+  --i-positive-surface: rgba(94, 224, 160, 0.12);
+  --i-warn-text: #f3dfa8;
+  --i-warn-surface: rgba(255, 209, 102, 0.1);
+  --i-warn-line: rgba(255, 209, 102, 0.3);
+  --i-info-text: #c5d2ff;
+  --i-hover: #ffd166; /* over the site: the outline under the pointer */
+  --i-changed: #5ee0a0; /* over the site: a changed part; the Keep button */
+  --i-chevron: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='10' height='6' viewBox='0 0 10 6' fill='none'%3E%3Cpath d='M1 1l4 4 4-4' stroke='white' stroke-width='1.4' stroke-linecap='round' stroke-linejoin='round'/%3E%3C/svg%3E"); /* a dropdown's arrow */
+  --i-dot: #606060; /* the canvas dots */
+  --i-seg: #202020; /* a switch of a few choices (the sizes, the theme) */
+  --i-seg-on: #30253f; /* its chosen one */
+  --i-radius: 12px;
+  font: 13px/1.45 var(--i-font);
+  letter-spacing: -0.02em;
+  color: var(--i-text);
+}
+
+:global(html[data-studio-theme="light"]) :is(.root, .toggle) {
+  --i-canvas: #f4f4f4;
+  --i-panel: #fff;
+  --i-bg: #fff;
+  --i-card: #fff;
+  --i-card-hover: #fafafa;
+  --i-input: #f4f4f4;
+  --i-well: rgba(0, 0, 0, 0.04);
+  --i-line: #e0e0e0;
+  --i-line-strong: #b3b3b3;
+  --i-text: #000;
+  --i-strong: #000;
+  --i-soft: rgba(0, 0, 0, 0.78);
+  --i-dim: rgba(0, 0, 0, 0.64);
+  --i-faint: rgba(0, 0, 0, 0.36);
+  --i-fill-1: rgba(0, 0, 0, 0.04);
+  --i-fill-2: rgba(0, 0, 0, 0.06);
+  --i-fill-3: rgba(0, 0, 0, 0.11);
+  --i-sheen: rgba(0, 0, 0, 0.04);
+  --i-inverse: #000;
+  --i-on-inverse: #fff;
+  --i-shadow: rgba(0, 0, 0, 0.14);
+  --i-shadow-soft: rgba(0, 0, 0, 0.08);
+  --i-scrim: rgba(0, 0, 0, 0.3);
+  --i-accent-ink: #6b3fe0;
+  --i-accent-soft: #9568f9;
+  --i-accent-surface: #eee7fc;
+  --i-danger: #d11f4e;
+  --i-danger-surface: rgba(209, 31, 78, 0.08);
+  --i-positive: #17784e;
+  --i-positive-surface: rgba(23, 120, 78, 0.1);
+  --i-warn-text: #7a5600;
+  --i-warn-surface: rgba(232, 170, 0, 0.14);
+  --i-warn-line: rgba(200, 140, 0, 0.45);
+  --i-info-text: #3346a8;
+  --i-dot: #b3b3b3;
+  --i-seg: #f4f4f4;
+  --i-seg-on: #fff;
+  --i-chevron: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='10' height='6' viewBox='0 0 10 6' fill='none'%3E%3Cpath d='M1 1l4 4 4-4' stroke='black' stroke-width='1.4' stroke-linecap='round' stroke-linejoin='round'/%3E%3C/svg%3E");
+}
+
+/* Its own reset, so it looks the same on every site whatever the site's global CSS does (or doesn't) reset.
+   :where() keeps these at zero specificity, so every class below still wins. */
+:where(.root, .toggle),
+:where(.root, .toggle) :where(*, *::before, *::after) {
+  box-sizing: border-box;
+}
+
+:where(.root, .toggle) :where(button, input, select, textarea, kbd, code) {
+  font: inherit;
+  color: inherit;
+  letter-spacing: inherit;
+  text-transform: none;
+}
+
+:where(.root) :where(button) {
+  appearance: none;
+  margin: 0;
+  padding: 0;
+  border: 0;
+  border-radius: 0;
+  background: none;
+  text-align: inherit;
+}
+
+:where(.root) :where(h2, h3, p, ul, ol, li, blockquote, dl, dd, figure) {
+  margin: 0;
+  padding: 0;
+}
+
+:where(.root) :where(code, kbd) {
+  font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+  letter-spacing: 0;
+}
+
+/* The pointer over the inspector, even on sites that hide it everywhere with !important (custom cursors) */
+:global(html[data-inspect]) .root,
+:global(html[data-inspect]) .root * {
+  cursor: auto !important;
+}
+
+:global(html[data-inspect]) .root :where(button, select, label, input[type="checkbox"], input[type="range"]) {
+  cursor: pointer !important;
+}
+
+:global(html[data-inspect]) .root .head,
+:global(html[data-inspect]) .root .head > strong {
+  cursor: grab !important;
+}
+
+:global(html[data-inspect]) .root .head:active {
+  cursor: grabbing !important;
+}
+
+:global(html[data-inspect]) .root .overlay {
+  cursor: crosshair !important;
+}
+
+:global(html[data-inspect]) .root .overlay[data-hovering="true"] {
+  cursor: pointer !important;
+}
+
+:global(html) .toggle {
+  cursor: pointer !important;
+}
+
+/* While inspecting: the normal pointer, no custom cursor disc */
+:global(html[data-inspect]) body,
+:global(html[data-inspect]) a,
+:global(html[data-inspect]) button {
+  cursor: auto;
+}
+
+:global(html[data-inspect]) [data-dm="cursor"] {
+  display: none;
+}
+
+/* Closed: a solid pill in the bottom-right corner, clear of the bottom-centre hints and the cards (bottom-left), and
+   readable on any background: dark glass with a light rim and a shadow */
+.toggle {
+  position: fixed;
+  right: 16px;
+  bottom: 16px;
+  z-index: 2147483000;
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  height: 34px;
+  padding: 0 10px 0 14px;
+  border: 1px solid var(--i-line-strong);
+  border-radius: 999px;
+  background: var(--i-bg);
+  box-shadow: 0 6px 20px var(--i-shadow), 0 0 0 1px var(--i-shadow-soft);
+  color: var(--i-text);
+  font-weight: 500;
+  cursor: pointer;
+  backdrop-filter: blur(12px);
+  -webkit-backdrop-filter: blur(12px);
+  transition: transform 150ms ease, background 150ms ease;
+}
+
+.toggle:hover,
+.toggle:focus-visible {
+  background: var(--i-bg);
+  transform: translateY(-1px);
+}
+
+kbd {
+  padding: 1px 6px;
+  border: 1px solid var(--i-line);
+  border-radius: 4px;
+  font: 12px ui-monospace, SFMono-Regular, Menlo, monospace;
+  color: var(--i-dim);
+  letter-spacing: 0;
+}
+
+/* Header: one row that never wraps; everything keeps its size except the mode switch, which can shrink */
+.head {
+  flex-wrap: nowrap;
+  min-width: 0;
+  cursor: grab;
+  user-select: none;
+  touch-action: none;
+}
+
+.head:active {
+  cursor: grabbing;
+}
+
+.head > * {
+  flex: none;
+}
+
+/* Header buttons never shrink or clip; the close button stays pinned to the right edge */
+.icon {
+  display: grid;
+  place-items: center;
+  width: 26px;
+  padding: 0;
+  font-size: 13px;
+}
+
+.close {
+  margin-left: auto;
+}
+
+/* A change at work: the part it's about pulses on the page */
+.pulseLayer {
+  position: fixed;
+  inset: 0;
+  z-index: 2147482998;
+  pointer-events: none;
+}
+
+.pulse {
+  position: absolute;
+  border-radius: 6px;
+  outline: 2px solid var(--i-accent);
+  outline-offset: 2px;
+  animation: inspector-pulse 1.6s ease-in-out infinite;
+}
+
+.pulse[data-state="queued"] {
+  outline: 1.5px dashed color-mix(in srgb, var(--i-accent) 70%, transparent);
+  animation: none;
+}
+
+/* A part Claude changed (until its card is closed): a steady green frame with its name */
+.pulse[data-state="changed"] {
+  outline: 2px solid var(--i-changed);
+  animation: none;
+  background: rgba(94, 224, 160, 0.06);
+}
+
+.mark {
+  position: absolute;
+  left: -4px;
+  bottom: 100%;
+  margin-bottom: 6px;
+  padding: 3px 8px;
+  border-radius: 999px;
+  background: var(--i-accent);
+  color: #fff;
+  font: 600 11px/1.3 var(--i-font);
+  white-space: nowrap;
+  box-shadow: 0 4px 14px rgba(0, 0, 0, 0.25);
+}
+
+.pulse[data-state="changed"] .mark {
+  background: var(--i-changed);
+  color: #06281a;
+}
+
+.pulse[data-state="queued"] .mark {
+  background: rgba(18, 18, 22, 0.85);
+  color: #ececf1;
+}
+
+@keyframes inspector-pulse {
+  0%, 100% {
+    outline-color: color-mix(in srgb, var(--i-accent) 35%, transparent);
+    box-shadow: 0 0 0 0 color-mix(in srgb, var(--i-accent) 10%, transparent);
+  }
+  50% {
+    outline-color: color-mix(in srgb, var(--i-accent) 100%, transparent);
+    box-shadow: 0 0 0 8px color-mix(in srgb, var(--i-accent) 12%, transparent);
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .pulse {
+    animation: none;
+    outline-color: var(--i-accent);
+  }
+}
+
+/* Steps of a running change */
+.steps {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 4px;
+  margin: 6px 0 4px;
+}
+
+.step {
+  padding: 2px 7px;
+  border-radius: 999px;
+  background: var(--i-fill-1);
+  color: var(--i-dim);
+  font-size: 12px;
+}
+
+.step[data-state="done"] {
+  color: var(--i-positive);
+}
+
+.step[data-state="now"] {
+  background: color-mix(in srgb, var(--i-accent) 22%, transparent);
+  color: var(--i-strong);
+  animation: inspector-step 1.4s ease-in-out infinite;
+}
+
+@keyframes inspector-step {
+  50% {
+    background: color-mix(in srgb, var(--i-accent) 38%, transparent);
+  }
+}
+
+.eta {
+  color: var(--i-dim);
+  font-variant-numeric: tabular-nums;
+}
+
+/* What a change will send */
+.context {
+  display: grid;
+  gap: 3px;
+  margin: 8px 0;
+  padding: 7px 8px;
+  border-radius: 7px;
+  background: var(--i-well);
+  font-size: 12px;
+}
+
+.contextHead {
+  display: flex;
+  justify-content: space-between;
+  gap: 8px;
+  color: var(--i-dim);
+}
+
+.contextItem {
+  display: grid;
+  grid-template-columns: auto 1fr;
+  gap: 6px;
+  color: var(--i-soft);
+}
+
+.contextItem code {
+  font: 12px ui-monospace, SFMono-Regular, Menlo, monospace;
+  color: var(--i-strong);
+  letter-spacing: 0;
+}
+
+.contextItem span {
+  overflow: hidden;
+  color: var(--i-dim);
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.moreLog > summary {
+  cursor: pointer;
+  color: var(--i-dim);
+  font-size: 12px;
+}
+
+/* Outlines over the page */
+.overlay {
+  position: fixed;
+  inset: 0;
+  z-index: 2147482999;
+  cursor: crosshair;
+}
+
+.overlay[data-hovering="true"] {
+  cursor: pointer;
+}
+
+.box {
+  position: absolute;
+  pointer-events: none;
+  border-radius: 4px;
+}
+
+.box[data-state="hover"] {
+  border: 1.5px solid var(--i-hover);
+  background: rgba(255, 209, 102, 0.08);
+}
+
+.box[data-state="selected"] {
+  border: 2px solid var(--i-accent);
+  background: color-mix(in srgb, var(--i-accent) 10%, transparent);
+}
+
+.tag {
+  position: absolute;
+  left: -2px;
+  bottom: 100%;
+  margin-bottom: 4px;
+  padding: 2px 7px;
+  border-radius: 4px;
+  background: var(--i-accent);
+  color: #fff;
+  font-weight: 600;
+  white-space: nowrap;
+}
+
+.box[data-state="hover"] .tag {
+  color: #2a1f00;
+  background: var(--i-hover);
+}
+
+/* The block the picked thing is inside: its edge, dashed, so it is clear where clicks land */
+.box[data-state="scope"] {
+  border: 1px dashed color-mix(in srgb, var(--i-accent) 75%, transparent);
+  border-radius: 6px;
+}
+
+/* The picked layer when it isn't shown right now: where it would be, and why */
+.box[data-state="ghost"] {
+  border: 1.5px dashed color-mix(in srgb, var(--i-accent) 70%, transparent);
+  background: color-mix(in srgb, var(--i-accent) 5%, transparent);
+}
+
+.box[data-state="ghost"] .tag {
+  background: color-mix(in srgb, var(--i-accent) 30%, var(--i-card));
+  color: var(--i-strong);
+  font-weight: 500;
+  white-space: normal;
+  max-width: 320px;
+}
+
+/* The panel */
+.panel {
+  position: fixed;
+  top: 12px;
+  right: 12px;
+  bottom: 12px;
+  z-index: 2147483000;
+  width: min(380px, calc(100vw - 24px));
+  display: flex;
+  flex-direction: column;
+  border: 1px solid var(--i-line);
+  border-radius: var(--i-radius);
+  background: var(--i-bg);
+  backdrop-filter: blur(16px);
+  box-shadow: 0 20px 60px var(--i-shadow);
+  overflow: hidden;
+}
+
+.head,
+.foot {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 10px 12px;
+  border-bottom: 1px solid var(--i-line);
+}
+
+.foot {
+  border-top: 1px solid var(--i-line);
+  border-bottom: 0;
+}
+
+.head strong {
+  font-size: 14px;
+}
+
+.hint,
+.count {
+  flex: 1;
+  color: var(--i-dim);
+}
+
+.scroll {
+  flex: 1;
+  overflow-y: auto;
+  padding: 12px;
+}
+
+.ghost,
+.primary {
+  white-space: nowrap;
+  height: 32px;
+  padding: 0 12px;
+  border-radius: 8px;
+  border: 1px solid var(--i-line);
+  color: var(--i-text);
+  font-size: 12px;
+  cursor: pointer;
+  font-weight: 500;
+}
+
+/* uberdesigner's primary button: a violet pill with a white rim and a soft light along its bottom */
+.primary {
+  padding: 0 14px;
+  border: 2px solid #fff;
+  border-radius: 999px;
+  background: var(--i-accent);
+  box-shadow: inset 0 -7px 4px rgba(255, 255, 255, 0.24);
+  color: #fff;
+  font-weight: 500;
+  letter-spacing: -0.02em;
+}
+
+.primary:hover:not(:disabled) {
+  background: var(--i-accent-hover);
+}
+
+.ghost:hover {
+  background: var(--i-fill-1);
+}
+
+.ghost:disabled,
+.primary:disabled {
+  opacity: 0.4;
+  cursor: default;
+}
+
+/* Layers */
+.layers {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 10px 12px;
+  padding-bottom: 12px;
+  border-bottom: 1px solid var(--i-line);
+}
+
+.group h3,
+.details h3 {
+  margin: 0 0 4px;
+  color: var(--i-dim);
+  font-size: 11px;
+  font-weight: 500;
+  text-transform: uppercase;
+  letter-spacing: 0.06em;
+}
+
+.layer {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  min-width: 0;
+  gap: 6px;
+  width: 100%;
+  padding: 3px 6px;
+  border-radius: 6px;
+  color: var(--i-text);
+  font-size: 13px;
+  text-align: left;
+  cursor: pointer;
+}
+
+.layer:hover {
+  background: var(--i-fill-1);
+}
+
+.layer[data-active="true"] {
+  background: color-mix(in srgb, var(--i-accent) 18%, transparent);
+  color: var(--i-strong);
+}
+
+.layerName {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.layer[data-changed="true"] .layerName {
+  color: var(--i-positive);
+}
+
+/* Status chips in the parts list: what's changing, waiting, or changed */
+.chip {
+  flex: none;
+  padding: 1px 7px;
+  border-radius: 999px;
+  font-size: 10px;
+  font-weight: 500;
+  line-height: 1.5;
+  white-space: nowrap;
+}
+
+.chip[data-state="working"] {
+  background: color-mix(in srgb, var(--i-accent) 20%, transparent);
+  color: var(--i-accent-ink);
+  animation: inspector-step 1.6s ease-in-out infinite;
+}
+
+.chip[data-state="queued"] {
+  border: 1px dashed color-mix(in srgb, var(--i-accent) 50%, transparent);
+  color: var(--i-dim);
+}
+
+.chip[data-state="changed"] {
+  background: var(--i-positive-surface);
+  color: var(--i-positive);
+}
+
+.off {
+  color: var(--i-dim);
+  font-size: 11px;
+  white-space: nowrap;
+}
+
+.empty {
+  margin-top: 16px;
+  color: var(--i-dim);
+}
+
+/* Details */
+.details h2 {
+  margin: 14px 0 6px;
+  font-size: 15px;
+}
+
+.details h3 {
+  margin-top: 16px;
+}
+
+.note {
+  padding: 6px 8px;
+  border-radius: 6px;
+  background: var(--i-warn-surface);
+  color: var(--i-warn-text);
+}
+
+.quote {
+  margin: 0 0 6px;
+  padding: 6px 8px 7px 10px;
+  border-left: 2px solid var(--i-accent);
+  border-radius: 0 6px 6px 0;
+  background: var(--i-fill-1);
+  color: var(--i-soft);
+}
+
+.quote cite {
+  display: block;
+  margin-bottom: 2px;
+  color: var(--i-accent-ink);
+  font-style: normal;
+  font-size: 12px;
+}
+
+.field {
+  display: block;
+  margin-bottom: 8px;
+}
+
+.field > span {
+  display: block;
+  margin-bottom: 3px;
+  color: var(--i-dim);
+}
+
+.list {
+  display: grid;
+  gap: 4px;
+}
+
+.field input,
+.field textarea,
+.raw,
+.number input[type="number"] {
+  width: 100%;
+  min-height: 32px;
+  padding: 6px 9px;
+  border: 1px solid transparent;
+  border-radius: 6px;
+  background: var(--i-input);
+  color: var(--i-text);
+  font: inherit;
+  resize: vertical;
+}
+
+.field input:focus,
+.field textarea:focus,
+.raw:focus,
+.number input[type="number"]:focus {
+  outline: 1px solid var(--i-accent);
+}
+
+/* Tokens */
+/* One value: no box, a line under it (an edited one gets a green mark at its left) */
+.token {
+  margin-bottom: 8px;
+  padding: 8px;
+  border-bottom: 1px solid var(--i-line);
+}
+
+.token[data-changed="true"] {
+  box-shadow: inset 2px 0 0 var(--i-positive);
+}
+
+.tokenHead {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+}
+
+.tokenHead code {
+  font: 12px ui-monospace, SFMono-Regular, Menlo, monospace;
+  color: var(--i-strong);
+  letter-spacing: 0;
+}
+
+.swatch {
+  flex: none;
+  width: 14px;
+  height: 14px;
+  border: 1px solid var(--i-line-strong);
+  border-radius: 4px;
+}
+
+/* A value that isn't a colour: an empty swatch struck through, where the swatch used to vanish */
+.swatch[data-empty="true"] {
+  border-color: var(--i-danger);
+  background: linear-gradient(to top right, transparent calc(50% - 1px), var(--i-danger) calc(50% - 1px), var(--i-danger) calc(50% + 1px), transparent calc(50% + 1px));
+}
+
+/* A typed value that can't be saved: the field and the reason (same red as a change's error) */
+.token[data-invalid="true"] .raw {
+  border-color: var(--i-danger);
+}
+
+.invalid {
+  margin-top: 4px;
+  color: var(--i-danger);
+  font-size: 12px;
+}
+
+.link {
+  margin-left: auto;
+  color: var(--i-positive);
+  font-size: 12px;
+  cursor: pointer;
+}
+
+.role {
+  margin: 2px 0 6px;
+  color: var(--i-dim);
+}
+
+.number,
+.color {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  margin-bottom: 6px;
+}
+
+/* Sliders: a thin dim track, violet up to the value (--fill, from rangeFill), a violet knob */
+.number input[type="range"],
+.color input[type="range"] {
+  flex: 1;
+  min-width: 0;
+  height: 16px;
+  margin: 0;
+  appearance: none;
+  background: none;
+}
+
+.number input[type="range"]::-webkit-slider-runnable-track,
+.color input[type="range"]::-webkit-slider-runnable-track {
+  height: 4px;
+  border-radius: 2px;
+  background: linear-gradient(to right, var(--i-accent) var(--fill, 0%), var(--i-fill-3) var(--fill, 0%));
+}
+
+.number input[type="range"]::-moz-range-track,
+.color input[type="range"]::-moz-range-track {
+  height: 4px;
+  border-radius: 2px;
+  background: linear-gradient(to right, var(--i-accent) var(--fill, 0%), var(--i-fill-3) var(--fill, 0%));
+}
+
+.number input[type="range"]::-webkit-slider-thumb,
+.color input[type="range"]::-webkit-slider-thumb {
+  width: 14px;
+  height: 14px;
+  margin-top: -5px;
+  border: 0;
+  border-radius: 50%;
+  appearance: none;
+  background: var(--i-accent);
+  box-shadow: 0 1px 3px rgba(0, 0, 0, 0.4);
+}
+
+.number input[type="range"]::-moz-range-thumb,
+.color input[type="range"]::-moz-range-thumb {
+  width: 14px;
+  height: 14px;
+  border: 0;
+  border-radius: 50%;
+  background: var(--i-accent);
+  box-shadow: 0 1px 3px rgba(0, 0, 0, 0.4);
+}
+
+.number input[type="number"] {
+  flex: none;
+  width: 72px;
+}
+
+.number span,
+.color span {
+  color: var(--i-dim);
+  white-space: nowrap;
+}
+
+.color input[type="color"] {
+  width: 32px;
+  height: 24px;
+  padding: 0;
+  border: 1px solid var(--i-line);
+  border-radius: 5px;
+  background: none;
+}
+
+.raw {
+  font: 12px ui-monospace, SFMono-Regular, Menlo, monospace;
+  letter-spacing: 0;
+}
+
+.phone {
+  margin-top: 4px;
+  color: var(--i-dim);
+  font-size: 12px;
+}
+
+/* A token's details (code name, CSS value, phone value), closed until asked for */
+.more {
+  margin-top: 2px;
+  color: var(--i-dim);
+  font-size: 12px;
+  cursor: pointer;
+}
+
+.more:hover,
+.more[aria-expanded="true"] {
+  color: var(--i-text);
+}
+
+.moreBox {
+  margin-top: 6px;
+  padding-top: 6px;
+  border-top: 1px solid var(--i-line);
+}
+
+.files {
+  margin: 0;
+  padding-left: 16px;
+  color: var(--i-soft);
+  font: 12px ui-monospace, SFMono-Regular, Menlo, monospace;
+  letter-spacing: 0;
+}
+
+/* Regenerate */
+.regen {
+  margin: 12px 0 4px;
+  padding: 10px;
+  border: 1px solid color-mix(in srgb, var(--i-accent) 35%, transparent);
+  border-radius: 10px;
+  background: color-mix(in srgb, var(--i-accent) 6%, transparent);
+}
+
+.regen h3 {
+  margin-top: 0;
+}
+
+.regen textarea,
+.regen select {
+  width: 100%;
+  padding: 6px 8px;
+  border: 1px solid var(--i-line);
+  border-radius: 6px;
+  background: var(--i-well);
+  color: var(--i-text);
+  font: inherit;
+  resize: vertical;
+}
+
+.regen textarea:focus {
+  outline: 1px solid var(--i-accent);
+}
+
+.picks {
+  display: grid;
+  gap: 2px;
+  margin: 8px 0;
+}
+
+.pick {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  font: 12px ui-monospace, SFMono-Regular, Menlo, monospace;
+  color: var(--i-soft);
+  cursor: pointer;
+  letter-spacing: 0;
+}
+
+.pick[data-extra="true"] {
+  color: var(--i-dim);
+}
+
+.pick input {
+  accent-color: var(--i-accent);
+}
+
+.pick em {
+  margin-left: auto;
+  font-style: normal;
+  color: var(--i-dim);
+}
+
+.runRow {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+}
+
+.runRow select {
+  width: auto;
+  min-width: 0;
+  padding: 3px 4px;
+}
+
+.estimate {
+  flex: 1;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  color: var(--i-dim);
+  white-space: nowrap;
+}
+
+.runRow .primary {
+  flex: none;
+}
+
+.error {
+  margin-top: 6px;
+  padding: 6px 8px;
+  border-radius: 6px;
+  background: var(--i-danger-surface);
+  color: var(--i-danger);
+}
+
+.result {
+  margin-top: 8px;
+  padding: 8px;
+  border-radius: 6px;
+  background: var(--i-positive-surface);
+}
+
+.result .ghost {
+  margin-top: 6px;
+}
+
+/* Claude Code connection */
+.connected {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  margin-bottom: 8px;
+  color: var(--i-dim);
+  font-size: 12px;
+}
+
+.connected i {
+  width: 7px;
+  height: 7px;
+  border-radius: 50%;
+  background: var(--i-changed);
+}
+
+.setup {
+  padding: 2px 0 0;
+  color: var(--i-soft);
+}
+
+.setup strong {
+  display: block;
+  margin-bottom: 4px;
+  color: var(--i-strong);
+  font-size: 14px;
+}
+
+.setup p {
+  margin-bottom: 8px;
+}
+
+.setup ol {
+  display: grid;
+  gap: 10px;
+  margin: 0 0 10px;
+  padding-left: 18px;
+}
+
+.setup details {
+  margin-top: 10px;
+}
+
+.setup details ol {
+  margin-top: 8px;
+}
+
+.setup code {
+  font: 12px ui-monospace, SFMono-Regular, Menlo, monospace;
+  letter-spacing: 0;
+}
+
+.command {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  margin: 5px 0;
+  padding: 5px 5px 5px 8px;
+  border: 1px solid var(--i-line);
+  border-radius: 6px;
+  background: var(--i-well);
+}
+
+.command code {
+  flex: 1;
+  min-width: 0;
+  overflow-x: auto;
+  white-space: nowrap;
+  color: var(--i-strong);
+}
+
+.command .ghost {
+  flex: none;
+  height: 24px;
+  padding: 0 8px;
+}
+
+/* Scope, progress, follow-ups */
+.scope {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 6px;
+  margin-bottom: 8px;
+}
+
+.scope button {
+  display: grid;
+  gap: 1px;
+  padding: 6px 8px;
+  border: 1px solid var(--i-line);
+  border-radius: 7px;
+  color: var(--i-text);
+  font-size: 13px;
+  font-weight: 500;
+  text-align: left;
+  cursor: pointer;
+}
+
+.scope button small {
+  color: var(--i-dim);
+  font-size: 11px;
+  font-weight: 400;
+}
+
+.scope button[aria-checked="true"] {
+  border-color: var(--i-accent);
+  background: color-mix(in srgb, var(--i-accent) 16%, transparent);
+}
+
+.hintBox {
+  margin: 8px 0;
+  color: var(--i-dim);
+}
+
+.replying {
+  display: flex;
+  gap: 6px;
+  margin-bottom: 6px;
+  color: var(--i-accent-ink);
+}
+
+.jobHead {
+  margin-bottom: 6px;
+  color: var(--i-soft);
+}
+
+.log {
+  max-height: 150px;
+  overflow-y: auto;
+  margin: 0 0 6px;
+  padding: 6px 8px 6px 22px;
+  border-radius: 6px;
+  background: var(--i-well);
+  font: 12px/1.5 ui-monospace, SFMono-Regular, Menlo, monospace;
+  color: var(--i-soft);
+  letter-spacing: 0;
+}
+
+.result[data-state="running"] {
+  background: color-mix(in srgb, var(--i-accent) 8%, transparent);
+}
+
+.result[data-state="error"] {
+  background: var(--i-danger-surface);
+}
+
+.actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+  margin-top: 6px;
+}
+
+.actions .ghost {
+  margin-top: 0;
+}
+
+.ghost[data-active="true"] {
+  border-color: var(--i-accent);
+  color: var(--i-strong);
+}
+
+.needs {
+  display: grid;
+  gap: 4px;
+  margin-top: 8px;
+  padding: 8px;
+  border: 1px solid color-mix(in srgb, var(--i-accent) 35%, transparent);
+  border-radius: 8px;
+  background: var(--i-well);
+}
+
+.needs .runRow {
+  margin-top: 4px;
+}
+
+.progress {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+  margin-top: 4px;
+  color: var(--i-dim);
+}
+
+.progress strong {
+  color: var(--i-text);
+  font-weight: 600;
+}
+
+.advice {
+  margin-top: 6px;
+  padding: 6px 8px;
+  border-radius: 6px;
+  background: var(--i-warn-surface);
+  color: var(--i-warn-text);
+}
+
+/* Pages: the site's pages, when it has several */
+.pages {
+  display: grid;
+  gap: 2px;
+  margin: 10px 0 0;
+  padding: 0;
+  list-style: none;
+}
+
+.pageRow {
+  display: block;
+  width: 100%;
+  padding: 6px 8px;
+  border: 1px solid transparent;
+  border-radius: 8px;
+  color: var(--i-text);
+  font-size: 13px;
+  text-align: left;
+  cursor: pointer;
+}
+
+.pageRow:hover {
+  background: var(--i-fill-1);
+}
+
+.pageRow[data-current="true"] {
+  border-color: var(--i-accent);
+}
+
+.pageRow strong,
+.pageRow small {
+  display: block;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.pageRow strong {
+  font-weight: 500;
+}
+
+.pageRow small {
+  margin-top: 2px;
+  color: var(--i-dim);
+  font-size: 12px;
+}
+
+/* A change's number: a violet teardrop, on its card and as a pin over the part it is about (the design's pin) */
+.pin {
+  display: inline-grid;
+  flex: none;
+  place-items: center;
+  border: 2px solid #fff;
+  border-radius: 50% 50% 50% 2px;
+  background: #7548d9;
+  color: #fff;
+  font-weight: 600;
+  font-variant-numeric: tabular-nums;
+  letter-spacing: 0;
+  line-height: 1;
+}
+
+.pin[data-on="page"] {
+  width: 28px;
+  height: 28px;
+  box-shadow: 0 2px 7px rgba(0, 0, 0, 0.2);
+  font-size: 12px;
+  cursor: pointer;
+}
+
+.pin[data-on="page"]:hover {
+  background: #8558e5;
+}
+
+.pin[data-on="card"] {
+  width: 20px;
+  height: 20px;
+  margin-right: 6px;
+  border-width: 0;
+  font-size: 11px;
+  vertical-align: -3px;
+}
+
+/* Assets: the page's pictures and videos */
+.assetSearch {
+  width: 100%;
+  margin-top: 10px;
+  padding: 7px 9px;
+  border: 1px solid var(--i-line);
+  border-radius: 8px;
+  background: var(--i-input);
+  color: var(--i-text);
+  font: inherit;
+  font-size: 13px;
+}
+
+.assets ul {
+  display: grid;
+  gap: 4px;
+  margin: 10px 0 0;
+  padding: 0;
+  list-style: none;
+}
+
+.asset {
+  display: grid;
+  grid-template-columns: 40px 1fr;
+  align-items: center;
+  gap: 8px;
+  width: 100%;
+  padding: 5px;
+  border: 1px solid transparent;
+  border-radius: 8px;
+  color: var(--i-text);
+  font-size: 13px;
+  text-align: left;
+  cursor: pointer;
+}
+
+.asset:hover:not(:disabled) {
+  background: var(--i-fill-1);
+}
+
+.asset[data-picked="true"] {
+  border-color: var(--i-accent);
+}
+
+.asset:disabled {
+  cursor: default;
+}
+
+.asset img,
+.asset video {
+  width: 40px;
+  height: 40px;
+  object-fit: cover;
+  border: 1px solid var(--i-line);
+  border-radius: 6px;
+  background: var(--i-fill-1);
+}
+
+.asset span {
+  min-width: 0;
+}
+
+.asset strong,
+.asset small {
+  display: block;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.asset strong {
+  font-weight: 500;
+}
+
+.asset small {
+  margin-top: 2px;
+  color: var(--i-dim);
+  font-size: 12px;
+}
+
+/* History */
+.history ol {
+  display: grid;
+  gap: 6px;
+  margin: 10px 0 0;
+  padding: 0;
+  list-style: none;
+}
+
+.version {
+  display: grid;
+  grid-template-columns: 1fr auto;
+  align-items: start;
+  gap: 4px 8px;
+  padding: 7px 8px;
+  border: 1px solid var(--i-line);
+  border-radius: 8px;
+}
+
+.version[data-current="true"] {
+  border-color: var(--i-accent);
+}
+
+.versionHead {
+  display: flex;
+  align-items: baseline;
+  gap: 6px;
+  min-width: 0;
+  color: var(--i-text);
+  font-size: 13px;
+  text-align: left;
+  cursor: pointer;
+}
+
+.versionLabel {
+  flex: 1;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.versionHead time {
+  color: var(--i-dim);
+  font-size: 12px;
+}
+
+/* A version's buttons sit on their own line, so its words keep the row's width */
+.versionActions {
+  grid-column: 1 / -1;
+  display: flex;
+  justify-content: flex-end;
+  gap: 6px;
+}
+
+.version:not([data-current="true"]) .versionLabel {
+  white-space: normal;
+  display: -webkit-box;
+  -webkit-box-orient: vertical;
+  -webkit-line-clamp: 2;
+}
+
+.versionBody {
+  grid-column: 1 / -1;
+  color: var(--i-soft);
+}
+
+.badge {
+  flex: none;
+  padding: 0 5px;
+  border-radius: 4px;
+  background: var(--i-fill-2);
+  color: var(--i-dim);
+  font-size: 10px;
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+}
+
+.badge[data-kind="change"] {
+  background: color-mix(in srgb, var(--i-accent) 20%, transparent);
+  color: var(--i-info-text);
+}
+
+.badge[data-kind="restore"],
+.badge[data-kind="redo"],
+.badge[data-kind="undo"] {
+  background: var(--i-warn-surface);
+  color: var(--i-warn-text);
+}
+
+.now {
+  color: var(--i-accent-ink);
+  font-size: 12px;
+}
+
+/* Narrow screens: the panel takes the bottom half */
+@media (max-width: 700px) {
+  .panel {
+    top: auto;
+    left: 12px;
+    width: auto;
+    height: 52svh;
+  }
+}
+
+
+/* Cards: changes at work and just finished, stacked like a phone's notifications */
+.cards {
+  position: fixed;
+  bottom: 12px;
+  left: 12px;
+  z-index: 2147483000;
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  width: min(340px, calc(100vw - 24px));
+  max-height: calc(100vh - 24px);
+  overflow-y: auto;
+  scrollbar-width: none;
+  pointer-events: none;
+}
+
+.cards[data-side="right"] {
+  left: auto;
+  right: 12px;
+}
+
+/* In the editor: a list in the right column's "AI changes" tab, newest first, scrolling with the column */
+.cards[data-place="side"] {
+  position: static;
+  z-index: auto;
+  width: auto;
+  max-height: none;
+  gap: 10px;
+  padding: 20px 10px 16px;
+  overflow: visible;
+}
+
+/* A card under the pointer, or being typed in, comes to the front of anything it overlaps */
+.cards:hover,
+.cards:focus-within {
+  z-index: 2147483001;
+}
+
+.cards[data-place="side"]:hover,
+.cards[data-place="side"]:focus-within {
+  z-index: auto;
+}
+
+.card,
+.cardsFoot {
+  pointer-events: auto;
+}
+
+.card {
+  padding: 14px;
+  border: 1px solid transparent;
+  border-radius: 10px;
+  background: var(--i-card);
+  color: var(--i-text);
+  font: 13px/1.35 var(--i-font);
+}
+
+/* Over the site's own page they float, so they cast a shadow there */
+.cards:not([data-place="side"]) .card {
+  box-shadow: 0 12px 34px var(--i-shadow);
+}
+
+/* Finished (ready to review, or done): the whole card takes you to its part */
+.card[data-ready="true"] {
+  cursor: pointer;
+  transition: border-color 150ms ease, background 150ms ease;
+}
+
+.card[data-ready="true"]:hover {
+  border-color: var(--i-line-strong);
+  background: var(--i-card-hover);
+}
+
+.card[data-ready="true"] :where(p, span) {
+  cursor: inherit;
+}
+
+.card[data-fresh="true"] {
+  animation: inspector-card-in 0.42s cubic-bezier(0.2, 1.2, 0.3, 1) both;
+}
+
+@keyframes inspector-card-in {
+  from {
+    opacity: 0;
+    transform: translateY(14px) scale(0.96);
+  }
+}
+
+.cardTop {
+  display: flex;
+  align-items: flex-start;
+  gap: 10px;
+}
+
+.cardWhat {
+  flex: 1;
+  min-width: 0;
+}
+
+.cardMeta {
+  display: flex;
+  justify-content: space-between;
+  gap: 8px;
+  color: var(--i-dim);
+  font-size: 12px;
+}
+
+.cardKind {
+  font-weight: 600;
+  letter-spacing: 0.02em;
+  text-transform: uppercase;
+}
+
+.card[data-kind="running"] .cardKind {
+  color: var(--i-accent-ink);
+}
+
+.card[data-kind="review"] .cardKind {
+  color: var(--i-positive);
+}
+
+.card[data-kind="needs"] .cardKind {
+  color: var(--i-warn-text);
+}
+
+.card[data-kind="failed"] .cardKind {
+  color: var(--i-danger);
+}
+
+.cardPart {
+  display: block;
+  max-width: 100%;
+  margin-top: 1px;
+  overflow: hidden;
+  color: var(--i-strong);
+  font-size: 15px;
+  font-weight: 600;
+  text-align: left;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  cursor: pointer;
+}
+
+.cardPart:hover {
+  text-decoration: underline;
+  text-underline-offset: 3px;
+}
+
+.cardAsk {
+  display: -webkit-box;
+  margin: 1px 0 0;
+  overflow: hidden;
+  color: var(--i-soft);
+  -webkit-line-clamp: 2;
+  -webkit-box-orient: vertical;
+}
+
+.cardX {
+  display: grid;
+  place-items: center;
+  flex: none;
+  width: 22px;
+  height: 22px;
+  border-radius: 50%;
+  background: var(--i-fill-2);
+  color: var(--i-dim);
+  font-size: 10px;
+  cursor: pointer;
+}
+
+.cardX:hover {
+  background: var(--i-fill-3);
+  color: var(--i-strong);
+}
+
+.bar {
+  height: 4px;
+  margin: 10px 0 6px;
+  overflow: hidden;
+  border-radius: 999px;
+  background: var(--i-fill-2);
+}
+
+.bar > span {
+  display: block;
+  height: 100%;
+  border-radius: inherit;
+  background: var(--i-accent);
+  transform-origin: left;
+  transition: transform 0.6s ease-out;
+}
+
+.bar > span[data-waiting="true"] {
+  width: 30%;
+  transform: none !important;
+  background: color-mix(in srgb, var(--i-accent) 45%, transparent);
+  animation: inspector-wait 1.4s ease-in-out infinite;
+}
+
+@keyframes inspector-wait {
+  from {
+    margin-left: -30%;
+  }
+  to {
+    margin-left: 100%;
+  }
+}
+
+.cardStep {
+  display: flex;
+  justify-content: space-between;
+  gap: 8px;
+  margin: 0;
+  color: var(--i-dim);
+  font-size: 12px;
+}
+
+.cardText {
+  display: -webkit-box;
+  margin: 8px 0 0;
+  overflow: hidden;
+  color: var(--i-soft);
+  -webkit-line-clamp: 3;
+  -webkit-box-orient: vertical;
+}
+
+.cardError {
+  margin: 6px 0 0;
+  color: var(--i-danger);
+  font-size: 13px;
+}
+
+.cardActions {
+  display: flex;
+  align-items: center;
+  justify-content: flex-end;
+  gap: 6px;
+  margin-top: 10px;
+}
+
+.cardCost {
+  flex: 1;
+  color: var(--i-dim);
+  font-size: 12px;
+}
+
+.cardActions button,
+.cardsFoot button {
+  height: 32px;
+  padding: 0 12px;
+  border-radius: 8px;
+  background: var(--i-fill-2);
+  color: var(--i-strong);
+  font-size: 13px;
+  font-weight: 500;
+  cursor: pointer;
+}
+
+.cardActions button:hover,
+.cardsFoot button:hover {
+  background: var(--i-fill-3);
+}
+
+.cardActions button:disabled {
+  opacity: 0.5;
+}
+
+.cardsFoot {
+  display: flex;
+  justify-content: center;
+  gap: 6px;
+}
+
+.cardsFoot button {
+  background: var(--i-card);
+  color: var(--i-dim);
+}
+
+/* The resolved cards' own heading: a quiet line between the cards that wait and the ones that are settled */
+.cardsFoot[data-resolved] {
+  justify-content: flex-start;
+  margin-top: 6px;
+}
+
+.card[data-kind="kept"],
+.card[data-kind="undone"] {
+  opacity: 0.86;
+}
+
+
+/* The card's little animated icon */
+.glyph {
+  display: grid;
+  place-items: center;
+  flex: none;
+  width: 34px;
+  height: 34px;
+  border-radius: 10px;
+  background: color-mix(in srgb, var(--i-accent) 16%, transparent);
+}
+
+.glyph[data-kind="review"],
+.glyph[data-kind="kept"] {
+  background: var(--i-positive-surface);
+}
+
+.glyph[data-kind="needs"] {
+  background: var(--i-warn-surface);
+}
+
+.glyph[data-kind="failed"] {
+  background: var(--i-danger-surface);
+}
+
+.glyph[data-kind="nothing"],
+.glyph[data-kind="stopped"],
+.glyph[data-kind="undone"] {
+  background: var(--i-fill-2);
+}
+
+.glyph svg {
+  overflow: visible;
+}
+
+.glyphTrack,
+.glyphSpin {
+  fill: none;
+  stroke-width: 2.4;
+}
+
+.glyphTrack {
+  stroke: color-mix(in srgb, var(--i-accent) 22%, transparent);
+}
+
+.glyphSpin {
+  stroke: var(--i-accent-ink);
+  stroke-linecap: round;
+  stroke-dasharray: 18 40;
+  transform-origin: 14px 14px;
+  animation: inspector-spin 1s linear infinite;
+}
+
+.glyphCore {
+  fill: var(--i-accent-ink);
+  transform-origin: 14px 14px;
+  animation: inspector-core 1.2s ease-in-out infinite;
+}
+
+.glyphDot {
+  fill: var(--i-accent-ink);
+  animation: inspector-dot 1.1s ease-in-out infinite;
+}
+
+.glyphCheck,
+.glyphMark {
+  fill: none;
+  stroke-width: 2.6;
+  stroke-linecap: round;
+  stroke-linejoin: round;
+}
+
+.glyphCheck {
+  stroke: var(--i-positive);
+  stroke-dasharray: 22;
+  stroke-dashoffset: 22;
+  animation: inspector-draw 0.5s 0.15s cubic-bezier(0.3, 0.9, 0.3, 1) forwards;
+}
+
+.glyphMark {
+  stroke: var(--i-dim);
+}
+
+.glyph[data-kind="needs"] .glyphMark {
+  stroke: var(--i-warn-text);
+}
+
+.glyph[data-kind="failed"] .glyphMark {
+  stroke: var(--i-danger);
+}
+
+@keyframes inspector-spin {
+  to {
+    transform: rotate(360deg);
+  }
+}
+
+@keyframes inspector-core {
+  50% {
+    transform: scale(0.6);
+    opacity: 0.6;
+  }
+}
+
+@keyframes inspector-dot {
+  0%,
+  100% {
+    opacity: 0.25;
+  }
+  40% {
+    opacity: 1;
+  }
+}
+
+@keyframes inspector-draw {
+  to {
+    stroke-dashoffset: 0;
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .card,
+  .glyphSpin,
+  .glyphCore,
+  .glyphDot,
+  .chip,
+  .bar > span[data-waiting="true"] {
+    animation: none;
+  }
+
+  .glyphCheck {
+    animation: none;
+    stroke-dashoffset: 0;
+  }
+}
+
+.versionLabel[data-undone="true"] {
+  color: var(--i-dim);
+  text-decoration: line-through;
+}
+
+/* Review: Before/After on the live page, refine, keep or undo */
+/* When "Use this one" takes the room, the token count drops to its own line instead of squeezing into a column */
+.cardCompare {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 6px 8px;
+  margin-top: 10px;
+}
+
+.segment {
+  display: flex;
+  padding: 2px;
+  border-radius: 999px;
+  background: var(--i-fill-2);
+}
+
+.segment button {
+  height: 26px;
+  padding: 0 12px;
+  border-radius: 999px;
+  color: var(--i-dim);
+  font-size: 13px;
+  font-weight: 500;
+  cursor: pointer;
+}
+
+.segment button[aria-checked="true"] {
+  background: var(--i-inverse);
+  color: var(--i-on-inverse);
+}
+
+.card[data-kind="review"] .segment button[aria-checked="true"]:first-child {
+  color: #2a1f00;
+  background: var(--i-hover);
+}
+
+.cardIcon {
+  display: grid;
+  place-items: center;
+  width: 26px;
+  height: 26px;
+  border-radius: 50%;
+  background: var(--i-fill-2);
+  color: var(--i-text);
+  font-size: 13px;
+  cursor: pointer;
+}
+
+.cardIcon:hover {
+  background: var(--i-fill-3);
+}
+
+.cardCompare .cardCost {
+  flex: 1 0 auto;
+  text-align: right;
+  white-space: nowrap;
+}
+
+.cardMore {
+  display: flex;
+  gap: 6px;
+  margin-top: 10px;
+}
+
+.cardMore input {
+  flex: 1;
+  min-width: 0;
+  height: 32px;
+  padding: 0 12px;
+  border: 1px solid var(--i-line);
+  border-radius: 8px;
+  background: var(--i-well);
+  color: var(--i-text);
+  font: inherit;
+  font-size: 13px;
+}
+
+.cardMore input:focus {
+  outline: none;
+  border-color: color-mix(in srgb, var(--i-accent) 70%, transparent);
+}
+
+.cardMore button {
+  height: 32px;
+  padding: 0 12px;
+  border-radius: 8px;
+  background: color-mix(in srgb, var(--i-accent) 25%, transparent);
+  color: var(--i-strong);
+  font-size: 13px;
+  font-weight: 500;
+  cursor: pointer;
+}
+
+.cardMore button:disabled {
+  opacity: 0.4;
+}
+
+.cardActions button.cardKeep {
+  background: var(--i-changed);
+  color: #06281a;
+}
+
+.cardActions button.cardKeep:hover {
+  background: #7ff0b8;
+}
+
+/* The page while a card shows "before": the part's frame turns amber */
+.pulse[data-state="before"] {
+  outline: 2px dashed var(--i-hover);
+  animation: none;
+}
+
+.pulse[data-state="before"] .mark {
+  background: var(--i-hover);
+  color: #2a1f00;
+}
+
+/* The page has changes it can't show without a reload: offered, never forced */
+.reload {
+  position: fixed;
+  top: 12px;
+  left: 50%;
+  z-index: 2147483000;
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  max-width: calc(100vw - 24px);
+  padding: 7px 8px 7px 14px;
+  border: 1px solid var(--i-line);
+  border-radius: 999px;
+  background: var(--i-panel);
+  box-shadow: 0 10px 32px var(--i-shadow-soft);
+  color: var(--i-text);
+  font: 12px/1.3 var(--i-font);
+  transform: translateX(-50%);
+  animation: reloadEnter 250ms cubic-bezier(0.16, 1, 0.3, 1);
+}
+
+.reload span {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.reload button {
+  position: relative;
+  flex: none;
+  padding: 7px 12px;
+  border-radius: 999px;
+  background: var(--i-accent);
+  color: #fff;
+  font-size: 12px;
+  font-weight: 500;
+  cursor: pointer;
+}
+
+.reload button:hover {
+  background: var(--i-accent-hover);
+}
+
+/* What draws the eye, as in the design: the notice rises in, then a soft violet ring leaves the button every few
+   seconds until it is pressed. With reduced motion asked for, neither moves. */
+.reload button::after {
+  content: "";
+  position: absolute;
+  inset: -3px;
+  border: 1px solid var(--i-accent-soft);
+  border-radius: inherit;
+  pointer-events: none;
+  opacity: 0;
+  animation: reloadWave 3.5s ease-out infinite;
+}
+
+@keyframes reloadEnter {
+  from {
+    opacity: 0;
+    transform: translateX(-50%) translateY(4px);
+  }
+  to {
+    opacity: 1;
+    transform: translateX(-50%) translateY(0);
+  }
+}
+
+@keyframes reloadWave {
+  0%,
+  60% {
+    opacity: 0;
+    transform: scale(1);
+  }
+  65% {
+    opacity: 0.6;
+  }
+  100% {
+    opacity: 0;
+    transform: scale(1.18, 1.5);
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .reload,
+  .reload button::after {
+    animation: none;
+  }
+}
+
+/* The map has fallen behind the site (MapBehind.tsx): a note at the top of the parts list, a dot on Inspect */
+.behind {
+  margin: 0 0 12px;
+  padding: 10px 12px 12px;
+  border: 1px solid var(--i-warn-line);
+  border-radius: var(--i-radius);
+  background: var(--i-warn-surface);
+}
+
+.behindHead {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  width: 100%;
+  text-align: left;
+  cursor: pointer;
+}
+
+.behindHead strong {
+  flex: 1;
+  font-size: 13px;
+  font-weight: 600;
+}
+
+.behindMore {
+  color: var(--i-dim);
+  font-size: 12px;
+}
+
+.behindDot {
+  flex: none;
+  width: 7px;
+  height: 7px;
+  border-radius: 50%;
+  background: var(--i-hover);
+  box-shadow: 0 0 0 3px rgba(255, 209, 102, 0.18);
+}
+
+.behind ul {
+  margin: 8px 0 0;
+  padding-left: 15px;
+  color: var(--i-text);
+}
+
+.behind li + li {
+  margin-top: 3px;
+}
+
+.behind p {
+  margin: 8px 0 0;
+  color: var(--i-dim);
+}
+
+.behind q {
+  color: var(--i-text);
+}
+
+.behindCopy {
+  margin-top: 9px;
+  height: 28px;
+  padding: 0 12px;
+  border: 1px solid var(--i-warn-line);
+  border-radius: 8px;
+  color: var(--i-warn-text);
+  font-size: 12px;
+  font-weight: 500;
+  cursor: pointer;
+}
+
+.behindCopy:hover {
+  background: var(--i-warn-surface);
+}
+
+/* Stepping through a change's tries: Original, Try 1, Try 2… */
+.stepper {
+  display: flex;
+  align-items: center;
+  gap: 2px;
+  padding: 2px;
+  border-radius: 999px;
+  background: var(--i-fill-2);
+}
+
+.stepper button {
+  display: grid;
+  place-items: center;
+  width: 24px;
+  height: 24px;
+  border-radius: 50%;
+  color: var(--i-text);
+  font-size: 15px;
+  line-height: 1;
+  cursor: pointer;
+}
+
+.stepper button:hover:not(:disabled) {
+  background: var(--i-fill-2);
+}
+
+.stepper button:disabled {
+  opacity: 0.3;
+}
+
+.stepper span {
+  min-width: 58px;
+  padding: 0 4px;
+  color: var(--i-strong);
+  font-size: 13px;
+  font-weight: 500;
+  text-align: center;
+  white-space: nowrap;
+}
+
+.useThis {
+  height: 28px;
+  padding: 0 12px;
+  border-radius: 8px;
+  background: var(--i-hover);
+  color: #2a1f00;
+  font-size: 13px;
+  font-weight: 600;
+  white-space: nowrap;
+  cursor: pointer;
+}
+
+/* The unit after a number ("design px") never wraps or pushes the row wider than its column */
+.number > span {
+  flex: none;
+  white-space: nowrap;
+}
+
+/* A token's plain name first ("Body text size"), its code name and the prompt's note small under it */
+.tokenName {
+  flex: 1;
+  min-width: 0;
+  overflow: hidden;
+  color: var(--i-text);
+  font-size: 13px;
+  font-weight: 500;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.role code {
+  color: var(--i-dim);
+  font-size: 11px;
+}
+
+/* ---------- Easing: presets, the curve's graph, the four numbers and a replay dot ---------- */
+.easing {
+  display: grid;
+  gap: 6px;
+  margin-bottom: 6px;
+}
+
+.easing select,
+.bezier input {
+  width: 100%;
+  padding: 4px 6px;
+  border: 1px solid transparent;
+  border-radius: 6px;
+  background: var(--i-input);
+  color: var(--i-text);
+  font: inherit;
+}
+
+/* The preset list: a dark box with a chevron, as in the chat bar */
+.easing select {
+  appearance: none;
+  height: 32px;
+  padding: 0 28px 0 7px;
+  border-color: var(--i-line);
+  background: var(--i-input) var(--i-chevron) no-repeat right 10px center;
+}
+
+.graph {
+  width: 100%;
+  max-width: 220px;
+  justify-self: center;
+  touch-action: none;
+  user-select: none;
+}
+
+.graphBox {
+  fill: var(--i-fill-1);
+  stroke: var(--i-line);
+}
+
+.graphDiagonal {
+  stroke: var(--i-line);
+  stroke-dasharray: 3 3;
+}
+
+.graphArm {
+  stroke: var(--i-dim);
+  stroke-width: 1;
+}
+
+.graphCurve {
+  fill: none;
+  stroke: var(--i-accent);
+  stroke-width: 2.4;
+  stroke-linecap: round;
+}
+
+.graphHandle {
+  fill: var(--i-strong);
+  stroke: var(--i-accent);
+  stroke-width: 2;
+  cursor: grab;
+}
+
+.graphHandle[data-dragging="true"] {
+  cursor: grabbing;
+  fill: var(--i-accent);
+}
+
+.bezier {
+  display: grid;
+  grid-template-columns: repeat(4, 1fr);
+  gap: 4px;
+}
+
+.easingPreview {
+  position: relative;
+  height: 14px;
+  border-radius: 7px;
+  background: var(--i-fill-1);
+  cursor: pointer;
+}
+
+.easingPreview i {
+  position: absolute;
+  top: 3px;
+  left: 3px;
+  width: 8px;
+  height: 8px;
+  border-radius: 50%;
+  background: var(--i-accent);
+  animation-name: easingMove;
+  animation-fill-mode: both;
+}
+
+@keyframes easingMove {
+  to {
+    left: calc(100% - 11px);
+  }
+}
+
+/* ---------- Font picker ---------- */
+.font {
+  position: relative;
+  margin-bottom: 6px;
+}
+
+.fontButton {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  width: 100%;
+  height: 32px;
+  padding: 5px 7px;
+  border: 0;
+  border-radius: 6px;
+  background: var(--i-input);
+  color: var(--i-text);
+  cursor: pointer;
+}
+
+.fontButton svg {
+  width: 12px;
+  height: 12px;
+  fill: none;
+  stroke: currentColor;
+  stroke-width: 1.5;
+}
+
+.fontPop {
+  position: absolute;
+  z-index: 5;
+  top: calc(100% + 4px);
+  left: 0;
+  right: 0;
+  padding: 6px;
+  border: 1px solid var(--i-line);
+  border-radius: 8px;
+  background: var(--i-bg);
+  box-shadow: 0 12px 32px var(--i-shadow);
+}
+
+.fontPop input {
+  width: 100%;
+  padding: 5px 7px;
+  border: 1px solid var(--i-line);
+  border-radius: 6px;
+  background: var(--i-well);
+  color: var(--i-text);
+  font: inherit;
+}
+
+.fontKinds {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 3px;
+  margin: 6px 0;
+}
+
+.fontKinds button {
+  padding: 2px 7px;
+  border-radius: 10px;
+  color: var(--i-dim);
+  font-size: 12px;
+  cursor: pointer;
+}
+
+.fontKinds button[aria-pressed="true"] {
+  background: var(--i-accent-surface);
+  color: var(--i-accent-ink);
+}
+
+.fontList {
+  max-height: 260px;
+  margin: 0;
+  padding: 0;
+  overflow-y: auto;
+  list-style: none;
+}
+
+.fontList button {
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: 8px;
+  width: 100%;
+  padding: 5px 6px;
+  border-radius: 5px;
+  color: var(--i-text);
+  font-size: 15px;
+  text-align: left;
+  cursor: pointer;
+}
+
+.fontList button:hover,
+.fontList button[data-current="true"] {
+  background: color-mix(in srgb, var(--i-accent) 16%, transparent);
+}
+
+.fontList small {
+  color: var(--i-dim);
+  font: 11px var(--i-font);
+}
+
+.fontEmpty,
+.fontSource {
+  padding: 6px;
+  color: var(--i-dim);
+  font-size: 12px;
+}
+
+.fontSource {
+  margin: 4px 0 0;
+  padding: 0 2px;
+}
+
+/* ---------- A layer's link, media and effect settings ---------- */
+.linkRow {
+  display: flex;
+  gap: 6px;
+  margin-bottom: 6px;
+}
+
+.linkRow input {
+  flex: 1;
+  min-width: 0;
+  padding: 5px 7px;
+  border: 1px solid var(--i-line);
+  border-radius: 6px;
+  background: var(--i-well);
+  color: var(--i-text);
+  font: 12px ui-monospace, SFMono-Regular, Menlo, monospace;
+  letter-spacing: 0;
+}
+
+.media {
+  display: grid;
+  grid-template-columns: 56px 1fr;
+  align-items: center;
+  gap: 8px;
+  margin-bottom: 8px;
+}
+
+.media img,
+.media video {
+  width: 56px;
+  height: 56px;
+  object-fit: cover;
+  border: 1px solid var(--i-line);
+  border-radius: 6px;
+  background: var(--i-fill-1);
+}
+
+.media small {
+  display: block;
+  overflow: hidden;
+  color: var(--i-dim);
+  font-size: 11px;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.danger {
+  color: var(--i-danger);
+}
+
+/* ---------- Play: beside anything that sets motion ---------- */
+.play {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  height: 22px;
+  padding: 0 8px 0 6px;
+  border-radius: 11px;
+  background: var(--i-inverse);
+  color: var(--i-on-inverse);
+  font-size: 12px;
+  font-weight: 500;
+  text-transform: none;
+  letter-spacing: 0;
+  cursor: pointer;
+}
+
+.play:hover {
+  background: color-mix(in srgb, var(--i-inverse) 88%, var(--i-panel));
+}
+
+.play svg {
+  width: 10px;
+  height: 10px;
+  fill: currentColor;
+}
+
+.withPlay {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+}
+
+.easingRow {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.easingRow .easingPreview {
+  flex: 1;
+}
+
+.deleteLayer {
+  margin-top: 14px;
+}
+
+/* ---------- Tokens saved by uberdesigner: the editor's top-right corner ---------- */
+/* Each milestone has its own colours (--tier-from, --tier-to, --tier-glow, set from Totals.tsx TIERS) */
+.totals {
+  position: relative;
+  flex: none;
+  padding: 5px 10px;
+}
+
+.totalsButton {
+  position: relative;
+  display: grid;
+  gap: 5px;
+  width: 100%;
+  padding: 8px 10px 7px;
+  overflow: visible;
+  border-radius: 5px;
+  background: linear-gradient(135deg, var(--tier-from), var(--tier-to));
+  box-shadow: 0 4px 18px var(--tier-glow), inset 0 1px 2px rgba(255, 255, 255, 0.18);
+  color: #fff;
+  text-align: left;
+  cursor: pointer;
+  transition: transform 160ms ease, box-shadow 300ms ease;
+}
+
+.totalsButton:hover {
+  transform: translateY(-1px);
+  box-shadow: 0 6px 24px var(--tier-glow), inset 0 1px 2px rgba(255, 255, 255, 0.24);
+}
+
+.totalsTop {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+}
+
+.totalsLabel {
+  flex: 1;
+  min-width: 0;
+  overflow: hidden;
+  color: rgba(255, 255, 255, 0.82);
+  font-size: 11px;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.totalsTop strong {
+  font-size: 15px;
+  font-weight: 750;
+  font-variant-numeric: tabular-nums;
+  letter-spacing: -0.01em;
+  text-shadow: 0 1px 2px rgba(0, 0, 0, 0.25);
+}
+
+.totalsBar {
+  height: 4px;
+  overflow: hidden;
+  border-radius: 2px;
+  background: rgba(0, 0, 0, 0.22);
+}
+
+.totalsBar i {
+  display: block;
+  height: 100%;
+  border-radius: inherit;
+  background: rgba(255, 255, 255, 0.9);
+  transition: width 900ms cubic-bezier(0.22, 1, 0.36, 1);
+}
+
+/* The top milestones shimmer, a light sweeping across now and then */
+.totalsButton[data-shine="true"]::after {
+  content: "";
+  position: absolute;
+  inset: 0;
+  border-radius: inherit;
+  background: linear-gradient(105deg, transparent 35%, rgba(255, 255, 255, 0.35) 50%, transparent 65%);
+  background-size: 250% 100%;
+  animation: totalsShine 3.6s ease-in-out infinite;
+  pointer-events: none;
+}
+
+@keyframes totalsShine {
+  0%,
+  55% {
+    background-position: 120% 0;
+  }
+  100% {
+    background-position: -120% 0;
+  }
+}
+
+/* A new saving floats up from the badge */
+.totalsGain {
+  position: absolute;
+  top: -2px;
+  right: 12px;
+  color: var(--tier-to);
+  font-size: 12px;
+  font-weight: 800;
+  text-shadow: 0 1px 3px rgba(0, 0, 0, 0.6);
+  pointer-events: none;
+  animation: totalsGain 1.4s cubic-bezier(0.22, 1, 0.36, 1) forwards;
+}
+
+@keyframes totalsGain {
+  0% {
+    opacity: 0;
+    transform: translateY(6px) scale(0.8);
+  }
+  20% {
+    opacity: 1;
+    transform: translateY(-6px) scale(1.1);
+  }
+  100% {
+    opacity: 0;
+    transform: translateY(-22px) scale(1);
+  }
+}
+
+/* A milestone reached: the badge pops, sparks fly out, a line says so */
+.totalsButton[data-party="true"] {
+  animation: totalsPop 700ms cubic-bezier(0.34, 1.56, 0.64, 1);
+}
+
+@keyframes totalsPop {
+  0% {
+    transform: scale(1);
+  }
+  35% {
+    transform: scale(1.08) rotate(-1.5deg);
+  }
+  65% {
+    transform: scale(0.97) rotate(1deg);
+  }
+  100% {
+    transform: scale(1);
+  }
+}
+
+.totalsSparks {
+  position: absolute;
+  top: 50%;
+  left: 50%;
+  pointer-events: none;
+}
+
+.totalsSparks i {
+  position: absolute;
+  width: 6px;
+  height: 6px;
+  margin: -3px;
+  border-radius: 50%;
+  background: var(--tier-to);
+  box-shadow: 0 0 6px var(--tier-glow);
+  animation: totalsSpark 1.1s cubic-bezier(0.22, 1, 0.36, 1) forwards;
+}
+
+.totalsSparks i:nth-child(3n) {
+  background: #fff;
+}
+
+@keyframes totalsSpark {
+  0% {
+    opacity: 1;
+    transform: rotate(var(--a)) translateX(0) scale(1);
+  }
+  100% {
+    opacity: 0;
+    transform: rotate(var(--a)) translateX(var(--d)) scale(0.4);
+  }
+}
+
+.totalsToast {
+  position: absolute;
+  z-index: 7;
+  top: calc(100% - 2px);
+  left: 10px;
+  right: 10px;
+  margin: 0;
+  padding: 8px 10px;
+  border-radius: 8px;
+  background: linear-gradient(135deg, var(--tier-from), var(--tier-to));
+  box-shadow: 0 10px 30px var(--tier-glow);
+  color: #fff;
+  font-weight: 700;
+  text-align: center;
+  animation: totalsToast 4.2s ease forwards;
+}
+
+@keyframes totalsToast {
+  0% {
+    opacity: 0;
+    transform: translateY(-6px);
+  }
+  8%,
+  85% {
+    opacity: 1;
+    transform: translateY(0);
+  }
+  100% {
+    opacity: 0;
+    transform: translateY(-4px);
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .totalsButton,
+  .totalsButton[data-party="true"],
+  .totalsGain,
+  .totalsSparks i,
+  .totalsToast,
+  .totalsButton[data-shine="true"]::after {
+    animation: none;
+    transition: none;
+  }
+  .totalsSparks,
+  .totalsGain {
+    display: none;
+  }
+}
+
+.totalsPop {
+  position: absolute;
+  z-index: 6;
+  top: calc(100% - 2px);
+  left: 10px;
+  right: 10px;
+  padding: 10px 12px;
+  border: 1px solid var(--i-line);
+  border-radius: 8px;
+  background: var(--i-bg);
+  box-shadow: 0 12px 32px var(--i-shadow);
+}
+
+.totalsPop dl {
+  display: grid;
+  grid-template-columns: 1fr auto;
+  gap: 4px 12px;
+  margin: 0 0 10px;
+}
+
+.totalsPop dt {
+  color: var(--i-dim);
+}
+
+.totalsPop dd {
+  margin: 0;
+  color: var(--i-strong);
+  font-variant-numeric: tabular-nums;
+  text-align: right;
+}
+
+/* The milestone ladder: reached ones in their colours */
+.totalsTiers {
+  display: grid;
+  gap: 3px;
+  margin: 0 0 10px;
+  padding: 0;
+  list-style: none;
+}
+
+.totalsTiers li {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  color: var(--i-dim);
+  font-size: 11.5px;
+}
+
+.totalsNote a {
+  color: var(--i-accent-ink);
+  text-decoration: underline;
+  text-underline-offset: 2px;
+}
+
+.totalsTiers li i {
+  width: 14px;
+  height: 14px;
+  border-radius: 4px;
+  background: #77737e; /* a milestone not reached yet (the design's muted grey) */
+}
+
+.totalsTiers li[data-reached="true"] {
+  color: var(--i-strong);
+}
+
+.totalsTiers li[data-reached="true"] i {
+  background: linear-gradient(135deg, var(--tier-from), var(--tier-to));
+}
+
+.totalsTiers small {
+  margin-left: auto;
+  color: var(--i-accent-ink);
+  font-size: 10px;
+  font-weight: 700;
+  text-transform: uppercase;
+}
+
+.totalsSite,
+.totalsNote {
+  margin: 0 0 6px;
+  color: var(--i-dim);
+  font-size: 11px;
+}
+
+/* The one thing to do about the footer's line: Undo a direct edit, ask Claude, look for a layer */
+.count .link {
+  margin-left: 6px;
+  padding: 0;
+  border: 0;
+  background: none;
+  font: inherit;
+  font-size: 12px;
+  text-decoration: underline;
+}
