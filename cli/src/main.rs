@@ -155,6 +155,34 @@ enum Commands {
         #[command(subcommand)]
         command: PrivateCommand,
     },
+    /// Lint only the lines changed since the merge base with REV, using the ast-grep rules in
+    /// <stack>/lint/rules and <config dir>/lint/rules. Exit 0 with no errors, 1 with errors, 2
+    /// when the rules or the paths cannot be loaded.
+    #[command(args_conflicts_with_subcommands = true)]
+    Lint {
+        #[command(subcommand)]
+        command: Option<LintCommand>,
+        /// Files or directories to lint (default: the repository of the current directory).
+        paths: Vec<PathBuf>,
+        /// Revision whose merge base with HEAD is the baseline.
+        #[arg(long, value_name = "REV", default_value = "HEAD")]
+        base: String,
+        /// Widen the changed lines to their enclosing function or the whole file (default: [lint] scope).
+        #[arg(long, value_enum)]
+        scope: Option<lint::Scope>,
+        /// Print `{"version":1,"findings":[...]}`.
+        #[arg(long)]
+        json: bool,
+    },
+}
+
+#[derive(Subcommand)]
+enum LintCommand {
+    /// List every loaded rule per language, its source file and its severity in this project.
+    Rules {
+        #[arg(long)]
+        json: bool,
+    },
 }
 
 #[derive(Subcommand)]
@@ -344,6 +372,7 @@ fn main() -> Result<()> {
         Commands::Groups { json } => cmd_groups(&ctx, json)?,
         Commands::Fleet { command } => cmd_fleet(&ctx, command)?,
         Commands::Private { command } => cmd_private(&ctx, command)?,
+        Commands::Lint { command, paths, base, scope, json } => cmd_lint(&ctx, command, lint::Request { paths, base, scope, json })?,
     };
     io::stdout().flush()?;
     std::process::exit(code);
@@ -599,6 +628,22 @@ fn cmd_private(ctx: &Context, command: PrivateCommand) -> Result<i32> {
             Err(err) => Err(err),
         },
         PrivateCommand::Check => private.check(&mut io::stdin().lock(), &mut io::stderr()),
+    }
+}
+
+fn cmd_lint(ctx: &Context, command: Option<LintCommand>, request: lint::Request) -> Result<i32> {
+    let settings = lint::settings(&ctx.config_path, &ctx.home, ctx.stack_override.as_deref());
+    let settings = match settings {
+        Ok(settings) => settings,
+        Err(err) => {
+            eprintln!("error: {err:#}");
+            return Ok(lint::LOAD_ERROR);
+        }
+    };
+    let (mut out, mut err) = (io::stdout(), io::stderr());
+    match command {
+        Some(LintCommand::Rules { json }) => lint::list(&settings, json, &mut out, &mut err),
+        _ => lint::run(&settings, request, &mut out, &mut err),
     }
 }
 

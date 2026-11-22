@@ -4,7 +4,9 @@ use std::path::{Path, PathBuf};
 use anyhow::{Result, anyhow, bail, ensure};
 use serde::{Deserialize, Serialize};
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
+use crate::lint::{Level, Scope};
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize, clap::ValueEnum)]
 #[serde(rename_all = "lowercase")]
 pub enum Harness {
     Claude,
@@ -253,6 +255,48 @@ struct ConfigFile {
     skills: SkillsSection,
     #[serde(default)]
     incidents: IncidentsSection,
+    #[serde(default)]
+    lint: LintSection,
+}
+
+#[derive(Debug, Clone, Deserialize, Serialize)]
+#[serde(deny_unknown_fields, default)]
+pub struct LintSection {
+    pub enabled: bool,
+    pub scope: Scope,
+    pub disable: Vec<String>,
+    pub enable: Vec<String>,
+    pub severity: BTreeMap<String, Level>,
+    pub ignore: Vec<String>,
+    pub project: Vec<LintProject>,
+}
+
+impl Default for LintSection {
+    fn default() -> Self {
+        LintSection {
+            enabled: true,
+            scope: Scope::Lines,
+            disable: Vec::new(),
+            enable: Vec::new(),
+            severity: BTreeMap::new(),
+            ignore: ["**/vendor/**", "**/node_modules/**"].map(String::from).to_vec(),
+            project: Vec::new(),
+        }
+    }
+}
+
+#[derive(Debug, Clone, Deserialize, Serialize)]
+#[serde(deny_unknown_fields)]
+pub struct LintProject {
+    pub path: String,
+    #[serde(default)]
+    pub paths: BTreeMap<String, Vec<String>>,
+    #[serde(default)]
+    pub ignore: Vec<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub scope: Option<Scope>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub enabled: Option<bool>,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Deserialize, Serialize, Default)]
@@ -649,19 +693,37 @@ pub fn parse(text: &str, home: &Path, stack_override: Option<&Path>) -> Result<U
         || table.get("stack").and_then(|stack| stack.get("models")).is_some();
     ensure!(!older, "this config is from an older ai-stack ([roles], [stack.models] or [install]); run `ai-stack init --force`, then re-apply your edits");
     let file: ConfigFile = toml::Value::Table(table).try_into()?;
+    let stack = stack_of(&file.stack, home, stack_override)?;
+    Ok(Unresolved { file, stack, home: home.to_path_buf() })
+}
+
+fn stack_of(section: &StackSection, home: &Path, stack_override: Option<&Path>) -> Result<Stack> {
     let mut stack = Stack {
-        path: crate::paths::absolute(&file.stack.path, home)?,
-        configured: file.stack.path.clone(),
-        remote: file.stack.remote.clone(),
-        branch: file.stack.branch.clone(),
-        legacy_paths: file.stack.legacy_paths.iter().map(|p| crate::paths::absolute(p, home)).collect::<std::io::Result<_>>()?,
+        path: crate::paths::absolute(&section.path, home)?,
+        configured: section.path.clone(),
+        remote: section.remote.clone(),
+        branch: section.branch.clone(),
+        legacy_paths: section.legacy_paths.iter().map(|p| crate::paths::absolute(p, home)).collect::<std::io::Result<_>>()?,
     };
     if let Some(over) = stack_override {
         stack.configured = over.to_string_lossy().into_owned();
         let configured = std::mem::replace(&mut stack.path, crate::paths::absolute(&stack.configured, home)?);
         stack.legacy_paths.push(configured);
     }
-    Ok(Unresolved { file, stack, home: home.to_path_buf() })
+    Ok(stack)
+}
+
+pub fn parse_lint(text: &str, home: &Path, stack_override: Option<&Path>) -> Result<(Stack, LintSection)> {
+    #[derive(Deserialize)]
+    struct LintFile {
+        stack: StackSection,
+        #[serde(default)]
+        lint: LintSection,
+    }
+    let mut table: toml::Table = toml::from_str(text)?;
+    table.retain(|key, _| key == "stack" || key == "lint");
+    let file: LintFile = toml::Value::Table(table).try_into()?;
+    Ok((stack_of(&file.stack, home, stack_override)?, file.lint))
 }
 
 impl Unresolved {
