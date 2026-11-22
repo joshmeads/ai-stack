@@ -31,3 +31,21 @@ message: "Fix what the linter reports instead of suppressing it. Suppress only w
 rule:
   kind: comment
   regex: '^//\s*nolint'
+---
+id: no-lint-suppression
+language: [TypeScript, Tsx, JavaScript, Python, Go]
+severity: error
+message: "Remove this ast-grep-ignore comment. It hides findings from ast-grep, so ai-stack lint reports it instead of honouring it."
+rule:
+  kind: comment
+  regex: '^[^\p{Alphabetic}]*ast-grep-ignore'
+---
+id: no-lint-suppression
+language: Rust
+severity: error
+message: "Remove this ast-grep-ignore comment. It hides findings from ast-grep, so ai-stack lint reports it instead of honouring it."
+rule:
+  any:
+    - kind: line_comment
+    - kind: block_comment
+  regex: '^[^\p{Alphabetic}]*ast-grep-ignore'

@@ -11,6 +11,7 @@ export class G {}
 const n: number = "x";
 
 function sealed(_: unknown) {}
+const cast = /** @type {number} @hit */ (1);
 // a prose comment after a function @hit
 type Local = {
   /** doc on a member of a type that is not exported @hit */

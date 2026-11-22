@@ -98,6 +98,12 @@ id: no-fixed-sleep
 language: Python
 severity: error
 message: "Replace this fixed sleep with a signal: wait on the event, future or condition the test depends on. A sleep guesses how long real work takes and fails under CPU load."
+files:
+  - "**/test_*.py"
+  - "**/*_test.py"
+  - "**/conftest.py"
+  - "**/tests/**/*.py"
+  - "**/test/**/*.py"
 rule:
   kind: call
   has:

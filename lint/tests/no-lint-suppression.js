@@ -7,3 +7,6 @@ const x = 1; // @ts-ignore @hit
 const y = x;
 // biome-ignore lint/style: reason @hit
 export { y };
+// ast-grep-ignore @hit
+/* ast-grep-ignore: no-comments */ // @hit
+// mentions ast-grep-ignore in prose

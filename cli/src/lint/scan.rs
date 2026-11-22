@@ -117,13 +117,10 @@ impl Engine<'_> {
             Scope::File => Owned::whole(source),
         };
         let rules: Vec<&Rule> = active.iter().map(|(rule, _)| *rule).collect();
-        for (at, found) in scan(&rules, &root, source, &index) {
+        for (at, found) in scan(&rules, &root, source, &index, &owned) {
             let (rule, severity) = active[at];
             let bytes = found.range();
             let span = index.span(bytes.clone());
-            if !owned.intersects(span.clone()) {
-                continue;
-            }
             let line_start = index.start(*span.start());
             let column = source[line_start..bytes.start].chars().count() as u32 + 1;
             let line_end = source[line_start..].find('\n').map_or(source.len(), |at| line_start + at);
@@ -144,7 +141,7 @@ impl Engine<'_> {
     }
 }
 
-pub fn scan<'t>(rules: &[&Rule], root: &'t AstGrep<StrDoc<SupportLang>>, source: &str, index: &LineIndex) -> Vec<(usize, NodeMatch<'t, StrDoc<SupportLang>>)> {
+pub fn scan<'t>(rules: &[&Rule], root: &'t AstGrep<StrDoc<SupportLang>>, source: &str, index: &LineIndex, owned: &Owned) -> Vec<(usize, NodeMatch<'t, StrDoc<SupportLang>>)> {
     let license = license_header(root, index);
     let allowed: Vec<Vec<RangeInclusive<u32>>> = rules.iter().map(|rule| rule.allowed_regions(source, index, license.as_ref())).collect();
     let mut by_kind: Vec<Vec<usize>> = Vec::new();
@@ -158,7 +155,10 @@ pub fn scan<'t>(rules: &[&Rule], root: &'t AstGrep<StrDoc<SupportLang>>, source:
     }
     let mut found = Vec::new();
     for node in root.root().dfs() {
-        let Some(candidates) = by_kind.get(usize::from(node.kind_id())) else { continue };
+        let Some(candidates) = by_kind.get(usize::from(node.kind_id())).filter(|candidates| !candidates.is_empty()) else { continue };
+        if !owned.intersects(index.span(node.range())) {
+            continue;
+        }
         for &at in candidates {
             if let Some(matched) = rules[at].config.matcher.match_node(node.clone()) {
                 let span = index.span(matched.range());
@@ -174,8 +174,8 @@ pub fn scan<'t>(rules: &[&Rule], root: &'t AstGrep<StrDoc<SupportLang>>, source:
 
 fn license_header(root: &AstGrep<StrDoc<SupportLang>>, index: &LineIndex) -> Option<RangeInclusive<u32>> {
     static LICENSE: LazyLock<Regex> = LazyLock::new(|| Regex::new(r"Copyright|SPDX-License-Identifier|License").unwrap());
-    let leading: Vec<_> = root.root().children().take_while(|node| node.kind().contains("comment") || node.kind().contains("hash_bang")).collect();
-    let licensed = leading.iter().any(|node| node.kind().contains("comment") && LICENSE.is_match(&node.text()));
+    let leading: Vec<_> = root.root().children().take_while(|node| node.kind().contains("comment")).collect();
+    let licensed = leading.iter().any(|node| LICENSE.is_match(&node.text()));
     let (first, last) = (leading.first()?, leading.last()?);
     licensed.then(|| *index.span(first.range()).start()..=*index.span(last.range()).end())
 }

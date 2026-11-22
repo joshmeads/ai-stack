@@ -7,3 +7,5 @@ fn b() {}
 struct S;
 #[cfg_attr(test, derive(Clone))]
 struct U;
+// ast-grep-ignore @hit
+// mentions ast-grep-ignore in prose

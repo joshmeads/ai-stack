@@ -238,7 +238,7 @@ pub(crate) mod tests {
                 covered.insert((id.clone(), language.to_string()));
                 let root = language.ast_grep(&source);
                 let index = LineIndex::new(&source);
-                let found: BTreeSet<u32> = crate::lint::scan::scan(&active, &root, &source, &index).into_iter().map(|(_, found)| index.line(found.range().start)).collect();
+                let found: BTreeSet<u32> = crate::lint::scan::scan(&active, &root, &source, &index, &crate::lint::Owned::whole(&source)).into_iter().map(|(_, found)| index.line(found.range().start)).collect();
                 if found != expected {
                     failures.push(format!("{name} as {language}: expected {expected:?}, found {found:?}"));
                 }
@@ -253,7 +253,7 @@ pub(crate) mod tests {
     }
 
     #[test]
-    fn shipped_rules_never_search_up_to_the_whole_program() {
+    fn shipped_rules_never_search_the_whole_program_or_every_sibling() {
         fn walk(value: &Value, unbounded: bool, trail: &str, offenders: &mut Vec<String>) {
             match value {
                 Value::Object(map) => {
@@ -261,8 +261,11 @@ pub(crate) mod tests {
                         offenders.push(trail.to_string());
                     }
                     for (key, child) in map {
-                        let relational = ["inside", "has", "follows", "precedes"].contains(&key.as_str());
-                        let nested = unbounded || (relational && child.get("stopBy").and_then(Value::as_str) == Some("end"));
+                        let to_the_end = child.get("stopBy").and_then(Value::as_str) == Some("end");
+                        if to_the_end && ["follows", "precedes"].contains(&key.as_str()) {
+                            offenders.push(format!("{trail}.{key}"));
+                        }
+                        let nested = unbounded || (to_the_end && ["inside", "has"].contains(&key.as_str()));
                         walk(child, nested, &format!("{trail}.{key}"), offenders);
                     }
                 }
@@ -277,7 +280,7 @@ pub(crate) mod tests {
                 walk(&doc, false, &path.file_name().unwrap().to_string_lossy(), &mut offenders);
             }
         }
-        assert!(offenders.is_empty(), "file-level facts belong in metadata.unless_file or when_file: {offenders:?}");
+        assert!(offenders.is_empty(), "file-level facts belong in metadata (unless_file, when_file, allow_license_header, allow_in): {offenders:?}");
     }
 
     #[test]
