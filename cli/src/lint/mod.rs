@@ -18,7 +18,7 @@ use std::path::{Path, PathBuf};
 use anyhow::{Context as _, Result};
 use serde::{Deserialize, Serialize};
 
-pub use commit::{Env as CommitEnv, post_commit, pre_commit};
+pub use commit::{Env as CommitEnv, REFUSE, post_commit, pre_commit};
 pub use events::now;
 pub use hook::run as run_hook;
 pub use lines::Baseline;

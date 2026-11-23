@@ -217,7 +217,7 @@ fn plan_hooks(cfg: &Config, hc: &HarnessConfig, folders: &links::Index, out: &mu
 
 const LINT_MATCHER: &str = "Edit|Write|Bash";
 const HOOK_FLAGS: [&str; 3] = ["--config", "--home", "--stack"];
-const OUR_GIT_HOOKS: [&str; 2] = ["hook.ai-stack-lint.", "hook.ai-stack-lint-post."];
+const OUR_GIT_KEYS: [&str; 4] = ["hook.ai-stack-lint.event", "hook.ai-stack-lint.command", "hook.ai-stack-lint-post.event", "hook.ai-stack-lint-post.command"];
 const CODEX_INCLUDE: [&str; 4] = ["GIT_CONFIG_COUNT", "GIT_CONFIG_KEY_*", "GIT_CONFIG_VALUE_*", "AI_STACK_HARNESS"];
 const FIRST_GIT_WITH_CONFIG_HOOKS: (u32, u32) = (2, 54);
 
@@ -229,19 +229,17 @@ fn lint_command(exe: &Path, flags: &[String], harness: Harness) -> String {
     format!("{} lint hook {}", exe_words(exe, flags), harness.as_str())
 }
 
-fn git_hook_command(exe: &Path, flags: &[String], event: &str) -> String {
-    format!("[ -x {} ] || exit 0; exec {} lint {event}", exec::shell_quote(&exe.to_string_lossy()), exe_words(exe, flags))
-}
-
 fn lint_env(cfg: &Config, harness: Harness) -> Vec<(String, String)> {
-    let entries = [
-        ("hook.ai-stack-lint.event", "pre-commit".to_string()),
-        ("hook.ai-stack-lint.command", git_hook_command(&cfg.exe, &cfg.exe_flags, "pre-commit")),
-        ("hook.ai-stack-lint-post.event", "post-commit".to_string()),
-        ("hook.ai-stack-lint-post.command", git_hook_command(&cfg.exe, &cfg.exe_flags, "post-commit")),
+    let installed = format!("[ -x {} ] || exit 0", exec::shell_quote(&cfg.exe.to_string_lossy()));
+    let exe = exe_words(&cfg.exe, &cfg.exe_flags);
+    let values = [
+        "pre-commit".to_string(),
+        format!("{installed}; {exe} lint pre-commit; [ $? -ne {} ]", crate::lint::REFUSE),
+        "post-commit".to_string(),
+        format!("{installed}; exec {exe} lint post-commit"),
     ];
-    let mut env = vec![("GIT_CONFIG_COUNT".to_string(), entries.len().to_string())];
-    for (at, (key, value)) in entries.into_iter().enumerate() {
+    let mut env = vec![("GIT_CONFIG_COUNT".to_string(), OUR_GIT_KEYS.len().to_string())];
+    for (at, (key, value)) in OUR_GIT_KEYS.into_iter().zip(values).enumerate() {
         env.push((format!("GIT_CONFIG_KEY_{at}"), key.to_string()));
         env.push((format!("GIT_CONFIG_VALUE_{at}"), value));
     }
@@ -261,7 +259,7 @@ fn numbered<'a>(name: &'a str, prefix: &str) -> Option<&'a str> {
 
 fn env_edits(existing: &[(String, Option<String>)], wanted: &[(String, String)]) -> Result<Vec<EnvEdit>, String> {
     let keys: Vec<(&str, Option<&str>)> = existing.iter().filter_map(|(name, value)| numbered(name, "GIT_CONFIG_KEY_").map(|number| (number, value.as_deref()))).collect();
-    if let Some((number, _)) = keys.iter().find(|(_, value)| !value.is_some_and(|value| OUR_GIT_HOOKS.iter().any(|hook| value.starts_with(hook)))) {
+    if let Some((number, _)) = keys.iter().find(|(_, value)| !value.is_some_and(|value| OUR_GIT_KEYS.contains(&value))) {
         return Err(format!("GIT_CONFIG_KEY_{number} is already set to something ai-stack does not own, and ai-stack needs GIT_CONFIG_* for its agent commit hook; remove it or set [lint] enabled = false"));
     }
     if keys.is_empty() && existing.iter().any(|(name, _)| name == "GIT_CONFIG_COUNT") {
@@ -342,9 +340,18 @@ fn merge_codex_env(doc: &mut toml_edit::DocumentMut, wanted: &[(String, String)]
         let filters = filters.as_table_like_mut().ok_or("`shell_environment_policy.filters` is not a table")?;
         if filters.iter().any(|(_, action)| action.as_str() == Some("include")) {
             for name in CODEX_INCLUDE {
-                if !filters.iter().any(|(known, _)| known.eq_ignore_ascii_case(name)) {
-                    filters.insert(name, toml_edit::value("include"));
-                    changed = true;
+                let listed = filters.iter().find(|(known, _)| known.eq_ignore_ascii_case(name)).map(|(known, action)| (known.to_string(), action.as_str() == Some("include")));
+                match listed {
+                    Some((_, true)) => {}
+                    Some((known, false)) => {
+                        return Err(format!(
+                            "`shell_environment_policy.filters` sets {known:?} to something other than \"include\" while other filters include, so Codex would drop ai-stack's {name} after `set` and git would fail; remove that filter or set [lint] enabled = false"
+                        ));
+                    }
+                    None => {
+                        filters.insert(name, toml_edit::value("include"));
+                        changed = true;
+                    }
                 }
             }
         }
@@ -1253,7 +1260,7 @@ pub(crate) mod tests {
         let claude: Value = serde_json::from_str(&f.read(".claude/settings.json")).unwrap();
         assert_eq!(claude["hooks"]["PostToolUse"][0]["matcher"], "Edit|Write|Bash");
         assert_eq!(claude["hooks"].as_object().unwrap().len(), 1, "only PostToolUse is registered");
-        let pre = format!("[ -x {exe} ] || exit 0; exec {exe} --config '/cfg dir/selected.toml' lint pre-commit");
+        let pre = format!("[ -x {exe} ] || exit 0; {exe} --config '/cfg dir/selected.toml' lint pre-commit; [ $? -ne 3 ]");
         assert_eq!(claude["env"]["TMPDIR"], "/t");
         assert_eq!(claude["env"]["GIT_CONFIG_COUNT"], "4");
         assert_eq!((claude["env"]["GIT_CONFIG_KEY_1"].as_str(), claude["env"]["GIT_CONFIG_VALUE_1"].as_str()), (Some("hook.ai-stack-lint.command"), Some(pre.as_str())));
@@ -1274,6 +1281,7 @@ pub(crate) mod tests {
         f.apply(&f.plan());
         let moved: Value = serde_json::from_str(&f.read(".claude/settings.json")).unwrap();
         assert_eq!(moved["env"]["GIT_CONFIG_VALUE_3"], format!("[ -x '{0}' ] || exit 0; exec '{0}' lint post-commit", f.cfg.exe.display()));
+        assert_eq!(moved["env"]["GIT_CONFIG_VALUE_1"], format!("[ -x '{0}' ] || exit 0; '{0}' lint pre-commit; [ $? -ne 3 ]", f.cfg.exe.display()));
         assert_eq!(moved["hooks"]["PostToolUse"].as_array().unwrap().len(), 1);
         assert!(f.plan().is_empty());
 
@@ -1287,9 +1295,14 @@ pub(crate) mod tests {
         put(&f.home.join(".codex/config.toml"), "[shell_environment_policy.set]\nGIT_CONFIG_COUNT = \"2\"\nGIT_CONFIG_KEY_0 = \"core.editor\"\nGIT_CONFIG_VALUE_0 = \"vi\"\n");
         let plan = f.plan();
         assert!(plan.conflicts.iter().any(|conflict| conflict.contains("config.toml") && conflict.contains("GIT_CONFIG_KEY_0")), "{:?}", plan.conflicts);
-        put(&f.home.join(".claude/settings.json"), &json!({"env": {"GIT_CONFIG_COUNT": "2", "GIT_CONFIG_KEY_0": "hook.ai-stack-lint-format.event", "GIT_CONFIG_VALUE_0": "pre-commit"}}).to_string());
-        assert!(f.plan().conflicts.iter().any(|conflict| conflict.contains("settings.json") && conflict.contains("GIT_CONFIG_KEY_0")), "a hook name that only starts like ours is foreign");
+        for foreign in ["hook.ai-stack-lint-format.event", "hook.ai-stack-lint.format.event"] {
+            put(&f.home.join(".claude/settings.json"), &json!({"env": {"GIT_CONFIG_COUNT": "2", "GIT_CONFIG_KEY_0": foreign, "GIT_CONFIG_VALUE_0": "pre-commit"}}).to_string());
+            assert!(f.plan().conflicts.iter().any(|conflict| conflict.contains("settings.json") && conflict.contains("GIT_CONFIG_KEY_0")), "{foreign} only starts like ours, so it is foreign");
+        }
         put(&f.home.join(".claude/settings.json"), "{}");
+        put(&f.home.join(".codex/config.toml"), "[shell_environment_policy.filters]\nHOME = \"include\"\n\"GIT_CONFIG_KEY_*\" = \"exclude\"\n");
+        let plan = f.plan();
+        assert!(plan.conflicts.iter().any(|conflict| conflict.contains("config.toml") && conflict.contains("GIT_CONFIG_KEY_*")), "a filter that would drop an injected name after set is a conflict: {:?}", plan.conflicts);
         let policy_after = |f: &Fixture, before: &str| -> toml::Value {
             put(&f.home.join(".codex/config.toml"), before);
             f.apply(&f.plan());
