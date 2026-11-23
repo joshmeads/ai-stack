@@ -2,6 +2,7 @@ mod commit;
 mod events;
 mod fix;
 mod hook;
+mod jj;
 mod lines;
 mod process;
 mod provenance;
@@ -22,6 +23,7 @@ use serde::{Deserialize, Serialize};
 pub use commit::{Env as CommitEnv, REFUSE, post_commit, pre_commit};
 pub use events::now;
 pub use hook::run as run_hook;
+pub use jj::{fix_here as jj_fix, tool as jj_tool};
 pub use lines::Baseline;
 pub use settings::Settings;
 
@@ -162,7 +164,7 @@ pub fn run(settings: &Settings, request: Request, out: &mut dyn Write, err: &mut
             }
         }
     }
-    let engine = Engine { settings, rules: &rules, scope: request.scope, display: &cwd, attributes: Attributes::Worktree };
+    let engine = Engine { settings, rules: &rules, scope: request.scope, display: &cwd, attributes: Attributes::Worktree, repo: None };
     let mut findings = engine.lint(files.iter().map(|(change, _)| change));
     if request.fix {
         let provenance = Provenance::new(&request.state_dir, now());
@@ -208,17 +210,18 @@ fn fix_worktree(files: &mut Vec<(scan::Change, Baseline)>, findings: &[Finding],
             None => by_repo.push((repo, vec![rel])),
         }
     }
-    let mut eligible: HashMap<PathBuf, PathBuf> = HashMap::new();
+    let mut eligible: HashMap<PathBuf, (PathBuf, &Path)> = HashMap::new();
     for (repo, rels) in &by_repo {
         let filtered = repo.filtered(rels, &Attributes::Worktree)?;
         let flagged = repo.flagged(rels, None);
-        eligible.extend(rels.iter().filter(|rel| !filtered.contains(*rel) && !flagged.contains(*rel)).map(|rel| (repo.root.join(rel), rel.clone())));
+        eligible.extend(rels.iter().filter(|rel| !filtered.contains(*rel) && !flagged.contains(*rel)).map(|rel| (repo.root.join(rel), (rel.clone(), repo.project_key.as_path()))));
     }
+    let mut moved: HashMap<&Path, HashSet<String>> = HashMap::new();
     let mut removed = 0;
     let mut names = Vec::new();
     let mut restored: HashSet<PathBuf> = HashSet::new();
     for (change, baseline) in files.iter_mut() {
-        let Some(rel) = eligible.get(&change.path) else { continue };
+        let Some((rel, project)) = eligible.get(&change.path) else { continue };
         let found: Vec<&Finding> = findings.iter().filter(fixable).filter(|finding| finding.file == change.path).collect();
         let (Some(first), Some(language)) = (found.first(), scan::language_of(&change.path)) else { continue };
         let single_link = std::fs::symlink_metadata(&change.path).is_ok_and(|meta| meta.is_file() && meta.nlink() == 1);
@@ -232,7 +235,8 @@ fn fix_worktree(files: &mut Vec<(scan::Change, Baseline)>, findings: &[Finding],
             None => Some(change.source.as_str()),
         };
         let written = provenance.written(&change.path);
-        let prior = fix::Prior { file: at_head, removed: &head.removed, written: &written };
+        let moved = moved.entry(*project).or_insert_with(|| provenance.moved(project));
+        let prior = fix::Prior { file: at_head, removed: &head.removed, written: &written, moved };
         let Some(fixed) = fix::remove_new_plain_comments(language, &change.source, &ranges, &prior) else { continue };
         if std::fs::read_to_string(&change.path).ok().as_deref() != Some(change.source.as_str()) {
             writeln!(err, "ai-stack lint: {} changed while it was checked, so it was left alone", first.path)?;
@@ -250,9 +254,19 @@ fn fix_worktree(files: &mut Vec<(scan::Change, Baseline)>, findings: &[Finding],
     }
     files.retain(|(change, _)| !restored.contains(&change.path));
     if removed > 0 {
-        writeln!(err, "ai-stack lint: removed {removed} comment{} in {}", if removed == 1 { "" } else { "s" }, names.join(", "))?;
+        writeln!(err, "ai-stack lint: removed {} in {}", commit::plural(removed, "comment"), files_named(&names))?;
     }
     Ok(removed)
+}
+
+const NAMED_FILES: usize = 5;
+
+pub fn files_named(names: &[String]) -> String {
+    let shown = names.iter().take(NAMED_FILES).cloned().collect::<Vec<_>>().join(", ");
+    match names.len().saturating_sub(NAMED_FILES) {
+        0 => shown,
+        more => format!("{shown} and {more} more"),
+    }
 }
 
 pub fn skips(state_dir: &Path, days: u32, now: u64, out: &mut dyn Write) -> Result<i32> {
@@ -262,7 +276,9 @@ pub fn skips(state_dir: &Path, days: u32, now: u64, out: &mut dyn Write) -> Resu
     repos.sort();
     repos.dedup();
     let commits: u32 = repos.iter().map(|repo| events::Rate::of(&events, repo, since).commits).sum();
-    writeln!(out, "{commits} agent commits in {} repositories in the last {days} days", repos.len())?;
+    let pushes = events.iter().filter(|event| event.vcs.is_some()).count();
+    let pushes = if pushes == 0 { String::new() } else { format!(" (including {pushes} jj pushes)") };
+    writeln!(out, "{commits} agent commits{pushes} in {} repositories in the last {days} days", repos.len())?;
     repos.retain(|repo| events.iter().any(|event| event.repo == *repo && event.kind != events::Kind::Checked));
     for repo in repos {
         let mine: Vec<&events::Event> = events.iter().filter(|event| event.repo == repo).collect();
@@ -291,7 +307,8 @@ pub fn skips(state_dir: &Path, days: u32, now: u64, out: &mut dyn Write) -> Resu
                 events::Kind::Skip => format!("skip: {}", event.reason.as_deref().unwrap_or_default()),
                 _ => "bypassed the check".to_string(),
             };
-            writeln!(out, "  {when} {} {} {what} [{}]", event.harness.as_deref().unwrap_or("unknown"), event.head.as_deref().map_or("", |head| &head[..head.len().min(12)]), event.findings.join(", "))?;
+            let via = event.vcs.as_deref().map_or(String::new(), |vcs| format!(" {vcs} push"));
+            writeln!(out, "  {when} {}{via} {} {what} [{}]", event.harness.as_deref().unwrap_or("unknown"), event.head.as_deref().map_or("", |head| &head[..head.len().min(12)]), event.findings.join(", "))?;
         }
     }
     Ok(0)

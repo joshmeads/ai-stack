@@ -57,6 +57,7 @@ pub struct Engine<'a> {
     pub scope: Option<Scope>,
     pub display: &'a Path,
     pub attributes: Attributes,
+    pub repo: Option<&'a Repo>,
 }
 
 impl Engine<'_> {
@@ -65,7 +66,7 @@ impl Engine<'_> {
         let mut findings = Vec::new();
         let mut by_repo: Vec<(Option<Repo>, Vec<Target>)> = Vec::new();
         for change in changes {
-            let repo = repos.of(&change.path);
+            let repo = self.repo.cloned().or_else(|| repos.of(&change.path));
             let target = Target { change, repo };
             match by_repo.iter_mut().find(|(repo, _)| *repo == target.repo) {
                 Some((_, group)) => group.push(target),

@@ -6,8 +6,9 @@ use serde::Deserialize;
 use serde_json::{Value, json};
 
 use super::events::{Log, now};
+use super::jj;
 use super::provenance::Provenance;
-use super::repo::{Attributes, Repo, Repos};
+use super::repo::{Attributes, Repos};
 use super::scan::{Change, Engine, read_lintable, sort};
 use super::{Baseline, Settings, Severity};
 use crate::config::Harness;
@@ -32,18 +33,25 @@ struct Payload {
 struct Edited {
     file: PathBuf,
     added: Vec<String>,
+    removed: Vec<String>,
 }
 
 pub fn run(harness: Harness, state_dir: &Path, settings: impl FnOnce() -> Result<Settings>, input: &str) -> Result<Option<String>> {
     let payload: Payload = serde_json::from_str(input)?;
-    if payload.hook_event_name.as_deref().is_some_and(|event| event != "PostToolUse") {
-        return Ok(None);
-    }
+    let shell = payload.tool_name.as_deref() == Some("Bash");
+    let command = payload.tool_input.get("command").and_then(Value::as_str).unwrap_or_default();
     let cwd = payload.cwd.clone().unwrap_or_else(|| PathBuf::from("/"));
+    match payload.hook_event_name.as_deref() {
+        Some("PreToolUse") if shell && jj::is_push(command) && jj::Workspace::find(&cwd).is_some() => {
+            return Ok(jj::before_push(&settings()?, state_dir, &cwd, command, harness.as_str()).map(|reply| reply.to_string()));
+        }
+        Some("PostToolUse") | None => {}
+        Some(_) => return Ok(None),
+    }
     let log = Log::new(state_dir);
     let queued = log.has_notices();
-    let shell = payload.tool_name.as_deref() == Some("Bash");
-    if shell && !queued {
+    let jj_commit = shell && jj::is_commit(command) && jj::Workspace::find(&cwd).is_some();
+    if shell && !queued && !jj_commit {
         return Ok(None);
     }
     let edits = if shell { Vec::new() } else { edited(harness, &payload, &cwd) };
@@ -51,19 +59,29 @@ pub fn run(harness: Harness, state_dir: &Path, settings: impl FnOnce() -> Result
     files.dedup();
     let mut repos = Repos::default();
     let mut context = None;
-    if !files.is_empty() {
+    if !files.is_empty() || jj_commit {
         let settings = settings()?;
         if settings.enabled {
             let provenance = Provenance::new(state_dir, now());
             for edit in &edits {
+                let repo = jj::locate(edit.file.parent().unwrap_or(&edit.file));
+                if !settings.policy(repo.as_ref()).enabled() {
+                    continue;
+                }
                 let _ = provenance.record(&edit.file, edit.added.iter().map(String::as_str));
+                if let Some(repo) = repo {
+                    let _ = provenance.record_removed(&repo.project_key, edit.removed.iter().map(String::as_str));
+                }
             }
             context = report(&settings, &files, &cwd, &mut repos)?;
+            if jj_commit {
+                context = jj::after_commit(&settings, state_dir, &cwd)?;
+            }
         }
     }
     let mut notices = Vec::new();
     if queued {
-        let mut keys: Vec<PathBuf> = Repo::discover(&cwd).map(|repo| repo.project_key).into_iter().collect();
+        let mut keys: Vec<PathBuf> = jj::locate(&cwd).map(|repo| repo.project_key).into_iter().collect();
         keys.extend(files.iter().filter_map(|file| repos.of(file)).map(|repo| repo.project_key));
         keys.dedup();
         notices.extend(keys.iter().filter_map(|key| log.take_notice(key)));
@@ -97,7 +115,7 @@ fn report(settings: &Settings, files: &[PathBuf], cwd: &Path, repos: &mut Repos)
         return Ok(None);
     }
     let rules = settings.rules()?;
-    let mut findings = Engine { settings, rules: &rules, scope: None, display: cwd, attributes: Attributes::Worktree }.lint(&changes);
+    let mut findings = Engine { settings, rules: &rules, scope: None, display: cwd, attributes: Attributes::Worktree, repo: None }.lint(&changes);
     findings.retain(|finding| finding.severity == Severity::Error && finding.fix.is_none());
     sort(&mut findings);
     if findings.is_empty() {
@@ -115,6 +133,10 @@ fn added(new: &[&str], old: &[&str]) -> Vec<String> {
     new.iter().flat_map(|text| text.lines()).filter(|line| !old.contains(line.trim())).map(str::to_string).collect()
 }
 
+fn edit(file: PathBuf, new: &[&str], old: &[&str]) -> Edited {
+    Edited { file, added: added(new, old), removed: added(old, new) }
+}
+
 fn edited(harness: Harness, payload: &Payload, cwd: &Path) -> Vec<Edited> {
     let absolute = |path: &str| paths::normalize(&cwd.join(path.trim()));
     let input = &payload.tool_input;
@@ -129,35 +151,29 @@ fn edited(harness: Harness, payload: &Payload, cwd: &Path) -> Vec<Edited> {
                 old.push(text(edit, "old_string"));
             }
             let (new, old): (Vec<&str>, Vec<&str>) = (new.iter().map(String::as_str).collect(), old.iter().map(String::as_str).collect());
-            vec![Edited { file, added: added(&new, &old) }]
+            vec![edit(file, &new, &old)]
         }
         Harness::Codex => {
             let patch = input.get("command").and_then(Value::as_str).or_else(|| input.as_str()).unwrap_or_default();
-            let mut edits: Vec<(Edited, Vec<String>)> = Vec::new();
+            let mut edits: Vec<(PathBuf, Vec<&str>, Vec<&str>)> = Vec::new();
             for line in patch.lines() {
                 if let Some(path) = ["*** Add File: ", "*** Update File: "].iter().find_map(|prefix| line.strip_prefix(prefix)) {
-                    edits.push((Edited { file: absolute(path), added: Vec::new() }, Vec::new()));
+                    edits.push((absolute(path), Vec::new(), Vec::new()));
                 } else if let Some(path) = line.strip_prefix("*** Move to: ")
-                    && let Some((edit, _)) = edits.last_mut()
+                    && let Some((file, ..)) = edits.last_mut()
                 {
-                    edit.file = absolute(path);
+                    *file = absolute(path);
                 } else if line.starts_with("*** ") {
                     continue;
-                } else if let Some((edit, removed)) = edits.last_mut() {
+                } else if let Some((_, added, removed)) = edits.last_mut() {
                     match line.split_at_checked(1) {
-                        Some(("+", text)) => edit.added.push(text.to_string()),
-                        Some(("-", text)) => removed.push(text.to_string()),
+                        Some(("+", text)) => added.push(text),
+                        Some(("-", text)) => removed.push(text),
                         _ => {}
                     }
                 }
             }
-            edits
-                .into_iter()
-                .map(|(edit, removed)| {
-                    let added = added(&edit.added.iter().map(String::as_str).collect::<Vec<_>>(), &removed.iter().map(String::as_str).collect::<Vec<_>>());
-                    Edited { file: edit.file, added }
-                })
-                .collect()
+            edits.into_iter().map(|(file, added, removed)| edit(file, &added, &removed)).collect()
         }
     }
 }
@@ -165,7 +181,8 @@ fn edited(harness: Harness, payload: &Payload, cwd: &Path) -> Vec<Edited> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::config::LintSection;
+    use crate::config::{LintProject, LintSection};
+    use crate::lint::repo::Repo;
     use crate::lint::tests::{git, put, settings};
 
     #[test]
@@ -200,6 +217,14 @@ mod tests {
         let codex_patch = "*** Begin Patch\n*** Add File: c.ts\n+// new file note\n+export {};\n*** Update File: b.ts\n*** Move to: d.ts\n@@\n-// kept wording\n+// kept wording\n+// codex note\n*** End Patch\n";
         call(Harness::Codex, json!({"hook_event_name": "PostToolUse", "tool_name": "apply_patch", "cwd": repo, "tool_input": {"command": codex_patch}}));
         assert_eq!((written("c.ts"), written("d.ts")), (HashSet::from(["// new file note".to_string()]), HashSet::from(["// codex note".to_string()])));
+        let cut = json!({"hook_event_name": "PostToolUse", "tool_name": "Edit", "cwd": repo, "tool_input": {"file_path": repo.join("b.ts"), "old_string": "// rounding rule\nx();", "new_string": "x();"}});
+        call(Harness::Claude, cut);
+        let key = Repo::discover(&repo).unwrap().project_key;
+        assert_eq!(Provenance::new(&state, now()).moved(&key), HashSet::from(["// rounding rule".to_string()]), "a comment an edit removed is recorded for its repository");
+        let off = LintProject { path: repo.to_string_lossy().into_owned(), paths: Default::default(), ignore: Vec::new(), scope: None, enabled: Some(false) };
+        let write = json!({"hook_event_name": "PostToolUse", "tool_name": "Write", "cwd": repo, "tool_input": {"file_path": repo.join("off.ts"), "content": "// written while lint is off\n"}});
+        run(Harness::Claude, &state, || Ok(settings(&home, LintSection { project: vec![off], ..LintSection::default() })), &write.to_string()).unwrap();
+        assert!(written("off.ts").is_empty(), "a disabled project records nothing");
 
         let shell = json!({"hook_event_name": "PostToolUse", "tool_name": "Bash", "cwd": repo.join("sub"), "tool_input": {"command": "git status"}});
         assert_eq!(call(Harness::Claude, shell.clone()), None);

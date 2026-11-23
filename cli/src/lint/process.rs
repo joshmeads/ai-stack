@@ -3,6 +3,7 @@ use std::os::unix::ffi::{OsStrExt as _, OsStringExt as _};
 use std::path::{Path, PathBuf};
 
 const SHELLS: [&str; 5] = ["sh", "bash", "zsh", "fish", "dash"];
+const WRAPPERS: [&str; 10] = ["timeout", "env", "nice", "nohup", "time", "stdbuf", "ionice", "chrt", "setsid", "flock"];
 const HARNESSES: [&str; 2] = ["claude", "codex"];
 const HARNESS_DEPTH: usize = 16;
 
@@ -30,7 +31,7 @@ impl GitProcess {
         };
         let environ = environ(git);
         let exec_by_shell = environ.as_ref().is_some_and(|vars| vars.iter().any(|(name, value)| name == "_" && Path::new(value).file_name().is_some_and(|name| name == "git")));
-        let launched_by_shell = parent(git).and_then(command_name).is_some_and(|name| SHELLS.contains(&name.trim_start_matches('-')));
+        let launched_by_shell = parent(git).and_then(command_name).is_some_and(|name| SHELLS.contains(&name.trim_start_matches('-')) || WRAPPERS.contains(&name.as_str()));
         let index = match environ {
             None => CallerIndex::Unknown,
             Some(vars) => vars.into_iter().find(|(name, _)| name == "GIT_INDEX_FILE").map_or(CallerIndex::Default, |(_, value)| CallerIndex::File(crate::paths::normalize(&cwd.join(value)))),
@@ -40,7 +41,7 @@ impl GitProcess {
 }
 
 fn under_harness(git: u32) -> bool {
-    std::iter::successors(parent(git), |&pid| parent(pid)).take_while(|&pid| pid > 1).take(HARNESS_DEPTH).any(|pid| [command_name(pid), executable_name(pid)].into_iter().flatten().any(|name| HARNESSES.contains(&name.as_str())))
+    std::iter::successors(parent(git), |&pid| parent(pid)).take_while(|&pid| pid >= 1).take(HARNESS_DEPTH).any(|pid| [command_name(pid), executable_name(pid)].into_iter().flatten().any(|name| HARNESSES.contains(&name.as_str())))
 }
 
 fn amends(git: u32) -> bool {

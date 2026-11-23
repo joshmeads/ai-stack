@@ -10,20 +10,21 @@ use std::process::{Command, Stdio};
 use anyhow::{Context as _, Result, bail};
 
 use super::events::{Event, Kind, Log, Outcome, Pending};
-use super::fix::{Fixed, Prior, remove_new_plain_comments, untouchable};
+use super::fix::{Fixed, Prior, drop_lines, remove_new_plain_comments, untouchable};
+use super::lines::hunks;
 use super::process::{CallerIndex, GitProcess, lock_of};
 use super::provenance::Provenance;
-use super::repo::{Attributes, GITLINK, Repo, SYMLINK, blobs, parse_raw, path_of, removed_lines, run_git};
-use super::scan::{Change, Engine, TEST_FILE_NAMES, language_of, sort};
-use super::{Baseline, Finding, Settings, Severity};
+use super::repo::{Attributes, GITLINK, Repo, SYMLINK, blobs, nul_paths, parse_raw, path_of, removed_lines, run_git};
+use super::scan::{Change, Engine, TEST_FILE_NAMES, language_of};
+use super::{Baseline, Finding, Settings, Severity, files_named};
 use crate::paths;
 
 pub const REFUSE: i32 = 3;
 const STATE_FILES: [&str; 6] = ["MERGE_HEAD", "CHERRY_PICK_HEAD", "REVERT_HEAD", "SQUASH_MSG", "rebase-merge", "rebase-apply"];
 const REPOSITORY_ENV: [&str; 7] = ["GIT_DIR", "GIT_WORK_TREE", "GIT_INDEX_FILE", "GIT_COMMON_DIR", "GIT_PREFIX", "GIT_OBJECT_DIRECTORY", "GIT_ALTERNATE_OBJECT_DIRECTORIES"];
 const SHOWN_ERRORS: usize = 20;
-const SKIP_REMINDER: &str = "Skips are only for a rule that is wrong for this specific code, never to save time; every other change must pass before you continue.";
-const HIGH_RATE: &str = "ai-stack lint: agents skip or bypass this check often in this repository. Fix findings instead; AI_STACK_LINT_SKIP is only for a rule that is wrong for this specific code.";
+pub(super) const SKIP_REMINDER: &str = "Skips are only for a rule that is wrong for this specific code, never to save time; every other change must pass before you continue.";
+pub(super) const HIGH_RATE: &str = "ai-stack lint: agents skip or bypass this check often in this repository. Fix findings instead; AI_STACK_LINT_SKIP is only for a rule that is wrong for this specific code.";
 
 pub struct Env {
     pub cwd: PathBuf,
@@ -60,16 +61,22 @@ impl Env {
     }
 }
 
-struct Git {
-    root: PathBuf,
-    git_dir: PathBuf,
+pub(super) struct Git {
+    pub(super) root: PathBuf,
+    pub(super) git_dir: PathBuf,
     index: Option<PathBuf>,
+    detached: bool,
 }
 
 impl Git {
+    pub(super) fn of_store(root: PathBuf, git_dir: PathBuf) -> Git {
+        Git { root, git_dir, index: None, detached: true }
+    }
+
     fn run<S: AsRef<OsStr>>(&self, args: &[S], input: &[u8]) -> Result<Vec<u8>> {
         match &self.index {
             Some(index) => self.run_on(index, args, input),
+            None if self.detached => run_git(&self.root, args, input, &[("GIT_DIR", self.git_dir.as_os_str())]),
             None => run_git(&self.root, args, input, &[]),
         }
     }
@@ -82,7 +89,7 @@ impl Git {
         Ok(String::from_utf8_lossy(&self.run(args, &[])?).trim().to_string())
     }
 
-    fn empty_tree(&self) -> Result<String> {
+    pub(super) fn empty_tree(&self) -> Result<String> {
         self.text(&["hash-object", "-t", "tree", "/dev/null"])
     }
 
@@ -100,9 +107,9 @@ impl Git {
     }
 }
 
-struct Checkout {
-    git: Git,
-    repo: Repo,
+pub(super) struct Checkout {
+    pub(super) git: Git,
+    pub(super) repo: Repo,
 }
 
 fn open(settings: &Settings, env: &Env) -> Result<Option<Checkout>> {
@@ -117,7 +124,7 @@ fn open(settings: &Settings, env: &Env) -> Result<Option<Checkout>> {
     if !settings.policy(Some(&repo)).enabled() {
         return Ok(None);
     }
-    Ok(Some(Checkout { git: Git { root, git_dir, index: env.index_file.clone() }, repo }))
+    Ok(Some(Checkout { git: Git { root, git_dir, index: env.index_file.clone(), detached: false }, repo }))
 }
 
 fn throwaway(root: &Path, tmpdir: Option<&Path>) -> bool {
@@ -146,23 +153,36 @@ fn ignored_by_another_repository(root: &Path) -> bool {
     check.arg("-C").arg(&enclosing).args(["check-ignore", "-q", "--"]).arg(root).stdin(Stdio::null()).stdout(Stdio::null()).stderr(Stdio::null()).status().is_ok_and(|status| status.success())
 }
 
-struct Staged {
-    rel: PathBuf,
+pub(super) struct Staged {
+    pub(super) rel: PathBuf,
     mode: String,
     blob: String,
-    baseline: Baseline,
-    source: String,
+    pub(super) baseline: Baseline,
+    pub(super) source: String,
 }
 
 impl Staged {
-    fn prior<'a>(&'a self, removed: &'a str, written: &'a HashSet<String>) -> Prior<'a> {
-        Prior { file: match &self.baseline { Baseline::Text(text) => Some(text.as_str()), Baseline::Absent => None }, removed, written }
+    fn prior<'a>(&'a self, removed: &'a str, written: &'a HashSet<String>, moved: &'a HashSet<String>) -> Prior<'a> {
+        Prior { file: match &self.baseline { Baseline::Text(text) => Some(text.as_str()), Baseline::Absent => None }, removed, written, moved }
     }
 }
 
-enum Target<'a> {
+pub(super) enum Target<'a> {
     Index,
     Commit(&'a str),
+}
+
+pub(super) enum OnDisk {
+    Index,
+    Links,
+    Ignored,
+}
+
+pub(super) struct Source<'a> {
+    pub(super) base: &'a str,
+    pub(super) target: Target<'a>,
+    pub(super) attributes: Attributes,
+    pub(super) on_disk: OnDisk,
 }
 
 enum PartialIndex {
@@ -171,13 +191,13 @@ enum PartialIndex {
     Unknown,
 }
 
-struct Deletion<'s> {
-    file: &'s Staged,
-    fixed: Fixed,
+pub(super) struct Deletion<'s> {
+    pub(super) file: &'s Staged,
+    pub(super) fixed: Fixed,
 }
 
 impl Checkout {
-    fn staged(&self, base: &str, target: &Target) -> Result<Vec<Staged>> {
+    pub(super) fn staged(&self, base: &str, target: &Target) -> Result<Vec<Staged>> {
         let diff = match target {
             Target::Index => self.git.run(&["diff-index", "--cached", "-z", "-M", "--no-abbrev", base], &[])?,
             Target::Commit(commit) => self.git.run(&["diff-tree", "-r", "-z", "-M", "--no-abbrev", base, commit], &[])?,
@@ -198,25 +218,53 @@ impl Checkout {
         Ok(staged)
     }
 
-    fn changes(&self, staged: &[Staged]) -> Vec<Change> {
+    pub(super) fn changes(&self, staged: &[Staged]) -> Vec<Change> {
         staged.iter().filter_map(|file| Change::new(self.git.root.join(&file.rel), file.source.clone(), &file.baseline)).collect()
     }
 
-    fn engine<'a>(&'a self, settings: &'a Settings, rules: &'a super::rules::Rules) -> Engine<'a> {
-        Engine { settings, rules, scope: None, display: &self.git.root, attributes: Attributes::Index(self.git.index.clone()) }
+    pub(super) fn engine<'a>(&'a self, settings: &'a Settings, rules: &'a super::rules::Rules) -> Engine<'a> {
+        Engine { settings, rules, scope: None, display: &self.git.root, attributes: Attributes::Index(self.git.index.clone()), repo: None }
     }
 
-    fn narrow(&self, base: &str) -> Result<Narrow> {
-        let mut narrow = Narrow::default();
-        for line in self.git.patch(base, &Target::Index)?.split(|&byte| byte == b'\n') {
+    fn narrow(&self, base: &str, deletions: &[Deletion]) -> Result<Narrow> {
+        let names: Vec<PathBuf> = nul_paths(&self.git.run(&["diff-index", "--cached", "-z", "--no-renames", "--name-only", base], &[])?).collect();
+        let patch = self.git.patch(base, &Target::Index)?;
+        let mut sections: Vec<Vec<&[u8]>> = Vec::new();
+        for line in patch.split(|&byte| byte == b'\n') {
             if line.starts_with(b"diff --git ") {
-                narrow.files += 1;
-            } else if let Some(header) = line.strip_prefix(b"@@ -") {
-                narrow.hunks += 1;
-                let header = String::from_utf8_lossy(header);
-                let mut counts = header.split(' ').take(2).map(|side| side.trim_start_matches('+').split_once(',').map_or(1, |(_, count)| count.parse().unwrap_or(1)));
-                narrow.lines += counts.next().unwrap_or(0).max(counts.next().unwrap_or(0));
+                sections.push(Vec::new());
+            } else if let Some(section) = sections.last_mut() {
+                section.push(line);
             }
+        }
+        let paired = sections.len() == names.len();
+        let mut narrow = Narrow::default();
+        for (at, section) in sections.iter().enumerate() {
+            let fixed = names.get(at).filter(|_| paired).and_then(|name| deletions.iter().find(|deletion| deletion.file.rel == *name));
+            let sizes: Vec<usize> = match fixed {
+                Some(deletion) => {
+                    let before = match &deletion.file.baseline {
+                        Baseline::Text(text) => text.as_str(),
+                        Baseline::Absent => "",
+                    };
+                    hunks(before, &deletion.fixed.text).into_iter().map(|hunk| hunk.old.len().max(hunk.new.len())).collect()
+                }
+                None => section
+                    .iter()
+                    .filter_map(|line| line.strip_prefix(b"@@ -"))
+                    .map(|header| {
+                        let header = String::from_utf8_lossy(header);
+                        let mut counts = header.split(' ').take(2).map(|side| side.trim_start_matches('+').split_once(',').map_or(1, |(_, count)| count.parse().unwrap_or(1)));
+                        counts.next().unwrap_or(0).max(counts.next().unwrap_or(0))
+                    })
+                    .collect(),
+            };
+            if fixed.is_some() && sizes.is_empty() {
+                continue;
+            }
+            narrow.files += 1;
+            narrow.hunks += sizes.len();
+            narrow.lines += sizes.iter().sum::<usize>();
         }
         Ok(narrow)
     }
@@ -269,7 +317,8 @@ impl Checkout {
         Ok(())
     }
 
-    fn rewrite_worktree(&self, file: &Staged, id: &str, modes: bool) -> Result<Worktree> {
+    fn rewrite_worktree(&self, deletion: &Deletion, id: &str, modes: bool) -> Result<Worktree> {
+        let file = deletion.file;
         let path = self.git.root.join(&file.rel);
         let Ok(meta) = std::fs::symlink_metadata(&path) else { return Ok(Worktree::Untouched) };
         let executable = meta.permissions().mode() & 0o100 != 0;
@@ -277,20 +326,30 @@ impl Checkout {
             return Ok(Worktree::Untouched);
         }
         let path_arg = [b"--path=".as_slice(), file.rel.as_os_str().as_bytes()].concat();
-        let current = String::from_utf8(self.git.run(&[OsStr::new("hash-object"), OsStr::from_bytes(&path_arg), OsStr::new("--"), path.as_os_str()], &[])?)?.trim().to_string();
-        if current != file.blob {
+        let hash = |args: &[&OsStr], input: &[u8]| -> Result<String> { Ok(String::from_utf8(self.git.run(&[&[OsStr::new("hash-object"), OsStr::from_bytes(&path_arg)], args].concat(), input)?)?.trim().to_string()) };
+        if hash(&[OsStr::new("--"), path.as_os_str()], &[])? != file.blob {
             return Ok(Worktree::Untouched);
         }
-        let smudged = self.git.run(&[OsStr::new("cat-file"), OsStr::new("--filters"), OsStr::from_bytes(&path_arg), OsStr::new(id)], &[])?;
-        std::fs::OpenOptions::new().write(true).truncate(true).open(&path)?.write_all(&smudged)?;
+        let bytes = std::fs::read(&path)?;
+        if bytes.iter().filter(|&&byte| byte == b'\n').count() != file.source.matches('\n').count() {
+            return Ok(Worktree::Untouched);
+        }
+        let rewritten = drop_lines(&bytes, &deletion.fixed.dropped);
+        if hash(&[OsStr::new("--stdin")], &rewritten)? != id {
+            return Ok(Worktree::Untouched);
+        }
+        std::fs::OpenOptions::new().write(true).truncate(true).open(&path)?.write_all(&rewritten)?;
         Ok(Worktree::Rewritten)
     }
 
-    fn rewritable(&self, staged: &[&Staged], attributes: &Attributes, worktree: bool) -> Result<HashSet<PathBuf>> {
+    fn rewritable(&self, staged: &[&Staged], source: &Source) -> Result<HashSet<PathBuf>> {
         let rels: Vec<PathBuf> = staged.iter().map(|file| file.rel.clone()).collect();
-        let filtered = self.repo.filtered(&rels, attributes)?;
-        let flagged = if worktree { self.repo.flagged(&rels, self.git.index.as_deref()) } else { HashSet::new() };
-        let single_link = |file: &Staged| !worktree || std::fs::symlink_metadata(self.git.root.join(&file.rel)).map_or(true, |meta| meta.nlink() == 1);
+        let filtered = self.repo.filtered(&rels, &source.attributes)?;
+        let flagged = match source.on_disk {
+            OnDisk::Index => self.repo.flagged(&rels, self.git.index.as_deref()),
+            OnDisk::Links | OnDisk::Ignored => HashSet::new(),
+        };
+        let single_link = |file: &Staged| matches!(source.on_disk, OnDisk::Ignored) || std::fs::symlink_metadata(self.git.root.join(&file.rel)).map_or(true, |meta| meta.nlink() == 1);
         Ok(staged
             .iter()
             .filter(|file| !filtered.contains(&file.rel) && !flagged.contains(&file.rel) && !untouchable(&file.rel, &file.source) && single_link(file))
@@ -298,7 +357,7 @@ impl Checkout {
             .collect())
     }
 
-    fn deletions<'s>(&self, staged: &'s [Staged], fixable: &[&Finding], base: &str, target: &Target, attributes: &Attributes, provenance: &Provenance) -> Result<Vec<Deletion<'s>>> {
+    pub(super) fn deletions<'s>(&self, staged: &'s [Staged], fixable: &[&Finding], source: &Source, provenance: &Provenance) -> Result<Vec<Deletion<'s>>> {
         let ranges = |file: &Staged| -> Vec<Range<usize>> {
             let path = self.git.root.join(&file.rel);
             fixable.iter().filter(|finding| finding.file == path).map(|finding| finding.bytes.clone()).collect()
@@ -307,25 +366,30 @@ impl Checkout {
         if candidates.is_empty() {
             return Ok(Vec::new());
         }
-        let eligible = self.rewritable(&candidates, attributes, matches!(target, Target::Index))?;
+        let eligible = self.rewritable(&candidates, source)?;
         if eligible.is_empty() {
             return Ok(Vec::new());
         }
-        let removed = removed_lines(&self.git.patch(base, target)?);
+        let removed = removed_lines(&self.git.patch(source.base, &source.target)?);
+        let moved = provenance.moved(&self.repo.project_key);
         Ok(candidates
             .into_iter()
             .filter(|file| eligible.contains(&file.rel))
             .filter_map(|file| {
                 let language = language_of(&file.rel)?;
                 let written = provenance.written(&self.git.root.join(&file.rel));
-                remove_new_plain_comments(language, &file.source, &ranges(file), &file.prior(&removed, &written)).map(|fixed| Deletion { file, fixed })
+                remove_new_plain_comments(language, &file.source, &ranges(file), &file.prior(&removed, &written, &moved)).map(|fixed| Deletion { file, fixed })
             })
             .collect())
     }
 
-    fn display(&self, rel: &Path) -> String {
+    pub(super) fn display(&self, rel: &Path) -> String {
         let path = self.git.root.join(rel);
         self.repo.relative(&path).unwrap_or_else(|| rel.to_path_buf()).display().to_string()
+    }
+
+    pub(super) fn fixed_files(&self, deletions: &[&Deletion]) -> String {
+        files_named(&deletions.iter().map(|deletion| self.display(&deletion.file.rel)).collect::<Vec<_>>())
     }
 }
 
@@ -341,16 +405,50 @@ enum Worktree {
     Untouched,
 }
 
-fn named(findings: &[&Finding]) -> Vec<String> {
+pub(super) fn named(findings: &[&Finding]) -> Vec<String> {
     findings.iter().map(|finding| format!("{}:{} {}", finding.path, finding.line, finding.rule)).collect()
 }
 
-fn plural(count: usize, noun: &str) -> String {
+pub(super) fn plural(count: usize, noun: &str) -> String {
     format!("{count} {noun}{}", if count == 1 { "" } else { "s" })
 }
 
-fn removed_by<'f>(checkout: &Checkout, fixable: &[&'f Finding], deletions: &[Deletion]) -> Vec<&'f Finding> {
+pub(super) fn removed_by<'f>(checkout: &Checkout, fixable: &[&'f Finding], deletions: &[Deletion]) -> Vec<&'f Finding> {
     fixable.iter().filter(|finding| deletions.iter().any(|deletion| checkout.git.root.join(&deletion.file.rel) == finding.file && deletion.fixed.removed.contains(&finding.bytes))).copied().collect()
+}
+
+fn outside_deletions<'f>(checkout: &Checkout, unfixable: &[&'f Finding], deletions: &[Deletion]) -> Vec<&'f Finding> {
+    let deleted = |finding: &Finding| {
+        !finding.bytes.is_empty()
+            && deletions.iter().any(|deletion| checkout.git.root.join(&deletion.file.rel) == finding.file && deletion.fixed.removed.iter().any(|gone| gone.start <= finding.bytes.start && finding.bytes.end <= gone.end))
+    };
+    unfixable.iter().filter(|finding| !deleted(finding)).copied().collect()
+}
+
+pub(super) fn refusal(findings: &[&Finding], verb: &str) -> Vec<String> {
+    let mut sorted = findings.to_vec();
+    sorted.sort_by(|a, b| (&a.path, a.line, a.column, &a.rule).cmp(&(&b.path, b.line, b.column, &b.rule)));
+    let mut lines = Vec::new();
+    let mut explained = HashSet::new();
+    for finding in sorted.iter().take(SHOWN_ERRORS) {
+        let message = if explained.insert(finding.rule.as_str()) { format!(": {}", finding.message) } else { String::new() };
+        lines.push(format!("{}:{} {}{message}", finding.path, finding.line, finding.rule));
+    }
+    if sorted.len() > SHOWN_ERRORS {
+        lines.push(format!("and {} more", sorted.len() - SHOWN_ERRORS));
+    }
+    lines.push(format!("Fix these, or {verb} with AI_STACK_LINT_SKIP=\"<reason>\" if a rule is wrong here."));
+    lines
+}
+
+pub(super) fn skip_recorded(findings: &[String], reason: &str) -> String {
+    format!("ai-stack lint: skip recorded for {} ({reason}). {SKIP_REMINDER}", findings.join(", "))
+}
+
+pub(super) fn sorted_names(findings: &[&Finding]) -> Vec<String> {
+    let mut sorted = findings.to_vec();
+    sorted.sort_by(|a, b| (&a.path, a.line, a.column, &a.rule).cmp(&(&b.path, b.line, b.column, &b.rule)));
+    named(&sorted)
 }
 
 pub fn pre_commit(state_dir: &Path, settings: Result<Settings>, env: &Env, err: &mut dyn Write) -> i32 {
@@ -398,44 +496,37 @@ fn check(settings: &Settings, checkout: &Checkout, log: &Log, provenance: &Prove
     if env.skip.is_some() && reason.is_none() {
         lines.push("ai-stack lint: AI_STACK_LINT_SKIP needs a reason, so this commit is checked as usual.".into());
     }
-    let deletions = checkout.deletions(&staged, &fixable, &base, &Target::Index, &Attributes::Index(checkout.git.index.clone()), provenance)?;
+    let source = Source { base: &base, target: Target::Index, attributes: Attributes::Index(checkout.git.index.clone()), on_disk: OnDisk::Index };
+    let deletions = checkout.deletions(&staged, &fixable, &source, provenance)?;
     let removed = removed_by(checkout, &fixable, &deletions);
-    let exceptions: Vec<&Finding> = unfixable.iter().chain(&removed).copied().collect();
-    if let Some(reason) = reason
-        && !exceptions.is_empty()
-    {
-        let (code, line) = skip(settings, checkout, log, env, before, exceptions, reason)?;
-        lines.push(line);
-        print(err, &lines);
-        return Ok(code);
+    let left = outside_deletions(checkout, &unfixable, &deletions);
+    let mut outcome = Outcome::Checked;
+    match reason {
+        _ if left.is_empty() => {}
+        Some(reason) => match skip(settings, log, env, before.clone(), checkout.narrow(&base, &deletions)?, &left, reason) {
+            Ok(line) => {
+                lines.push(line);
+                outcome = Outcome::Skip { findings: sorted_names(&left), reason: reason.to_string() };
+            }
+            Err(line) => {
+                lines.push(line);
+                print(err, &lines);
+                return Ok(REFUSE);
+            }
+        },
+        None => {
+            lines.extend(refusal(&left, "commit"));
+            print(err, &lines);
+            return Ok(REFUSE);
+        }
     }
 
-    let fixed_paths: HashSet<PathBuf> = deletions.iter().map(|deletion| checkout.git.root.join(&deletion.file.rel)).collect();
-    let mut left: Vec<Finding> = unfixable.into_iter().filter(|finding| !fixed_paths.contains(&finding.file)).cloned().collect();
-    let rescanned: Vec<Change> = deletions.iter().filter_map(|deletion| Change::new(checkout.git.root.join(&deletion.file.rel), deletion.fixed.text.clone(), &deletion.file.baseline)).collect();
-    left.extend(engine.lint(&rescanned).into_iter().filter(|finding| finding.severity == Severity::Error && finding.fix.is_none()));
-    sort(&mut left);
-    if !left.is_empty() {
-        let mut explained = HashSet::new();
-        for finding in left.iter().take(SHOWN_ERRORS) {
-            let message = if explained.insert(finding.rule.as_str()) { format!(": {}", finding.message) } else { String::new() };
-            lines.push(format!("{}:{} {}{message}", finding.path, finding.line, finding.rule));
-        }
-        if left.len() > SHOWN_ERRORS {
-            lines.push(format!("and {} more", left.len() - SHOWN_ERRORS));
-        }
-        lines.push("Fix these, or commit with AI_STACK_LINT_SKIP=\"<reason>\" if a rule is wrong here.".into());
-        print(err, &lines);
-        return Ok(REFUSE);
-    }
-
-    let fixed_names = |deletions: &[&Deletion]| deletions.iter().map(|deletion| checkout.display(&deletion.file.rel)).collect::<Vec<_>>().join(", ");
     let all: Vec<&Deletion> = deletions.iter().collect();
     let ids: Vec<String> = deletions.iter().map(|deletion| checkout.git.blob_id(&deletion.fixed.text, false)).collect::<Result<_>>()?;
     if !removed.is_empty() && !env.git.amend {
         let fixed: Vec<(&PathBuf, &str)> = deletions.iter().zip(&ids).map(|(deletion, id)| (&deletion.file.rel, id.as_str())).collect();
         if checkout.emptied(&base, &fixed)? {
-            lines.push(format!("ai-stack lint: removed {} in {}, which left nothing to commit.", plural(removed.len(), "comment"), fixed_names(&all)));
+            lines.push(format!("ai-stack lint: removed {} in {}, which left nothing to commit.", plural(removed.len(), "comment"), checkout.fixed_files(&all)));
             print(err, &lines);
             return Ok(REFUSE);
         }
@@ -446,9 +537,9 @@ fn check(settings: &Settings, checkout: &Checkout, log: &Log, provenance: &Prove
     if matches!(partial, PartialIndex::Unknown) && !removed.is_empty() {
         for deletion in &deletions {
             let id = checkout.git.blob_id(&deletion.fixed.text, true)?;
-            checkout.rewrite_worktree(deletion.file, &id, modes)?;
+            checkout.rewrite_worktree(deletion, &id, modes)?;
         }
-        lines.push(format!("ai-stack lint: removed {} in {}; rerun the same commit.", plural(removed.len(), "comment"), fixed_names(&all)));
+        lines.push(format!("ai-stack lint: removed {} in {}; rerun the same commit.", plural(removed.len(), "comment"), checkout.fixed_files(&all)));
         print(err, &lines);
         return Ok(REFUSE);
     }
@@ -460,19 +551,19 @@ fn check(settings: &Settings, checkout: &Checkout, log: &Log, provenance: &Prove
         if checkout.rewrite_index(deletion.file, &id, &partial).is_err() {
             continue;
         }
-        if matches!(checkout.rewrite_worktree(deletion.file, &id, modes).unwrap_or(Worktree::Untouched), Worktree::Untouched) {
+        if matches!(checkout.rewrite_worktree(deletion, &id, modes).unwrap_or(Worktree::Untouched), Worktree::Untouched) {
             unstaged.push(checkout.display(&deletion.file.rel));
         }
         applied.push(deletion);
     }
     let removed_count: usize = applied.iter().map(|deletion| deletion.fixed.removed.len()).sum();
     if !unstaged.is_empty() {
-        lines.push(format!("ai-stack lint: {} {} unstaged changes, so only the staged version was fixed.", unstaged.join(", "), if unstaged.len() == 1 { "has" } else { "have" }));
+        lines.push(format!("ai-stack lint: {} {} unstaged changes, so only the staged version was fixed.", files_named(&unstaged), if unstaged.len() == 1 { "has" } else { "have" }));
     }
     let kept = fixable.len() - removed_count;
     let mut summary = Vec::new();
     if removed_count > 0 {
-        summary.push(format!("removed {} in {}", plural(removed_count, "comment"), fixed_names(&applied)));
+        summary.push(format!("removed {} in {}", plural(removed_count, "comment"), checkout.fixed_files(&applied)));
     }
     if kept > 0 {
         summary.push(format!("kept {} (trailing, block, header, edited, tool-read or not written by the agent)", plural(kept, "comment")));
@@ -480,30 +571,27 @@ fn check(settings: &Settings, checkout: &Checkout, log: &Log, provenance: &Prove
     if !summary.is_empty() {
         lines.push(format!("ai-stack lint: {}", summary.join("; ")));
     }
-    let _ = log.mark(&env.git.id, &Pending { before, outcome: Outcome::Checked });
+    let _ = log.mark(&env.git.id, &Pending { before, outcome });
     print(err, &lines);
     Ok(0)
 }
 
-fn skip(settings: &Settings, checkout: &Checkout, log: &Log, env: &Env, before: Option<String>, mut exceptions: Vec<&Finding>, reason: &str) -> Result<(i32, String)> {
-    let base = before.clone().map_or_else(|| checkout.git.empty_tree(), Ok)?;
-    let narrow = checkout.narrow(&base)?;
+fn skip(settings: &Settings, log: &Log, env: &Env, before: Option<String>, narrow: Narrow, exceptions: &[&Finding], reason: &str) -> Result<String, String> {
     let limits = settings.skip;
     let whole_files = exceptions.iter().all(|finding| finding.rule == TEST_FILE_NAMES);
     let wide = narrow.files > limits.files || exceptions.len() > limits.findings || (!whole_files && (narrow.hunks > limits.hunks || narrow.lines > limits.lines));
     if wide {
-        return Ok((REFUSE, format!(
+        return Err(format!(
             "ai-stack lint: a skip must be its own commit containing only the exception (at most {} file, {} hunk, {} changed lines and {} findings; this commit has {}, {}, {} and {}). Commit the rest without a skip first.",
             limits.files, limits.hunks, limits.lines, limits.findings, narrow.files, narrow.hunks, narrow.lines, exceptions.len()
-        )));
+        ));
     }
-    exceptions.sort_by(|a, b| (&a.path, a.line, a.column, &a.rule).cmp(&(&b.path, b.line, b.column, &b.rule)));
-    let findings = named(&exceptions);
-    let pending = Pending { before, outcome: Outcome::Skip { findings: findings.clone(), reason: reason.to_string() } };
-    if let Err(error) = log.writable().and_then(|()| log.mark(&env.git.id, &pending)) {
-        return Ok((REFUSE, format!("ai-stack lint: the skip could not be recorded ({}), so this commit is refused.", format!("{error:#}").lines().next().unwrap_or_default())));
+    let findings = sorted_names(exceptions);
+    let outcome = Outcome::Skip { findings: findings.clone(), reason: reason.to_string() };
+    if let Err(error) = log.writable().and_then(|()| log.mark(&env.git.id, &Pending { before, outcome })) {
+        return Err(format!("ai-stack lint: the skip could not be recorded ({}), so this commit is refused.", format!("{error:#}").lines().next().unwrap_or_default()));
     }
-    Ok((0, format!("ai-stack lint: skip recorded for {} ({reason}). {SKIP_REMINDER}", findings.join(", "))))
+    Ok(skip_recorded(&findings, reason))
 }
 
 fn print(err: &mut dyn Write, lines: &[String]) {
@@ -525,7 +613,7 @@ pub fn post_commit(state_dir: &Path, settings: Result<Settings>, env: &Env) -> i
         let pending = log.take_mark(&env.git.id);
         let Some(checkout) = open(&settings, env)? else { return Ok(()) };
         let head = checkout.repo.head();
-        let event = |kind, findings: Vec<String>, reason| Event { time: env.now, kind, repo: checkout.repo.project_key.clone(), harness: env.harness.clone(), head: head.clone(), findings, reason };
+        let event = |kind, findings: Vec<String>, reason| Event { time: env.now, kind, repo: checkout.repo.project_key.clone(), harness: env.harness.clone(), head: head.clone(), findings, reason, vcs: None };
         match pending {
             Some(pending) if pending.before == head => return Ok(()),
             Some(Pending { outcome: Outcome::Nothing, .. }) => return Ok(()),
@@ -568,16 +656,14 @@ fn bypassed(settings: &Settings, checkout: &Checkout, provenance: &Provenance) -
         return Ok(None);
     };
     let rules = settings.rules()?;
-    let target = Target::Commit("HEAD");
-    let staged = checkout.staged(&base, &target)?;
-    let attributes = Attributes::Index(None);
-    let engine = Engine { attributes: attributes.clone(), ..checkout.engine(settings, &rules) };
+    let source = Source { base: &base, target: Target::Commit("HEAD"), attributes: Attributes::Index(None), on_disk: OnDisk::Ignored };
+    let staged = checkout.staged(&base, &source.target)?;
+    let engine = Engine { attributes: source.attributes.clone(), ..checkout.engine(settings, &rules) };
     let findings: Vec<Finding> = engine.lint(&checkout.changes(&staged)).into_iter().filter(|finding| finding.severity == Severity::Error).collect();
     let (fixable, unfixable): (Vec<&Finding>, Vec<&Finding>) = findings.iter().partition(|finding| finding.fix.is_some());
-    let deletions = checkout.deletions(&staged, &fixable, &base, &target, &attributes, provenance)?;
-    let mut counted: Vec<&Finding> = unfixable.iter().copied().chain(removed_by(checkout, &fixable, &deletions)).collect();
-    counted.sort_by(|a, b| (&a.path, a.line, a.column, &a.rule).cmp(&(&b.path, b.line, b.column, &b.rule)));
-    Ok((!counted.is_empty()).then(|| named(&counted)))
+    let deletions = checkout.deletions(&staged, &fixable, &source, provenance)?;
+    let counted: Vec<&Finding> = outside_deletions(checkout, &unfixable, &deletions).into_iter().chain(removed_by(checkout, &fixable, &deletions)).collect();
+    Ok((!counted.is_empty()).then(|| sorted_names(&counted)))
 }
 
 #[cfg(test)]

@@ -210,6 +210,19 @@ enum LintCommand {
     /// Git post-commit hook that records a commit made without the pre-commit check.
     #[command(hide = true)]
     PostCommit,
+    /// Remove the agent's comments from the mutable commits below the jj working copy, as the
+    /// hooks do after `jj commit` and before `jj git push`, then report what is left. Exits 1
+    /// when errors remain.
+    #[command(hide = true)]
+    JjFix,
+    /// The `jj fix` tool that `jj-fix` configures: reads one file version on stdin and writes
+    /// it back without the comment runs the plan names for PATH.
+    #[command(hide = true)]
+    JjTool {
+        #[arg(long)]
+        plan: PathBuf,
+        path: String,
+    },
 }
 
 #[derive(Subcommand)]
@@ -701,6 +714,11 @@ fn cmd_lint(ctx: &Context, command: Option<LintCommand>, request: lint::Request)
             std::panic::set_hook(Box::new(|_| {}));
             return Ok(lint::post_commit(&state_dir, load(), &lint::CommitEnv::from_process()?));
         }
+        Some(LintCommand::JjTool { plan, path }) => {
+            std::panic::set_hook(Box::new(|_| {}));
+            lint::jj_tool(&plan, &path, &mut io::stdin(), &mut io::stdout())?;
+            return Ok(0);
+        }
         _ => {}
     }
     let settings = match load() {
@@ -714,6 +732,7 @@ fn cmd_lint(ctx: &Context, command: Option<LintCommand>, request: lint::Request)
     match command {
         Some(LintCommand::Rules { json }) => lint::list(&settings, json, &mut out, &mut err),
         Some(LintCommand::Skips { days }) => lint::skips(&state_dir, days.unwrap_or(settings.skip_alert.days), lint::now(), &mut out),
+        Some(LintCommand::JjFix) => lint::jj_fix(&settings, &state_dir, &request.cwd, &mut err),
         _ => lint::run(&settings, request, &mut out, &mut err),
     }
 }

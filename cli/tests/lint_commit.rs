@@ -298,12 +298,12 @@ fn the_commit_hook_deletes_only_the_agents_own_comment_lines_in_every_commit_for
     assert_eq!(show(&moved, "HEAD:c.ts"), extracted, "a comment the commit moved from another file is kept");
 
     let unfixable = s.repo("unfixable", &BASE);
-    write(&unfixable.join("a.test.ts"), "test(\"x\", async () => {\n  await new Promise((r) => setTimeout(r, 50));\n});\n");
+    s.agent_writes(&unfixable, "a.test.ts", "import { test } from \"vitest\";\n// agent prose above the test\ntest(\"x\", async () => {\n  await new Promise((r) => setTimeout(r, 50));\n});\n");
     s.agent_writes(&unfixable, "a.ts", PROSE);
     s.git(&unfixable, &["add", "a.test.ts", "a.ts"]);
     let sleep = s.agent(&unfixable, &["commit", "-qm", "sleep"]);
     assert_eq!(sleep.status.code(), Some(1));
-    assert!(stderr(&sleep).contains("a.test.ts:2 no-fixed-sleep: ") && stderr(&sleep).contains("AI_STACK_LINT_SKIP=\"<reason>\""), "{}", stderr(&sleep));
+    assert!(stderr(&sleep).contains("a.test.ts:4 no-fixed-sleep: ") && stderr(&sleep).contains("AI_STACK_LINT_SKIP=\"<reason>\""), "the refusal points at the staged file the agent can open: {}", stderr(&sleep));
     assert_eq!((show(&unfixable, ":a.ts"), on_disk(&unfixable, "a.ts")), (PROSE.into(), PROSE.into()), "a refused commit leaves the index and the worktree as they were");
 
     let ancestry = s.repo("ancestry", &BASE);
@@ -345,7 +345,7 @@ fn skips_are_narrow_and_recorded_bypasses_queue_a_notice_and_the_rate_flags_a_re
     fs::remove_file(repo.join(".git/hooks/commit-msg")).unwrap();
     let skipped = skip("the device has no event", &["commit", "-qm", "narrow skip"]);
     assert!(committed(&skipped).contains("skip recorded for a.test.ts:2 no-fixed-sleep (the device has no event)"), "{}", stderr(&skipped));
-    assert_eq!(s.git(&repo, &["show", "HEAD:a.test.ts"]), sleep, "a skip commit gets no fixes");
+    assert_eq!(s.git(&repo, &["show", "HEAD:a.test.ts"]), sleep, "the skipped code and its trailing comment land as staged");
     assert_eq!(kinds(&s), ["skip"]);
     assert_eq!(s.events()[0]["reason"], "the device has no event");
     assert_eq!(s.events()[0]["harness"], "claude");
@@ -387,10 +387,13 @@ fn skips_are_narrow_and_recorded_bypasses_queue_a_notice_and_the_rate_flags_a_re
     committed(&s.agent(&repo, &["commit", "-qam", "prose bypass", "--no-verify"]));
     assert_eq!((kinds(&s).last().unwrap().as_str(), &s.events().last().unwrap()["findings"]), ("bypassed", &serde_json::json!(["b.ts:2 no-comments"])), "the agent's prose the fixer would delete counts as a bypass");
 
-    let spec: String = std::iter::once("describe(\"users\", () => {\n".to_string()).chain((1..=25).map(|n| format!("  it(\"case {n}\", () => expect({n}).toBe({n}));\n"))).chain(["});\n".to_string()]).collect();
-    write(&repo.join("users.service.spec.ts"), &spec);
+    let cases: String = (1..=25).map(|n| format!("  it(\"case {n}\", () => expect({n}).toBe({n}));\n")).collect();
+    let spec = format!("describe(\"users\", () => {{\n  // Arrange a user for every case below\n{cases}}});\n");
+    s.agent_writes(&repo, "users.service.spec.ts", &spec);
     s.git(&repo, &["add", "users.service.spec.ts"]);
-    assert!(committed(&skip("Jest here only runs *.spec.ts", &["commit", "-qm", "spec"])).contains("skip recorded for users.service.spec.ts:1 test-file-names"), "a file-level exception is narrow when it is the only file");
+    let skipped = committed(&skip("Jest here only runs *.spec.ts", &["commit", "-qm", "spec"]));
+    assert!(skipped.contains("skip recorded for users.service.spec.ts:1 test-file-names") && skipped.contains("removed 1 comment in users.service.spec.ts"), "a file-level exception is narrow when it is the only file, and the fixer still runs: {skipped}");
+    assert_eq!(s.git(&repo, &["show", "HEAD:users.service.spec.ts"]), format!("describe(\"users\", () => {{\n{cases}}});\n"));
 
     let events = s.home.join(".local/state/ai-stack/lint/events.jsonl");
     fs::rename(&events, s.home.join("events.saved")).unwrap();

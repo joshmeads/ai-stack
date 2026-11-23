@@ -23,6 +23,12 @@ pub struct Provenance {
     now: u64,
 }
 
+#[derive(Clone, Copy)]
+enum Record {
+    WrittenTo,
+    RemovedIn,
+}
+
 pub fn comment_line(line: &str) -> Option<&str> {
     let trimmed = line.trim();
     (trimmed.starts_with("//") || trimmed.starts_with('#')).then_some(trimmed)
@@ -33,8 +39,12 @@ impl Provenance {
         Provenance { dir: state_dir.join("provenance"), now }
     }
 
-    fn file_of(&self, path: &Path) -> PathBuf {
-        let digest: String = Sha256::digest(paths::resolve(path).as_os_str().as_bytes()).iter().take(16).map(|byte| format!("{byte:02x}")).collect();
+    fn file_of(&self, record: Record, path: &Path) -> PathBuf {
+        let prefix: &[u8] = match record {
+            Record::WrittenTo => b"",
+            Record::RemovedIn => b"removed\0",
+        };
+        let digest: String = Sha256::new().chain_update(prefix).chain_update(paths::resolve(path).as_os_str().as_bytes()).finalize().iter().take(16).map(|byte| format!("{byte:02x}")).collect();
         self.dir.join(digest)
     }
 
@@ -44,7 +54,15 @@ impl Provenance {
     }
 
     pub fn record<'l>(&self, path: &Path, added: impl IntoIterator<Item = &'l str>) -> Result<()> {
-        let mut lines: Vec<String> = added.into_iter().filter_map(comment_line).map(str::to_string).collect();
+        self.append(Record::WrittenTo, path, added)
+    }
+
+    pub fn record_removed<'l>(&self, repo: &Path, removed: impl IntoIterator<Item = &'l str>) -> Result<()> {
+        self.append(Record::RemovedIn, repo, removed)
+    }
+
+    fn append<'l>(&self, record: Record, path: &Path, lines: impl IntoIterator<Item = &'l str>) -> Result<()> {
+        let mut lines: Vec<String> = lines.into_iter().filter_map(comment_line).map(str::to_string).collect();
         lines.sort();
         lines.dedup();
         if lines.is_empty() {
@@ -52,7 +70,7 @@ impl Provenance {
         }
         std::fs::create_dir_all(&self.dir).with_context(|| format!("creating {}", self.dir.display()))?;
         self.prune();
-        let file = self.file_of(path);
+        let file = self.file_of(record, path);
         let cutoff = self.now.saturating_sub(KEEP);
         let records = self.records(&file);
         if records.first().is_some_and(|oldest| oldest.time < cutoff) {
@@ -80,9 +98,17 @@ impl Provenance {
         }
     }
 
-    pub fn written(&self, path: &Path) -> HashSet<String> {
+    fn lines(&self, record: Record, path: &Path) -> HashSet<String> {
         let cutoff = self.now.saturating_sub(KEEP);
-        self.records(&self.file_of(path)).into_iter().filter(|record| record.time >= cutoff).flat_map(|record| record.lines).collect()
+        self.records(&self.file_of(record, path)).into_iter().filter(|record| record.time >= cutoff).flat_map(|record| record.lines).collect()
+    }
+
+    pub fn written(&self, path: &Path) -> HashSet<String> {
+        self.lines(Record::WrittenTo, path)
+    }
+
+    pub fn moved(&self, repo: &Path) -> HashSet<String> {
+        self.lines(Record::RemovedIn, repo)
     }
 }
 
@@ -91,7 +117,7 @@ mod tests {
     use super::*;
 
     #[test]
-    fn only_comment_lines_the_agent_wrote_in_the_last_week_count_for_their_file() {
+    fn only_comment_lines_the_agent_wrote_in_the_last_week_count_for_their_file_and_removals_count_for_the_repository() {
         let tmp = tempfile::tempdir().unwrap();
         let file = tmp.path().join("a.ts");
         let day = 24 * 60 * 60;
@@ -101,8 +127,11 @@ mod tests {
         assert_eq!(later.written(&file), HashSet::from(["# new prose".to_string(), "// old prose".to_string()]));
         assert!(later.written(&tmp.path().join("b.ts")).is_empty(), "entries are per file");
         later.record(&file, ["// newest"]).unwrap();
-        let text = std::fs::read_to_string(later.file_of(&file)).unwrap();
+        let text = std::fs::read_to_string(later.file_of(Record::WrittenTo, &file)).unwrap();
         assert_eq!(text.lines().count(), 2, "an expired record is dropped when its file is written: {text}");
         assert_eq!(Provenance::new(tmp.path(), 114 * day).written(&file), HashSet::from(["// newest".to_string()]));
+        later.record_removed(tmp.path(), ["  // a human's rule", "return 1;"]).unwrap();
+        assert_eq!(later.moved(tmp.path()), HashSet::from(["// a human's rule".to_string()]));
+        assert!(later.written(tmp.path()).is_empty(), "a repository's removals are kept apart from a file's additions");
     }
 }

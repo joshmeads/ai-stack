@@ -34,6 +34,8 @@ pub struct Event {
     pub findings: Vec<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub reason: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub vcs: Option<String>,
 }
 
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
@@ -213,7 +215,7 @@ mod tests {
     use super::*;
 
     fn event(time: u64, kind: Kind) -> Event {
-        Event { time, kind, repo: PathBuf::from("/r"), harness: None, head: None, findings: Vec::new(), reason: None }
+        Event { time, kind, repo: PathBuf::from("/r"), harness: None, head: None, findings: Vec::new(), reason: None, vcs: None }
     }
 
     #[test]

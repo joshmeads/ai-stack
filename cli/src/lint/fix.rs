@@ -17,11 +17,14 @@ type TreeNode<'t> = Node<'t, StrDoc<SupportLang>>;
 const LINE_TERMINATORS: [char; 5] = ['\n', '\r', '\u{85}', '\u{2028}', '\u{2029}'];
 const SHEBANGS: [&str; 2] = ["hash_bang_line", "shebang"];
 const UNTOUCHED_DIRECTORIES: [&str; 7] = ["vendor", "third_party", "node_modules", "testdata", "fixtures", "__fixtures__", "__testfixtures__"];
+const TOP_LEVEL: [&str; 3] = ["program", "source_file", "module"];
+const BODY_STATEMENTS_TO_STAY_MULTILINE: usize = 2;
 
 pub struct Prior<'a> {
     pub file: Option<&'a str>,
     pub removed: &'a str,
     pub written: &'a HashSet<String>,
+    pub moved: &'a HashSet<String>,
 }
 
 impl Prior<'_> {
@@ -30,9 +33,13 @@ impl Prior<'_> {
     }
 }
 
+pub type Run = Vec<String>;
+
 pub struct Fixed {
     pub text: String,
     pub removed: Vec<Range<usize>>,
+    pub runs: Vec<Run>,
+    pub dropped: BTreeSet<usize>,
 }
 
 pub fn untouchable(rel: &Path, source: &str) -> bool {
@@ -43,28 +50,51 @@ pub fn untouchable(rel: &Path, source: &str) -> bool {
 }
 
 pub fn remove_new_plain_comments(language: SupportLang, source: &str, comments: &[Range<usize>], prior: &Prior) -> Option<Fixed> {
-    std::panic::catch_unwind(AssertUnwindSafe(|| fix(language, source, comments, prior))).ok().flatten()
+    let reported: HashSet<&Range<usize>> = comments.iter().collect();
+    guarded(|| fix(language, source, prior.file, |file, block| block.iter().all(|node| reported.contains(&node.range()) && file.plain(node) && file.agent_wrote(node, prior))))
 }
 
-fn fix(language: SupportLang, source: &str, comments: &[Range<usize>], prior: &Prior) -> Option<Fixed> {
+pub fn remove_runs(language: SupportLang, source: &str, runs: &[Run]) -> Option<Fixed> {
+    guarded(|| fix(language, source, None, |file, block| runs.contains(&file.run(block)) && block.iter().all(|node| file.plain(node))))
+}
+
+pub fn runs(language: SupportLang, source: &str) -> Vec<Run> {
+    guarded(|| {
+        let tree = language.ast_grep(source);
+        let file = File::new(language, source, &tree, None);
+        Some(file.blocks(&tree).iter().map(|block| file.run(block)).collect())
+    })
+    .unwrap_or_default()
+}
+
+pub fn drop_lines(bytes: &[u8], dropped: &BTreeSet<usize>) -> Vec<u8> {
+    bytes.split_inclusive(|&byte| byte == b'\n').enumerate().filter(|(at, _)| !dropped.contains(at)).flat_map(|(_, line)| line.iter().copied()).collect()
+}
+
+fn guarded<T>(work: impl FnOnce() -> Option<T>) -> Option<T> {
+    std::panic::catch_unwind(AssertUnwindSafe(work)).ok().flatten()
+}
+
+fn fix(language: SupportLang, source: &str, before: Option<&str>, select: impl Fn(&File, &[TreeNode]) -> bool) -> Option<Fixed> {
     let tree = language.ast_grep(source);
-    let file = File::new(language, source, &tree, prior.file);
-    let reported: HashSet<&Range<usize>> = comments.iter().collect();
+    let file = File::new(language, source, &tree, before);
     let mut removed = Vec::new();
+    let mut runs = Vec::new();
     let mut gone = BTreeSet::new();
     for block in file.blocks(&tree) {
-        if block.iter().all(|node| reported.contains(&node.range()) && file.deletable(node, prior)) && file.fits(&block) {
+        if select(&file, &block) && file.fits(&block) {
             for node in &block {
                 gone.extend(file.index.span(without_line_end(source, node.range())).map(|line| line as usize - 1));
                 removed.push(node.range());
             }
+            runs.push(file.run(&block));
         }
     }
     if removed.is_empty() {
         return None;
     }
-    let text = apply(source, &gone);
-    verified(source, &tree, &text, &language.ast_grep(&text)).then_some(Fixed { text, removed })
+    let (text, dropped) = apply(source, &gone);
+    verified(source, &tree, &text, &language.ast_grep(&text)).then_some(Fixed { text, removed, runs, dropped })
 }
 
 struct File<'s> {
@@ -97,20 +127,31 @@ impl<'s> File<'s> {
         blocks
     }
 
-    fn deletable(&self, node: &TreeNode, prior: &Prior) -> bool {
+    fn body(&self, node: &TreeNode) -> &'s str {
+        let range = without_line_end(self.source, node.range());
+        &self.source[range]
+    }
+
+    fn run(&self, block: &[TreeNode]) -> Run {
+        block.iter().map(|node| self.body(node).trim().to_string()).collect()
+    }
+
+    fn plain(&self, node: &TreeNode) -> bool {
         let range = without_line_end(self.source, node.range());
         let body = &self.source[range.clone()];
-        let line = self.index.line(range.start);
         (body.starts_with("//") || body.starts_with('#'))
             && !body.contains(LINE_TERMINATORS)
-            && prior.written.contains(body.trim())
-            && !prior.holds(body)
             && range.start >= self.code_start
-            && !(self.language == SupportLang::Python && line <= 2)
+            && !(self.language == SupportLang::Python && self.index.line(range.start) <= 2)
             && !body.contains("want \"")
-            && !self.edited.iter().any(|hunk| hunk.contains(&(line as usize - 1)))
             && !self.is_doc(node, body)
             && !looks_like_a_directive(body)
+    }
+
+    fn agent_wrote(&self, node: &TreeNode, prior: &Prior) -> bool {
+        let body = self.body(node);
+        let line = self.index.line(node.range().start) as usize - 1;
+        prior.written.contains(body.trim()) && !prior.moved.contains(body.trim()) && !prior.holds(body) && !self.edited.iter().any(|hunk| hunk.contains(&line))
     }
 
     fn fits(&self, block: &[TreeNode]) -> bool {
@@ -119,7 +160,7 @@ impl<'s> File<'s> {
         let below = *self.index.span(without_line_end(self.source, last.range())).end() + 1;
         let containers = statement_containers(self.language);
         let continued = above >= 1 && self.source[self.index.start(above)..self.index.start(above + 1) - 1].trim_end_matches('\r').ends_with('\\');
-        block.iter().all(|node| node.parent().is_some_and(|parent| containers.contains(&parent.kind().as_ref())))
+        block.iter().all(|node| node.parent().is_some_and(|parent| containers.contains(&parent.kind().as_ref()) && stays_multiline(&parent)))
             && !continued
             && !(self.language == SupportLang::Go && self.trailing.contains(&above) && self.trailing.contains(&below))
     }
@@ -140,6 +181,13 @@ fn statement_containers(language: SupportLang) -> &'static [&'static str] {
         SupportLang::Go => &["source_file", "block", "statement_list", "expression_case", "default_case", "type_case", "communication_case"],
         _ => &["program", "statement_block", "class_body", "switch_case", "switch_default"],
     }
+}
+
+fn stays_multiline(container: &TreeNode) -> bool {
+    fn statements(node: &TreeNode) -> usize {
+        node.children().filter(|child| child.is_named() && !is_comment(child)).map(|child| if child.kind() == "statement_list" { statements(&child) } else { 1 }).sum()
+    }
+    TOP_LEVEL.contains(&container.kind().as_ref()) || statements(container) >= BODY_STATEMENTS_TO_STAY_MULTILINE
 }
 
 fn code_start(tree: &Tree, end: usize) -> usize {
@@ -184,7 +232,7 @@ fn directly_above_a_declaration(node: &TreeNode, source: &str) -> bool {
 fn looks_like_a_directive(text: &str) -> bool {
     static OPENER: LazyLock<Regex> = LazyLock::new(|| Regex::new(r"^(?://+!?|#+)").unwrap());
     static TAG: LazyLock<Regex> = LazyLock::new(|| Regex::new(r"[@$][A-Za-z]").unwrap());
-    static TOOL_WORD: LazyLock<Regex> = LazyLock::new(|| Regex::new(r"(?i)ignore|disable|suppress|noqa|pragma|codeql|deepcode|nosec|lint").unwrap());
+    static TOOL_WORD: LazyLock<Regex> = LazyLock::new(|| Regex::new(r"(?i)ignore|disable|suppress|noqa|pragma|codeql|deepcode|nosec|lint|format|fmt|translator").unwrap());
     let after = &text[OPENER.find(text).map_or(0, |opener| opener.end())..];
     let body = after.trim();
     let Some(first) = body.split_whitespace().next() else { return true };
@@ -212,17 +260,17 @@ fn blank(text: &str) -> bool {
     text.chars().all(|char| char == ' ' || char == '\t' || char == '\r')
 }
 
-fn apply(source: &str, gone: &BTreeSet<usize>) -> String {
+fn apply(source: &str, gone: &BTreeSet<usize>) -> (String, BTreeSet<usize>) {
     let lines: Vec<&str> = source.split_inclusive('\n').collect();
     let content = |at: usize| lines[at].trim_end_matches(['\n', '\r']);
     let empty = |at: usize| !gone.contains(&at) && content(at).trim().is_empty();
     let opens = |at: usize| content(at).trim_end().ends_with(['{', '(', '[', ':']);
     let closes = |at: usize| content(at).trim_start().starts_with(['}', ')', ']']);
-    let mut out = String::with_capacity(source.len());
+    let mut kept = BTreeSet::new();
     let mut at = 0;
     while at < lines.len() {
         if !gone.contains(&at) && !empty(at) {
-            out.push_str(lines[at]);
+            kept.insert(at);
             at += 1;
             continue;
         }
@@ -238,11 +286,11 @@ fn apply(source: &str, gone: &BTreeSet<usize>) -> String {
         } else {
             run.split(|line| gone.contains(line)).map(<[usize]>::len).max().unwrap_or(0)
         };
-        for &line in run.iter().filter(|line| !gone.contains(line)).take(keep) {
-            out.push_str(lines[line]);
-        }
+        kept.extend(run.iter().filter(|line| !gone.contains(line)).take(keep));
     }
-    out
+    let text = kept.iter().map(|&line| lines[line]).collect();
+    let dropped = (0..lines.len()).filter(|line| !kept.contains(line)).collect();
+    (text, dropped)
 }
 
 struct Token {
@@ -289,7 +337,7 @@ mod tests {
         let notes: Vec<TreeNode> = tree.root().dfs().filter(|node| is_comment(node) && node.text().contains("note")).collect();
         let written: HashSet<String> = notes.iter().map(|node| node.text().trim().to_string()).collect();
         let comments: Vec<Range<usize>> = notes.iter().map(|node| node.range()).collect();
-        remove_new_plain_comments(language, source, &comments, &Prior { file, removed, written: &written }).map_or_else(|| source.to_string(), |fixed| fixed.text)
+        remove_new_plain_comments(language, source, &comments, &Prior { file, removed, written: &written, moved: &HashSet::new() }).map_or_else(|| source.to_string(), |fixed| fixed.text)
     }
 
     fn fixed(language: SupportLang, source: &str) -> String {
@@ -303,10 +351,10 @@ mod tests {
             (SupportLang::JavaScript, "\n\nconst a = 'é';\n  // note\nf();\n", "\n\nconst a = 'é';\nf();\n"),
             (SupportLang::TypeScript, "f();\n\n// note one\n// note two\n\ng();\n", "f();\n\ng();\n"),
             (SupportLang::Rust, "fn f() {\r\n    let a = 1;\r\n    // note\r\n    a\r\n}\r\n", "fn f() {\r\n    let a = 1;\r\n    a\r\n}\r\n"),
-            (SupportLang::Rust, "fn f() {\n    // note\n\n    g();\n}\n", "fn f() {\n    g();\n}\n"),
+            (SupportLang::Rust, "fn f() {\n    // note\n\n    g();\n    h();\n}\n", "fn f() {\n    g();\n    h();\n}\n"),
             (SupportLang::Python, "def load():\n    return 1\n\n\n# note section\n\n\ndef parse(text):\n    return text\n", "def load():\n    return 1\n\n\ndef parse(text):\n    return text\n"),
             (SupportLang::Python, "x = 1\n\n# note\n", "x = 1\n"),
-            (SupportLang::Go, "package main\n\nfunc main() {\n\t// note\n\tprintln(1)\n}\n", "package main\n\nfunc main() {\n\tprintln(1)\n}\n"),
+            (SupportLang::Go, "package main\n\nfunc main() {\n\t// note\n\tprintln(1)\n\tprintln(2)\n}\n", "package main\n\nfunc main() {\n\tprintln(1)\n\tprintln(2)\n}\n"),
         ];
         for (language, source, expected) in removed {
             assert_eq!(fixed(language, source), expected, "{language} {source:?}");
@@ -319,11 +367,18 @@ mod tests {
             (SupportLang::JavaScript, "const a = [\n  1,\n  // note\n  2,\n];\n"),
             (SupportLang::JavaScript, "f();\n// TODO: note\n"),
             (SupportLang::JavaScript, "f();\n// note\n// eslint-disable-next-line\ng();\n"),
+            (SupportLang::JavaScript, "f();\n// note clang-format off\ng();\n"),
+            (SupportLang::Python, "x = 1\ny = 2\n# Translators note the verb\nlabel = 1\n"),
             (SupportLang::Python, "import os\n# note\n"),
             (SupportLang::Python, "x = 1\ny = 2\n# Translators: note\n# note continues\nlabel = 1\n"),
             (SupportLang::Python, "y = 0\nx = 1 \\\n# note\nprint(x)\n"),
             (SupportLang::Rust, "fn g() {}\n/// note\nfn f() {}\n"),
+            (SupportLang::Rust, "fn f(xs: &[u8]) -> Vec<u8> {\n    xs.iter().map(|x| {\n        // note\n        x * 2\n    }).collect()\n}\n"),
+            (SupportLang::Rust, "fn f(c: u8) -> u8 {\n    match c {\n        0 => {\n            // note\n            0\n        }\n        _ => 1,\n    }\n}\n"),
+            (SupportLang::Rust, "struct S;\nimpl S {\n    // note\n}\n"),
+            (SupportLang::TypeScript, "export class Base {\n  // note\n}\n"),
             (SupportLang::Go, "package main\n\nfunc g() {}\n\n// note\nfunc main() {}\n"),
+            (SupportLang::Go, "package main\n\nfunc main() {\n\t// note\n\tprintln(1)\n}\n"),
             (SupportLang::Go, "package main\n\ntype T struct {\n\tA int\n\t// note\n\tLong string\n}\n"),
             (SupportLang::Go, "package main\n\nfunc main() {\n\ta := 1 // x\n\t// note\n\tbb := 2 // y\n\t_ = a + bb\n}\n"),
             (SupportLang::Go, "package a\n\nfunc f() {\n\tg()\n\t// note want \"avoid\"\n}\n"),
@@ -334,7 +389,11 @@ mod tests {
         let unwritten = "f();\n// prose a human wrote\ng();\n";
         let tree = SupportLang::JavaScript.ast_grep(unwritten);
         let comments: Vec<Range<usize>> = tree.root().dfs().filter(is_comment).map(|node| node.range()).collect();
-        assert!(remove_new_plain_comments(SupportLang::JavaScript, unwritten, &comments, &Prior { file: None, removed: "", written: &HashSet::new() }).is_none(), "a comment the agent's edits never wrote is kept");
+        assert!(remove_new_plain_comments(SupportLang::JavaScript, unwritten, &comments, &Prior { file: None, removed: "", written: &HashSet::new(), moved: &HashSet::new() }).is_none(), "a comment the agent's edits never wrote is kept");
+        let moved = "f();\n// note moved by the agent\ng();\n";
+        let written = HashSet::from(["// note moved by the agent".to_string()]);
+        let comments: Vec<Range<usize>> = SupportLang::JavaScript.ast_grep(moved).root().dfs().filter(is_comment).map(|node| node.range()).collect();
+        assert!(remove_new_plain_comments(SupportLang::JavaScript, moved, &comments, &Prior { file: None, removed: "", written: &written, moved: &written }).is_none(), "a comment the agent removed elsewhere in the repository is kept");
         let source = "f();\n// note the ledger\n";
         assert_eq!(fixed_with(SupportLang::TypeScript, source, Some("// note the ledger\nf();\n"), ""), source, "a comment already in the file is kept");
         assert_eq!(fixed_with(SupportLang::TypeScript, source, None, "  // note the ledger\n"), source, "a comment moved from another file is kept");
@@ -347,5 +406,18 @@ mod tests {
         assert!(untouchable(Path::new("pkg/testdata/src/a/a.go"), "package a\n"));
         assert!(untouchable(Path::new("analysis.py"), "x = 1\n# %% [markdown]\n# Sales\n"));
         assert!(!untouchable(Path::new("src/vendors.ts"), "f();\n"));
+    }
+
+    #[test]
+    fn planned_runs_are_removed_from_any_version_and_line_drops_carry_over_to_crlf_bytes() {
+        let source = "f();\n// note one\n// note two\ng();\n// keep me\nh();\n";
+        let planned = vec![vec!["// note one".to_string(), "// note two".to_string()]];
+        assert_eq!(runs(SupportLang::TypeScript, source), [planned[0].clone(), vec!["// keep me".to_string()]]);
+        let older = "f();\nx();\n// note one\n// note two\ng();\n";
+        assert_eq!(remove_runs(SupportLang::TypeScript, older, &planned).map(|fixed| fixed.text).as_deref(), Some("f();\nx();\ng();\n"));
+        assert!(remove_runs(SupportLang::TypeScript, "f();\n// note one\ng();\n", &planned).is_none(), "a run is deleted only when all of it is there");
+        let fixed = remove_runs(SupportLang::TypeScript, source, &planned).unwrap();
+        assert_eq!(fixed.text, "f();\ng();\n// keep me\nh();\n");
+        assert_eq!(drop_lines(source.replace('\n', "\r\n").as_bytes(), &fixed.dropped), fixed.text.replace('\n', "\r\n").as_bytes());
     }
 }

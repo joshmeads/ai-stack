@@ -19,6 +19,7 @@ pub const SYMLINK: &str = "120000";
 pub enum Attributes {
     Worktree,
     Index(Option<PathBuf>),
+    Tree { git_dir: PathBuf, commit: String },
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -126,6 +127,7 @@ impl Repo {
                 let env: Vec<(&str, &OsStr)> = index.iter().map(|index| ("GIT_INDEX_FILE", index.as_os_str())).collect();
                 run_git(&self.root, &[&["check-attr", "--cached", "-z", "--stdin"], names].concat(), &input, &env)?
             }
+            Attributes::Tree { git_dir, commit } => run_git(&self.root, &[&["check-attr", "--source", commit.as_str(), "-z", "--stdin"], names].concat(), &input, &[("GIT_DIR", git_dir.as_os_str())])?,
         };
         let fields: Vec<&[u8]> = out.split(|&byte| byte == 0).collect();
         Ok(fields.chunks(3).filter(|chunk| chunk.len() == 3 && holds(chunk[2])).map(|chunk| path_of(chunk[0])).collect())
@@ -169,27 +171,43 @@ impl Repo {
         let merge_base = String::from_utf8(merge_base)?;
         let work = Workspace::new(self, Some(&head))?;
         work.track_untracked()?;
-        let prior = match against_head {
-            true => HeadPrior {
-                removed: removed_lines(&work.git(&["diff", "-U0", "--no-color", "--no-ext-diff", "--no-textconv", "--no-renames", "--text", "--ignore-submodules=all", &head], &[])?),
-                files: work.changes(&head)?.into_iter().collect(),
-            },
-            false => HeadPrior::default(),
-        };
+        let prior = if against_head { self.head_prior(&work, &head)? } else { HeadPrior::default() };
         Ok((work.changes(merge_base.trim())?, prior))
     }
 
-    fn changes_from(&self, head: &str, base: &str) -> Result<Vec<(PathBuf, Baseline)>> {
-        let work = Workspace::new(self, Some(head))?;
-        work.track_untracked()?;
-        work.changes(base)
+    fn head_prior(&self, work: &Workspace, head: &str) -> Result<HeadPrior> {
+        let mut prior = HeadPrior {
+            removed: removed_lines(&work.git(&["diff", "-U0", "--no-color", "--no-ext-diff", "--no-textconv", "--no-renames", "--text", "--ignore-submodules=all", head], &[])?),
+            files: work.own_changes(head)?.into_iter().collect(),
+        };
+        for (rel, _) in work.gitlinks(head)? {
+            let Some((submodule, head)) = self.submodule(&rel) else { continue };
+            let nested = Workspace::new(&submodule, Some(&head)).and_then(|work| {
+                work.track_untracked()?;
+                submodule.head_prior(&work, &head)
+            });
+            if let Ok(nested) = nested {
+                prior.removed.push_str(&nested.removed);
+                prior.files.extend(nested.files);
+            }
+        }
+        Ok(prior)
+    }
+
+    fn submodule(&self, rel: &Path) -> Option<(Repo, String)> {
+        let dir = self.root.join(rel);
+        let submodule = Repo::discover(&dir).filter(|submodule| submodule.root == paths::resolve(&dir))?;
+        let head = submodule.head()?;
+        Some((submodule, head))
     }
 
     fn submodule_changes(&self, rel: &Path, recorded: &str) -> Vec<(PathBuf, Baseline)> {
-        let dir = self.root.join(rel);
-        let Some(submodule) = Repo::discover(&dir).filter(|submodule| submodule.root == paths::resolve(&dir)) else { return Vec::new() };
-        let Some(head) = submodule.head() else { return Vec::new() };
-        submodule.changes_from(&head, recorded).unwrap_or_default()
+        let Some((submodule, head)) = self.submodule(rel) else { return Vec::new() };
+        let changes = Workspace::new(&submodule, Some(&head)).and_then(|work| {
+            work.track_untracked()?;
+            work.changes(recorded)
+        });
+        changes.unwrap_or_default()
     }
 }
 
@@ -271,15 +289,27 @@ impl<'a> Workspace<'a> {
     }
 
     fn changes(&self, base: &str) -> Result<Vec<(PathBuf, Baseline)>> {
-        let diff = self.git(&["diff", "--raw", "-z", "-M", "--no-abbrev", "--ignore-submodules=all", base], &[])?;
-        let mut nested = Vec::new();
-        let listed = self.git(&["ls-tree", "-r", "-z", base], &[])?;
-        for entry in listed.split(|&byte| byte == 0) {
-            let Some(tab) = entry.iter().position(|&byte| byte == b'\t') else { continue };
-            if let Some(recorded) = entry[..tab].strip_prefix(format!("{GITLINK} commit ").as_bytes()) {
-                nested.extend(self.repo.submodule_changes(&path_of(&entry[tab + 1..]), &String::from_utf8_lossy(recorded)));
-            }
+        let mut changes = self.own_changes(base)?;
+        for (rel, recorded) in self.gitlinks(base)? {
+            changes.extend(self.repo.submodule_changes(&rel, &recorded));
         }
+        Ok(changes)
+    }
+
+    fn gitlinks(&self, base: &str) -> Result<Vec<(PathBuf, String)>> {
+        let listed = self.git(&["ls-tree", "-r", "-z", base], &[])?;
+        Ok(listed
+            .split(|&byte| byte == 0)
+            .filter_map(|entry| {
+                let tab = entry.iter().position(|&byte| byte == b'\t')?;
+                let recorded = entry[..tab].strip_prefix(format!("{GITLINK} commit ").as_bytes())?;
+                Some((path_of(&entry[tab + 1..]), String::from_utf8_lossy(recorded).into_owned()))
+            })
+            .collect())
+    }
+
+    fn own_changes(&self, base: &str) -> Result<Vec<(PathBuf, Baseline)>> {
+        let diff = self.git(&["diff", "--raw", "-z", "-M", "--no-abbrev", "--ignore-submodules=all", base], &[])?;
         let found: Vec<(PathBuf, Option<String>)> = parse_raw(&diff)?
             .into_iter()
             .filter(|entry| entry.old_mode != GITLINK && entry.new_mode != GITLINK)
@@ -287,7 +317,7 @@ impl<'a> Workspace<'a> {
             .filter(|(path, _)| lintable(path))
             .collect();
         let blobs = blobs(&self.repo.root, found.iter().filter_map(|(_, id)| id.as_deref()), |args, input| self.git(args, input))?;
-        let mut changes = Vec::with_capacity(found.len() + nested.len());
+        let mut changes = Vec::with_capacity(found.len());
         for (path, id) in found {
             let baseline = match id {
                 Some(id) => Baseline::Text(String::from_utf8_lossy(blobs.get(&id).with_context(|| format!("git cat-file --batch did not return {id}"))?).into_owned()),
@@ -295,7 +325,6 @@ impl<'a> Workspace<'a> {
             };
             changes.push((path, baseline));
         }
-        changes.extend(nested);
         Ok(changes)
     }
 }
