@@ -8,29 +8,33 @@ use ast_grep_core::{AstGrep, Language as _, Matcher as _, NodeMatch};
 use ast_grep_language::SupportLang;
 use regex::Regex;
 
-use super::owned::{LineIndex, same_lines};
+use super::lines::{LineIndex, Lines, same_lines};
 use super::repo::{Repo, Repos};
 use super::rules::{Rule, Rules};
 use super::settings::{Policy, Settings};
-use super::{Baseline, Finding, Owned, Scope, Severity};
+use super::{Baseline, Finding, Scope, Severity};
 
 pub const TEST_FILE_NAMES: &str = "test-file-names";
 
 pub struct Change {
     pub path: PathBuf,
     pub source: String,
-    pub owned: Owned,
+    pub lines: Lines,
     pub created: bool,
 }
 
 impl Change {
     pub fn read(path: PathBuf, baseline: &Baseline) -> Option<Change> {
         let source = read_lintable(&path)?;
+        Change::new(path, source, baseline)
+    }
+
+    pub fn new(path: PathBuf, source: String, baseline: &Baseline) -> Option<Change> {
         if matches!(baseline, Baseline::Text(before) if same_lines(before, &source)) {
             return None;
         }
-        let owned = Owned::between(baseline, &source);
-        Some(Change { path, source, owned, created: *baseline == Baseline::Absent })
+        let lines = Lines::between(baseline, &source);
+        Some(Change { path, source, lines, created: *baseline == Baseline::Absent })
     }
 }
 
@@ -96,8 +100,7 @@ impl Engine<'_> {
             && let Some(severity) = policy.severity(TEST_FILE_NAMES, Some(Severity::Error), false)
         {
             let snippet = source.lines().next().unwrap_or_default().to_string();
-            let text = change.path.to_string_lossy().into_owned();
-            findings.push(Finding { file: change.path.clone(), path: shown.clone(), rule: TEST_FILE_NAMES.into(), severity, line: 1, column: 1, end_line: 1, message: message.into(), snippet, text, occurrence: 0 });
+            findings.push(Finding { file: change.path.clone(), path: shown.clone(), rule: TEST_FILE_NAMES.into(), severity, line: 1, column: 1, end_line: 1, message: message.into(), snippet, bytes: 0..0, fix: None });
         }
         let active: Vec<(&Rule, Severity)> = self
             .rules
@@ -106,25 +109,24 @@ impl Engine<'_> {
             .filter_map(|rule| policy.severity(&rule.key.id, rule.base, rule.default_off).map(|severity| (rule, severity)))
             .collect();
         let scope = self.scope.unwrap_or(policy.scope());
-        if active.is_empty() || (change.owned.is_empty() && scope != Scope::File) {
+        if active.is_empty() || (change.lines.is_empty() && scope != Scope::File) {
             return findings;
         }
         let root = language.ast_grep(source);
         let index = LineIndex::new(source);
-        let owned = match scope {
-            Scope::Lines => change.owned.clone(),
-            Scope::Function => change.owned.widen(&function_spans(&root, language, &index)),
-            Scope::File => Owned::whole(source),
+        let lines = match scope {
+            Scope::Lines => change.lines.clone(),
+            Scope::Function => change.lines.widen(&function_spans(&root, language, &index)),
+            Scope::File => Lines::whole(source),
         };
         let rules: Vec<&Rule> = active.iter().map(|(rule, _)| *rule).collect();
-        for (at, found) in scan(&rules, &root, source, &index, &owned) {
+        for (at, found) in scan(&rules, &root, source, &index, &lines) {
             let (rule, severity) = active[at];
             let bytes = found.range();
             let span = index.span(bytes.clone());
             let line_start = index.start(*span.start());
             let column = source[line_start..bytes.start].chars().count() as u32 + 1;
             let line_end = source[line_start..].find('\n').map_or(source.len(), |at| line_start + at);
-            let text = found.text().into_owned();
             findings.push(Finding {
                 file: change.path.clone(),
                 path: shown.clone(),
@@ -135,8 +137,8 @@ impl Engine<'_> {
                 end_line: *span.end(),
                 message: rule.config.get_message(&found),
                 snippet: source[line_start..line_end].trim_end_matches('\r').to_string(),
-                occurrence: source[..bytes.start].matches(text.as_str()).count(),
-                text,
+                bytes,
+                fix: rule.fix,
             });
         }
         findings
@@ -147,7 +149,7 @@ pub fn sort(findings: &mut [Finding]) {
     findings.sort_by(|a, b| (&a.path, a.line, a.column, &a.rule).cmp(&(&b.path, b.line, b.column, &b.rule)));
 }
 
-pub fn scan<'t>(rules: &[&Rule], root: &'t AstGrep<StrDoc<SupportLang>>, source: &str, index: &LineIndex, owned: &Owned) -> Vec<(usize, NodeMatch<'t, StrDoc<SupportLang>>)> {
+pub fn scan<'t>(rules: &[&Rule], root: &'t AstGrep<StrDoc<SupportLang>>, source: &str, index: &LineIndex, lines: &Lines) -> Vec<(usize, NodeMatch<'t, StrDoc<SupportLang>>)> {
     let license = license_header(root);
     let allowed: Vec<Vec<Range<usize>>> = rules.iter().map(|rule| rule.allowed_regions(source, license.as_ref())).collect();
     let mut by_kind: Vec<Vec<usize>> = Vec::new();
@@ -162,13 +164,13 @@ pub fn scan<'t>(rules: &[&Rule], root: &'t AstGrep<StrDoc<SupportLang>>, source:
     let mut found = Vec::new();
     for node in root.root().dfs() {
         let Some(candidates) = by_kind.get(usize::from(node.kind_id())).filter(|candidates| !candidates.is_empty()) else { continue };
-        if !owned.intersects(index.span(node.range())) {
+        if !lines.intersects(index.span(node.range())) {
             continue;
         }
         for &at in candidates {
             if let Some(matched) = rules[at].config.matcher.match_node(node.clone()) {
                 let bytes = matched.range();
-                if allowed[at].iter().any(|region| region.start <= bytes.start && bytes.end <= region.end) {
+                if allowed[at].iter().any(|region| region.start <= bytes.start && bytes.end <= region.end) || rules[at].is_directive(&matched.text()) {
                     continue;
                 }
                 found.push((at, matched));

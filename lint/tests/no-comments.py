@@ -12,3 +12,8 @@ def f():
     return x
 # WARNING: removing this import breaks plugin discovery
 # fmt: off
+# flake8: noqa
+import json  # ty: ignore[unresolved-import]
+import re  # pyrefly: ignore
+# yapf: disable
+# fmt: skip

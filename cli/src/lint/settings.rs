@@ -8,12 +8,14 @@ use globset::GlobSet;
 use super::repo::Repo;
 use super::rules::{Rules, glob_set};
 use super::{Level, Scope, Severity};
-use crate::config::{LintSection, Stack};
+use crate::config::{LintSection, SkipAlert, SkipLimits, Stack};
 use crate::paths;
 
 pub struct Settings {
     pub enabled: bool,
     pub scope: Scope,
+    pub skip: SkipLimits,
+    pub skip_alert: SkipAlert,
     disable: BTreeSet<String>,
     enable: BTreeSet<String>,
     severity: BTreeMap<String, Level>,
@@ -21,7 +23,6 @@ pub struct Settings {
     projects: Vec<Project>,
     pub shipped_rules: PathBuf,
     pub local_rules: PathBuf,
-    pub state_dir: PathBuf,
 }
 
 struct Project {
@@ -53,6 +54,8 @@ impl Settings {
         Ok(Settings {
             enabled: section.enabled,
             scope: section.scope,
+            skip: section.skip,
+            skip_alert: section.skip_alert,
             disable: section.disable.into_iter().collect(),
             enable: section.enable.into_iter().collect(),
             severity: section.severity,
@@ -60,7 +63,6 @@ impl Settings {
             projects,
             shipped_rules: stack.path.join("lint/rules"),
             local_rules: config_dir.join("lint/rules"),
-            state_dir: super::state_dir(home),
         })
     }
 

@@ -79,3 +79,19 @@ struct Plain {
     /// Doc on a field of a type that is not a clap type. @hit
     field: u8,
 }
+
+fn noop() {
+    // nothing to do
+}
+
+unsafe fn raw(pointer: *const u8) -> u8 {
+    // SAFETY: the caller passes a pointer that is valid
+    // for reads of one byte, and nothing writes it meanwhile.
+    unsafe { *pointer }
+}
+
+fn tail() {
+    let _ = 1;
+    // prose after a statement @hit
+    // rustfmt::skip
+}

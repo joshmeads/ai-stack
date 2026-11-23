@@ -1,5 +1,4 @@
 use std::borrow::Cow;
-use std::collections::HashSet;
 use std::ops::RangeInclusive;
 use std::sync::LazyLock;
 
@@ -13,30 +12,30 @@ pub enum Baseline {
 }
 
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
-pub struct Owned(Vec<RangeInclusive<u32>>);
+pub struct Lines(Vec<RangeInclusive<u32>>);
 
-impl Owned {
-    pub fn between(baseline: &Baseline, current: &str) -> Owned {
-        let Baseline::Text(before) = baseline else { return Owned::whole(current) };
-        let mut owned = Owned::default();
+impl Lines {
+    pub fn between(baseline: &Baseline, current: &str) -> Lines {
+        let Baseline::Text(before) = baseline else { return Lines::whole(current) };
+        let mut changed = Lines::default();
         for op in similar::capture_diff_slices(Algorithm::Patience, &comparable(before), &comparable(current)) {
             if let DiffOp::Insert { new_index, new_len, .. } | DiffOp::Replace { new_index, new_len, .. } = op
                 && new_len > 0
             {
-                owned.0.push(line_number(new_index)..=line_number(new_index + new_len - 1));
+                changed.0.push(line_number(new_index)..=line_number(new_index + new_len - 1));
             }
         }
-        owned.normalize();
-        owned
+        changed.normalize();
+        changed
     }
 
-    pub fn whole(current: &str) -> Owned {
+    pub fn whole(current: &str) -> Lines {
         let count = lines(current).len();
-        let mut owned = Owned::default();
+        let mut changed = Lines::default();
         if count > 0 {
-            owned.add(1..=line_number(count - 1));
+            changed.add(1..=line_number(count - 1));
         }
-        owned
+        changed
     }
 
     pub fn is_empty(&self) -> bool {
@@ -48,17 +47,11 @@ impl Owned {
         &self.0
     }
 
-    pub fn intersects(&self, lines: RangeInclusive<u32>) -> bool {
-        self.0.iter().any(|owned| owned.start() <= lines.end() && lines.start() <= owned.end())
+    pub fn intersects(&self, span: RangeInclusive<u32>) -> bool {
+        self.0.iter().any(|changed| changed.start() <= span.end() && span.start() <= changed.end())
     }
 
-    pub fn without(&self, lines: &HashSet<u32>) -> Owned {
-        let mut kept = Owned(self.0.iter().flat_map(Clone::clone).filter(|line| !lines.contains(line)).map(|line| line..=line).collect());
-        kept.normalize();
-        kept
-    }
-
-    pub fn widen(&self, spans: &[RangeInclusive<u32>]) -> Owned {
+    pub fn widen(&self, spans: &[RangeInclusive<u32>]) -> Lines {
         let mut widened = self.clone();
         for range in &self.0 {
             for line in range.clone() {
@@ -139,28 +132,28 @@ impl LineIndex {
 mod tests {
     use super::*;
 
-    fn owned(before: Option<&str>, after: &str) -> Vec<RangeInclusive<u32>> {
+    fn changed(before: Option<&str>, after: &str) -> Vec<RangeInclusive<u32>> {
         let baseline = before.map_or(Baseline::Absent, |text| Baseline::Text(text.to_string()));
-        Owned::between(&baseline, after).ranges().to_vec()
+        Lines::between(&baseline, after).ranges().to_vec()
     }
 
     #[test]
-    fn owned_lines_are_the_inserted_and_replaced_lines_of_the_current_text() {
-        assert_eq!(owned(Some("a\nb\nc\n"), "a\nB\nc\nd\n"), [2..=2, 4..=4]);
-        assert_eq!(owned(Some("a\nb\nc\n"), "a\nc\n"), []);
-        assert_eq!(owned(Some("a\nb"), "a\nb\nc"), [3..=3], "appending after a missing final newline does not own the old last line");
-        assert_eq!(owned(Some("a\r\nb\r\n"), "a\nb\nc\n"), [3..=3], "a CRLF to LF change owns nothing by itself");
-        assert_eq!(owned(Some("a\nb\n"), "a\r\nb\r\nx\r\n"), [3..=3]);
-        assert_eq!(owned(None, "x\ny\n"), [1..=2]);
-        assert_eq!(owned(None, ""), []);
-        assert_eq!(owned(Some(""), "x"), [1..=1]);
-        assert_eq!(owned(Some("same\n"), "same\n"), []);
-        assert_eq!(owned(Some("// $Id$\nx\n"), "// $Id: 3b18e512dba79e4c8300dd08aeb37f8e728b8dad $\ny\n"), [2..=2], "an expanded ident keyword owns nothing");
+    fn changed_lines_are_the_inserted_and_replaced_lines_of_the_current_text() {
+        assert_eq!(changed(Some("a\nb\nc\n"), "a\nB\nc\nd\n"), [2..=2, 4..=4]);
+        assert_eq!(changed(Some("a\nb\nc\n"), "a\nc\n"), []);
+        assert_eq!(changed(Some("a\nb"), "a\nb\nc"), [3..=3], "appending after a missing final newline does not own the old last line");
+        assert_eq!(changed(Some("a\r\nb\r\n"), "a\nb\nc\n"), [3..=3], "a CRLF to LF change owns nothing by itself");
+        assert_eq!(changed(Some("a\nb\n"), "a\r\nb\r\nx\r\n"), [3..=3]);
+        assert_eq!(changed(None, "x\ny\n"), [1..=2]);
+        assert_eq!(changed(None, ""), []);
+        assert_eq!(changed(Some(""), "x"), [1..=1]);
+        assert_eq!(changed(Some("same\n"), "same\n"), []);
+        assert_eq!(changed(Some("// $Id$\nx\n"), "// $Id: 3b18e512dba79e4c8300dd08aeb37f8e728b8dad $\ny\n"), [2..=2], "an expanded ident keyword owns nothing");
     }
 
     #[test]
-    fn widening_adds_the_innermost_enclosing_span_of_each_owned_line() {
-        let base = Owned::between(&Baseline::Text("1\n2\n3\n4\n5\n6\n7\n8\n9\n".into()), "1\n2\n3\n4\nX\n6\n7\n8\n9\n");
+    fn widening_adds_the_innermost_enclosing_span_of_each_changed_line() {
+        let base = Lines::between(&Baseline::Text("1\n2\n3\n4\n5\n6\n7\n8\n9\n".into()), "1\n2\n3\n4\nX\n6\n7\n8\n9\n");
         assert_eq!(base.ranges(), [5..=5]);
         let spans = [1..=9, 3..=7, 4..=6];
         assert_eq!(base.widen(&spans).ranges(), [4..=6]);

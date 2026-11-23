@@ -2,6 +2,7 @@ use std::collections::BTreeMap;
 use std::ops::Range;
 use std::path::{Path, PathBuf};
 use std::str::FromStr as _;
+use std::sync::LazyLock;
 
 use anyhow::{Context as _, Result, anyhow, bail, ensure};
 use ast_grep_config::{GlobalRules, RuleConfig, SerializableRuleConfig, Severity as AstSeverity};
@@ -20,18 +21,26 @@ pub struct RuleKey {
     pub language: SupportLang,
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Fix {
+    DeleteComment,
+}
+
 pub struct Rule {
     pub key: RuleKey,
     pub source: PathBuf,
     pub config: RuleConfig<SupportLang>,
     pub base: Option<Severity>,
     pub default_off: bool,
+    pub fix: Option<Fix>,
     files: Option<GlobSet>,
     ignores: Option<GlobSet>,
     unless_file: Option<Regex>,
     when_file: Option<Regex>,
     allow_license_header: bool,
     allow_in: Option<Regex>,
+    allow_directives: bool,
+    directives: Option<Regex>,
 }
 
 impl Rule {
@@ -39,6 +48,11 @@ impl Rule {
         let license = license.filter(|_| self.allow_license_header).cloned();
         let marked = self.allow_in.iter().flat_map(|regions| regions.find_iter(source)).map(|region| region.range());
         license.into_iter().chain(marked).collect()
+    }
+
+    pub fn is_directive(&self, comment: &str) -> bool {
+        static OPENER: LazyLock<Regex> = LazyLock::new(|| Regex::new(r"^(?://+!?|/\*+!?|#+)").unwrap());
+        self.directives.as_ref().is_some_and(|directives| directives.is_match(&comment[OPENER.find(comment).map_or(0, |opener| opener.end())..]))
     }
 
     pub fn applies_to_path(&self, rel: &Path) -> bool {
@@ -58,6 +72,7 @@ pub struct Rules {
 impl Rules {
     pub fn load(shipped: &Path, local: Option<&Path>) -> Result<Rules> {
         let mut rules: Vec<Rule> = Vec::new();
+        let mut directives: Vec<String> = Vec::new();
         let mut owners: BTreeMap<(String, String), PathBuf> = BTreeMap::new();
         for (dir, required) in std::iter::once((shipped, true)).chain(local.map(|local| (local, false))) {
             let mut files: Vec<PathBuf> = match std::fs::read_dir(dir) {
@@ -72,7 +87,9 @@ impl Rules {
             files.sort();
             for file in files {
                 let text = std::fs::read_to_string(&file).with_context(|| format!("reading {}", file.display()))?;
-                for rule in parse(&text, &file)? {
+                let parsed = parse(&text, &file)?;
+                directives.extend(parsed.directives);
+                for rule in parsed.rules {
                     let owner = owners.entry((rule.key.id.clone(), rule.key.language.to_string())).or_insert_with(|| file.clone());
                     ensure!(
                         *owner == file,
@@ -86,6 +103,11 @@ impl Rules {
                 }
             }
         }
+        let combined = (!directives.is_empty()).then(|| format!(r"^\s*(?:{})", directives.join("|")));
+        let directives = combined.map(|pattern| Regex::new(&pattern)).transpose().context("the comment directive list")?;
+        for rule in rules.iter_mut().filter(|rule| rule.allow_directives) {
+            rule.directives.clone_from(&directives);
+        }
         Ok(Rules { rules })
     }
 
@@ -94,11 +116,29 @@ impl Rules {
     }
 }
 
-pub fn parse(text: &str, source: &Path) -> Result<Vec<Rule>> {
+pub struct Parsed {
+    pub rules: Vec<Rule>,
+    pub directives: Vec<String>,
+}
+
+pub fn parse(text: &str, source: &Path) -> Result<Parsed> {
     let docs: Vec<Value> = ast_grep_config::from_multiple(text).map_err(|err| anyhow!("{}: {err}", source.display()))?;
     let mut rules = Vec::new();
+    let mut directives = Vec::new();
     for doc in docs {
         let Value::Object(mut doc) = doc else { bail!("{}: each YAML document must be a rule mapping", source.display()) };
+        if !doc.contains_key("id")
+            && let Some(listed) = doc.remove("directives")
+        {
+            ensure!(doc.is_empty(), "{}: a `directives` document holds only the `directives` list", source.display());
+            let Value::Array(listed) = listed else { bail!("{}: `directives` must be a list of regexes", source.display()) };
+            for entry in listed {
+                let pattern = entry.as_str().with_context(|| format!("{}: `directives` entries must be strings", source.display()))?;
+                Regex::new(pattern).with_context(|| format!("{}: directive {pattern:?}", source.display()))?;
+                directives.push(format!("(?:{pattern})"));
+            }
+            continue;
+        }
         let id = doc.get("id").and_then(Value::as_str).filter(|id| !id.is_empty()).map(str::to_owned).with_context(|| format!("{}: a rule has no `id`", source.display()))?;
         let context = || format!("{}: rule `{id}`", source.display());
         let languages = languages(doc.get("language")).with_context(context)?;
@@ -110,6 +150,12 @@ pub fn parse(text: &str, source: &Path) -> Result<Vec<Rule>> {
         let default_off = flag(&metadata, "default_off").with_context(context)?;
         let allow_license_header = flag(&metadata, "allow_license_header").with_context(context)?;
         let allow_in = fact(&metadata, "allow_in").with_context(context)?;
+        let allow_directives = flag(&metadata, "allow_directives").with_context(context)?;
+        let fix = match metadata.get("fix") {
+            None => None,
+            Some(Value::String(fix)) if fix == "delete-comment" => Some(Fix::DeleteComment),
+            Some(other) => bail!("{}: metadata.fix must be \"delete-comment\", not {other}", context()),
+        };
         for language in languages {
             let mut one = doc.clone();
             one.insert("language".into(), Value::String(language.to_string()));
@@ -126,16 +172,19 @@ pub fn parse(text: &str, source: &Path) -> Result<Vec<Rule>> {
                 config,
                 base,
                 default_off: default_off || base.is_none(),
+                fix,
                 files: files.clone(),
                 ignores: ignores.clone(),
                 unless_file: unless_file.clone(),
                 when_file: when_file.clone(),
                 allow_license_header,
                 allow_in: allow_in.clone(),
+                allow_directives,
+                directives: None,
             });
         }
     }
-    Ok(rules)
+    Ok(Parsed { rules, directives })
 }
 
 fn languages(value: Option<&Value>) -> Result<Vec<SupportLang>> {
@@ -205,7 +254,7 @@ pub(crate) mod tests {
     use ast_grep_core::tree_sitter::LanguageExt as _;
 
     use super::*;
-    use crate::lint::owned::LineIndex;
+    use crate::lint::lines::LineIndex;
 
     pub(crate) fn shipped() -> PathBuf {
         Path::new(env!("CARGO_MANIFEST_DIR")).parent().unwrap().join("lint/rules")
@@ -238,7 +287,7 @@ pub(crate) mod tests {
                 covered.insert((id.clone(), language.to_string()));
                 let root = language.ast_grep(&source);
                 let index = LineIndex::new(&source);
-                let found: BTreeSet<u32> = crate::lint::scan::scan(&active, &root, &source, &index, &crate::lint::Owned::whole(&source)).into_iter().map(|(_, found)| index.line(found.range().start)).collect();
+                let found: BTreeSet<u32> = crate::lint::scan::scan(&active, &root, &source, &index, &crate::lint::lines::Lines::whole(&source)).into_iter().map(|(_, found)| index.line(found.range().start)).collect();
                 if found != expected {
                     failures.push(format!("{name} as {language}: expected {expected:?}, found {found:?}"));
                 }

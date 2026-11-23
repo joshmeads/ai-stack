@@ -1,21 +1,30 @@
+mod commit;
+mod events;
+mod fix;
 mod hook;
-mod owned;
+mod lines;
 mod repo;
 mod rules;
 mod scan;
 mod settings;
 
+use std::collections::BTreeMap;
 use std::io::Write;
+use std::ops::Range;
 use std::path::{Path, PathBuf};
 
 use anyhow::{Context as _, Result};
 use serde::{Deserialize, Serialize};
 
-pub use hook::{HookEvent, config_error as hook_config_error, run as run_hook};
-pub use owned::{Baseline, Owned};
+pub use commit::{Env as CommitEnv, post_commit, pre_commit};
+pub use events::now;
+pub use hook::run as run_hook;
+pub use lines::Baseline;
 pub use settings::Settings;
 
+use events::Log;
 use repo::Repo;
+use rules::Fix;
 use scan::Engine;
 
 pub const LOAD_ERROR: i32 = 2;
@@ -66,9 +75,9 @@ pub struct Finding {
     pub message: String,
     pub snippet: String,
     #[serde(skip)]
-    pub text: String,
+    pub bytes: Range<usize>,
     #[serde(skip)]
-    pub occurrence: usize,
+    pub fix: Option<Fix>,
 }
 
 pub fn state_dir(home: &Path) -> PathBuf {
@@ -88,6 +97,7 @@ pub struct Request {
     pub base: String,
     pub scope: Option<Scope>,
     pub json: bool,
+    pub fix: bool,
 }
 
 pub fn run(settings: &Settings, request: Request, out: &mut dyn Write, err: &mut dyn Write) -> Result<i32> {
@@ -125,16 +135,16 @@ pub fn run(settings: &Settings, request: Request, out: &mut dyn Write, err: &mut
             None => groups.push((repo, vec![spec])),
         }
     }
-    let mut files: Vec<scan::Change> = Vec::new();
+    let mut files: Vec<(scan::Change, Baseline)> = Vec::new();
     for (repo, specs) in groups {
         match repo.changes(&request.base) {
             Ok(changes) => {
                 for (path, baseline) in changes {
                     if specs.iter().any(|spec| path.starts_with(spec))
-                        && !files.iter().any(|known| known.path == path)
+                        && !files.iter().any(|(known, _)| known.path == path)
                         && let Some(change) = scan::Change::read(path, &baseline)
                     {
-                        files.push(change);
+                        files.push((change, baseline));
                     }
                 }
             }
@@ -145,7 +155,13 @@ pub fn run(settings: &Settings, request: Request, out: &mut dyn Write, err: &mut
         }
     }
     let engine = Engine { settings, rules: &rules, scope: request.scope, display: &cwd };
-    let findings = engine.lint(&files);
+    let mut findings = engine.lint(files.iter().map(|(change, _)| change));
+    if request.fix {
+        let fixed = fix_worktree(&mut files, &findings, err)?;
+        if fixed > 0 {
+            findings = engine.lint(files.iter().map(|(change, _)| change));
+        }
+    }
     if request.json {
         writeln!(out, "{}", serde_json::json!({ "version": 1, "findings": findings }))?;
     } else {
@@ -169,6 +185,75 @@ pub fn text(findings: &[Finding]) -> String {
         ));
     }
     text
+}
+
+fn fix_worktree(files: &mut [(scan::Change, Baseline)], findings: &[Finding], err: &mut dyn Write) -> Result<usize> {
+    let mut removed = 0;
+    let mut names = Vec::new();
+    for (change, baseline) in files.iter_mut() {
+        let found: Vec<&Finding> = findings.iter().filter(|finding| finding.file == change.path && finding.severity == Severity::Error && finding.fix.is_some()).collect();
+        let Some(first) = found.first() else { continue };
+        let Some(language) = scan::language_of(&change.path) else { continue };
+        let ranges: Vec<Range<usize>> = found.iter().map(|finding| finding.bytes.clone()).collect();
+        match fix::delete_comments(language, &change.source, &ranges) {
+            Err(refusal) => writeln!(err, "ai-stack lint: {}: comments kept because {}", first.path, refusal.reason())?,
+            Ok(_) if std::fs::read_to_string(&change.path).ok().as_deref() != Some(change.source.as_str()) => writeln!(err, "ai-stack lint: {} changed while it was checked, so it was left alone", first.path)?,
+            Ok(fixed) => {
+                std::fs::OpenOptions::new().write(true).truncate(true).open(&change.path)?.write_all(fixed.as_bytes())?;
+                removed += found.len();
+                names.push(first.path.clone());
+                if let Some(rescanned) = scan::Change::new(change.path.clone(), fixed, baseline) {
+                    *change = rescanned;
+                }
+            }
+        }
+    }
+    if removed > 0 {
+        writeln!(err, "ai-stack lint: removed {removed} comment{} in {}", if removed == 1 { "" } else { "s" }, names.join(", "))?;
+    }
+    Ok(removed)
+}
+
+pub fn skips(state_dir: &Path, days: u32, now: u64, out: &mut dyn Write) -> Result<i32> {
+    let since = now.saturating_sub(u64::from(days) * 24 * 60 * 60);
+    let events: Vec<events::Event> = Log::new(state_dir).read().into_iter().filter(|event| event.time >= since).collect();
+    let mut repos: Vec<&Path> = events.iter().map(|event| event.repo.as_path()).collect();
+    repos.sort();
+    repos.dedup();
+    if repos.is_empty() {
+        writeln!(out, "no agent commits recorded in the last {days} days")?;
+    }
+    for repo in repos {
+        let mine: Vec<&events::Event> = events.iter().filter(|event| event.repo == repo).collect();
+        let rate = events::Rate::of(&events, repo, since);
+        let count = |kind| mine.iter().filter(|event| event.kind == kind).count();
+        writeln!(out, "{}: {} commits, {} skips, {} bypasses", repo.display(), rate.commits, count(events::Kind::Skip), count(events::Kind::Bypassed))?;
+        let flagged: Vec<&&events::Event> = mine.iter().filter(|event| event.kind != events::Kind::Checked).collect();
+        let mut rules: BTreeMap<String, usize> = BTreeMap::new();
+        let mut harnesses: BTreeMap<String, usize> = BTreeMap::new();
+        for event in &flagged {
+            for finding in &event.findings {
+                *rules.entry(finding.rsplit(' ').next().unwrap_or_default().to_string()).or_default() += 1;
+            }
+            *harnesses.entry(event.harness.clone().unwrap_or_else(|| "unknown".into())).or_default() += 1;
+        }
+        let tally = |counts: &BTreeMap<String, usize>| counts.iter().map(|(name, count)| format!("{name} {count}")).collect::<Vec<_>>().join(", ");
+        if !rules.is_empty() {
+            writeln!(out, "  rules: {}", tally(&rules))?;
+        }
+        if !harnesses.is_empty() {
+            writeln!(out, "  harnesses: {}", tally(&harnesses))?;
+        }
+        for event in flagged {
+            let when = time::OffsetDateTime::from_unix_timestamp(i64::try_from(event.time).unwrap_or(0)).map(|at| at.date().to_string()).unwrap_or_default();
+            let what = match event.kind {
+                events::Kind::Skip => format!("skip: {}", event.reason.as_deref().unwrap_or_default()),
+                _ => "bypassed the check".to_string(),
+            };
+            writeln!(out, "  {when} {} {} {what} [{}]", event.harness.as_deref().unwrap_or("unknown"), event.head.as_deref().map_or("", |head| &head[..head.len().min(12)]), event.findings.join(", "))?;
+        }
+    }
+    Ok(0)
 }
 
 #[derive(Serialize)]
@@ -221,16 +306,8 @@ pub(crate) mod tests {
     use crate::config::{LintProject, LintSection, Stack};
 
     pub(crate) fn git(dir: &Path, args: &[&str]) {
-        git_with(dir, &[], args);
-    }
-
-    pub(crate) fn git_dated(dir: &Path, date: &str, args: &[&str]) {
-        git_with(dir, &[("GIT_AUTHOR_DATE", date), ("GIT_COMMITTER_DATE", date)], args);
-    }
-
-    fn git_with(dir: &Path, env: &[(&str, &str)], args: &[&str]) {
         let config = ["-c", "user.name=t", "-c", "user.email=t@t", "-c", "commit.gpgsign=false", "-c", "core.hooksPath=/dev/null", "-c", "init.defaultBranch=main"];
-        let output = Command::new("git").args(config).args(args).envs(env.iter().copied()).current_dir(dir).output().unwrap();
+        let output = Command::new("git").args(config).args(args).current_dir(dir).output().unwrap();
         assert!(output.status.success(), "git {args:?}: {}", String::from_utf8_lossy(&output.stderr));
     }
 
@@ -256,7 +333,7 @@ pub(crate) mod tests {
 
     fn lint_from(settings: &Settings, cwd: &Path, paths: Vec<PathBuf>, base: &str, scope: Option<Scope>) -> (i32, Vec<(String, u32, String)>) {
         let (mut out, mut err) = (Vec::new(), Vec::new());
-        let code = run(settings, Request { cwd: cwd.to_path_buf(), paths, base: base.into(), scope, json: true }, &mut out, &mut err).unwrap();
+        let code = run(settings, Request { cwd: cwd.to_path_buf(), paths, base: base.into(), scope, json: true, fix: false }, &mut out, &mut err).unwrap();
         let value: serde_json::Value = serde_json::from_slice(&out).unwrap_or_else(|_| panic!("{}", String::from_utf8_lossy(&err)));
         let findings = value["findings"]
             .as_array()
@@ -323,7 +400,7 @@ pub(crate) mod tests {
         ]);
         assert_eq!(code, 1);
         assert_eq!(lint(&settings, &repo.join("gone.ts"), "HEAD", Some(Scope::File)).1, [found("gone.ts", 1, "no-comments")], "a file whose edit only deleted lines is scanned whole");
-        let request = |path: PathBuf, base: &str| Request { cwd: root.clone(), paths: vec![path], base: base.into(), scope: None, json: true };
+        let request = |path: PathBuf, base: &str| Request { cwd: root.clone(), paths: vec![path], base: base.into(), scope: None, json: true, fix: false };
         for bad in [request(repo.join("missing.ts"), "HEAD"), request(repo.clone(), "absent")] {
             assert_eq!(run(&settings, bad, &mut Vec::new(), &mut Vec::new()).unwrap(), LOAD_ERROR);
         }

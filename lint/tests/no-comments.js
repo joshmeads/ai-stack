@@ -40,3 +40,15 @@ const h = /* inline prose @hit */ 2;
 // c8 ignore next
 /// <reference types="node" />
 export default { a, b, c, d, f, g, h };
+// @flow strict
+switch (g) {
+  case 1:
+    // fall through
+  default:
+    // no default
+}
+if (h) {
+  // an empty branch a linter asks to explain
+} else {
+  h; // prose beside code @hit
+}

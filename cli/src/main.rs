@@ -173,6 +173,10 @@ enum Commands {
         /// Print `{"version":1,"findings":[...]}`.
         #[arg(long)]
         json: bool,
+        /// Remove the comments that `no-comments` reports from the files in scope, then report
+        /// what is left. For commits made by hand, which the agent commit hook never sees.
+        #[arg(long)]
+        fix: bool,
     },
 }
 
@@ -183,9 +187,27 @@ enum LintCommand {
         #[arg(long)]
         json: bool,
     },
-    /// Agent hook entry point that `ai-stack install` registers: reads the hook payload on
-    /// stdin, answers on stdout and always exits 0.
-    Hook { harness: Harness, event: lint::HookEvent },
+    /// Count agent commits, skips (AI_STACK_LINT_SKIP) and bypasses (--no-verify) per
+    /// repository, rule and harness, with the recorded reasons.
+    Skips {
+        /// How many days back to count (default: [lint] skip_alert days).
+        #[arg(long, value_name = "N")]
+        days: Option<u32>,
+    },
+    /// PostToolUse hook entry point that `ai-stack install` registers: reads the hook payload
+    /// on stdin, answers on stdout and always exits 0.
+    #[command(hide = true)]
+    Hook {
+        harness: Harness,
+        #[arg(hide = true)]
+        event: Option<String>,
+    },
+    /// Git pre-commit hook that agent shells run through GIT_CONFIG_* variables.
+    #[command(hide = true)]
+    PreCommit,
+    /// Git post-commit hook that records a commit made without the pre-commit check.
+    #[command(hide = true)]
+    PostCommit,
 }
 
 #[derive(Subcommand)]
@@ -376,7 +398,7 @@ fn main() -> Result<()> {
         Commands::Groups { json } => cmd_groups(&ctx, json)?,
         Commands::Fleet { command } => cmd_fleet(&ctx, command)?,
         Commands::Private { command } => cmd_private(&ctx, command)?,
-        Commands::Lint { command, paths, base, scope, json } => cmd_lint(&ctx, command, lint::Request { cwd: std::env::current_dir()?, paths, base, scope, json })?,
+        Commands::Lint { command, paths, base, scope, json, fix } => cmd_lint(&ctx, command, lint::Request { cwd: std::env::current_dir()?, paths, base, scope, json, fix })?,
     };
     io::stdout().flush()?;
     std::process::exit(code);
@@ -656,21 +678,24 @@ fn cmd_private(ctx: &Context, command: PrivateCommand) -> Result<i32> {
 }
 
 fn cmd_lint(ctx: &Context, command: Option<LintCommand>, request: lint::Request) -> Result<i32> {
-    let settings = lint::settings(&ctx.config_path, &ctx.home, ctx.stack_override.as_deref());
-    if let Some(LintCommand::Hook { harness, event }) = command {
-        let mut input = String::new();
-        let reply = io::Read::read_to_string(&mut io::stdin(), &mut input).map_err(anyhow::Error::from).and_then(|_| match settings {
-            Ok(settings) => lint::run_hook(harness, event, &settings, &input),
-            Err(error) => Ok(lint::hook_config_error(&lint::state_dir(&ctx.home), event, &input, &error)),
-        });
-        match reply {
-            Ok(Some(json)) => println!("{json}"),
-            Ok(None) => {}
-            Err(err) => eprintln!("ai-stack lint hook: {err:#}"),
+    let state_dir = lint::state_dir(&ctx.home);
+    let load = || lint::settings(&ctx.config_path, &ctx.home, ctx.stack_override.as_deref());
+    match command {
+        Some(LintCommand::Hook { harness, .. }) => {
+            let mut input = String::new();
+            let reply = io::Read::read_to_string(&mut io::stdin(), &mut input).map_err(anyhow::Error::from).and_then(|_| lint::run_hook(harness, &state_dir, load, &input));
+            match reply {
+                Ok(Some(json)) => println!("{json}"),
+                Ok(None) => {}
+                Err(err) => eprintln!("ai-stack lint hook: {err:#}"),
+            }
+            return Ok(0);
         }
-        return Ok(0);
+        Some(LintCommand::PreCommit) => return Ok(lint::pre_commit(&state_dir, load(), &lint::CommitEnv::from_process()?, &mut io::stderr())),
+        Some(LintCommand::PostCommit) => return Ok(lint::post_commit(&state_dir, load(), &lint::CommitEnv::from_process()?)),
+        _ => {}
     }
-    let settings = match settings {
+    let settings = match load() {
         Ok(settings) => settings,
         Err(err) => {
             eprintln!("error: {err:#}");
@@ -680,6 +705,7 @@ fn cmd_lint(ctx: &Context, command: Option<LintCommand>, request: lint::Request)
     let (mut out, mut err) = (io::stdout(), io::stderr());
     match command {
         Some(LintCommand::Rules { json }) => lint::list(&settings, json, &mut out, &mut err),
+        Some(LintCommand::Skips { days }) => lint::skips(&state_dir, days.unwrap_or(settings.skip_alert.days), lint::now(), &mut out),
         _ => lint::run(&settings, request, &mut out, &mut err),
     }
 }

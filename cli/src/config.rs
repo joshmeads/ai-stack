@@ -268,6 +268,8 @@ pub struct LintSection {
     pub enable: Vec<String>,
     pub severity: BTreeMap<String, Level>,
     pub ignore: Vec<String>,
+    pub skip: SkipLimits,
+    pub skip_alert: SkipAlert,
     pub project: Vec<LintProject>,
 }
 
@@ -280,8 +282,39 @@ impl Default for LintSection {
             enable: Vec::new(),
             severity: BTreeMap::new(),
             ignore: ["**/vendor/**", "**/node_modules/**"].map(String::from).to_vec(),
+            skip: SkipLimits::default(),
+            skip_alert: SkipAlert::default(),
             project: Vec::new(),
         }
+    }
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Deserialize, Serialize)]
+#[serde(deny_unknown_fields, default)]
+pub struct SkipLimits {
+    pub files: usize,
+    pub hunks: usize,
+    pub lines: usize,
+    pub findings: usize,
+}
+
+impl Default for SkipLimits {
+    fn default() -> Self {
+        SkipLimits { files: 1, hunks: 1, lines: 20, findings: 3 }
+    }
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Deserialize, Serialize)]
+#[serde(deny_unknown_fields, default)]
+pub struct SkipAlert {
+    pub percent: u32,
+    pub days: u32,
+    pub min_commits: u32,
+}
+
+impl Default for SkipAlert {
+    fn default() -> Self {
+        SkipAlert { percent: 20, days: 7, min_commits: 5 }
     }
 }
 

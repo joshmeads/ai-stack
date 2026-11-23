@@ -10,7 +10,6 @@ use crate::blocks;
 use crate::config::{Config, Harness, HarnessConfig};
 use crate::exec;
 use crate::links;
-use crate::lint::HookEvent;
 use crate::paths;
 use crate::plan::{self, Action, Plan};
 use crate::plugins::{self, Runner};
@@ -40,6 +39,8 @@ pub fn plan(cfg: &Config, opts: Options, runner: &dyn Runner) -> Result<Plan> {
         return Ok(out);
     }
     let cfg = &active;
+    let git = std::process::Command::new("git").arg("--version").output();
+    out.warnings.extend(git.ok().and_then(|ran| git_version_warning(&String::from_utf8_lossy(&ran.stdout))));
     ensure!(cfg.stack.path.is_dir(), "stack path {} does not exist; set [stack] path in the config or pass --stack", cfg.stack.path.display());
     let stack_file = stackfile::load(&cfg.stack.path)?;
     let owner = links::Owner::new(cfg);
@@ -194,46 +195,175 @@ fn plan_hooks(cfg: &Config, hc: &HarnessConfig, folders: &links::Index, out: &mu
     };
     let roots: Vec<&Path> = std::iter::once(cfg.stack.path.as_path()).chain(cfg.stack.legacy_paths.iter().map(PathBuf::as_path)).collect();
     let removed = hc.harness == Harness::Claude && remove_owned_hooks(&mut root, &roots);
-    match ensure_lint_hooks(&mut root, hc.harness, &cfg.exe, &cfg.exe_flags) {
-        Ok(added) if removed || added => {
+    let added = ensure_lint_hook(&mut root, hc.harness, &cfg.exe, &cfg.exe_flags);
+    let env = match hc.harness {
+        Harness::Claude => merge_claude_env(&mut root, &lint_env(cfg, hc.harness)),
+        Harness::Codex => Ok(false),
+    };
+    match (added, env) {
+        (Ok(added), Ok(env)) if removed || added || env => {
             let mut text = serde_json::to_string_pretty(&root)?;
             text.push('\n');
             out.actions.extend(plan::write_if_changed(&path, text)?);
         }
-        Ok(_) => {}
+        (Ok(_), Ok(_)) => {}
+        (Err(conflict), _) | (_, Err(conflict)) => out.conflicts.push(format!("{}: {conflict}; fix it and run again", path.display())),
+    }
+    if hc.harness == Harness::Codex {
+        plan_codex_env(cfg, hc, folders, out)?;
+    }
+    Ok(())
+}
+
+const LINT_MATCHER: &str = "Edit|Write|Bash";
+const HOOK_FLAGS: [&str; 3] = ["--config", "--home", "--stack"];
+const OUR_GIT_KEYS: &str = "hook.ai-stack-lint";
+const CODEX_INCLUDE: [&str; 4] = ["GIT_CONFIG_COUNT", "GIT_CONFIG_KEY_*", "GIT_CONFIG_VALUE_*", "AI_STACK_HARNESS"];
+const FIRST_GIT_WITH_CONFIG_HOOKS: (u32, u32) = (2, 54);
+
+fn exe_words(exe: &Path, flags: &[String]) -> String {
+    std::iter::once(exe.to_string_lossy().into_owned()).chain(flags.iter().cloned()).map(|word| exec::shell_quote(&word)).collect::<Vec<_>>().join(" ")
+}
+
+fn lint_command(exe: &Path, flags: &[String], harness: Harness) -> String {
+    format!("{} lint hook {}", exe_words(exe, flags), harness.as_str())
+}
+
+fn git_hook_command(exe: &Path, flags: &[String], event: &str) -> String {
+    format!("[ -x {} ] || exit 0; exec {} lint {event}", exec::shell_quote(&exe.to_string_lossy()), exe_words(exe, flags))
+}
+
+fn lint_env(cfg: &Config, harness: Harness) -> Vec<(String, String)> {
+    let entries = [
+        ("hook.ai-stack-lint.event", "pre-commit".to_string()),
+        ("hook.ai-stack-lint.command", git_hook_command(&cfg.exe, &cfg.exe_flags, "pre-commit")),
+        ("hook.ai-stack-lint-post.event", "post-commit".to_string()),
+        ("hook.ai-stack-lint-post.command", git_hook_command(&cfg.exe, &cfg.exe_flags, "post-commit")),
+    ];
+    let mut env = vec![("GIT_CONFIG_COUNT".to_string(), entries.len().to_string())];
+    for (at, (key, value)) in entries.into_iter().enumerate() {
+        env.push((format!("GIT_CONFIG_KEY_{at}"), key.to_string()));
+        env.push((format!("GIT_CONFIG_VALUE_{at}"), value));
+    }
+    env.push(("AI_STACK_HARNESS".to_string(), harness.as_str().to_string()));
+    env
+}
+
+#[derive(Debug, PartialEq, Eq)]
+enum EnvEdit {
+    Set(String, String),
+    Remove(String),
+}
+
+fn numbered<'a>(name: &'a str, prefix: &str) -> Option<&'a str> {
+    name.strip_prefix(prefix).filter(|number| !number.is_empty() && number.bytes().all(|byte| byte.is_ascii_digit()))
+}
+
+fn env_edits(existing: &[(String, Option<String>)], wanted: &[(String, String)]) -> Result<Vec<EnvEdit>, String> {
+    let keys: Vec<(&str, Option<&str>)> = existing.iter().filter_map(|(name, value)| numbered(name, "GIT_CONFIG_KEY_").map(|number| (number, value.as_deref()))).collect();
+    if let Some((number, _)) = keys.iter().find(|(_, value)| !value.is_some_and(|value| value.starts_with(OUR_GIT_KEYS))) {
+        return Err(format!("GIT_CONFIG_KEY_{number} is already set to something ai-stack does not own, and ai-stack needs GIT_CONFIG_* for its agent commit hook; remove it or set [lint] enabled = false"));
+    }
+    if keys.is_empty() && existing.iter().any(|(name, _)| name == "GIT_CONFIG_COUNT") {
+        return Err("GIT_CONFIG_COUNT is already set by something other than ai-stack, and ai-stack needs GIT_CONFIG_* for its agent commit hook; remove it".into());
+    }
+    let mut edits: Vec<EnvEdit> = existing
+        .iter()
+        .filter(|(name, _)| (numbered(name, "GIT_CONFIG_KEY_").is_some() || numbered(name, "GIT_CONFIG_VALUE_").is_some()) && !wanted.iter().any(|(wanted, _)| wanted == name))
+        .map(|(name, _)| EnvEdit::Remove(name.clone()))
+        .collect();
+    for (name, value) in wanted {
+        if !existing.iter().any(|(known, current)| known == name && current.as_deref() == Some(value.as_str())) {
+            edits.push(EnvEdit::Set(name.clone(), value.clone()));
+        }
+    }
+    Ok(edits)
+}
+
+fn merge_claude_env(root: &mut Value, wanted: &[(String, String)]) -> Result<bool, String> {
+    let env = root.as_object_mut().ok_or("the file is not a JSON object")?.entry("env").or_insert_with(|| Value::Object(Default::default()));
+    let env = env.as_object_mut().ok_or("`env` is not an object")?;
+    let existing: Vec<(String, Option<String>)> = env.iter().map(|(name, value)| (name.clone(), value.as_str().map(String::from))).collect();
+    let edits = env_edits(&existing, wanted)?;
+    for edit in &edits {
+        match edit {
+            EnvEdit::Set(name, value) => {
+                env.insert(name.clone(), Value::String(value.clone()));
+            }
+            EnvEdit::Remove(name) => {
+                env.shift_remove(name);
+            }
+        }
+    }
+    Ok(!edits.is_empty())
+}
+
+fn plan_codex_env(cfg: &Config, hc: &HarnessConfig, folders: &links::Index, out: &mut Plan) -> Result<()> {
+    let requested = hc.home.join("config.toml");
+    if folders.blocks_write(&requested, out) {
+        return Ok(());
+    }
+    let path = paths::write_through(&requested)?;
+    let original = read_optional(&path)?.unwrap_or_default();
+    let mut doc: toml_edit::DocumentMut = match original.parse() {
+        Ok(doc) => doc,
+        Err(err) => {
+            out.conflicts.push(format!("{} is not valid TOML ({err}); ai-stack never rewrites a malformed config.toml, so fix it and run again", path.display()));
+            return Ok(());
+        }
+    };
+    match merge_codex_env(&mut doc, &lint_env(cfg, hc.harness)) {
+        Ok(true) => out.actions.extend(plan::write_if_changed(&path, doc.to_string())?),
+        Ok(false) => {}
         Err(conflict) => out.conflicts.push(format!("{}: {conflict}; fix it and run again", path.display())),
     }
     Ok(())
 }
 
-#[derive(Clone, Copy, PartialEq, Eq)]
-enum Registration {
-    Ensure,
-    RepointOnly,
+fn merge_codex_env(doc: &mut toml_edit::DocumentMut, wanted: &[(String, String)]) -> Result<bool, String> {
+    let policy = doc.as_table_mut().entry("shell_environment_policy").or_insert_with(|| {
+        let mut table = toml_edit::Table::new();
+        table.set_implicit(true);
+        toml_edit::Item::Table(table)
+    });
+    let policy = policy.as_table_like_mut().ok_or("`shell_environment_policy` is not a table")?;
+    let mut changed = false;
+    if let Some(include) = policy.get_mut("include_only") {
+        let include = include.as_array_mut().ok_or("`shell_environment_policy.include_only` is not a list")?;
+        for name in CODEX_INCLUDE {
+            if !include.iter().any(|known| known.as_str() == Some(name)) {
+                include.push(name);
+                changed = true;
+            }
+        }
+    }
+    let set = policy.entry("set").or_insert(toml_edit::Item::Table(toml_edit::Table::new()));
+    let set = set.as_table_like_mut().ok_or("`shell_environment_policy.set` is not a table")?;
+    let existing: Vec<(String, Option<String>)> = set.iter().map(|(name, value)| (name.to_string(), value.as_str().map(String::from))).collect();
+    let edits = env_edits(&existing, wanted)?;
+    for edit in &edits {
+        match edit {
+            EnvEdit::Set(name, value) => {
+                set.insert(name, toml_edit::value(value.as_str()));
+            }
+            EnvEdit::Remove(name) => {
+                set.remove(name);
+            }
+        }
+    }
+    Ok(changed || !edits.is_empty())
 }
 
-fn lint_hooks(harness: Harness) -> [(&'static str, Option<&'static str>, HookEvent, Registration); 5] {
-    let edits = match harness {
-        Harness::Claude => "Edit|Write",
-        Harness::Codex => "apply_patch",
-    };
-    [
-        ("PreToolUse", Some(edits), HookEvent::PreEdit, Registration::Ensure),
-        ("PostToolUse", Some(edits), HookEvent::PostEdit, Registration::Ensure),
-        ("Stop", None, HookEvent::Stop, Registration::Ensure),
-        ("SubagentStop", None, HookEvent::Stop, Registration::RepointOnly),
-        ("UserPromptSubmit", None, HookEvent::Prompt, Registration::Ensure),
-    ]
+fn git_version_warning(version: &str) -> Option<String> {
+    let numbers: Vec<u32> = version.trim().strip_prefix("git version ")?.split(['.', ' ']).take(2).map(|part| part.parse().ok()).collect::<Option<_>>()?;
+    let [major, minor] = numbers[..] else { return None };
+    let (first_major, first_minor) = FIRST_GIT_WITH_CONFIG_HOOKS;
+    ((major, minor) < FIRST_GIT_WITH_CONFIG_HOOKS).then(|| {
+        format!("note: {} cannot run hooks from git config (that needs git {first_major}.{first_minor}), so the ai-stack lint commit hook will not run in agent shells until git is upgraded", version.trim())
+    })
 }
 
-const HOOK_FLAGS: [&str; 3] = ["--config", "--home", "--stack"];
-
-fn lint_command(exe: &Path, flags: &[String], harness: Harness, event: HookEvent) -> String {
-    let words: Vec<String> = std::iter::once(exe.to_string_lossy().into_owned()).chain(flags.iter().cloned()).map(|word| exec::shell_quote(&word)).collect();
-    format!("{} lint hook {} {}", words.join(" "), harness.as_str(), event.as_str())
-}
-
-fn lint_hook_of(command: &str) -> Option<(Harness, HookEvent)> {
+fn lint_hook_of(command: &str) -> Option<Harness> {
     let words = shell_words(command)?;
     let (program, mut rest) = words.split_first()?;
     while let [flag, value, tail @ ..] = rest
@@ -242,9 +372,13 @@ fn lint_hook_of(command: &str) -> Option<(Harness, HookEvent)> {
     {
         rest = tail;
     }
-    let [lint, hook, harness, event] = rest else { return None };
-    let ours = Path::new(program).file_name().is_some_and(|name| name == "ai-stack") && lint == "lint" && hook == "hook";
-    ours.then(|| Some((Harness::from_str(harness, false).ok()?, HookEvent::from_str(event, false).ok()?))).flatten()
+    let (harness, event) = match rest {
+        [lint, hook, harness] if lint == "lint" && hook == "hook" => (harness, None),
+        [lint, hook, harness, event] if lint == "lint" && hook == "hook" => (harness, Some(event)),
+        _ => return None,
+    };
+    let ours = Path::new(program).file_name().is_some_and(|name| name == "ai-stack") && event.is_none_or(|event| event == "post-edit");
+    ours.then(|| Harness::from_str(harness, false).ok()).flatten()
 }
 
 fn shell_words(command: &str) -> Option<Vec<String>> {
@@ -287,38 +421,26 @@ fn shell_words(command: &str) -> Option<Vec<String>> {
     Some(words)
 }
 
-fn ensure_lint_hooks(root: &mut Value, harness: Harness, exe: &Path, flags: &[String]) -> Result<bool, String> {
+fn ensure_lint_hook(root: &mut Value, harness: Harness, exe: &Path, flags: &[String]) -> Result<bool, String> {
     let hooks = root.as_object_mut().ok_or("the file is not a JSON object")?.entry("hooks").or_insert_with(|| Value::Object(Default::default()));
     let hooks = hooks.as_object_mut().ok_or("`hooks` is not an object")?;
+    let wanted = lint_command(exe, flags, harness);
+    let groups = hooks.entry("PostToolUse").or_insert_with(|| Value::Array(Vec::new())).as_array_mut().ok_or("`hooks.PostToolUse` is not a list")?;
+    let ours = |hook: &Value| hook["command"].as_str().and_then(lint_hook_of) == Some(harness);
+    let Some(group) = groups.iter_mut().find(|group| group["hooks"].as_array().is_some_and(|list| list.iter().any(ours))) else {
+        groups.push(serde_json::json!({"matcher": LINT_MATCHER, "hooks": [{"type": "command", "command": wanted}]}));
+        return Ok(true);
+    };
     let mut changed = false;
-    for (event, matcher, lint_event, registration) in lint_hooks(harness) {
-        let wanted = lint_command(exe, flags, harness, lint_event);
-        if registration == Registration::RepointOnly && !hooks.contains_key(event) {
-            continue;
-        }
-        let groups = hooks.entry(event).or_insert_with(|| Value::Array(Vec::new())).as_array_mut().ok_or_else(|| format!("`hooks.{event}` is not a list"))?;
-        let existing = groups
-            .iter_mut()
-            .filter_map(|group| group.get_mut("hooks").and_then(Value::as_array_mut))
-            .flatten()
-            .find(|hook| hook["command"].as_str().and_then(lint_hook_of) == Some((harness, lint_event)));
-        match existing {
-            Some(hook) if hook["command"] == wanted.as_str() => {}
-            Some(hook) => {
-                hook["command"] = Value::String(wanted);
-                changed = true;
-            }
-            None if registration == Registration::RepointOnly => {}
-            None => {
-                let mut group = serde_json::Map::new();
-                if let Some(matcher) = matcher {
-                    group.insert("matcher".into(), Value::String(matcher.into()));
-                }
-                group.insert("hooks".into(), serde_json::json!([{"type": "command", "command": wanted}]));
-                groups.push(Value::Object(group));
-                changed = true;
-            }
-        }
+    let alone = group["hooks"].as_array().is_some_and(|list| list.len() == 1);
+    if alone && group["matcher"] != LINT_MATCHER {
+        group["matcher"] = Value::String(LINT_MATCHER.into());
+        changed = true;
+    }
+    let hook = group["hooks"].as_array_mut().and_then(|list| list.iter_mut().find(|hook| ours(hook))).ok_or("the lint hook entry moved while it was read")?;
+    if hook["command"] != wanted.as_str() {
+        hook["command"] = Value::String(wanted);
+        changed = true;
     }
     Ok(changed)
 }
@@ -1100,59 +1222,60 @@ pub(crate) mod tests {
     }
 
     #[test]
-    fn lint_hooks_are_appended_once_repointed_in_place_and_never_move_another_hook() {
+    fn lint_hook_and_agent_git_env_are_merged_in_place_and_foreign_git_config_is_a_conflict() {
         let mut f = fixture();
         let foreign = |command: &str| json!({"matcher": "apply_patch", "hooks": [{"type": "command", "command": command, "timeout": 30}]});
-        let ours_moved = json!({"hooks": [{"type": "command", "command": "\"/old place/ai-stack\" lint hook codex stop"}]});
-        put(&f.home.join(".codex/hooks.json"), &json!({
-            "hooks": {
-                "PostToolUse": [foreign("/usr/local/bin/format-hook")],
-                "Stop": [ours_moved.clone(), foreign("my-stop-hook")],
-                "SubagentStop": [foreign("my-subagent-hook"), ours_moved.clone()],
-                "SessionStart": [foreign("ai-stack lint hook codex stop --extra")],
-                "UserPromptSubmit": [foreign("my-prompt-hook")]
-            }
-        }).to_string());
+        let v1 = json!({"matcher": "apply_patch", "hooks": [{"type": "command", "command": "\"/old place/ai-stack\" lint hook codex post-edit"}]});
+        let v1_stop = json!({"hooks": [{"type": "command", "command": "\"/old place/ai-stack\" lint hook codex stop"}]});
+        put(&f.home.join(".codex/hooks.json"), &json!({"hooks": {"PostToolUse": [foreign("/usr/local/bin/format-hook"), v1], "Stop": [v1_stop.clone()]}}).to_string());
+        put(&f.home.join(".codex/config.toml"), "model = \"o\" # keep this comment\n\n[shell_environment_policy]\ninclude_only = [\"PATH\", \"HOME\"]\nset = { EDITOR = \"vi\" }\n");
+        put(&f.home.join(".claude/settings.json"), &json!({"env": {"TMPDIR": "/t"}, "hooks": {}}).to_string());
+        f.cfg.exe_flags = vec!["--config".into(), "/cfg dir/selected.toml".into()];
         f.apply(&f.plan());
-        let codex: Value = serde_json::from_str(&f.read(".codex/hooks.json")).unwrap();
+
         let exe = f.cfg.exe.display().to_string();
-        let command = |hooks: &Value, event: &str, index: usize| hooks["hooks"][event][index]["hooks"][0]["command"].as_str().unwrap().to_string();
+        let codex: Value = serde_json::from_str(&f.read(".codex/hooks.json")).unwrap();
         assert_eq!(codex["hooks"]["PostToolUse"][0], foreign("/usr/local/bin/format-hook"));
-        assert_eq!(command(&codex, "PostToolUse", 1), format!("{exe} lint hook codex post-edit"));
-        assert_eq!(codex["hooks"]["PostToolUse"][1]["matcher"], "apply_patch");
-        assert_eq!(command(&codex, "PreToolUse", 0), format!("{exe} lint hook codex pre-edit"));
-        assert_eq!(command(&codex, "Stop", 0), format!("{exe} lint hook codex stop"), "an entry already ours is repointed where it stands");
-        assert_eq!(codex["hooks"]["Stop"][1], foreign("my-stop-hook"));
-        assert_eq!(codex["hooks"]["Stop"].as_array().unwrap().len(), 2);
-        assert_eq!(codex["hooks"]["SessionStart"], json!([foreign("ai-stack lint hook codex stop --extra")]));
-        assert_eq!(codex["hooks"]["SubagentStop"][0], foreign("my-subagent-hook"));
-        assert_eq!(command(&codex, "SubagentStop", 1), format!("{exe} lint hook codex stop"), "an existing SubagentStop entry is repointed, never removed");
-        assert_eq!(codex["hooks"]["UserPromptSubmit"][0], foreign("my-prompt-hook"));
-        assert_eq!(command(&codex, "UserPromptSubmit", 1), format!("{exe} lint hook codex prompt"));
-        assert!(codex["hooks"]["UserPromptSubmit"][1].get("matcher").is_none());
+        assert_eq!(codex["hooks"]["PostToolUse"][1], json!({"matcher": "Edit|Write|Bash", "hooks": [{"type": "command", "command": format!("{exe} --config '/cfg dir/selected.toml' lint hook codex")}]}), "a v1 entry is repointed where it stands");
+        assert_eq!(codex["hooks"]["Stop"], json!([v1_stop]), "install never removes a hook entry");
         let claude: Value = serde_json::from_str(&f.read(".claude/settings.json")).unwrap();
-        assert_eq!(claude["hooks"]["PreToolUse"][0]["matcher"], "Edit|Write");
-        assert_eq!(command(&claude, "UserPromptSubmit", 0), format!("{exe} lint hook claude prompt"));
-        assert_eq!(claude["hooks"].as_object().unwrap().keys().next_back().unwrap(), "UserPromptSubmit", "new events are appended after existing ones");
-        assert!(claude["hooks"].get("SubagentStop").is_none(), "a new install registers no SubagentStop hook");
+        assert_eq!(claude["hooks"]["PostToolUse"][0]["matcher"], "Edit|Write|Bash");
+        assert_eq!(claude["hooks"].as_object().unwrap().len(), 1, "only PostToolUse is registered");
+        let pre = format!("[ -x {exe} ] || exit 0; exec {exe} --config '/cfg dir/selected.toml' lint pre-commit");
+        assert_eq!(claude["env"]["TMPDIR"], "/t");
+        assert_eq!(claude["env"]["GIT_CONFIG_COUNT"], "4");
+        assert_eq!((claude["env"]["GIT_CONFIG_KEY_1"].as_str(), claude["env"]["GIT_CONFIG_VALUE_1"].as_str()), (Some("hook.ai-stack-lint.command"), Some(pre.as_str())));
+        assert_eq!(claude["env"]["GIT_CONFIG_VALUE_2"], "post-commit");
+        assert_eq!(claude["env"]["AI_STACK_HARNESS"], "claude");
+        let config: toml::Table = toml::from_str(&f.read(".codex/config.toml")).unwrap();
+        let policy = &config["shell_environment_policy"];
+        assert_eq!(policy["set"]["EDITOR"].as_str(), Some("vi"));
+        assert_eq!(policy["set"]["AI_STACK_HARNESS"].as_str(), Some("codex"));
+        assert_eq!(policy["set"]["GIT_CONFIG_VALUE_1"].as_str(), Some(pre.as_str()));
+        let include: Vec<&str> = policy["include_only"].as_array().unwrap().iter().filter_map(|name| name.as_str()).collect();
+        assert_eq!(include, ["PATH", "HOME", "GIT_CONFIG_COUNT", "GIT_CONFIG_KEY_*", "GIT_CONFIG_VALUE_*", "AI_STACK_HARNESS"]);
+        assert!(f.read(".codex/config.toml").starts_with("model = \"o\" # keep this comment\n"));
         assert!(f.plan().is_empty(), "{}", f.plan().render_text(&f.home));
 
         f.cfg.exe = f.root.join("new bin/ai-stack");
-        f.apply(&f.plan());
-        let moved: Value = serde_json::from_str(&f.read(".codex/hooks.json")).unwrap();
-        assert_eq!(command(&moved, "PostToolUse", 1), format!("'{}' lint hook codex post-edit", f.cfg.exe.display()));
-        assert_eq!(moved["hooks"]["PostToolUse"][0], codex["hooks"]["PostToolUse"][0]);
-        assert_eq!(moved["hooks"]["Stop"][1], codex["hooks"]["Stop"][1]);
-        assert_eq!(moved["hooks"]["Stop"].as_array().unwrap().len(), 2);
-        assert!(f.plan().is_empty(), "{}", f.plan().render_text(&f.home));
-
-        f.cfg.exe_flags = vec!["--config".into(), "/cfg dir/selected.toml".into()];
-        f.apply(&f.plan());
-        let flagged: Value = serde_json::from_str(&f.read(".codex/hooks.json")).unwrap();
-        assert_eq!(command(&flagged, "Stop", 0), format!("'{}' --config '/cfg dir/selected.toml' lint hook codex stop", f.cfg.exe.display()));
         f.cfg.exe_flags.clear();
         f.apply(&f.plan());
-        let plain: Value = serde_json::from_str(&f.read(".codex/hooks.json")).unwrap();
-        assert_eq!(plain, moved, "an entry carrying flags is still ours and is repointed in place");
+        let moved: Value = serde_json::from_str(&f.read(".claude/settings.json")).unwrap();
+        assert_eq!(moved["env"]["GIT_CONFIG_VALUE_3"], format!("[ -x '{0}' ] || exit 0; exec '{0}' lint post-commit", f.cfg.exe.display()));
+        assert_eq!(moved["hooks"]["PostToolUse"].as_array().unwrap().len(), 1);
+        assert!(f.plan().is_empty());
+
+        let mut claude = moved;
+        claude["env"]["GIT_CONFIG_KEY_7"] = json!("user.name");
+        put(&f.home.join(".claude/settings.json"), &claude.to_string());
+        assert!(f.plan().conflicts.iter().any(|conflict| conflict.contains("GIT_CONFIG_KEY_7")), "{:?}", f.plan().conflicts);
+        put(&f.home.join(".claude/settings.json"), &json!({"env": {"GIT_CONFIG_COUNT": "1"}}).to_string());
+        assert!(f.plan().conflicts.iter().any(|conflict| conflict.contains("GIT_CONFIG_COUNT")));
+        put(&f.home.join(".claude/settings.json"), "{}");
+        put(&f.home.join(".codex/config.toml"), "[shell_environment_policy.set]\nGIT_CONFIG_COUNT = \"2\"\nGIT_CONFIG_KEY_0 = \"core.editor\"\nGIT_CONFIG_VALUE_0 = \"vi\"\n");
+        let plan = f.plan();
+        assert!(plan.conflicts.iter().any(|conflict| conflict.contains("config.toml") && conflict.contains("GIT_CONFIG_KEY_0")), "{:?}", plan.conflicts);
+        assert!(git_version_warning("git version 2.53.1\n").is_some_and(|warning| warning.contains("2.54")));
+        assert_eq!(git_version_warning("git version 2.54.0"), None);
     }
 }
