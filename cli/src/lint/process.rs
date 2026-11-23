@@ -3,6 +3,8 @@ use std::os::unix::ffi::{OsStrExt as _, OsStringExt as _};
 use std::path::{Path, PathBuf};
 
 const SHELLS: [&str; 5] = ["sh", "bash", "zsh", "fish", "dash"];
+const HARNESSES: [&str; 2] = ["claude", "codex"];
+const HARNESS_DEPTH: usize = 16;
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum CallerIndex {
@@ -14,6 +16,8 @@ pub enum CallerIndex {
 pub struct GitProcess {
     pub id: String,
     pub from_shell: bool,
+    pub under_harness: bool,
+    pub amend: bool,
     pub index: CallerIndex,
 }
 
@@ -31,8 +35,20 @@ impl GitProcess {
             None => CallerIndex::Unknown,
             Some(vars) => vars.into_iter().find(|(name, _)| name == "GIT_INDEX_FILE").map_or(CallerIndex::Default, |(_, value)| CallerIndex::File(crate::paths::normalize(&cwd.join(value)))),
         };
-        GitProcess { id: identity(git), from_shell: exec_by_shell || launched_by_shell, index }
+        GitProcess { id: identity(git), from_shell: exec_by_shell || launched_by_shell, under_harness: under_harness(git), amend: amends(git), index }
     }
+}
+
+fn under_harness(git: u32) -> bool {
+    std::iter::successors(parent(git), |&pid| parent(pid)).take_while(|&pid| pid > 1).take(HARNESS_DEPTH).any(|pid| [command_name(pid), executable_name(pid)].into_iter().flatten().any(|name| HARNESSES.contains(&name.as_str())))
+}
+
+fn amends(git: u32) -> bool {
+    let words: Vec<String> = match std::fs::read(format!("/proc/{git}/cmdline")) {
+        Ok(bytes) => bytes.split(|&byte| byte == 0).map(|word| String::from_utf8_lossy(word).into_owned()).collect(),
+        Err(_) => ps("args=", git).map(|args| args.split_whitespace().map(str::to_string).collect()).unwrap_or_default(),
+    };
+    words.iter().any(|word| word.len() >= 4 && "--amend".starts_with(word.as_str()))
 }
 
 fn identity(pid: u32) -> String {
@@ -67,10 +83,17 @@ fn parent(pid: u32) -> Option<u32> {
     }
 }
 
-fn command_name(pid: u32) -> Option<String> {
-    let name = std::fs::read_to_string(format!("/proc/{pid}/comm")).ok().or_else(|| ps("comm=", pid))?;
+fn base_name(name: &str) -> String {
     let name = name.trim();
-    Some(Path::new(name).file_name().map_or(name, |base| base.to_str().unwrap_or(name)).to_string())
+    Path::new(name).file_name().map_or(name, |base| base.to_str().unwrap_or(name)).to_string()
+}
+
+fn command_name(pid: u32) -> Option<String> {
+    std::fs::read_to_string(format!("/proc/{pid}/comm")).ok().or_else(|| ps("comm=", pid)).map(|name| base_name(&name))
+}
+
+fn executable_name(pid: u32) -> Option<String> {
+    std::fs::read_link(format!("/proc/{pid}/exe")).ok().map(|exe| base_name(&exe.to_string_lossy()))
 }
 
 fn environ(pid: u32) -> Option<Vec<(OsString, OsString)>> {

@@ -4,6 +4,7 @@ mod fix;
 mod hook;
 mod lines;
 mod process;
+mod provenance;
 mod repo;
 mod rules;
 mod scan;
@@ -25,7 +26,8 @@ pub use lines::Baseline;
 pub use settings::Settings;
 
 use events::Log;
-use repo::{Attributes, Repo, Repos};
+use provenance::Provenance;
+use repo::{Attributes, HeadPrior, Repo, Repos};
 use rules::Fix;
 use scan::Engine;
 
@@ -100,6 +102,7 @@ pub struct Request {
     pub scope: Option<Scope>,
     pub json: bool,
     pub fix: bool,
+    pub state_dir: PathBuf,
 }
 
 pub fn run(settings: &Settings, request: Request, out: &mut dyn Write, err: &mut dyn Write) -> Result<i32> {
@@ -138,11 +141,12 @@ pub fn run(settings: &Settings, request: Request, out: &mut dyn Write, err: &mut
         }
     }
     let mut files: Vec<(scan::Change, Baseline)> = Vec::new();
-    let mut removed_text = String::new();
+    let mut head = HeadPrior::default();
     for (repo, specs) in groups {
         match repo.changes(&request.base, request.fix) {
-            Ok((changes, removed)) => {
-                removed_text.push_str(&removed);
+            Ok((changes, prior)) => {
+                head.removed.push_str(&prior.removed);
+                head.files.extend(prior.files);
                 for (path, baseline) in changes {
                     if specs.iter().any(|spec| path.starts_with(spec))
                         && !files.iter().any(|(known, _)| known.path == path)
@@ -161,7 +165,8 @@ pub fn run(settings: &Settings, request: Request, out: &mut dyn Write, err: &mut
     let engine = Engine { settings, rules: &rules, scope: request.scope, display: &cwd, attributes: Attributes::Worktree };
     let mut findings = engine.lint(files.iter().map(|(change, _)| change));
     if request.fix {
-        let fixed = fix_worktree(&mut files, &findings, &removed_text, err)?;
+        let provenance = Provenance::new(&request.state_dir, now());
+        let fixed = fix_worktree(&mut files, &findings, &head, &provenance, err)?;
         if fixed > 0 {
             findings = engine.lint(files.iter().map(|(change, _)| change));
         }
@@ -191,7 +196,7 @@ pub fn text(findings: &[Finding]) -> String {
     text
 }
 
-fn fix_worktree(files: &mut Vec<(scan::Change, Baseline)>, findings: &[Finding], removed_text: &str, err: &mut dyn Write) -> Result<usize> {
+fn fix_worktree(files: &mut Vec<(scan::Change, Baseline)>, findings: &[Finding], head: &HeadPrior, provenance: &Provenance, err: &mut dyn Write) -> Result<usize> {
     let fixable = |finding: &&Finding| finding.severity == Severity::Error && finding.fix.is_some();
     let mut repos = Repos::default();
     let mut by_repo: Vec<(Repo, Vec<PathBuf>)> = Vec::new();
@@ -203,26 +208,31 @@ fn fix_worktree(files: &mut Vec<(scan::Change, Baseline)>, findings: &[Finding],
             None => by_repo.push((repo, vec![rel])),
         }
     }
-    let mut eligible: HashMap<PathBuf, (&Repo, PathBuf)> = HashMap::new();
+    let mut eligible: HashMap<PathBuf, PathBuf> = HashMap::new();
     for (repo, rels) in &by_repo {
         let filtered = repo.filtered(rels, &Attributes::Worktree)?;
         let flagged = repo.flagged(rels, None);
-        eligible.extend(rels.iter().filter(|rel| !filtered.contains(*rel) && !flagged.contains(*rel)).map(|rel| (repo.root.join(rel), (repo, rel.clone()))));
+        eligible.extend(rels.iter().filter(|rel| !filtered.contains(*rel) && !flagged.contains(*rel)).map(|rel| (repo.root.join(rel), rel.clone())));
     }
     let mut removed = 0;
     let mut names = Vec::new();
     let mut restored: HashSet<PathBuf> = HashSet::new();
     for (change, baseline) in files.iter_mut() {
-        let Some((repo, rel)) = eligible.get(&change.path) else { continue };
+        let Some(rel) = eligible.get(&change.path) else { continue };
         let found: Vec<&Finding> = findings.iter().filter(fixable).filter(|finding| finding.file == change.path).collect();
         let (Some(first), Some(language)) = (found.first(), scan::language_of(&change.path)) else { continue };
         let single_link = std::fs::symlink_metadata(&change.path).is_ok_and(|meta| meta.is_file() && meta.nlink() == 1);
-        if !single_link || fix::generated_or_vendored(rel, &change.source) {
+        if !single_link || fix::untouchable(rel, &change.source) {
             continue;
         }
         let ranges: Vec<Range<usize>> = found.iter().map(|finding| finding.bytes.clone()).collect();
-        let head = repo.head().map(|head| repo.blob_at(&head, rel)).transpose()?.flatten().map(|blob| String::from_utf8_lossy(&blob).into_owned());
-        let prior = fix::Prior { file: head.as_deref(), removed: removed_text };
+        let at_head = match head.files.get(&change.path) {
+            Some(Baseline::Text(text)) => Some(text.as_str()),
+            Some(Baseline::Absent) => None,
+            None => Some(change.source.as_str()),
+        };
+        let written = provenance.written(&change.path);
+        let prior = fix::Prior { file: at_head, removed: &head.removed, written: &written };
         let Some(fixed) = fix::remove_new_plain_comments(language, &change.source, &ranges, &prior) else { continue };
         if std::fs::read_to_string(&change.path).ok().as_deref() != Some(change.source.as_str()) {
             writeln!(err, "ai-stack lint: {} changed while it was checked, so it was left alone", first.path)?;
@@ -364,7 +374,7 @@ pub(crate) mod tests {
 
     fn lint_from(settings: &Settings, cwd: &Path, paths: Vec<PathBuf>, base: &str, scope: Option<Scope>) -> (i32, Vec<(String, u32, String)>) {
         let (mut out, mut err) = (Vec::new(), Vec::new());
-        let code = run(settings, Request { cwd: cwd.to_path_buf(), paths, base: base.into(), scope, json: true, fix: false }, &mut out, &mut err).unwrap();
+        let code = run(settings, Request { cwd: cwd.to_path_buf(), paths, base: base.into(), scope, json: true, fix: false, state_dir: PathBuf::from("/nonexistent") }, &mut out, &mut err).unwrap();
         let value: serde_json::Value = serde_json::from_slice(&out).unwrap_or_else(|_| panic!("{}", String::from_utf8_lossy(&err)));
         let findings = value["findings"]
             .as_array()
@@ -431,7 +441,7 @@ pub(crate) mod tests {
         ]);
         assert_eq!(code, 1);
         assert_eq!(lint(&settings, &repo.join("gone.ts"), "HEAD", Some(Scope::File)).1, [found("gone.ts", 1, "no-comments")], "a file whose edit only deleted lines is scanned whole");
-        let request = |path: PathBuf, base: &str| Request { cwd: root.clone(), paths: vec![path], base: base.into(), scope: None, json: true, fix: false };
+        let request = |path: PathBuf, base: &str| Request { cwd: root.clone(), paths: vec![path], base: base.into(), scope: None, json: true, fix: false, state_dir: root.join("state") };
         for bad in [request(repo.join("missing.ts"), "HEAD"), request(repo.clone(), "absent")] {
             assert_eq!(run(&settings, bad, &mut Vec::new(), &mut Vec::new()).unwrap(), LOAD_ERROR);
         }

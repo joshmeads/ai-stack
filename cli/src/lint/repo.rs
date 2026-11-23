@@ -27,6 +27,12 @@ pub struct Repo {
     pub project_key: PathBuf,
 }
 
+#[derive(Default)]
+pub struct HeadPrior {
+    pub removed: String,
+    pub files: HashMap<PathBuf, Baseline>,
+}
+
 pub struct RawEntry {
     pub old_mode: String,
     pub new_mode: String,
@@ -144,7 +150,7 @@ impl Repo {
         Ok(out.get(end + 1..end + 1 + size).map(<[u8]>::to_vec))
     }
 
-    pub fn changes(&self, base: &str, with_removed: bool) -> Result<(Vec<(PathBuf, Baseline)>, String)> {
+    pub fn changes(&self, base: &str, against_head: bool) -> Result<(Vec<(PathBuf, Baseline)>, HeadPrior)> {
         let Some(head) = self.head() else {
             if base != "HEAD" {
                 bail!("{} has no commits yet, so --base {base} cannot be resolved", self.root.display());
@@ -152,8 +158,9 @@ impl Repo {
             let work = Workspace::new(self, None)?;
             work.track_untracked()?;
             let all = work.git(&["ls-files", "-z", "--cached"], &[])?;
-            let files = nul_paths(&all).map(|rel| self.root.join(rel)).filter(|path| lintable(path)).map(|path| (path, Baseline::Absent)).collect();
-            return Ok((files, String::new()));
+            let files: Vec<(PathBuf, Baseline)> = nul_paths(&all).map(|rel| self.root.join(rel)).filter(|path| lintable(path)).map(|path| (path, Baseline::Absent)).collect();
+            let prior = HeadPrior { removed: String::new(), files: files.iter().cloned().collect() };
+            return Ok((files, prior));
         };
         git(&self.root, &["rev-parse", "--verify", "--quiet", "--end-of-options", &format!("{base}^{{commit}}")])
             .map_err(|_| anyhow!("--base {base} does not name a commit in {}", self.root.display()))?;
@@ -162,11 +169,14 @@ impl Repo {
         let merge_base = String::from_utf8(merge_base)?;
         let work = Workspace::new(self, Some(&head))?;
         work.track_untracked()?;
-        let removed = match with_removed {
-            true => removed_lines(&work.git(&["diff", "-U0", "--no-color", "--no-ext-diff", "--no-textconv", "--no-renames", "--text", "--ignore-submodules=all", &head], &[])?),
-            false => String::new(),
+        let prior = match against_head {
+            true => HeadPrior {
+                removed: removed_lines(&work.git(&["diff", "-U0", "--no-color", "--no-ext-diff", "--no-textconv", "--no-renames", "--text", "--ignore-submodules=all", &head], &[])?),
+                files: work.changes(&head)?.into_iter().collect(),
+            },
+            false => HeadPrior::default(),
         };
-        Ok((work.changes(merge_base.trim())?, removed))
+        Ok((work.changes(merge_base.trim())?, prior))
     }
 
     fn changes_from(&self, head: &str, base: &str) -> Result<Vec<(PathBuf, Baseline)>> {

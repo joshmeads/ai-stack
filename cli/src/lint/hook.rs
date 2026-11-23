@@ -1,10 +1,12 @@
+use std::collections::HashSet;
 use std::path::{Path, PathBuf};
 
 use anyhow::Result;
 use serde::Deserialize;
 use serde_json::{Value, json};
 
-use super::events::Log;
+use super::events::{Log, now};
+use super::provenance::Provenance;
 use super::repo::{Attributes, Repo, Repos};
 use super::scan::{Change, Engine, read_lintable, sort};
 use super::{Baseline, Settings, Severity};
@@ -23,6 +25,13 @@ struct Payload {
     cwd: Option<PathBuf>,
     #[serde(default)]
     tool_input: Value,
+    #[serde(default)]
+    tool_response: Value,
+}
+
+struct Edited {
+    file: PathBuf,
+    added: Vec<String>,
 }
 
 pub fn run(harness: Harness, state_dir: &Path, settings: impl FnOnce() -> Result<Settings>, input: &str) -> Result<Option<String>> {
@@ -37,12 +46,18 @@ pub fn run(harness: Harness, state_dir: &Path, settings: impl FnOnce() -> Result
     if shell && !queued {
         return Ok(None);
     }
-    let files = if shell { Vec::new() } else { edited(harness, &payload, &cwd) };
+    let edits = if shell { Vec::new() } else { edited(harness, &payload, &cwd) };
+    let mut files: Vec<PathBuf> = edits.iter().map(|edit| edit.file.clone()).collect();
+    files.dedup();
     let mut repos = Repos::default();
     let mut context = None;
     if !files.is_empty() {
         let settings = settings()?;
         if settings.enabled {
+            let provenance = Provenance::new(state_dir, now());
+            for edit in &edits {
+                let _ = provenance.record(&edit.file, edit.added.iter().map(String::as_str));
+            }
             context = report(&settings, &files, &cwd, &mut repos)?;
         }
     }
@@ -95,18 +110,56 @@ fn report(settings: &Settings, files: &[PathBuf], cwd: &Path, repos: &mut Repos)
     Ok(Some(format!("ai-stack lint: {} (fix before committing)", named.join(", "))))
 }
 
-fn edited(harness: Harness, payload: &Payload, cwd: &Path) -> Vec<PathBuf> {
+fn added(new: &[&str], old: &[&str]) -> Vec<String> {
+    let old: HashSet<&str> = old.iter().flat_map(|text| text.lines()).map(str::trim).collect();
+    new.iter().flat_map(|text| text.lines()).filter(|line| !old.contains(line.trim())).map(str::to_string).collect()
+}
+
+fn edited(harness: Harness, payload: &Payload, cwd: &Path) -> Vec<Edited> {
     let absolute = |path: &str| paths::normalize(&cwd.join(path.trim()));
-    let mut files: Vec<PathBuf> = match harness {
-        Harness::Claude => payload.tool_input.get("file_path").and_then(Value::as_str).map(absolute).into_iter().collect(),
-        Harness::Codex => {
-            let patch = payload.tool_input.get("command").and_then(Value::as_str).or_else(|| payload.tool_input.as_str()).unwrap_or_default();
-            let headers = ["*** Add File: ", "*** Update File: ", "*** Move to: "];
-            patch.lines().filter_map(|line| headers.iter().find_map(|prefix| line.strip_prefix(prefix))).map(absolute).collect()
+    let input = &payload.tool_input;
+    let text = |value: &Value, key: &str| value.get(key).and_then(Value::as_str).unwrap_or_default().to_string();
+    match harness {
+        Harness::Claude => {
+            let Some(file) = input.get("file_path").and_then(Value::as_str).map(absolute) else { return Vec::new() };
+            let mut new = vec![text(input, "content"), text(input, "new_string")];
+            let mut old = vec![text(&payload.tool_response, "originalFile"), text(input, "old_string")];
+            for edit in input.get("edits").and_then(Value::as_array).into_iter().flatten() {
+                new.push(text(edit, "new_string"));
+                old.push(text(edit, "old_string"));
+            }
+            let (new, old): (Vec<&str>, Vec<&str>) = (new.iter().map(String::as_str).collect(), old.iter().map(String::as_str).collect());
+            vec![Edited { file, added: added(&new, &old) }]
         }
-    };
-    files.dedup();
-    files
+        Harness::Codex => {
+            let patch = input.get("command").and_then(Value::as_str).or_else(|| input.as_str()).unwrap_or_default();
+            let mut edits: Vec<(Edited, Vec<String>)> = Vec::new();
+            for line in patch.lines() {
+                if let Some(path) = ["*** Add File: ", "*** Update File: "].iter().find_map(|prefix| line.strip_prefix(prefix)) {
+                    edits.push((Edited { file: absolute(path), added: Vec::new() }, Vec::new()));
+                } else if let Some(path) = line.strip_prefix("*** Move to: ")
+                    && let Some((edit, _)) = edits.last_mut()
+                {
+                    edit.file = absolute(path);
+                } else if line.starts_with("*** ") {
+                    continue;
+                } else if let Some((edit, removed)) = edits.last_mut() {
+                    match line.split_at_checked(1) {
+                        Some(("+", text)) => edit.added.push(text.to_string()),
+                        Some(("-", text)) => removed.push(text.to_string()),
+                        _ => {}
+                    }
+                }
+            }
+            edits
+                .into_iter()
+                .map(|(edit, removed)| {
+                    let added = added(&edit.added.iter().map(String::as_str).collect::<Vec<_>>(), &removed.iter().map(String::as_str).collect::<Vec<_>>());
+                    Edited { file: edit.file, added }
+                })
+                .collect()
+        }
+    }
 }
 
 #[cfg(test)]
@@ -116,7 +169,7 @@ mod tests {
     use crate::lint::tests::{git, put, settings};
 
     #[test]
-    fn an_edit_gets_one_line_of_unfixable_errors_and_any_shell_call_delivers_a_queued_notice() {
+    fn an_edit_records_the_comment_lines_it_added_gets_one_line_of_unfixable_errors_and_any_shell_call_delivers_a_queued_notice() {
         let tmp = tempfile::tempdir().unwrap();
         let root = std::fs::canonicalize(tmp.path()).unwrap();
         let home = root.join("home");
@@ -139,6 +192,14 @@ mod tests {
         assert_eq!(call(Harness::Claude, edit(&repo.join("b.ts"))), None, "fixable findings are never mentioned");
         let patch = json!({"hook_event_name": "PostToolUse", "tool_name": "apply_patch", "cwd": repo, "tool_input": {"command": "*** Begin Patch\n*** Update File: a.test.ts\n@@\n*** End Patch\n"}});
         assert!(call(Harness::Codex, patch).unwrap().contains("a.test.ts:2 no-fixed-sleep"));
+
+        let written = |file: &str| Provenance::new(&state, now()).written(&repo.join(file));
+        let claude_edit = json!({"hook_event_name": "PostToolUse", "tool_name": "Edit", "cwd": repo, "tool_input": {"file_path": repo.join("b.ts"), "old_string": "// human note\nf();", "new_string": "  // human note\n  // agent note\ng();"}});
+        call(Harness::Claude, claude_edit);
+        assert_eq!(written("b.ts"), HashSet::from(["// agent note".to_string()]), "only comment lines the edit added are the agent's");
+        let codex_patch = "*** Begin Patch\n*** Add File: c.ts\n+// new file note\n+export {};\n*** Update File: b.ts\n*** Move to: d.ts\n@@\n-// kept wording\n+// kept wording\n+// codex note\n*** End Patch\n";
+        call(Harness::Codex, json!({"hook_event_name": "PostToolUse", "tool_name": "apply_patch", "cwd": repo, "tool_input": {"command": codex_patch}}));
+        assert_eq!((written("c.ts"), written("d.ts")), (HashSet::from(["// new file note".to_string()]), HashSet::from(["// codex note".to_string()])));
 
         let shell = json!({"hook_event_name": "PostToolUse", "tool_name": "Bash", "cwd": repo.join("sub"), "tool_input": {"command": "git status"}});
         assert_eq!(call(Harness::Claude, shell.clone()), None);

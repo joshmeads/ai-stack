@@ -1,4 +1,4 @@
-use std::collections::HashSet;
+use std::collections::{BTreeSet, HashSet};
 use std::ops::Range;
 use std::panic::AssertUnwindSafe;
 use std::path::Path;
@@ -15,11 +15,13 @@ type Tree = AstGrep<StrDoc<SupportLang>>;
 type TreeNode<'t> = Node<'t, StrDoc<SupportLang>>;
 
 const LINE_TERMINATORS: [char; 5] = ['\n', '\r', '\u{85}', '\u{2028}', '\u{2029}'];
-const GO_STATEMENT_LISTS: [&str; 7] = ["source_file", "block", "statement_list", "expression_case", "default_case", "type_case", "communication_case"];
+const SHEBANGS: [&str; 2] = ["hash_bang_line", "shebang"];
+const UNTOUCHED_DIRECTORIES: [&str; 7] = ["vendor", "third_party", "node_modules", "testdata", "fixtures", "__fixtures__", "__testfixtures__"];
 
 pub struct Prior<'a> {
     pub file: Option<&'a str>,
     pub removed: &'a str,
+    pub written: &'a HashSet<String>,
 }
 
 impl Prior<'_> {
@@ -33,10 +35,11 @@ pub struct Fixed {
     pub removed: Vec<Range<usize>>,
 }
 
-pub fn generated_or_vendored(rel: &Path, source: &str) -> bool {
+pub fn untouchable(rel: &Path, source: &str) -> bool {
     static MARKER: LazyLock<Regex> = LazyLock::new(|| Regex::new(r"Code generated|DO NOT EDIT|@generated").unwrap());
-    let vendored = rel.components().any(|part| matches!(part.as_os_str().to_str(), Some("vendor" | "third_party" | "node_modules")));
-    vendored || source.lines().take(5).any(|line| MARKER.is_match(line))
+    let set_apart = rel.components().any(|part| part.as_os_str().to_str().is_some_and(|part| UNTOUCHED_DIRECTORIES.contains(&part)));
+    let notebook = rel.extension().is_some_and(|ext| ext == "py") && source.lines().any(|line| line.starts_with("# %%"));
+    set_apart || notebook || source.lines().take(5).any(|line| MARKER.is_match(line))
 }
 
 pub fn remove_new_plain_comments(language: SupportLang, source: &str, comments: &[Range<usize>], prior: &Prior) -> Option<Fixed> {
@@ -46,18 +49,21 @@ pub fn remove_new_plain_comments(language: SupportLang, source: &str, comments: 
 fn fix(language: SupportLang, source: &str, comments: &[Range<usize>], prior: &Prior) -> Option<Fixed> {
     let tree = language.ast_grep(source);
     let file = File::new(language, source, &tree, prior.file);
-    let mut removed: Vec<Range<usize>> = comments
-        .iter()
-        .filter_map(|range| tree.root().dfs().find(|node| node.range() == *range && is_comment(node)))
-        .filter(|node| file.deletable(node, prior))
-        .map(|node| node.range())
-        .collect();
+    let reported: HashSet<&Range<usize>> = comments.iter().collect();
+    let mut removed = Vec::new();
+    let mut gone = BTreeSet::new();
+    for block in file.blocks(&tree) {
+        if block.iter().all(|node| reported.contains(&node.range()) && file.deletable(node, prior)) && file.fits(&block) {
+            for node in &block {
+                gone.extend(file.index.span(without_line_end(source, node.range())).map(|line| line as usize - 1));
+                removed.push(node.range());
+            }
+        }
+    }
     if removed.is_empty() {
         return None;
     }
-    removed.sort_by_key(|range| range.start);
-    removed.dedup();
-    let text = apply(source, &removed);
+    let text = apply(source, &gone);
     verified(source, &tree, &text, &language.ast_grep(&text)).then_some(Fixed { text, removed })
 }
 
@@ -67,27 +73,55 @@ struct File<'s> {
     index: LineIndex,
     edited: Vec<Range<usize>>,
     trailing: HashSet<u32>,
-    package_line: Option<u32>,
+    code_start: usize,
 }
 
 impl<'s> File<'s> {
     fn new(language: SupportLang, source: &'s str, tree: &Tree, before: Option<&str>) -> File<'s> {
         let index = LineIndex::new(source);
-        let trailing = tree.root().dfs().filter(is_comment).filter(|node| !blank(&source[line_start(source, node.range().start)..node.range().start])).map(|node| index.line(node.range().start)).collect();
-        let package_line = tree.root().children().find(|node| node.kind() == "package_clause").map(|node| index.line(node.range().start));
-        File { language, source, edited: edited_commentary(language, before, source), index, trailing, package_line }
+        let trailing = tree.root().dfs().filter(is_comment).filter(|node| !alone(source, node.range())).map(|node| index.line(node.range().start)).collect();
+        File { language, source, edited: edited_commentary(language, before, source), index, trailing, code_start: code_start(tree, source.len()) }
+    }
+
+    fn blocks<'t>(&self, tree: &'t Tree) -> Vec<Vec<TreeNode<'t>>> {
+        let mut blocks: Vec<Vec<TreeNode<'t>>> = Vec::new();
+        let mut last_line = 0;
+        for node in tree.root().dfs().filter(|node| is_comment(node) && alone(self.source, node.range())) {
+            let span = self.index.span(without_line_end(self.source, node.range()));
+            match blocks.last_mut() {
+                Some(block) if *span.start() == last_line + 1 => block.push(node),
+                _ => blocks.push(vec![node]),
+            }
+            last_line = *span.end();
+        }
+        blocks
     }
 
     fn deletable(&self, node: &TreeNode, prior: &Prior) -> bool {
-        let body = &self.source[without_line_end(self.source, node.range())];
-        let line = self.index.line(node.range().start);
+        let range = without_line_end(self.source, node.range());
+        let body = &self.source[range.clone()];
+        let line = self.index.line(range.start);
         (body.starts_with("//") || body.starts_with('#'))
             && !body.contains(LINE_TERMINATORS)
+            && prior.written.contains(body.trim())
             && !prior.holds(body)
+            && range.start >= self.code_start
+            && !(self.language == SupportLang::Python && line <= 2)
+            && !body.contains("want \"")
             && !self.edited.iter().any(|hunk| hunk.contains(&(line as usize - 1)))
             && !self.is_doc(node, body)
             && !looks_like_a_directive(body)
-            && (self.language != SupportLang::Go || self.gofmt_stable(node, line))
+    }
+
+    fn fits(&self, block: &[TreeNode]) -> bool {
+        let (Some(first), Some(last)) = (block.first(), block.last()) else { return false };
+        let above = self.index.line(first.range().start) - 1;
+        let below = *self.index.span(without_line_end(self.source, last.range())).end() + 1;
+        let containers = statement_containers(self.language);
+        let continued = above >= 1 && self.source[self.index.start(above)..self.index.start(above + 1) - 1].trim_end_matches('\r').ends_with('\\');
+        block.iter().all(|node| node.parent().is_some_and(|parent| containers.contains(&parent.kind().as_ref())))
+            && !continued
+            && !(self.language == SupportLang::Go && self.trailing.contains(&above) && self.trailing.contains(&below))
     }
 
     fn is_doc(&self, node: &TreeNode, body: &str) -> bool {
@@ -97,24 +131,28 @@ impl<'s> File<'s> {
             _ => false,
         }
     }
+}
 
-    fn gofmt_stable(&self, node: &TreeNode, line: u32) -> bool {
-        let (above, below) = (self.trailing.contains(&(line - 1)), self.trailing.contains(&(line + 1)));
-        if self.package_line == Some(line) {
-            return false;
-        }
-        if self.trailing.contains(&line) {
-            return !above && !below;
-        }
-        if above && below {
-            return false;
-        }
-        if node.parent().is_some_and(|parent| GO_STATEMENT_LISTS.contains(&parent.kind().as_ref())) {
-            return true;
-        }
-        let text = |at: u32| at.checked_sub(1).and_then(|at| self.source.split('\n').nth(at as usize)).map(str::trim);
-        text(line - 1).is_some_and(|above| above.is_empty() || above.ends_with(['{', '('])) || text(line + 1).is_some_and(|below| below.is_empty() || below.starts_with(['}', ')']))
+fn statement_containers(language: SupportLang) -> &'static [&'static str] {
+    match language {
+        SupportLang::Rust => &["source_file", "block", "declaration_list"],
+        SupportLang::Python => &["module", "block"],
+        SupportLang::Go => &["source_file", "block", "statement_list", "expression_case", "default_case", "type_case", "communication_case"],
+        _ => &["program", "statement_block", "class_body", "switch_case", "switch_default"],
     }
+}
+
+fn code_start(tree: &Tree, end: usize) -> usize {
+    tree.root()
+        .dfs()
+        .find(|node| node.children().len() == 0 && !node.range().is_empty() && !is_comment(node) && !SHEBANGS.contains(&node.kind().as_ref()) && !node.ancestors().any(|ancestor| is_comment(&ancestor)))
+        .map_or(end, |node| node.range().start)
+}
+
+fn alone(source: &str, range: Range<usize>) -> bool {
+    let range = without_line_end(source, range);
+    let line_end = source[range.end..].find('\n').map_or(source.len(), |at| range.end + at);
+    blank(&source[line_start(source, range.start)..range.start]) && blank(&source[range.end..line_end])
 }
 
 fn edited_commentary(language: SupportLang, before: Option<&str>, after: &str) -> Vec<Range<usize>> {
@@ -174,46 +212,37 @@ fn blank(text: &str) -> bool {
     text.chars().all(|char| char == ' ' || char == '\t' || char == '\r')
 }
 
-fn apply(source: &str, comments: &[Range<usize>]) -> String {
+fn apply(source: &str, gone: &BTreeSet<usize>) -> String {
+    let lines: Vec<&str> = source.split_inclusive('\n').collect();
+    let content = |at: usize| lines[at].trim_end_matches(['\n', '\r']);
+    let empty = |at: usize| !gone.contains(&at) && content(at).trim().is_empty();
+    let opens = |at: usize| content(at).trim_end().ends_with(['{', '(', '[', ':']);
+    let closes = |at: usize| content(at).trim_start().starts_with(['}', ')', ']']);
     let mut out = String::with_capacity(source.len());
-    let mut touched: Vec<usize> = Vec::new();
-    let mut copied = 0;
-    for comment in comments {
-        let comment = without_line_end(source, comment.clone());
-        let start = source[..comment.start].trim_end_matches([' ', '\t']).len();
-        out.push_str(&source[copied..start]);
-        touched.push(out.len());
-        copied = comment.end;
-    }
-    out.push_str(&source[copied..]);
-    let lines: Vec<&str> = out.split_inclusive('\n').collect();
-    let content = |at: usize| lines[at].strip_suffix('\n').unwrap_or(lines[at]);
-    let continued = |at: usize| at > 0 && lines[at - 1].trim_end_matches(['\n', '\r']).ends_with('\\');
-    let mut keep = vec![true; lines.len()];
-    let mut emptied = Vec::new();
     let mut at = 0;
-    for (line, text) in lines.iter().enumerate() {
-        let span = at..at + text.len();
-        at = span.end;
-        let was_touched = touched.iter().any(|&edit| span.start <= edit && edit <= span.end && !(edit == span.end && text.ends_with('\n')));
-        if was_touched && blank(content(line)) && !continued(line) {
-            keep[line] = false;
-            emptied.push(line);
+    while at < lines.len() {
+        if !gone.contains(&at) && !empty(at) {
+            out.push_str(lines[at]);
+            at += 1;
+            continue;
+        }
+        let start = at;
+        while at < lines.len() && (gone.contains(&at) || empty(at)) {
+            at += 1;
+        }
+        let run: Vec<usize> = (start..at).collect();
+        let keep = if !run.iter().any(|line| gone.contains(line)) {
+            run.len()
+        } else if start == 0 || at == lines.len() || opens(start - 1) || closes(at) {
+            0
+        } else {
+            run.split(|line| gone.contains(line)).map(<[usize]>::len).max().unwrap_or(0)
+        };
+        for &line in run.iter().filter(|line| !gone.contains(line)).take(keep) {
+            out.push_str(lines[line]);
         }
     }
-    for line in emptied {
-        let previous = (0..line).rev().find(|&at| keep[at]);
-        let next = (line + 1..lines.len()).find(|&at| keep[at]);
-        let spare = |at: usize| blank(content(at)) && !continued(at);
-        let opens = previous.is_none_or(|at| blank(content(at)) || content(at).trim_end().ends_with(['{', '(', '[', ':']));
-        let closes = next.is_none_or(|at| content(at).trim_start().starts_with(['}', ')', ']']));
-        match (previous, next) {
-            (_, Some(next)) if opens && spare(next) => keep[next] = false,
-            (Some(previous), _) if closes && spare(previous) => keep[previous] = false,
-            _ => {}
-        }
-    }
-    lines.iter().zip(&keep).filter(|(_, keep)| **keep).map(|(line, _)| *line).collect()
+    out
 }
 
 struct Token {
@@ -255,62 +284,68 @@ fn verified(old_source: &str, before: &Tree, new_source: &str, after: &Tree) -> 
 mod tests {
     use super::*;
 
-    fn fixed(language: SupportLang, source: &str, prior: &Prior) -> String {
+    fn fixed_with(language: SupportLang, source: &str, file: Option<&str>, removed: &str) -> String {
         let tree = language.ast_grep(source);
-        let comments: Vec<Range<usize>> = tree.root().dfs().filter(|node| is_comment(node) && node.text().contains("note")).map(|node| node.range()).collect();
-        remove_new_plain_comments(language, source, &comments, prior).map_or_else(|| source.to_string(), |fixed| fixed.text)
+        let notes: Vec<TreeNode> = tree.root().dfs().filter(|node| is_comment(node) && node.text().contains("note")).collect();
+        let written: HashSet<String> = notes.iter().map(|node| node.text().trim().to_string()).collect();
+        let comments: Vec<Range<usize>> = notes.iter().map(|node| node.range()).collect();
+        remove_new_plain_comments(language, source, &comments, &Prior { file, removed, written: &written }).map_or_else(|| source.to_string(), |fixed| fixed.text)
+    }
+
+    fn fixed(language: SupportLang, source: &str) -> String {
+        fixed_with(language, source, None, "")
     }
 
     #[test]
-    fn only_new_plain_line_comments_are_deleted_and_every_token_line_break_and_format_is_kept() {
-        let new = Prior { file: None, removed: "" };
+    fn only_whole_line_blocks_the_agent_wrote_in_statement_lists_are_deleted_and_blank_runs_never_grow() {
         let removed = [
-            (SupportLang::JavaScript, "  console.log('é'); // note\n", "  console.log('é');\n"),
-            (SupportLang::JavaScript, "\n\n\nconst a = 1; // note\n", "\n\n\nconst a = 1;\n"),
-            (SupportLang::Rust, "fn f() {\n    let a = 1; // note\n\n    // note\n    a\n}\n", "fn f() {\n    let a = 1;\n\n    a\n}\n"),
-            (SupportLang::Rust, "fn f() {\r\n    let a = 1; // note\r\n    a\r\n}\r\n", "fn f() {\r\n    let a = 1;\r\n    a\r\n}\r\n"),
-            (SupportLang::Python, "x = 1 \\\n# note\nprint(x)\n", "x = 1 \\\n\nprint(x)\n"),
-            (SupportLang::Python, "def f():\n    # note\n    return 1  # note\n", "def f():\n    return 1\n"),
-            (SupportLang::Python, "x = 2  # note\r\ny = 3\r\n", "x = 2\r\ny = 3\r\n"),
+            (SupportLang::JavaScript, "f();\n// note\ng();\n", "f();\ng();\n"),
+            (SupportLang::JavaScript, "\n\nconst a = 'é';\n  // note\nf();\n", "\n\nconst a = 'é';\nf();\n"),
+            (SupportLang::TypeScript, "f();\n\n// note one\n// note two\n\ng();\n", "f();\n\ng();\n"),
+            (SupportLang::Rust, "fn f() {\r\n    let a = 1;\r\n    // note\r\n    a\r\n}\r\n", "fn f() {\r\n    let a = 1;\r\n    a\r\n}\r\n"),
+            (SupportLang::Rust, "fn f() {\n    // note\n\n    g();\n}\n", "fn f() {\n    g();\n}\n"),
+            (SupportLang::Python, "def load():\n    return 1\n\n\n# note section\n\n\ndef parse(text):\n    return text\n", "def load():\n    return 1\n\n\ndef parse(text):\n    return text\n"),
             (SupportLang::Python, "x = 1\n\n# note\n", "x = 1\n"),
-            (SupportLang::Go, "package main\n\n// note\n\nfunc main() {}\n", "package main\n\nfunc main() {}\n"),
-            (SupportLang::Go, "package main\n\nfunc main() {\n\ta := 1\n\t// note\n\tprintln(a) // note\n}\n", "package main\n\nfunc main() {\n\ta := 1\n\tprintln(a)\n}\n"),        ];
+            (SupportLang::Go, "package main\n\nfunc main() {\n\t// note\n\tprintln(1)\n}\n", "package main\n\nfunc main() {\n\tprintln(1)\n}\n"),
+        ];
         for (language, source, expected) in removed {
-            assert_eq!(fixed(language, source, &new), expected, "{language} {source:?}");
+            assert_eq!(fixed(language, source), expected, "{language} {source:?}");
         }
         let kept = [
-            (SupportLang::JavaScript, "function f() { return /* note\r*/ 7 }\n"),
-            (SupportLang::TypeScript, "console.log(1+/* note */+n)\n"),
-            (SupportLang::Tsx, "h(<div>\n  {/* note */}\n  <i />\n</div>)\n"),
-            (SupportLang::Rust, "/// note\nfn f() {}\n"),
-            (SupportLang::Rust, "//! note\nfn f() {}\n"),
-            (SupportLang::Go, "package main\n\n// note\nfunc main() {}\n"),
-            (SupportLang::Go, "package main\n\nimport (\n\t// int note = 42;\n\t\"C\"\n)\n"),
-            (SupportLang::Go, "package demo // note \"example.com/demo\"\n\nvar n = 1\n"),
-            (SupportLang::Go, "package main\n\nfunc main() {\n\t_ = f()        //nolint:errcheck\n\tdefer g() // note\n}\n"),
+            (SupportLang::JavaScript, "f(); // note\n"),
+            (SupportLang::JavaScript, "f();\n/* note */\ng();\n"),
+            (SupportLang::JavaScript, "// note on the module\nf();\n"),
+            (SupportLang::JavaScript, "#!/usr/bin/env node\n// note license\n// note terms\n\nf();\n"),
+            (SupportLang::JavaScript, "const a = [\n  1,\n  // note\n  2,\n];\n"),
+            (SupportLang::JavaScript, "f();\n// TODO: note\n"),
+            (SupportLang::JavaScript, "f();\n// note\n// eslint-disable-next-line\ng();\n"),
+            (SupportLang::Python, "import os\n# note\n"),
+            (SupportLang::Python, "x = 1\ny = 2\n# Translators: note\n# note continues\nlabel = 1\n"),
+            (SupportLang::Python, "y = 0\nx = 1 \\\n# note\nprint(x)\n"),
+            (SupportLang::Rust, "fn g() {}\n/// note\nfn f() {}\n"),
+            (SupportLang::Go, "package main\n\nfunc g() {}\n\n// note\nfunc main() {}\n"),
             (SupportLang::Go, "package main\n\ntype T struct {\n\tA int\n\t// note\n\tLong string\n}\n"),
-            (SupportLang::JavaScript, "f(); // TODO: note\n"),
-            (SupportLang::JavaScript, "f(); // NOSONAR note\n"),
-            (SupportLang::JavaScript, "f(); // $FlowFixMe note\n"),
-            (SupportLang::JavaScript, "f(); // see @note\n"),
-            (SupportLang::JavaScript, "f(); //note\n"),
-            (SupportLang::JavaScript, "f(); // codeql[js/xss] note\n"),
-            (SupportLang::JavaScript, "f(); // deepcode ignore XSS: note\n"),
-            (SupportLang::Python, "x = 1  # pragma no cover note\n"),
-            (SupportLang::Python, "x = 1  # %% note\n"),
+            (SupportLang::Go, "package main\n\nfunc main() {\n\ta := 1 // x\n\t// note\n\tbb := 2 // y\n\t_ = a + bb\n}\n"),
+            (SupportLang::Go, "package a\n\nfunc f() {\n\tg()\n\t// note want \"avoid\"\n}\n"),
         ];
         for (language, source) in kept {
-            assert_eq!(fixed(language, source, &new), source, "{language} {source:?}");
+            assert_eq!(fixed(language, source), source, "{language} {source:?}");
         }
-        let source = "export const a = 2; // note the ledger\n";
-        assert_eq!(fixed(SupportLang::TypeScript, source, &Prior { file: Some("export const a = 1; // note the ledger\n"), removed: "" }), source, "a comment already in the file is kept");
-        assert_eq!(fixed(SupportLang::TypeScript, source, &Prior { file: None, removed: "  // note the ledger\n" }), source, "a comment moved from another file is kept");
+        let unwritten = "f();\n// prose a human wrote\ng();\n";
+        let tree = SupportLang::JavaScript.ast_grep(unwritten);
+        let comments: Vec<Range<usize>> = tree.root().dfs().filter(is_comment).map(|node| node.range()).collect();
+        assert!(remove_new_plain_comments(SupportLang::JavaScript, unwritten, &comments, &Prior { file: None, removed: "", written: &HashSet::new() }).is_none(), "a comment the agent's edits never wrote is kept");
+        let source = "f();\n// note the ledger\n";
+        assert_eq!(fixed_with(SupportLang::TypeScript, source, Some("// note the ledger\nf();\n"), ""), source, "a comment already in the file is kept");
+        assert_eq!(fixed_with(SupportLang::TypeScript, source, None, "  // note the ledger\n"), source, "a comment moved from another file is kept");
         let before = "export const a = 1;\n// note per line\nexport const b = 1;\n\nexport const c = 1;\n";
-        let after = "export const a = 1;\n// note per invoice\nexport const b = 2;\n\nexport const c = 2; // note from the agent\n";
-        let expected = "export const a = 1;\n// note per invoice\nexport const b = 2;\n\nexport const c = 2;\n";
-        assert_eq!(fixed(SupportLang::TypeScript, after, &Prior { file: Some(before), removed: "" }), expected, "a hunk that edits a comment keeps every comment in it");
-        assert!(generated_or_vendored(Path::new("gen/a.go"), "// Code generated by protoc. DO NOT EDIT.\npackage gen\n"));
-        assert!(generated_or_vendored(Path::new("third_party/semver/a.js"), "f();\n"));
-        assert!(!generated_or_vendored(Path::new("src/vendors.ts"), "f();\n"));
+        let after = "export const a = 1;\n// note per invoice\nexport const b = 2;\n\nexport const c = 2;\n// note from the agent\nexport const d = 2;\n";
+        let expected = "export const a = 1;\n// note per invoice\nexport const b = 2;\n\nexport const c = 2;\nexport const d = 2;\n";
+        assert_eq!(fixed_with(SupportLang::TypeScript, after, Some(before), ""), expected, "a hunk that edits a comment keeps every comment in it");
+        assert!(untouchable(Path::new("gen/a.go"), "// Code generated by protoc. DO NOT EDIT.\npackage gen\n"));
+        assert!(untouchable(Path::new("third_party/semver/a.js"), "f();\n"));
+        assert!(untouchable(Path::new("pkg/testdata/src/a/a.go"), "package a\n"));
+        assert!(untouchable(Path::new("analysis.py"), "x = 1\n# %% [markdown]\n# Sales\n"));
+        assert!(!untouchable(Path::new("src/vendors.ts"), "f();\n"));
     }
 }

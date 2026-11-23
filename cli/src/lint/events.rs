@@ -137,34 +137,26 @@ impl Log {
     }
 
     pub fn alert(&self, repo: &Path, alert: SkipAlert, now: u64) -> Result<bool> {
-        let events = self.read();
+        let mut events = self.read();
         let since = now.saturating_sub(u64::from(alert.days) * DAY);
         let rate = Rate::of(&events, repo, since);
-        let flag = self.dir.join("alerts").join(key(repo));
-        let identity = |event: &Event| event.head.clone().unwrap_or_else(|| event.time.to_string());
-        let raised: Option<String> = std::fs::read_to_string(&flag).ok().map(|text| text.trim().to_string());
-        let window_moved_on = |raised: &String| !events.iter().any(|event| event.repo == repo && event.time >= since && identity(event) == *raised);
-        let over = rate.over(alert);
-        match (over, &raised) {
-            (true, raised) if raised.as_ref().is_none_or(window_moved_on) => {
-                let latest = events.iter().rev().find(|event| event.repo == repo).map(identity).unwrap_or_default();
-                std::fs::create_dir_all(self.dir.join("alerts"))?;
-                std::fs::write(&flag, latest)?;
-                self.queue_notice(
-                    repo,
-                    &format!(
-                        "ai-stack lint: agents skipped or bypassed the commit check on {} of {} commits in {} in the last {} days. `ai-stack lint skips` lists the reasons.",
-                        rate.flagged,
-                        rate.commits,
-                        repo.display(),
-                        alert.days
-                    ),
-                )?;
-            }
-            (false, Some(_)) => std::fs::remove_file(&flag)?,
-            _ => {}
+        if let Some(newest) = events.iter().rposition(|event| event.repo == repo) {
+            events.remove(newest);
         }
-        Ok(over)
+        let crossed = rate.over(alert) && !Rate::of(&events, repo, since).over(alert);
+        if crossed {
+            self.queue_notice(
+                repo,
+                &format!(
+                    "ai-stack lint: agents skipped or bypassed the commit check on {} of {} commits in {} in the last {} days. `ai-stack lint skips` lists the reasons.",
+                    rate.flagged,
+                    rate.commits,
+                    repo.display(),
+                    alert.days
+                ),
+            )?;
+        }
+        Ok(crossed)
     }
 
     fn notices(&self) -> PathBuf {
@@ -225,41 +217,32 @@ mod tests {
     }
 
     #[test]
-    fn the_rate_crosses_once_clears_below_the_threshold_and_old_events_are_pruned() {
+    fn each_landed_commit_that_takes_the_window_from_below_to_over_the_threshold_queues_one_notice() {
         let tmp = tempfile::tempdir().unwrap();
         let log = Log::new(tmp.path());
-        let alert = SkipAlert { percent: 20, days: 7, min_commits: 5 };
+        let repo = Path::new("/r");
+        let alert = SkipAlert { percent: 50, days: 7, min_commits: 3 };
         let start = 100 * DAY;
-        for at in 0..3 {
-            log.record(&event(start + at, Kind::Checked)).unwrap();
+        let land = |time, kind| {
+            log.record(&event(time, kind)).unwrap();
+            let crossed = log.alert(repo, alert, time).unwrap();
+            assert_eq!(crossed, log.take_notice(repo).is_some());
+            crossed
+        };
+        assert!(!land(start, Kind::Skip));
+        assert!(!land(start + 1, Kind::Skip), "two commits are below min_commits");
+        assert!(land(start + 2, Kind::Checked), "two of three commits flagged");
+        assert_eq!(Rate::of(&log.read(), repo, 0), Rate { commits: 3, flagged: 2 }, "a skip is a commit that was flagged");
+        assert!(!land(start + 3, Kind::Checked), "two of four is still over, so no second notice");
+        let mut aged = log.read();
+        for (event, days) in aged.iter_mut().zip([8, 6, 5, 5]) {
+            event.time -= days * DAY;
         }
-        log.record(&event(start + 3, Kind::Skip)).unwrap();
-        assert!(!log.alert(Path::new("/r"), alert, start + 3).unwrap(), "four commits are below min_commits");
-        log.record(&event(start + 4, Kind::Checked)).unwrap();
-        assert_eq!(Rate::of(&log.read(), Path::new("/r"), 0), Rate { commits: 5, flagged: 1 }, "a skip is a commit that was flagged");
-        assert!(log.alert(Path::new("/r"), alert, start + 5).unwrap(), "one of five commits flagged");
-        assert!(log.take_notice(Path::new("/r")).unwrap().contains("1 of 5 commits"));
-        log.record(&event(start + 5, Kind::Bypassed)).unwrap();
-        assert!(log.alert(Path::new("/r"), alert, start + 6).unwrap(), "two of six commits flagged");
-        assert!(log.alert(Path::new("/r"), alert, start + 7).unwrap());
-        assert_eq!(log.take_notice(Path::new("/r")), None, "a notice is queued once per crossing");
-        for at in 0..10 {
-            log.record(&event(start + 10 + at, Kind::Checked)).unwrap();
-        }
-        assert!(!log.alert(Path::new("/r"), alert, start + 30).unwrap());
-        assert!(!log.rate(Path::new("/r"), alert, start + 8 * DAY).over(alert), "events outside the window do not count");
+        std::fs::write(log.events_path(), aged.iter().map(|event| serde_json::to_string(event).unwrap() + "\n").collect::<String>()).unwrap();
+        assert!(!log.rate(repo, alert, start + 4).over(alert), "the oldest skip has left the window, so the rate is below the threshold");
+        assert!(land(start + 4, Kind::Skip), "the window was below the threshold before this commit, so the state changed again");
         log.record(&event(start + 31 * DAY, Kind::Checked)).unwrap();
         assert_eq!(log.read().len(), 1, "events older than 30 days are pruned on write");
         assert_eq!(Rate::of(&log.read(), Path::new("/other"), 0), Rate::default());
-
-        let quiet = Path::new("/q");
-        let skip = |time| Event { repo: quiet.to_path_buf(), ..event(time, Kind::Skip) };
-        let once = SkipAlert { percent: 20, days: 7, min_commits: 1 };
-        let later = start + 32 * DAY;
-        for (at, notified) in [(later, true), (later + 1, false), (later + 8 * DAY, true)] {
-            log.record(&skip(at)).unwrap();
-            assert!(log.alert(quiet, once, at).unwrap());
-            assert_eq!(log.take_notice(quiet).is_some(), notified, "a crossing notifies again once the window has moved past the last one ({at})");
-        }
     }
 }

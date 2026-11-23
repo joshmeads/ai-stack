@@ -173,8 +173,9 @@ enum Commands {
         /// Print `{"version":1,"findings":[...]}`.
         #[arg(long)]
         json: bool,
-        /// Remove the comments that `no-comments` reports from the files in scope, then report
-        /// what is left. For commits made by hand, which the agent commit hook never sees.
+        /// Remove the whole-line comments that an agent's edits wrote and `no-comments` reports
+        /// from the files in scope, then report what is left. For commits made by hand, which
+        /// the agent commit hook never sees.
         #[arg(long)]
         fix: bool,
     },
@@ -399,7 +400,7 @@ fn main() -> Result<()> {
         Commands::Groups { json } => cmd_groups(&ctx, json)?,
         Commands::Fleet { command } => cmd_fleet(&ctx, command)?,
         Commands::Private { command } => cmd_private(&ctx, command)?,
-        Commands::Lint { command, paths, base, scope, json, fix } => cmd_lint(&ctx, command, lint::Request { cwd: std::env::current_dir()?, paths, base, scope, json, fix })?,
+        Commands::Lint { command, paths, base, scope, json, fix } => cmd_lint(&ctx, command, lint::Request { cwd: std::env::current_dir()?, paths, base, scope, json, fix, state_dir: lint::state_dir(&ctx.home) })?,
     };
     io::stdout().flush()?;
     std::process::exit(code);
