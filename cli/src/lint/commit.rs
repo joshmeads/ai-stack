@@ -430,6 +430,11 @@ fn check(settings: &Settings, checkout: &Checkout, log: &Log, env: &Env, err: &m
         print(err, &lines);
         return Ok(REFUSE);
     }
+    if removed > 0 && checkout.git.text(&["diff-index", "--cached", "--name-only", base.as_str()])?.is_empty() {
+        lines.push(format!("ai-stack lint: removed {} in {}, which left nothing to commit.", plural(removed, "comment"), fixed_names.join(", ")));
+        print(err, &lines);
+        return Ok(REFUSE);
+    }
     let mut summary = Vec::new();
     if removed > 0 {
         summary.push(format!("removed {} in {}", plural(removed, "comment"), fixed_names.join(", ")));

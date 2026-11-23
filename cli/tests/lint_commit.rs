@@ -141,6 +141,12 @@ fn the_commit_hook_fixes_the_index_and_a_matching_worktree_in_every_commit_form(
     committed(&s.agent(&all, &["commit", "-qam", "all"]));
     assert_eq!((show(&all, "HEAD:a.ts"), status(&all)), (FIXED.into(), String::new()));
 
+    let only_prose = s.repo("only-prose", &BASE);
+    write(&only_prose.join("b.ts"), "export const b = 1; // agent prose\n");
+    let refused = s.agent(&only_prose, &["commit", "-qam", "prose"]);
+    assert!(!refused.status.success() && stderr(&refused).contains("left nothing to commit"), "{}", stderr(&refused));
+    assert_eq!(s.git(&only_prose, &["rev-list", "--count", "HEAD"]), "1\n");
+
     for split in [false, true] {
         let pathspec = s.repo(if split { "pathspec-split" } else { "pathspec" }, &BASE);
         if split {
