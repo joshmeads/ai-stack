@@ -217,7 +217,7 @@ fn plan_hooks(cfg: &Config, hc: &HarnessConfig, folders: &links::Index, out: &mu
 
 const LINT_MATCHER: &str = "Edit|Write|Bash";
 const HOOK_FLAGS: [&str; 3] = ["--config", "--home", "--stack"];
-const OUR_GIT_KEYS: &str = "hook.ai-stack-lint";
+const OUR_GIT_HOOKS: [&str; 2] = ["hook.ai-stack-lint.", "hook.ai-stack-lint-post."];
 const CODEX_INCLUDE: [&str; 4] = ["GIT_CONFIG_COUNT", "GIT_CONFIG_KEY_*", "GIT_CONFIG_VALUE_*", "AI_STACK_HARNESS"];
 const FIRST_GIT_WITH_CONFIG_HOOKS: (u32, u32) = (2, 54);
 
@@ -261,7 +261,7 @@ fn numbered<'a>(name: &'a str, prefix: &str) -> Option<&'a str> {
 
 fn env_edits(existing: &[(String, Option<String>)], wanted: &[(String, String)]) -> Result<Vec<EnvEdit>, String> {
     let keys: Vec<(&str, Option<&str>)> = existing.iter().filter_map(|(name, value)| numbered(name, "GIT_CONFIG_KEY_").map(|number| (number, value.as_deref()))).collect();
-    if let Some((number, _)) = keys.iter().find(|(_, value)| !value.is_some_and(|value| value.starts_with(OUR_GIT_KEYS))) {
+    if let Some((number, _)) = keys.iter().find(|(_, value)| !value.is_some_and(|value| OUR_GIT_HOOKS.iter().any(|hook| value.starts_with(hook)))) {
         return Err(format!("GIT_CONFIG_KEY_{number} is already set to something ai-stack does not own, and ai-stack needs GIT_CONFIG_* for its agent commit hook; remove it or set [lint] enabled = false"));
     }
     if keys.is_empty() && existing.iter().any(|(name, _)| name == "GIT_CONFIG_COUNT") {
@@ -330,10 +330,22 @@ fn merge_codex_env(doc: &mut toml_edit::DocumentMut, wanted: &[(String, String)]
     let mut changed = false;
     if let Some(include) = policy.get_mut("include_only") {
         let include = include.as_array_mut().ok_or("`shell_environment_policy.include_only` is not a list")?;
-        for name in CODEX_INCLUDE {
+        let restricts = !include.is_empty();
+        for name in CODEX_INCLUDE.into_iter().filter(|_| restricts) {
             if !include.iter().any(|known| known.as_str() == Some(name)) {
                 include.push(name);
                 changed = true;
+            }
+        }
+    }
+    if let Some(filters) = policy.get_mut("filters") {
+        let filters = filters.as_table_like_mut().ok_or("`shell_environment_policy.filters` is not a table")?;
+        if filters.iter().any(|(_, action)| action.as_str() == Some("include")) {
+            for name in CODEX_INCLUDE {
+                if !filters.iter().any(|(known, _)| known.eq_ignore_ascii_case(name)) {
+                    filters.insert(name, toml_edit::value("include"));
+                    changed = true;
+                }
             }
         }
     }
@@ -1275,6 +1287,24 @@ pub(crate) mod tests {
         put(&f.home.join(".codex/config.toml"), "[shell_environment_policy.set]\nGIT_CONFIG_COUNT = \"2\"\nGIT_CONFIG_KEY_0 = \"core.editor\"\nGIT_CONFIG_VALUE_0 = \"vi\"\n");
         let plan = f.plan();
         assert!(plan.conflicts.iter().any(|conflict| conflict.contains("config.toml") && conflict.contains("GIT_CONFIG_KEY_0")), "{:?}", plan.conflicts);
+        put(&f.home.join(".claude/settings.json"), &json!({"env": {"GIT_CONFIG_COUNT": "2", "GIT_CONFIG_KEY_0": "hook.ai-stack-lint-format.event", "GIT_CONFIG_VALUE_0": "pre-commit"}}).to_string());
+        assert!(f.plan().conflicts.iter().any(|conflict| conflict.contains("settings.json") && conflict.contains("GIT_CONFIG_KEY_0")), "a hook name that only starts like ours is foreign");
+        put(&f.home.join(".claude/settings.json"), "{}");
+        let policy_after = |f: &Fixture, before: &str| -> toml::Value {
+            put(&f.home.join(".codex/config.toml"), before);
+            f.apply(&f.plan());
+            toml::from_str::<toml::Table>(&f.read(".codex/config.toml")).unwrap()["shell_environment_policy"].clone()
+        };
+        let unrestricted = policy_after(&f, "[shell_environment_policy]\ninclude_only = []\n");
+        assert_eq!(unrestricted["include_only"].as_array().unwrap().len(), 0, "an empty include_only keeps every variable, so it stays empty");
+        let filters = policy_after(&f, "[shell_environment_policy.filters]\nPATH = \"include\"\ngit_config_count = \"include\"\n");
+        let filters = filters["filters"].as_table().unwrap();
+        let mut names: Vec<&str> = filters.keys().map(String::as_str).collect();
+        names.sort_unstable();
+        assert_eq!(names, ["AI_STACK_HARNESS", "GIT_CONFIG_KEY_*", "GIT_CONFIG_VALUE_*", "PATH", "git_config_count"], "names already listed in any case are not added again");
+        assert!(filters.values().all(|action| action.as_str() == Some("include")));
+        let excludes = policy_after(&f, "[shell_environment_policy.filters]\n\"AWS_*\" = \"exclude\"\n");
+        assert_eq!(excludes["filters"].as_table().unwrap().len(), 1, "filters with no include entry restrict nothing");
         assert!(git_version_warning("git version 2.53.1\n").is_some_and(|warning| warning.contains("2.54")));
         assert_eq!(git_version_warning("git version 2.54.0"), None);
     }
