@@ -147,14 +147,16 @@ worker = "haiku"
 # other repositories in an ignored path, are left alone; worktrees are checked.
 # In a jj workspace the same comments are removed with `jj fix` from the
 # unpushed changes an agent's `jj commit`, `describe`, `new`, `squash` or
-# `split` finalised, and a `jj git push` is refused while such an error is
-# left in one of those changes that it pushes.
+# `split` finalised, unless someone else built on them, and a `jj git push` is
+# refused while such an error is left in one of those changes that it pushes.
+# A `jj undo` right after such a commit undoes the fix first.
 # Every key is optional; uncomment to change a default. `enabled = false` turns
 # every hook call into a silent no-op, and install then removes the lint
 # environment it wrote. `severity` values are "error", "warning" or "off".
 # Globs match paths relative to the repository root.
 # `skip` bounds what one AI_STACK_LINT_SKIP="<reason>" commit may hold; a jj
-# push skip uses only `files` and `findings`.
+# commit or push skip uses only `files` and `findings`, counting every
+# occurrence.
 # `skip_alert` notifies you when skips and --no-verify bypasses (commits with
 # errors the hook would refuse or agent prose it would remove) reach
 # `percent` of a repository's agent commits over `days`, once it has at
