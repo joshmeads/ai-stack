@@ -195,7 +195,7 @@ fn plan_hooks(cfg: &Config, hc: &HarnessConfig, folders: &links::Index, out: &mu
     };
     let roots: Vec<&Path> = std::iter::once(cfg.stack.path.as_path()).chain(cfg.stack.legacy_paths.iter().map(PathBuf::as_path)).collect();
     let removed = hc.harness == Harness::Claude && remove_owned_hooks(&mut root, &roots);
-    let added = ensure_lint_hook(&mut root, hc.harness, &cfg.exe, &cfg.exe_flags);
+    let added = LINT_HOOKS.iter().try_fold(false, |changed, &(event, matcher)| Ok::<bool, String>(ensure_lint_hook(&mut root, hc.harness, &cfg.exe, &cfg.exe_flags, event, matcher)? || changed));
     let mut env = false;
     if hc.harness == Harness::Claude {
         let mut merged = root.clone();
@@ -222,7 +222,7 @@ fn plan_hooks(cfg: &Config, hc: &HarnessConfig, folders: &links::Index, out: &mu
     Ok(())
 }
 
-const LINT_MATCHER: &str = "Edit|Write|Bash";
+const LINT_HOOKS: [(&str, &str); 2] = [("PostToolUse", "Edit|Write|Bash"), ("PreToolUse", "Bash")];
 const HOOK_FLAGS: [&str; 3] = ["--config", "--home", "--stack"];
 const OUR_GIT_KEYS: [&str; 4] = ["hook.ai-stack-lint.event", "hook.ai-stack-lint.command", "hook.ai-stack-lint-post.event", "hook.ai-stack-lint-post.command"];
 const CODEX_INCLUDE: [&str; 4] = ["GIT_CONFIG_COUNT", "GIT_CONFIG_KEY_*", "GIT_CONFIG_VALUE_*", "AI_STACK_HARNESS"];
@@ -476,20 +476,20 @@ fn shell_words(command: &str) -> Option<Vec<String>> {
     Some(words)
 }
 
-fn ensure_lint_hook(root: &mut Value, harness: Harness, exe: &Path, flags: &[String]) -> Result<bool, String> {
+fn ensure_lint_hook(root: &mut Value, harness: Harness, exe: &Path, flags: &[String], event: &str, matcher: &str) -> Result<bool, String> {
     let hooks = root.as_object_mut().ok_or("the file is not a JSON object")?.entry("hooks").or_insert_with(|| Value::Object(Default::default()));
     let hooks = hooks.as_object_mut().ok_or("`hooks` is not an object")?;
     let wanted = lint_command(exe, flags, harness);
-    let groups = hooks.entry("PostToolUse").or_insert_with(|| Value::Array(Vec::new())).as_array_mut().ok_or("`hooks.PostToolUse` is not a list")?;
+    let groups = hooks.entry(event).or_insert_with(|| Value::Array(Vec::new())).as_array_mut().ok_or_else(|| format!("`hooks.{event}` is not a list"))?;
     let ours = |hook: &Value| hook["command"].as_str().and_then(lint_hook_of) == Some(harness);
     let Some(group) = groups.iter_mut().find(|group| group["hooks"].as_array().is_some_and(|list| list.iter().any(ours))) else {
-        groups.push(serde_json::json!({"matcher": LINT_MATCHER, "hooks": [{"type": "command", "command": wanted}]}));
+        groups.push(serde_json::json!({"matcher": matcher, "hooks": [{"type": "command", "command": wanted}]}));
         return Ok(true);
     };
     let mut changed = false;
     let alone = group["hooks"].as_array().is_some_and(|list| list.len() == 1);
-    if alone && group["matcher"] != LINT_MATCHER {
-        group["matcher"] = Value::String(LINT_MATCHER.into());
+    if alone && group["matcher"] != matcher {
+        group["matcher"] = Value::String(matcher.into());
         changed = true;
     }
     let hook = group["hooks"].as_array_mut().and_then(|list| list.iter_mut().find(|hook| ours(hook))).ok_or("the lint hook entry moved while it was read")?;
@@ -1293,9 +1293,11 @@ pub(crate) mod tests {
         assert_eq!(codex["hooks"]["PostToolUse"][0], foreign("/usr/local/bin/format-hook"));
         assert_eq!(codex["hooks"]["PostToolUse"][1], json!({"matcher": "Edit|Write|Bash", "hooks": [{"type": "command", "command": format!("{exe} --config '/cfg dir/selected.toml' lint hook codex")}]}), "a v1 entry is repointed where it stands");
         assert_eq!(codex["hooks"]["Stop"], json!([v1_stop]), "install never removes a hook entry");
+        assert_eq!(codex["hooks"]["PreToolUse"], json!([{"matcher": "Bash", "hooks": [{"type": "command", "command": format!("{exe} --config '/cfg dir/selected.toml' lint hook codex")}]}]), "the jj push check runs before Bash");
         let claude: Value = serde_json::from_str(&f.read(".claude/settings.json")).unwrap();
         assert_eq!(claude["hooks"]["PostToolUse"][0]["matcher"], "Edit|Write|Bash");
-        assert_eq!(claude["hooks"].as_object().unwrap().len(), 1, "only PostToolUse is registered");
+        assert_eq!(claude["hooks"]["PreToolUse"][0]["matcher"], "Bash");
+        assert_eq!(claude["hooks"].as_object().unwrap().len(), 2, "only PostToolUse and PreToolUse are registered");
         let pre = format!("[ -x {exe} ] || exit 0; {exe} --config '/cfg dir/selected.toml' lint pre-commit; [ $? -ne 3 ]");
         assert_eq!(claude["env"]["TMPDIR"], "/t");
         assert_eq!(claude["env"]["GIT_CONFIG_COUNT"], "4");
@@ -1318,7 +1320,8 @@ pub(crate) mod tests {
         let moved: Value = serde_json::from_str(&f.read(".claude/settings.json")).unwrap();
         assert_eq!(moved["env"]["GIT_CONFIG_VALUE_3"], format!("[ -x '{0}' ] || exit 0; exec '{0}' lint post-commit", f.cfg.exe.display()));
         assert_eq!(moved["env"]["GIT_CONFIG_VALUE_1"], format!("[ -x '{0}' ] || exit 0; '{0}' lint pre-commit; [ $? -ne 3 ]", f.cfg.exe.display()));
-        assert_eq!(moved["hooks"]["PostToolUse"].as_array().unwrap().len(), 1);
+        assert_eq!((moved["hooks"]["PostToolUse"].as_array().unwrap().len(), moved["hooks"]["PreToolUse"].as_array().unwrap().len()), (1, 1));
+        assert_eq!(moved["hooks"]["PreToolUse"][0]["hooks"][0]["command"], moved["hooks"]["PostToolUse"][0]["hooks"][0]["command"]);
         assert!(f.plan().is_empty());
 
         let skipped_env = |f: &Fixture, file: &str, key: &str| {
