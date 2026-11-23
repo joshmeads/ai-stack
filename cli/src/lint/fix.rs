@@ -232,7 +232,7 @@ fn directly_above_a_declaration(node: &TreeNode, source: &str) -> bool {
 fn looks_like_a_directive(text: &str) -> bool {
     static OPENER: LazyLock<Regex> = LazyLock::new(|| Regex::new(r"^(?://+!?|#+)").unwrap());
     static TAG: LazyLock<Regex> = LazyLock::new(|| Regex::new(r"[@$][A-Za-z]").unwrap());
-    static TOOL_WORD: LazyLock<Regex> = LazyLock::new(|| Regex::new(r"(?i)ignore|disable|suppress|noqa|pragma|codeql|deepcode|nosec|lint|format|fmt|translator").unwrap());
+    static TOOL_WORD: LazyLock<Regex> = LazyLock::new(|| Regex::new(r"(?i)ignore|disable|suppress|noqa|pragma|codeql|deepcode|nosec|lint|clang-format|\bformat\s*(?::|off\b|on\b)|\bfmt\s*(?::|off\b|on\b|skip\b)|\btranslators?\b").unwrap());
     let after = &text[OPENER.find(text).map_or(0, |opener| opener.end())..];
     let body = after.trim();
     let Some(first) = body.split_whitespace().next() else { return true };
