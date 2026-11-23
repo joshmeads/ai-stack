@@ -14,7 +14,6 @@ use super::scan::{Change, Engine, language_of, sort};
 use super::{Baseline, Finding, Settings, Severity};
 use crate::paths;
 
-const LFS_POINTER: &[u8] = b"version https://git-lfs.github.com/spec/";
 const STATE_FILES: [&str; 6] = ["MERGE_HEAD", "CHERRY_PICK_HEAD", "REVERT_HEAD", "SQUASH_MSG", "rebase-merge", "rebase-apply"];
 const SHOWN_ERRORS: usize = 20;
 const SKIP_REMINDER: &str = "Skips are only for a rule that is wrong for this specific code, never to save time; every other change must pass before you continue.";
@@ -124,9 +123,6 @@ impl Checkout {
         for entry in entries {
             let new = blobs.get(&entry.new_id).with_context(|| format!("git cat-file did not return {}", entry.new_id))?;
             let Ok(source) = String::from_utf8(new.clone()) else { continue };
-            if new.starts_with(LFS_POINTER) {
-                continue;
-            }
             let baseline = match entry.absent_before() {
                 true => Baseline::Absent,
                 false => Baseline::Text(String::from_utf8_lossy(blobs.get(&entry.old_id).with_context(|| format!("git cat-file did not return {}", entry.old_id))?).into_owned()),
@@ -264,6 +260,9 @@ fn check(settings: &Settings, checkout: &Checkout, log: &Log, env: &Env, err: &m
     let rules = settings.rules()?;
     let engine = Engine { settings, rules: &rules, scope: None, display: &checkout.git.root };
     let base = checkout.base()?;
+    if checkout.git.run(&["diff-index", "--cached", "--quiet", &base], &[]).is_ok() {
+        return Ok(0);
+    }
     let staged = checkout.staged(&base, Target::Index)?;
     let changes = checkout.changes(&staged);
     let findings = engine.lint(&changes);
@@ -338,7 +337,7 @@ fn check(settings: &Settings, checkout: &Checkout, log: &Log, env: &Env, err: &m
             }
         };
         if let Some(reason) = refusal {
-            kept.push(format!("{shown}: comments kept because {reason}"));
+            kept.push(format!("ai-stack lint: {shown}: comments kept because {reason}"));
         }
     }
     let mut findings = findings;

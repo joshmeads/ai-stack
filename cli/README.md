@@ -325,13 +325,13 @@ When the hook rewrites a file on disk, Claude Code must read that file again bef
 
 `AI_STACK_LINT_SKIP="<reason>" git commit ...` is the escape hatch for a rule that is wrong for this code. An empty reason is ignored. A skip runs no fixes, so it can also keep a comment that `no-comments` gets wrong. It is accepted only for a narrow commit: at most 1 file, 1 hunk with no context lines, 20 changed lines and 3 error findings, each set by `[lint] skip`. A wider commit is refused with `a skip must be its own commit containing only the exception ... Commit the rest without a skip first.` An accepted skip prints the findings it let through and a reminder that skips are only for a rule that is wrong for this specific code.
 
-`~/.local/state/ai-stack/lint/events.jsonl` records, per agent commit, a JSON line with the time, the repository (its main checkout), the harness from `AI_STACK_HARNESS`, the HEAD commit, the findings and the reason:
+`~/.local/state/ai-stack/lint/events.jsonl` records, per agent commit, a JSON line with the time, the repository (its main checkout), the harness from `AI_STACK_HARNESS`, the HEAD commit (for `checked` and `skip`, the commit the new one is made on), the findings and the reason:
 
 - `checked` for every commit the pre-commit hook let through, skips included. A refused commit records nothing.
 - `skip` for an accepted skip.
 - `bypassed` for a commit made without the pre-commit check. The pre-commit hook, on every path, leaves a marker named after the `git commit` process (its PID and start time, from `/proc/<pid>/stat` or `ps -o lstart=`). The post-commit hook records a bypass when the HEAD reflog entry is `commit:`, `commit (amend):` or `commit (initial):` and that marker is missing, so `--no-verify` counts and a cherry-pick, revert, rebase or merge never does. A bypass also queues a notice for you that names the commit and its error findings.
 
-Events older than 30 days are dropped when an event is written. `ai-stack lint skips [--days N]` prints, per repository, the commits, skips and bypasses in the last N days (default `skip_alert.days`), the rules and harnesses involved, and each skip's reason.
+Events older than 30 days are dropped when an event is written. `ai-stack lint skips [--days N]` prints how many agent commits were checked in the last N days (default `skip_alert.days`), then, for each repository with a skip or bypass, its commits, skips and bypasses, the rules and harnesses involved, and each skip or bypass with its commit and reason. A commit with nothing staged records nothing.
 
 When skips plus bypasses reach `skip_alert.percent` of a repository's commits in the last `skip_alert.days` days, with at least `skip_alert.min_commits` commits, a notice for you is queued once, and every pre-commit run in that repository starts with a reminder line for the agent until the rate falls below the threshold.
 

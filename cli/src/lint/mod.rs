@@ -220,9 +220,9 @@ pub fn skips(state_dir: &Path, days: u32, now: u64, out: &mut dyn Write) -> Resu
     let mut repos: Vec<&Path> = events.iter().map(|event| event.repo.as_path()).collect();
     repos.sort();
     repos.dedup();
-    if repos.is_empty() {
-        writeln!(out, "no agent commits recorded in the last {days} days")?;
-    }
+    let commits: u32 = repos.iter().map(|repo| events::Rate::of(&events, repo, since).commits).sum();
+    writeln!(out, "{commits} agent commits in {} repositories in the last {days} days", repos.len())?;
+    repos.retain(|repo| events.iter().any(|event| event.repo == *repo && event.kind != events::Kind::Checked));
     for repo in repos {
         let mine: Vec<&events::Event> = events.iter().filter(|event| event.repo == repo).collect();
         let rate = events::Rate::of(&events, repo, since);

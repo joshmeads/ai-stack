@@ -15,6 +15,7 @@ use super::settings::{Policy, Settings};
 use super::{Baseline, Finding, Scope, Severity};
 
 pub const TEST_FILE_NAMES: &str = "test-file-names";
+const LFS_POINTER: &str = "version https://git-lfs.github.com/spec/";
 
 pub struct Change {
     pub path: PathBuf,
@@ -30,7 +31,7 @@ impl Change {
     }
 
     pub fn new(path: PathBuf, source: String, baseline: &Baseline) -> Option<Change> {
-        if matches!(baseline, Baseline::Text(before) if same_lines(before, &source)) {
+        if source.starts_with(LFS_POINTER) || matches!(baseline, Baseline::Text(before) if same_lines(before, &source)) {
             return None;
         }
         let lines = Lines::between(baseline, &source);
