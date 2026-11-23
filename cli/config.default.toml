@@ -140,10 +140,15 @@ path = "~/.local/state/ai-stack/incidents.md"
 worker = "haiku"
 
 # `ai-stack lint` and the agent hooks that `ai-stack install` registers check
-# only the lines an agent changed. Every key is optional; uncomment to change
-# a default. `enabled = false` turns every hook call into a silent no-op.
-# `severity` values are "error", "warning" or "off". Globs match paths relative
-# to the repository root.
+# only changed lines. An agent's `git commit` removes the comments no-comments
+# reports and refuses a commit with an error left. Every key is optional;
+# uncomment to change a default. `enabled = false` turns every hook call into
+# a silent no-op. `severity` values are "error", "warning" or "off". Globs
+# match paths relative to the repository root.
+# `skip` bounds what one AI_STACK_LINT_SKIP="<reason>" commit may hold.
+# `skip_alert` notifies you when skips and --no-verify bypasses reach
+# `percent` of a repository's agent commits over `days`, once it has at
+# least `min_commits` commits.
 # [lint]
 # enabled = true
 # scope = "lines"                 # lines | function | file
@@ -151,6 +156,8 @@ worker = "haiku"
 # enable = ["no-explicit-return-types"]
 # severity = { "no-lint-suppression" = "warning" }
 # ignore = ["**/vendor/**", "**/node_modules/**"]
+# skip = { files = 1, hunks = 1, lines = 20, findings = 3 }
+# skip_alert = { percent = 20, days = 7, min_commits = 5 }
 #
 # A project is its main checkout, so these settings also cover its worktrees.
 # `paths` limits a rule to the listed globs in that project.
