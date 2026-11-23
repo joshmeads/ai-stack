@@ -96,6 +96,10 @@ fn jj_commits_lose_the_agents_prose_and_a_push_with_an_unfixable_error_is_denied
         s.jj(&repo, &["git", "push", "--bookmark", "main"]);
 
         s.agent_writes(&repo, "h.ts", "export const h = 1;\n// agent prose the human chose to keep\n");
+        fs::write(repo.join("human.test.ts"), SLEEP).unwrap();
+        s.agent_runs(&repo, "PreToolUse", "jj commit --help");
+        s.jj(&repo, &["commit", "--help"]);
+        assert_eq!(s.agent_runs(&repo, "PostToolUse", "jj commit --help"), Value::Null, "{layout}: reading help finalises nothing");
         s.jj(&repo, &["commit", "-m", "human"]);
         let human = s.commit_of(&repo, "@-");
         fs::write(repo.join("a.ts"), "export const a = 2;\n// agent prose about the total\n").unwrap();
@@ -107,13 +111,23 @@ fn jj_commits_lose_the_agents_prose_and_a_push_with_an_unfixable_error_is_denied
         s.agent_writes(&repo, "a.ts", "export const a = 2;\n// agent prose about the total\n");
         fs::write(repo.join("b.ts"), "export const b = 2;\n// The ledger rejects fractional cents.\n").unwrap();
         let after = s.agent_commits(&repo, &["commit", "-m", "work"]);
-        assert_eq!(after["hookSpecificOutput"]["additionalContext"], "ai-stack lint: removed 1 comment in a.ts", "{layout}");
+        assert_eq!(after["hookSpecificOutput"]["additionalContext"], "ai-stack lint: removed 1 comment in a.ts (jj undo reverts this fix first)", "{layout}");
         assert_eq!(s.jj(&repo, &["file", "show", "-r", "@-", "a.ts"]), "export const a = 2;\n", "{layout}: the commit is rewritten");
         assert_eq!(fs::read_to_string(repo.join("a.ts")).unwrap(), "export const a = 2;\n", "{layout}: the working copy follows");
         assert_eq!(s.jj(&repo, &["file", "show", "-r", "@-", "b.ts"]), "export const b = 2;\n// The ledger rejects fractional cents.\n", "{layout}: a human's comment stays, and the user's own fix tools never run");
         assert_eq!(s.jj(&repo, &["diff", "--summary"]), "", "{layout}: the working copy is consistent");
         assert_eq!((s.commit_of(&repo, "@--"), s.commit_of(&repo, "side")), (human, side), "{layout}: the human's commit and the sibling branch are never rewritten");
         assert!(s.jj(&repo, &["file", "show", "-r", "side", "a.ts"]).contains("agent prose about the total"));
+
+        s.jj(&repo, &["bookmark", "set", "main", "-r", "@-"]);
+        s.agent_writes(&repo, "draft.test.ts", SLEEP);
+        s.agent_commits(&repo, &["commit", "-m", "draft"]);
+        s.jj(&repo, &["bookmark", "create", "draft", "-r", "@-"]);
+        for push in ["jj git push --tracked", "jj git push"] {
+            let decision = s.agent_runs(&repo, "PreToolUse", push);
+            assert!(decision["hookSpecificOutput"].get("permissionDecision").is_none(), "{layout}: {push} sends only the tracked, clean main, not the untracked draft: {decision}");
+        }
+        s.jj(&repo, &["new", "main"]);
 
         s.agent_writes(&repo, "a.test.ts", SLEEP);
         assert_eq!(s.agent_commits(&repo, &["commit", "-m", "sleep"])["hookSpecificOutput"]["additionalContext"], "ai-stack lint: a.test.ts:2 no-fixed-sleep (fix before pushing)");
@@ -124,9 +138,12 @@ fn jj_commits_lose_the_agents_prose_and_a_push_with_an_unfixable_error_is_denied
         let denied = s.agent_runs(&repo, "PreToolUse", "jj git push --bookmark main");
         let reason = denied["hookSpecificOutput"]["permissionDecisionReason"].as_str().unwrap_or_default();
         assert!(denied["hookSpecificOutput"]["permissionDecision"] == "deny" && reason.starts_with("a.test.ts:2 no-fixed-sleep: ") && reason.ends_with("Fix these, or push with AI_STACK_LINT_SKIP=\"<reason>\" if a rule is wrong here."), "{denied}");
-        assert!(!reason.contains("wip.test.ts"), "{layout}: the working copy is not pushed, so it is not checked: {reason}");
+        assert!(!reason.contains("wip.test.ts") && !reason.contains("draft.test.ts"), "{layout}: the working copy and the draft are not pushed, so they are not checked: {reason}");
+        assert!(!reason.contains("human.test.ts"), "{layout}: a human's commit is never refused for: {reason}");
         assert_eq!(s.agent_runs(&repo, "PreToolUse", "git push"), Value::Null, "only jj pushes are checked here");
         assert_eq!(s.agent_runs(&repo, "PreToolUse", "jj git push --dry-run --bookmark main"), Value::Null, "a dry run is not checked");
+        let chained = s.agent_runs(&repo, "PreToolUse", "jj bookmark set main -r @- && jj git push --bookmark main");
+        assert_eq!(chained["hookSpecificOutput"]["permissionDecisionReason"], "ai-stack lint: run jj git push as its own command so ai-stack lint can check what it sends.");
 
         let skipped = s.agent_runs(&repo, "PreToolUse", "AI_STACK_LINT_SKIP=\"the device has no event\" jj git push --bookmark main");
         assert!(skipped["hookSpecificOutput"].get("permissionDecision").is_none(), "{skipped}");
@@ -134,8 +151,25 @@ fn jj_commits_lose_the_agents_prose_and_a_push_with_an_unfixable_error_is_denied
         let last = s.events().pop().unwrap();
         assert_eq!((&last["kind"], &last["vcs"], &last["harness"], &last["reason"]), (&json!("skip"), &json!("jj"), &json!("claude"), &json!("the device has no event")));
         assert_eq!(last["head"].as_str().unwrap(), s.jj(&repo, &["log", "--no-graph", "-r", "@-", "-T", "commit_id"]), "the skip names the newest commit it let through");
+
+        s.jj(&repo, &["new", "main"]);
+        s.agent_writes(&repo, "c.ts", "export const c = 1;\n");
+        s.agent_commits(&repo, &["commit", "-m", "agent base"]);
+        let agent_base = s.commit_of(&repo, "@-");
+        fs::write(repo.join("hb.ts"), "export const hb = 1;\n// The human's branch starts here.\n").unwrap();
+        s.jj(&repo, &["commit", "-m", "human on the agent's base"]);
+        let human_change = s.jj(&repo, &["log", "--no-graph", "-r", "@-", "-T", "change_id"]);
+        s.jj(&repo, &["new", &agent_base]);
+        s.agent_writes(&repo, "c.ts", "export const c = 1;\n// agent prose squashed into its base\n");
+        s.agent_runs(&repo, "PreToolUse", "jj squash");
+        s.jj(&repo, &["squash"]);
+        let human_on_top = s.commit_of(&repo, &human_change);
+        let squashed = s.agent_runs(&repo, "PostToolUse", "jj squash");
+        assert_eq!(squashed["hookSpecificOutput"]["additionalContext"], "ai-stack lint: kept 1 comment (others built on it)", "{layout}");
+        assert_eq!(s.commit_of(&repo, &human_change), human_on_top, "{layout}: a human's commit built on the agent's change is never rewritten");
+        assert!(s.jj(&repo, &["file", "show", "-r", &human_on_top, "c.ts"]).contains("agent prose squashed into its base"));
     }
     let report = s.command(EXE, &s.root).args(["--home", s.home.to_str().unwrap(), "--stack", &stack(), "lint", "skips"]).output().unwrap();
     let report = String::from_utf8_lossy(&report.stdout);
-    assert!(report.contains("(including 2 jj pushes)") && report.contains("claude jj push"), "{report}");
+    assert!(report.contains("6 agent commits (including 6 jj changes)") && report.contains(" claude jj ") && report.contains("3 commits, 1 skips"), "{report}");
 }

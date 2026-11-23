@@ -277,9 +277,9 @@ pub fn skips(state_dir: &Path, days: u32, now: u64, out: &mut dyn Write) -> Resu
     repos.sort();
     repos.dedup();
     let commits: u32 = repos.iter().map(|repo| events::Rate::of(&events, repo, since).commits).sum();
-    let pushes = events.iter().filter(|event| event.vcs.is_some()).count();
-    let pushes = if pushes == 0 { String::new() } else { format!(" (including {pushes} jj pushes)") };
-    writeln!(out, "{commits} agent commits{pushes} in {} repositories in the last {days} days", repos.len())?;
+    let changes = events.iter().filter(|event| event.vcs.is_some()).count();
+    let changes = if changes == 0 { String::new() } else { format!(" (including {changes} jj changes)") };
+    writeln!(out, "{commits} agent commits{changes} in {} repositories in the last {days} days", repos.len())?;
     repos.retain(|repo| events.iter().any(|event| event.repo == *repo && event.kind != events::Kind::Checked));
     for repo in repos {
         let mine: Vec<&events::Event> = events.iter().filter(|event| event.repo == repo).collect();
@@ -308,7 +308,7 @@ pub fn skips(state_dir: &Path, days: u32, now: u64, out: &mut dyn Write) -> Resu
                 events::Kind::Skip => format!("skip: {}", event.reason.as_deref().unwrap_or_default()),
                 _ => "bypassed the check".to_string(),
             };
-            let via = event.vcs.as_deref().map_or(String::new(), |vcs| format!(" {vcs} push"));
+            let via = event.vcs.as_deref().map_or(String::new(), |vcs| format!(" {vcs}"));
             writeln!(out, "  {when} {}{via} {} {what} [{}]", event.harness.as_deref().unwrap_or("unknown"), event.head.as_deref().map_or("", |head| &head[..head.len().min(12)]), event.findings.join(", "))?;
         }
     }

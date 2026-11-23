@@ -10,13 +10,12 @@ const TAKES_VALUE: [&str; 36] = [
 ];
 const SQUASH_INTO: [&str; 3] = ["-t", "--into", "--to"];
 const SQUASH_NEW_COMMIT: [&str; 10] = ["-o", "--onto", "-d", "--destination", "-A", "--insert-after", "--after", "-B", "--insert-before", "--before"];
-const PATTERN_KINDS: [&str; 8] = ["exact", "glob", "regex", "substring", "exact-i", "glob-i", "regex-i", "substring-i"];
-const PUSHABLE: &str = "(bookmarks() | tags())";
+const OUR_OUTPUT_FLAGS: [&str; 4] = ["--quiet", "--no-pager", "--dry-run", "-n"];
 
 #[derive(Debug, PartialEq, Eq)]
 pub enum Action {
     Commit { owns: String },
-    Push { targets: Option<String>, dry_run: bool },
+    Push { args: Vec<String>, dry_run: bool, chained: bool },
 }
 
 #[derive(Debug, PartialEq, Eq)]
@@ -31,10 +30,16 @@ pub fn jj_calls(command: &str, cwd: &Path) -> Vec<Call> {
         return Vec::new();
     }
     let Some(lexemes) = lex(command) else { return Vec::new() };
-    lexemes.split(|lexeme| *lexeme == Lexeme::Separator).filter_map(|segment| call(segment, cwd)).collect()
+    let mut calls = Vec::new();
+    let mut earlier = false;
+    for segment in lexemes.split(|lexeme| *lexeme == Lexeme::Separator) {
+        calls.extend(call(segment, cwd, earlier));
+        earlier |= segment.iter().any(|lexeme| matches!(lexeme, Lexeme::Word(_)));
+    }
+    calls
 }
 
-fn call(segment: &[Lexeme], cwd: &Path) -> Option<Call> {
+fn call(segment: &[Lexeme], cwd: &Path, chained: bool) -> Option<Call> {
     let mut words: Vec<&Word> = Vec::new();
     let mut redirected = false;
     for lexeme in segment {
@@ -52,10 +57,13 @@ fn call(segment: &[Lexeme], cwd: &Path) -> Option<Call> {
     }
     let skip = words[..at].iter().filter_map(|word| word.assignment()).find(|(name, _)| *name == "AI_STACK_LINT_SKIP").map(|(_, value)| value.trim().to_string());
     let args: Vec<&str> = words[at + 1..].iter().map(|word| word.text.as_str()).collect();
+    if flag(&args, &["-h", "--help"]) {
+        return None;
+    }
     let dir = values(&args, &["-R", "--repository"]).last().map_or_else(|| cwd.to_path_buf(), |repository| paths::normalize(&cwd.join(repository)));
     let action = match positionals(&args)[..] {
         [name, ..] if COMMITTING.contains(&name) => Action::Commit { owns: owned_by(name, &args) },
-        ["git", "push", ..] => Action::Push { targets: push_targets(&args), dry_run: flag(&args, &["--dry-run", "-n"]) },
+        ["git", "push", ..] => Action::Push { args: push_args(&args), dry_run: flag(&args, &["--dry-run", "-n"]), chained },
         _ => return None,
     };
     Some(Call { dir, skip, action })
@@ -126,28 +134,17 @@ fn owned_by(subcommand: &str, args: &[&str]) -> String {
     destination.map_or_else(|| "@".into(), |destination| format!("@ | {destination}"))
 }
 
-fn push_targets(args: &[&str]) -> Option<String> {
-    let mut targets: Vec<String> = Vec::new();
-    targets.extend(values(args, &["-b", "--bookmark"]).into_iter().map(|bookmark| format!("bookmarks({})", pattern(bookmark))));
-    targets.extend(values(args, &["-t", "--tag"]).into_iter().map(|tag| format!("tags({})", pattern(tag))));
-    targets.extend(values(args, &["-r", "--revision", "--revisions"]).into_iter().map(|revision| format!("(({revision}) & {PUSHABLE})")));
-    targets.extend(values(args, &["-c", "--change"]).into_iter().map(|change| format!("({change})")));
-    targets.extend(values(args, &["--named"]).into_iter().filter_map(|named| named.split_once('=')).map(|(_, revision)| format!("({revision})")));
-    if flag(args, &["--all", "--tracked"]) {
-        targets.push(PUSHABLE.into());
+fn push_args(args: &[&str]) -> Vec<String> {
+    let mut kept = Vec::new();
+    let mut rest = args.iter();
+    while let Some(&arg) = rest.next() {
+        if ["-R", "--repository", "--color"].contains(&arg) {
+            rest.next();
+        } else if !(OUR_OUTPUT_FLAGS.contains(&arg) || arg.starts_with("--repository=") || arg.starts_with("--color=") || (arg.starts_with("-R") && !arg.starts_with("--"))) {
+            kept.push(arg.to_string());
+        }
     }
-    if targets.is_empty() && !flag(args, &["--deleted"]) {
-        targets.push(format!("({PUSHABLE} & (remote_bookmarks()..@))"));
-    }
-    (!targets.is_empty()).then(|| targets.join(" | "))
-}
-
-fn pattern(value: &str) -> String {
-    let (kind, text) = match value.split_once(':') {
-        Some((kind, text)) if PATTERN_KINDS.contains(&kind) => (kind, text),
-        _ => ("glob", value),
-    };
-    format!("{kind}:\"{}\"", text.replace('\\', "\\\\").replace('"', "\\\""))
+    kept
 }
 
 #[cfg(test)]
@@ -163,12 +160,12 @@ mod tests {
     }
 
     #[test]
-    fn jj_commands_are_read_from_unquoted_segments_with_their_workspace_targets_and_skip_assignment() {
+    fn jj_commands_are_read_from_unquoted_segments_with_their_workspace_push_arguments_and_skip_assignment() {
         let here = PathBuf::from("/w/repo");
         for command in ["jj commit -m x", "cd sub && jj --no-pager commit -m 'jj git push'", "/usr/bin/jj new", "jj split -r @-", "jj describe -m \"$(cat msg)\" 2>&1"] {
             assert_eq!(actions(command).len(), 1, "{command}");
         }
-        for command in ["rg 'Use jj git push to publish' README.md", "echo jj git push", "git commit -m jj", "jj st", "jj log -r 'description(new)'", "'jj' commit", "jj git fetch", "jj push"] {
+        for command in ["rg 'Use jj git push to publish' README.md", "echo jj git push", "git commit -m jj", "jj st", "jj log -r 'description(new)'", "'jj' commit", "jj git fetch", "jj push", "jj commit --help", "jj git push -h", "jj help commit", "cat > notes.md <<'EOF'\njj git push --bookmark feat\njj new\nEOF"] {
             assert_eq!(actions(command), [], "{command}");
         }
         assert_eq!(actions("jj -R ../other commit -m work; jj --repository=/x new"), [(PathBuf::from("/w/other"), None, owns("@")), (PathBuf::from("/x"), None, owns("@"))]);
@@ -177,12 +174,11 @@ mod tests {
         assert_eq!(actions("jj squash -r x")[0].2, owns("@ | (x)-"));
         assert_eq!(actions("jj squash -A x")[0].2, owns("@"));
 
-        let push = |targets: &str| Action::Push { targets: Some(targets.into()), dry_run: false };
-        assert_eq!(actions("AI_STACK_LINT_SKIP=\"the device has no event\" jj git push -b main --bookmark 'glob:feat-*'"), [(here.clone(), Some("the device has no event".into()), push("bookmarks(glob:\"main\") | bookmarks(glob:\"feat-*\")"))]);
-        assert_eq!(actions("jj git push -c @- --named next=@")[0].2, push("(@-) | (@)"));
-        assert_eq!(actions("jj git push -r @-")[0].2, push("((@-) & (bookmarks() | tags()))"));
-        assert_eq!(actions("jj git push")[0].2, push("((bookmarks() | tags()) & (remote_bookmarks()..@))"));
-        assert_eq!(actions("jj git push --deleted")[0].2, Action::Push { targets: None, dry_run: false });
+        let push = |args: &[&str], chained: bool| Action::Push { args: args.iter().map(|arg| arg.to_string()).collect(), dry_run: false, chained };
+        assert_eq!(actions("AI_STACK_LINT_SKIP=\"the device has no event\" jj git push -b main --bookmark 'glob:feat-*'"), [(here.clone(), Some("the device has no event".into()), push(&["git", "push", "-b", "main", "--bookmark", "glob:feat-*"], false))]);
+        assert_eq!(actions("jj --quiet -R ../other --color=always git push --tracked")[0].2, push(&["git", "push", "--tracked"], false), "the dry run gets the push arguments without our output flags");
+        assert_eq!(actions("jj commit -m x && jj git push -c @-")[1].2, push(&["git", "push", "-c", "@-"], true));
+        assert_eq!(actions("# publish\n\njj git push")[0].2, push(&["git", "push"], false), "a comment is not a command");
         assert!(matches!(actions("jj git push --dry-run -b main")[0].2, Action::Push { dry_run: true, .. }));
         assert_eq!(actions("echo AI_STACK_LINT_SKIP=x; jj git push")[0].1, None, "a skip counts only as an assignment on the jj command");
         assert_eq!(actions("AI_STACK_LINT_SKIP= jj git push")[0].1.as_deref(), Some(""));

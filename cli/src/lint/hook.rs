@@ -74,14 +74,15 @@ pub fn run(harness: Harness, state_dir: &Path, settings: impl FnOnce() -> Result
                 }
                 let _ = provenance.record(&edit.file, edit.added.iter().map(String::as_str));
                 if let Some(repo) = repo {
-                    let _ = provenance.record_removed(&repo.project_key, edit.removed.iter().map(String::as_str));
+                    let _ = provenance.record_removed(&repo.project_key, not_the_agents(&provenance, &edit.file, edit.removed.iter().map(String::as_str)));
                 }
             }
             context = report(&settings, &files, &cwd, &mut repos)?;
             if jj_commit {
                 let mut lines = Vec::new();
                 for dir in committed {
-                    lines.extend(jj::after_commit(&settings, state_dir, dir)?);
+                    let skip = calls.iter().filter(|call| call.dir.as_path() == dir).find_map(|call| call.skip.as_deref());
+                    lines.extend(jj::after_commit(&settings, state_dir, dir, skip, harness.as_str())?);
                 }
                 context = (!lines.is_empty()).then(|| lines.join("\n"));
             }
@@ -124,20 +125,17 @@ fn before(harness: Harness, state_dir: &Path, settings: impl FnOnce() -> Result<
         if let Some(repo) = jj::locate(file.parent().unwrap_or(file))
             && settings.policy(Some(&repo)).enabled()
         {
-            let _ = provenance.record_removed(&repo.project_key, text.lines());
+            let _ = provenance.record_removed(&repo.project_key, not_the_agents(&provenance, file, text.lines()));
         }
     }
-    let mut reply = None;
-    for call in calls {
-        match call.action {
-            Action::Commit { .. } => {
-                let _ = jj::own(&settings, state_dir, call);
-            }
-            Action::Push { .. } if reply.is_none() => reply = jj::before_push(&settings, state_dir, call, harness.as_str()),
-            Action::Push { .. } => {}
-        }
-    }
-    Ok(reply.map(|reply| reply.to_string()))
+    let committing: Vec<&Call> = calls.iter().filter(|call| matches!(call.action, Action::Commit { .. })).collect();
+    let _ = jj::stage(&settings, state_dir, &committing);
+    Ok(calls.iter().find_map(|call| jj::before_push(&settings, state_dir, call, harness.as_str())).map(|reply| reply.to_string()))
+}
+
+fn not_the_agents<'l>(provenance: &Provenance, file: &Path, removed: impl IntoIterator<Item = &'l str>) -> Vec<&'l str> {
+    let own = provenance.written(file);
+    removed.into_iter().filter(|line| !own.contains(line.trim())).collect()
 }
 
 fn deleted_files(payload: &Payload, cwd: &Path) -> Vec<(PathBuf, String)> {
@@ -276,6 +274,9 @@ mod tests {
         call(Harness::Claude, cut);
         let key = Repo::discover(&repo).unwrap().project_key;
         assert_eq!(Provenance::new(&state, now()).moved(&key), HashSet::from(["// rounding rule".to_string()]), "an Edit removes only what its old_string held, never the rest of originalFile");
+        let own_cut = json!({"hook_event_name": "PostToolUse", "tool_name": "Edit", "cwd": repo, "tool_input": {"file_path": repo.join("b.ts"), "old_string": "// agent note\ng();", "new_string": "g();"}});
+        call(Harness::Claude, own_cut);
+        assert!(!Provenance::new(&state, now()).moved(&key).contains("// agent note"), "the agent cutting its own prose is not a move of a human's note");
         put(&repo.join("draft.ts"), "// a human's untracked note\nexport {};\n");
         let delete = json!({"hook_event_name": "PreToolUse", "tool_name": "apply_patch", "cwd": repo, "tool_input": {"command": "*** Begin Patch\n*** Delete File: draft.ts\n*** End Patch\n"}});
         call(Harness::Codex, delete);

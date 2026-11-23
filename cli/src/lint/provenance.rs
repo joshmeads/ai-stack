@@ -28,6 +28,13 @@ enum Record {
     WrittenTo,
     RemovedIn,
     OwnedIn,
+    StagedIn,
+}
+
+#[derive(Debug, PartialEq, Eq, Serialize, Deserialize)]
+pub struct Staged {
+    pub operation: String,
+    pub changes: Vec<String>,
 }
 
 pub fn comment_line(line: &str) -> Option<&str> {
@@ -49,6 +56,7 @@ impl Provenance {
             Record::WrittenTo => b"",
             Record::RemovedIn => b"removed\0",
             Record::OwnedIn => b"owned\0",
+            Record::StagedIn => b"staged\0",
         };
         let digest: String = Sha256::new().chain_update(prefix).chain_update(paths::resolve(path).as_os_str().as_bytes()).finalize().iter().take(16).map(|byte| format!("{byte:02x}")).collect();
         self.dir.join(digest)
@@ -69,6 +77,19 @@ impl Provenance {
 
     pub fn record_owned(&self, workspace: &Path, changes: &[String]) -> Result<()> {
         self.append(Record::OwnedIn, workspace, changes.to_vec())
+    }
+
+    pub fn stage_owned(&self, workspace: &Path, staged: &Staged) -> Result<()> {
+        std::fs::create_dir_all(&self.dir).with_context(|| format!("creating {}", self.dir.display()))?;
+        std::fs::write(self.file_of(Record::StagedIn, workspace), serde_json::to_vec(staged)?)?;
+        Ok(())
+    }
+
+    pub fn take_staged(&self, workspace: &Path) -> Option<Staged> {
+        let file = self.file_of(Record::StagedIn, workspace);
+        let bytes = std::fs::read(&file).ok()?;
+        let _ = std::fs::remove_file(&file);
+        serde_json::from_slice(&bytes).ok()
     }
 
     fn append(&self, record: Record, path: &Path, mut lines: Vec<String>) -> Result<()> {
@@ -148,5 +169,8 @@ mod tests {
         assert!(later.written(tmp.path()).is_empty(), "a repository's removals are kept apart from a file's additions");
         later.record_owned(tmp.path(), &["kxyz".to_string()]).unwrap();
         assert_eq!((later.owned(tmp.path()), later.moved(tmp.path()).len()), (HashSet::from(["kxyz".to_string()]), 1), "owned jj changes are a record of their own");
+        let staged = Staged { operation: "op1".into(), changes: vec!["kabc".into()] };
+        later.stage_owned(tmp.path(), &staged).unwrap();
+        assert_eq!((later.take_staged(tmp.path()), later.take_staged(tmp.path())), (Some(staged), None), "a staged candidate is confirmed or dropped once");
     }
 }
