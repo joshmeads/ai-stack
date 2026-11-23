@@ -140,18 +140,22 @@ fn edit(file: PathBuf, new: &[&str], old: &[&str]) -> Edited {
 fn edited(harness: Harness, payload: &Payload, cwd: &Path) -> Vec<Edited> {
     let absolute = |path: &str| paths::normalize(&cwd.join(path.trim()));
     let input = &payload.tool_input;
-    let text = |value: &Value, key: &str| value.get(key).and_then(Value::as_str).unwrap_or_default().to_string();
+    fn text<'v>(value: &'v Value, key: &str) -> &'v str {
+        value.get(key).and_then(Value::as_str).unwrap_or_default()
+    }
     match harness {
         Harness::Claude => {
             let Some(file) = input.get("file_path").and_then(Value::as_str).map(absolute) else { return Vec::new() };
-            let mut new = vec![text(input, "content"), text(input, "new_string")];
-            let mut old = vec![text(&payload.tool_response, "originalFile"), text(input, "old_string")];
-            for edit in input.get("edits").and_then(Value::as_array).into_iter().flatten() {
-                new.push(text(edit, "new_string"));
-                old.push(text(edit, "old_string"));
+            if input.get("content").is_some() {
+                return vec![edit(file, &[text(input, "content")], &[text(&payload.tool_response, "originalFile")])];
             }
-            let (new, old): (Vec<&str>, Vec<&str>) = (new.iter().map(String::as_str).collect(), old.iter().map(String::as_str).collect());
-            vec![edit(file, &new, &old)]
+            let mut whole = Edited { file, added: Vec::new(), removed: Vec::new() };
+            for pair in std::iter::once(input).chain(input.get("edits").and_then(Value::as_array).into_iter().flatten()) {
+                let (new, old) = (text(pair, "new_string"), text(pair, "old_string"));
+                whole.added.extend(added(&[new], &[old]));
+                whole.removed.extend(added(&[old], &[new]));
+            }
+            vec![whole]
         }
         Harness::Codex => {
             let patch = input.get("command").and_then(Value::as_str).or_else(|| input.as_str()).unwrap_or_default();
@@ -217,10 +221,10 @@ mod tests {
         let codex_patch = "*** Begin Patch\n*** Add File: c.ts\n+// new file note\n+export {};\n*** Update File: b.ts\n*** Move to: d.ts\n@@\n-// kept wording\n+// kept wording\n+// codex note\n*** End Patch\n";
         call(Harness::Codex, json!({"hook_event_name": "PostToolUse", "tool_name": "apply_patch", "cwd": repo, "tool_input": {"command": codex_patch}}));
         assert_eq!((written("c.ts"), written("d.ts")), (HashSet::from(["// new file note".to_string()]), HashSet::from(["// codex note".to_string()])));
-        let cut = json!({"hook_event_name": "PostToolUse", "tool_name": "Edit", "cwd": repo, "tool_input": {"file_path": repo.join("b.ts"), "old_string": "// rounding rule\nx();", "new_string": "x();"}});
+        let cut = json!({"hook_event_name": "PostToolUse", "tool_name": "Edit", "cwd": repo, "tool_input": {"file_path": repo.join("b.ts"), "old_string": "// rounding rule\nx();", "new_string": "x();"}, "tool_response": {"originalFile": "// earlier agent prose\n// rounding rule\nx();\n"}});
         call(Harness::Claude, cut);
         let key = Repo::discover(&repo).unwrap().project_key;
-        assert_eq!(Provenance::new(&state, now()).moved(&key), HashSet::from(["// rounding rule".to_string()]), "a comment an edit removed is recorded for its repository");
+        assert_eq!(Provenance::new(&state, now()).moved(&key), HashSet::from(["// rounding rule".to_string()]), "an Edit removes only what its old_string held, never the rest of originalFile");
         let off = LintProject { path: repo.to_string_lossy().into_owned(), paths: Default::default(), ignore: Vec::new(), scope: None, enabled: Some(false) };
         let write = json!({"hook_event_name": "PostToolUse", "tool_name": "Write", "cwd": repo, "tool_input": {"file_path": repo.join("off.ts"), "content": "// written while lint is off\n"}});
         run(Harness::Claude, &state, || Ok(settings(&home, LintSection { project: vec![off], ..LintSection::default() })), &write.to_string()).unwrap();
