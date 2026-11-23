@@ -196,18 +196,25 @@ fn plan_hooks(cfg: &Config, hc: &HarnessConfig, folders: &links::Index, out: &mu
     let roots: Vec<&Path> = std::iter::once(cfg.stack.path.as_path()).chain(cfg.stack.legacy_paths.iter().map(PathBuf::as_path)).collect();
     let removed = hc.harness == Harness::Claude && remove_owned_hooks(&mut root, &roots);
     let added = ensure_lint_hook(&mut root, hc.harness, &cfg.exe, &cfg.exe_flags);
-    let env = match hc.harness {
-        Harness::Claude => merge_claude_env(&mut root, &lint_env(cfg, hc.harness)),
-        Harness::Codex => Ok(false),
-    };
-    match (added, env) {
-        (Ok(added), Ok(env)) if removed || added || env => {
+    let mut env = false;
+    if hc.harness == Harness::Claude {
+        let mut merged = root.clone();
+        match merge_claude_env(&mut merged, &lint_env(cfg, hc.harness), cfg.lint_enabled) {
+            Ok(changed) => {
+                env = changed;
+                root = merged;
+            }
+            Err(conflict) => out.warnings.push(format!("{}: {conflict}", path.display())),
+        }
+    }
+    match added {
+        Ok(added) if removed || added || env => {
             let mut text = serde_json::to_string_pretty(&root)?;
             text.push('\n');
             out.actions.extend(plan::write_if_changed(&path, text)?);
         }
-        (Ok(_), Ok(_)) => {}
-        (Err(conflict), _) | (_, Err(conflict)) => out.conflicts.push(format!("{}: {conflict}; fix it and run again", path.display())),
+        Ok(_) => {}
+        Err(conflict) => out.conflicts.push(format!("{}: {conflict}; fix it and run again", path.display())),
     }
     if hc.harness == Harness::Codex {
         plan_codex_env(cfg, hc, folders, out)?;
@@ -257,13 +264,29 @@ fn numbered<'a>(name: &'a str, prefix: &str) -> Option<&'a str> {
     name.strip_prefix(prefix).filter(|number| !number.is_empty() && number.bytes().all(|byte| byte.is_ascii_digit()))
 }
 
-fn env_edits(existing: &[(String, Option<String>)], wanted: &[(String, String)]) -> Result<Vec<EnvEdit>, String> {
+fn env_edits(existing: &[(String, Option<String>)], wanted: &[(String, String)], enabled: bool) -> Result<Vec<EnvEdit>, String> {
     let keys: Vec<(&str, Option<&str>)> = existing.iter().filter_map(|(name, value)| numbered(name, "GIT_CONFIG_KEY_").map(|number| (number, value.as_deref()))).collect();
-    if let Some((number, _)) = keys.iter().find(|(_, value)| !value.is_some_and(|value| OUR_GIT_KEYS.contains(&value))) {
-        return Err(format!("GIT_CONFIG_KEY_{number} is already set to something ai-stack does not own, and ai-stack needs GIT_CONFIG_* for its agent commit hook; remove it or set [lint] enabled = false"));
+    let foreign = keys.iter().find(|(_, value)| !value.is_some_and(|value| OUR_GIT_KEYS.contains(&value)));
+    let bare_count = keys.is_empty() && existing.iter().any(|(name, _)| name == "GIT_CONFIG_COUNT");
+    if !enabled {
+        if foreign.is_some() || bare_count {
+            return Ok(Vec::new());
+        }
+        let ours = |name: &str, value: Option<&str>| {
+            name == "GIT_CONFIG_COUNT"
+                || numbered(name, "GIT_CONFIG_KEY_").or_else(|| numbered(name, "GIT_CONFIG_VALUE_")).is_some_and(|number| keys.iter().any(|(key, _)| *key == number))
+                || (name == "AI_STACK_HARNESS" && wanted.iter().any(|(wanted, harness)| wanted == name && value == Some(harness.as_str())))
+        };
+        return Ok(existing.iter().filter(|(name, value)| ours(name, value.as_deref())).map(|(name, _)| EnvEdit::Remove(name.clone())).collect());
     }
-    if keys.is_empty() && existing.iter().any(|(name, _)| name == "GIT_CONFIG_COUNT") {
-        return Err("GIT_CONFIG_COUNT is already set by something other than ai-stack, and ai-stack needs GIT_CONFIG_* for its agent commit hook; remove it".into());
+    if let Some((number, value)) = foreign {
+        return Err(format!(
+            "GIT_CONFIG_KEY_{number} is set to {}, which ai-stack does not own, so the agent commit hook was not set up; rename or remove that key, then run install again",
+            value.map_or("a non-string value".to_string(), |value| format!("`{value}`"))
+        ));
+    }
+    if bare_count {
+        return Err("GIT_CONFIG_COUNT is set without any GIT_CONFIG_KEY_n, so the agent commit hook was not set up; rename or remove that key, then run install again".into());
     }
     let mut edits: Vec<EnvEdit> = existing
         .iter()
@@ -278,11 +301,15 @@ fn env_edits(existing: &[(String, Option<String>)], wanted: &[(String, String)])
     Ok(edits)
 }
 
-fn merge_claude_env(root: &mut Value, wanted: &[(String, String)]) -> Result<bool, String> {
-    let env = root.as_object_mut().ok_or("the file is not a JSON object")?.entry("env").or_insert_with(|| Value::Object(Default::default()));
-    let env = env.as_object_mut().ok_or("`env` is not an object")?;
+fn merge_claude_env(root: &mut Value, wanted: &[(String, String)], enabled: bool) -> Result<bool, String> {
+    let root = root.as_object_mut().ok_or("the file is not a JSON object")?;
+    if !enabled && !root.contains_key("env") {
+        return Ok(false);
+    }
+    let env = root.entry("env").or_insert_with(|| Value::Object(Default::default()));
+    let env = env.as_object_mut().ok_or("`env` is not an object, so the agent commit hook was not set up")?;
     let existing: Vec<(String, Option<String>)> = env.iter().map(|(name, value)| (name.clone(), value.as_str().map(String::from))).collect();
-    let edits = env_edits(&existing, wanted)?;
+    let edits = env_edits(&existing, wanted, enabled)?;
     for edit in &edits {
         match edit {
             EnvEdit::Set(name, value) => {
@@ -305,20 +332,41 @@ fn plan_codex_env(cfg: &Config, hc: &HarnessConfig, folders: &links::Index, out:
     let original = read_optional(&path)?.unwrap_or_default();
     let mut doc: toml_edit::DocumentMut = match original.parse() {
         Ok(doc) => doc,
+        Err(_) if !cfg.lint_enabled => return Ok(()),
         Err(err) => {
             out.conflicts.push(format!("{} is not valid TOML ({err}); ai-stack never rewrites a malformed config.toml, so fix it and run again", path.display()));
             return Ok(());
         }
     };
-    match merge_codex_env(&mut doc, &lint_env(cfg, hc.harness)) {
+    match merge_codex_env(&mut doc, &lint_env(cfg, hc.harness), cfg.lint_enabled) {
         Ok(true) => out.actions.extend(plan::write_if_changed(&path, doc.to_string())?),
         Ok(false) => {}
-        Err(conflict) => out.conflicts.push(format!("{}: {conflict}; fix it and run again", path.display())),
+        Err(conflict) => out.warnings.push(format!("{}: {conflict}", path.display())),
     }
     Ok(())
 }
 
-fn merge_codex_env(doc: &mut toml_edit::DocumentMut, wanted: &[(String, String)]) -> Result<bool, String> {
+fn apply_env_edits(set: &mut dyn toml_edit::TableLike, wanted: &[(String, String)], enabled: bool) -> Result<bool, String> {
+    let existing: Vec<(String, Option<String>)> = set.iter().map(|(name, value)| (name.to_string(), value.as_str().map(String::from))).collect();
+    let edits = env_edits(&existing, wanted, enabled)?;
+    for edit in &edits {
+        match edit {
+            EnvEdit::Set(name, value) => {
+                set.insert(name, toml_edit::value(value.as_str()));
+            }
+            EnvEdit::Remove(name) => {
+                set.remove(name);
+            }
+        }
+    }
+    Ok(!edits.is_empty())
+}
+
+fn merge_codex_env(doc: &mut toml_edit::DocumentMut, wanted: &[(String, String)], enabled: bool) -> Result<bool, String> {
+    if !enabled {
+        let set = doc.get_mut("shell_environment_policy").and_then(|policy| policy.get_mut("set")).and_then(toml_edit::Item::as_table_like_mut);
+        return set.map_or(Ok(false), |set| apply_env_edits(set, wanted, false));
+    }
     let policy = doc.as_table_mut().entry("shell_environment_policy").or_insert_with(|| {
         let mut table = toml_edit::Table::new();
         table.set_implicit(true);
@@ -345,7 +393,7 @@ fn merge_codex_env(doc: &mut toml_edit::DocumentMut, wanted: &[(String, String)]
                     Some((_, true)) => {}
                     Some((known, false)) => {
                         return Err(format!(
-                            "`shell_environment_policy.filters` sets {known:?} to something other than \"include\" while other filters include, so Codex would drop ai-stack's {name} after `set` and git would fail; remove that filter or set [lint] enabled = false"
+                            "`shell_environment_policy.filters` sets {known:?} to something other than \"include\" while other filters include, so Codex would drop ai-stack's {name} after `set` and git would fail; the agent commit hook was not set up; rename or remove that filter, then run install again"
                         ));
                     }
                     None => {
@@ -358,19 +406,7 @@ fn merge_codex_env(doc: &mut toml_edit::DocumentMut, wanted: &[(String, String)]
     }
     let set = policy.entry("set").or_insert(toml_edit::Item::Table(toml_edit::Table::new()));
     let set = set.as_table_like_mut().ok_or("`shell_environment_policy.set` is not a table")?;
-    let existing: Vec<(String, Option<String>)> = set.iter().map(|(name, value)| (name.to_string(), value.as_str().map(String::from))).collect();
-    let edits = env_edits(&existing, wanted)?;
-    for edit in &edits {
-        match edit {
-            EnvEdit::Set(name, value) => {
-                set.insert(name, toml_edit::value(value.as_str()));
-            }
-            EnvEdit::Remove(name) => {
-                set.remove(name);
-            }
-        }
-    }
-    Ok(changed || !edits.is_empty())
+    Ok(apply_env_edits(set, wanted, true)? || changed)
 }
 
 fn git_version_warning(version: &str) -> Option<String> {
@@ -1241,7 +1277,7 @@ pub(crate) mod tests {
     }
 
     #[test]
-    fn lint_hook_and_agent_git_env_are_merged_in_place_and_foreign_git_config_is_a_conflict() {
+    fn lint_hook_and_agent_git_env_are_merged_in_place_foreign_git_config_skips_only_the_env_and_lint_off_removes_it() {
         let mut f = fixture();
         let foreign = |command: &str| json!({"matcher": "apply_patch", "hooks": [{"type": "command", "command": command, "timeout": 30}]});
         let v1 = json!({"matcher": "apply_patch", "hooks": [{"type": "command", "command": "\"/old place/ai-stack\" lint hook codex post-edit"}]});
@@ -1285,24 +1321,44 @@ pub(crate) mod tests {
         assert_eq!(moved["hooks"]["PostToolUse"].as_array().unwrap().len(), 1);
         assert!(f.plan().is_empty());
 
+        let skipped_env = |f: &Fixture, file: &str, key: &str| {
+            let plan = f.plan();
+            let warned = plan.warnings.iter().any(|warning| warning.contains(file) && warning.contains(key) && warning.contains("rename or remove") && !warning.contains("enabled = false"));
+            assert!(plan.conflicts.is_empty() && warned, "a lint env conflict skips only the lint env: {:?} {:?}", plan.conflicts, plan.warnings);
+            plan
+        };
         let mut claude = moved;
         claude["env"]["GIT_CONFIG_KEY_7"] = json!("user.name");
         put(&f.home.join(".claude/settings.json"), &claude.to_string());
-        assert!(f.plan().conflicts.iter().any(|conflict| conflict.contains("GIT_CONFIG_KEY_7")), "{:?}", f.plan().conflicts);
+        skipped_env(&f, "settings.json", "GIT_CONFIG_KEY_7");
         put(&f.home.join(".claude/settings.json"), &json!({"env": {"GIT_CONFIG_COUNT": "1"}}).to_string());
-        assert!(f.plan().conflicts.iter().any(|conflict| conflict.contains("GIT_CONFIG_COUNT")));
+        f.apply(&skipped_env(&f, "settings.json", "GIT_CONFIG_COUNT"));
+        let kept: Value = serde_json::from_str(&f.read(".claude/settings.json")).unwrap();
+        assert_eq!((&kept["env"], kept["hooks"]["PostToolUse"].as_array().map(Vec::len)), (&json!({"GIT_CONFIG_COUNT": "1"}), Some(1)), "the hook entry is still written");
         put(&f.home.join(".claude/settings.json"), "{}");
         put(&f.home.join(".codex/config.toml"), "[shell_environment_policy.set]\nGIT_CONFIG_COUNT = \"2\"\nGIT_CONFIG_KEY_0 = \"core.editor\"\nGIT_CONFIG_VALUE_0 = \"vi\"\n");
-        let plan = f.plan();
-        assert!(plan.conflicts.iter().any(|conflict| conflict.contains("config.toml") && conflict.contains("GIT_CONFIG_KEY_0")), "{:?}", plan.conflicts);
+        skipped_env(&f, "config.toml", "GIT_CONFIG_KEY_0");
         for foreign in ["hook.ai-stack-lint-format.event", "hook.ai-stack-lint.format.event"] {
             put(&f.home.join(".claude/settings.json"), &json!({"env": {"GIT_CONFIG_COUNT": "2", "GIT_CONFIG_KEY_0": foreign, "GIT_CONFIG_VALUE_0": "pre-commit"}}).to_string());
-            assert!(f.plan().conflicts.iter().any(|conflict| conflict.contains("settings.json") && conflict.contains("GIT_CONFIG_KEY_0")), "{foreign} only starts like ours, so it is foreign");
+            skipped_env(&f, "settings.json", "GIT_CONFIG_KEY_0");
         }
         put(&f.home.join(".claude/settings.json"), "{}");
         put(&f.home.join(".codex/config.toml"), "[shell_environment_policy.filters]\nHOME = \"include\"\n\"GIT_CONFIG_KEY_*\" = \"exclude\"\n");
-        let plan = f.plan();
-        assert!(plan.conflicts.iter().any(|conflict| conflict.contains("config.toml") && conflict.contains("GIT_CONFIG_KEY_*")), "a filter that would drop an injected name after set is a conflict: {:?}", plan.conflicts);
+        skipped_env(&f, "config.toml", "GIT_CONFIG_KEY_*");
+        f.cfg.lint_enabled = false;
+        assert!(f.plan().warnings.iter().all(|warning| !warning.contains("GIT_CONFIG")), "with lint off a foreign key is no conflict");
+        f.cfg.lint_enabled = true;
+        put(&f.home.join(".codex/config.toml"), "[shell_environment_policy]\nset = { EDITOR = \"vi\" }\n");
+        put(&f.home.join(".claude/settings.json"), &json!({"env": {"TMPDIR": "/t"}}).to_string());
+        f.apply(&f.plan());
+        f.cfg.lint_enabled = false;
+        f.apply(&f.plan());
+        assert!(f.plan().is_empty(), "{}", f.plan().render_text(&f.home));
+        let claude: Value = serde_json::from_str(&f.read(".claude/settings.json")).unwrap();
+        assert_eq!(claude["env"], json!({"TMPDIR": "/t"}));
+        let config: toml::Table = toml::from_str(&f.read(".codex/config.toml")).unwrap();
+        assert_eq!(config["shell_environment_policy"]["set"], toml::Value::Table(toml::from_str("EDITOR = \"vi\"").unwrap()), "with lint off install removes the lint env it wrote");
+        f.cfg.lint_enabled = true;
         let policy_after = |f: &Fixture, before: &str| -> toml::Value {
             put(&f.home.join(".codex/config.toml"), before);
             f.apply(&f.plan());
