@@ -145,9 +145,10 @@ worker = "haiku"
 # no-comments reports, keeps every other comment, and refuses a commit when an
 # error from a rule it cannot fix is left. Repositories under a temp dir, or
 # other repositories in an ignored path, are left alone; worktrees are checked.
-# In a jj workspace the same comments are removed with `jj fix` after an
-# agent's `jj commit`, `describe`, `new`, `squash` or `split`, and a
-# `jj git push` is refused while such an error is left.
+# In a jj workspace the same comments are removed with `jj fix` from the
+# unpushed changes an agent's `jj commit`, `describe`, `new`, `squash` or
+# `split` finalised, and a `jj git push` is refused while such an error is
+# left in one of those changes that it pushes.
 # Every key is optional; uncomment to change a default. `enabled = false` turns
 # every hook call into a silent no-op, and install then removes the lint
 # environment it wrote. `severity` values are "error", "warning" or "off".
