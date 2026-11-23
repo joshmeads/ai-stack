@@ -62,6 +62,17 @@ impl Sandbox {
         self.hook(repo, json!({"hook_event_name": event, "tool_name": "Bash", "cwd": repo, "tool_input": {"command": command}}))
     }
 
+    fn agent_commits(&self, repo: &Path, args: &[&str]) -> Value {
+        let command = format!("jj {}", args.join(" "));
+        self.agent_runs(repo, "PreToolUse", &command);
+        self.jj(repo, args);
+        self.agent_runs(repo, "PostToolUse", &command)
+    }
+
+    fn commit_of(&self, repo: &Path, revision: &str) -> String {
+        self.jj(repo, &["log", "--no-graph", "-r", revision, "-T", "commit_id"])
+    }
+
     fn events(&self) -> Vec<Value> {
         let text = fs::read_to_string(self.home.join(".local/state/ai-stack/lint/events.jsonl")).unwrap_or_default();
         text.lines().map(|line| serde_json::from_str(line).unwrap()).collect()
@@ -84,24 +95,38 @@ fn jj_commits_lose_the_agents_prose_and_a_push_with_an_unfixable_error_is_denied
         s.jj(&repo, &["bookmark", "create", "main", "-r", "@-"]);
         s.jj(&repo, &["git", "push", "--bookmark", "main"]);
 
+        s.agent_writes(&repo, "h.ts", "export const h = 1;\n// agent prose the human chose to keep\n");
+        s.jj(&repo, &["commit", "-m", "human"]);
+        let human = s.commit_of(&repo, "@-");
+        fs::write(repo.join("a.ts"), "export const a = 2;\n// agent prose about the total\n").unwrap();
+        s.jj(&repo, &["commit", "-m", "side"]);
+        s.jj(&repo, &["bookmark", "create", "side", "-r", "@-"]);
+        let side = s.commit_of(&repo, "side");
+        s.jj(&repo, &["new", &human]);
+
         s.agent_writes(&repo, "a.ts", "export const a = 2;\n// agent prose about the total\n");
         fs::write(repo.join("b.ts"), "export const b = 2;\n// The ledger rejects fractional cents.\n").unwrap();
-        s.jj(&repo, &["commit", "-m", "work"]);
-        let after = s.agent_runs(&repo, "PostToolUse", "jj commit -m work");
+        let after = s.agent_commits(&repo, &["commit", "-m", "work"]);
         assert_eq!(after["hookSpecificOutput"]["additionalContext"], "ai-stack lint: removed 1 comment in a.ts", "{layout}");
         assert_eq!(s.jj(&repo, &["file", "show", "-r", "@-", "a.ts"]), "export const a = 2;\n", "{layout}: the commit is rewritten");
         assert_eq!(fs::read_to_string(repo.join("a.ts")).unwrap(), "export const a = 2;\n", "{layout}: the working copy follows");
         assert_eq!(s.jj(&repo, &["file", "show", "-r", "@-", "b.ts"]), "export const b = 2;\n// The ledger rejects fractional cents.\n", "{layout}: a human's comment stays, and the user's own fix tools never run");
         assert_eq!(s.jj(&repo, &["diff", "--summary"]), "", "{layout}: the working copy is consistent");
+        assert_eq!((s.commit_of(&repo, "@--"), s.commit_of(&repo, "side")), (human, side), "{layout}: the human's commit and the sibling branch are never rewritten");
+        assert!(s.jj(&repo, &["file", "show", "-r", "side", "a.ts"]).contains("agent prose about the total"));
 
         s.agent_writes(&repo, "a.test.ts", SLEEP);
-        s.jj(&repo, &["commit", "-m", "sleep"]);
+        assert_eq!(s.agent_commits(&repo, &["commit", "-m", "sleep"])["hookSpecificOutput"]["additionalContext"], "ai-stack lint: a.test.ts:2 no-fixed-sleep (fix before pushing)");
         s.jj(&repo, &["bookmark", "set", "main", "-r", "@-"]);
-        assert_eq!(s.agent_runs(&repo, "PostToolUse", "jj commit -m sleep")["hookSpecificOutput"]["additionalContext"], "ai-stack lint: a.test.ts:2 no-fixed-sleep (fix before pushing)");
+        s.agent_writes(&repo, "wip.test.ts", SLEEP);
+        let described = s.agent_commits(&repo, &["describe", "-m", "wip"]);
+        assert!(described["hookSpecificOutput"]["additionalContext"].as_str().unwrap().contains("wip.test.ts:2 no-fixed-sleep"), "{described}");
         let denied = s.agent_runs(&repo, "PreToolUse", "jj git push --bookmark main");
         let reason = denied["hookSpecificOutput"]["permissionDecisionReason"].as_str().unwrap_or_default();
         assert!(denied["hookSpecificOutput"]["permissionDecision"] == "deny" && reason.starts_with("a.test.ts:2 no-fixed-sleep: ") && reason.ends_with("Fix these, or push with AI_STACK_LINT_SKIP=\"<reason>\" if a rule is wrong here."), "{denied}");
+        assert!(!reason.contains("wip.test.ts"), "{layout}: the working copy is not pushed, so it is not checked: {reason}");
         assert_eq!(s.agent_runs(&repo, "PreToolUse", "git push"), Value::Null, "only jj pushes are checked here");
+        assert_eq!(s.agent_runs(&repo, "PreToolUse", "jj git push --dry-run --bookmark main"), Value::Null, "a dry run is not checked");
 
         let skipped = s.agent_runs(&repo, "PreToolUse", "AI_STACK_LINT_SKIP=\"the device has no event\" jj git push --bookmark main");
         assert!(skipped["hookSpecificOutput"].get("permissionDecision").is_none(), "{skipped}");

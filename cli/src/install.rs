@@ -222,7 +222,7 @@ fn plan_hooks(cfg: &Config, hc: &HarnessConfig, folders: &links::Index, out: &mu
     Ok(())
 }
 
-const LINT_HOOKS: [(&str, &str); 2] = [("PostToolUse", "Edit|Write|Bash"), ("PreToolUse", "Bash")];
+const LINT_HOOKS: [(&str, &str); 2] = [("PostToolUse", "Edit|Write|Bash"), ("PreToolUse", "Edit|Write|Bash")];
 const HOOK_FLAGS: [&str; 3] = ["--config", "--home", "--stack"];
 const OUR_GIT_KEYS: [&str; 4] = ["hook.ai-stack-lint.event", "hook.ai-stack-lint.command", "hook.ai-stack-lint-post.event", "hook.ai-stack-lint-post.command"];
 const CODEX_INCLUDE: [&str; 4] = ["GIT_CONFIG_COUNT", "GIT_CONFIG_KEY_*", "GIT_CONFIG_VALUE_*", "AI_STACK_HARNESS"];
@@ -437,43 +437,13 @@ fn lint_hook_of(command: &str) -> Option<Harness> {
 }
 
 fn shell_words(command: &str) -> Option<Vec<String>> {
-    let mut words = Vec::new();
-    let mut word: Option<String> = None;
-    let mut chars = command.chars();
-    while let Some(c) = chars.next() {
-        match c {
-            '\'' => {
-                let current = word.get_or_insert_with(String::new);
-                loop {
-                    match chars.next()? {
-                        '\'' => break,
-                        inner => current.push(inner),
-                    }
-                }
-            }
-            '"' => {
-                let current = word.get_or_insert_with(String::new);
-                loop {
-                    match chars.next()? {
-                        '"' => break,
-                        '$' | '`' => return None,
-                        '\\' => match chars.next()? {
-                            escaped @ ('$' | '`' | '"' | '\\') => current.push(escaped),
-                            '\n' => {}
-                            other => current.extend(['\\', other]),
-                        },
-                        inner => current.push(inner),
-                    }
-                }
-            }
-            '\\' => word.get_or_insert_with(String::new).push(chars.next()?),
-            c if c.is_whitespace() => words.extend(word.take()),
-            c if "\"$`;&|<>(){}*?".contains(c) => return None,
-            c => word.get_or_insert_with(String::new).push(c),
-        }
-    }
-    words.extend(word);
-    Some(words)
+    exec::lex(command)?
+        .into_iter()
+        .map(|lexeme| match lexeme {
+            exec::Lexeme::Word(word) if !word.expands => Some(word.text),
+            _ => None,
+        })
+        .collect()
 }
 
 fn ensure_lint_hook(root: &mut Value, harness: Harness, exe: &Path, flags: &[String], event: &str, matcher: &str) -> Result<bool, String> {
@@ -1293,10 +1263,10 @@ pub(crate) mod tests {
         assert_eq!(codex["hooks"]["PostToolUse"][0], foreign("/usr/local/bin/format-hook"));
         assert_eq!(codex["hooks"]["PostToolUse"][1], json!({"matcher": "Edit|Write|Bash", "hooks": [{"type": "command", "command": format!("{exe} --config '/cfg dir/selected.toml' lint hook codex")}]}), "a v1 entry is repointed where it stands");
         assert_eq!(codex["hooks"]["Stop"], json!([v1_stop]), "install never removes a hook entry");
-        assert_eq!(codex["hooks"]["PreToolUse"], json!([{"matcher": "Bash", "hooks": [{"type": "command", "command": format!("{exe} --config '/cfg dir/selected.toml' lint hook codex")}]}]), "the jj push check runs before Bash");
+        assert_eq!(codex["hooks"]["PreToolUse"], json!([{"matcher": "Edit|Write|Bash", "hooks": [{"type": "command", "command": format!("{exe} --config '/cfg dir/selected.toml' lint hook codex")}]}]), "the jj checks and Codex deletions run before Bash and edits");
         let claude: Value = serde_json::from_str(&f.read(".claude/settings.json")).unwrap();
         assert_eq!(claude["hooks"]["PostToolUse"][0]["matcher"], "Edit|Write|Bash");
-        assert_eq!(claude["hooks"]["PreToolUse"][0]["matcher"], "Bash");
+        assert_eq!(claude["hooks"]["PreToolUse"][0]["matcher"], "Edit|Write|Bash");
         assert_eq!(claude["hooks"].as_object().unwrap().len(), 2, "only PostToolUse and PreToolUse are registered");
         let pre = format!("[ -x {exe} ] || exit 0; {exe} --config '/cfg dir/selected.toml' lint pre-commit; [ $? -ne 3 ]");
         assert_eq!(claude["env"]["TMPDIR"], "/t");

@@ -27,11 +27,16 @@ pub struct Provenance {
 enum Record {
     WrittenTo,
     RemovedIn,
+    OwnedIn,
 }
 
 pub fn comment_line(line: &str) -> Option<&str> {
     let trimmed = line.trim();
     (trimmed.starts_with("//") || trimmed.starts_with('#')).then_some(trimmed)
+}
+
+fn comments<'l>(lines: impl IntoIterator<Item = &'l str>) -> Vec<String> {
+    lines.into_iter().filter_map(comment_line).map(str::to_string).collect()
 }
 
 impl Provenance {
@@ -43,6 +48,7 @@ impl Provenance {
         let prefix: &[u8] = match record {
             Record::WrittenTo => b"",
             Record::RemovedIn => b"removed\0",
+            Record::OwnedIn => b"owned\0",
         };
         let digest: String = Sha256::new().chain_update(prefix).chain_update(paths::resolve(path).as_os_str().as_bytes()).finalize().iter().take(16).map(|byte| format!("{byte:02x}")).collect();
         self.dir.join(digest)
@@ -54,15 +60,18 @@ impl Provenance {
     }
 
     pub fn record<'l>(&self, path: &Path, added: impl IntoIterator<Item = &'l str>) -> Result<()> {
-        self.append(Record::WrittenTo, path, added)
+        self.append(Record::WrittenTo, path, comments(added))
     }
 
     pub fn record_removed<'l>(&self, repo: &Path, removed: impl IntoIterator<Item = &'l str>) -> Result<()> {
-        self.append(Record::RemovedIn, repo, removed)
+        self.append(Record::RemovedIn, repo, comments(removed))
     }
 
-    fn append<'l>(&self, record: Record, path: &Path, lines: impl IntoIterator<Item = &'l str>) -> Result<()> {
-        let mut lines: Vec<String> = lines.into_iter().filter_map(comment_line).map(str::to_string).collect();
+    pub fn record_owned(&self, workspace: &Path, changes: &[String]) -> Result<()> {
+        self.append(Record::OwnedIn, workspace, changes.to_vec())
+    }
+
+    fn append(&self, record: Record, path: &Path, mut lines: Vec<String>) -> Result<()> {
         lines.sort();
         lines.dedup();
         if lines.is_empty() {
@@ -110,6 +119,10 @@ impl Provenance {
     pub fn moved(&self, repo: &Path) -> HashSet<String> {
         self.lines(Record::RemovedIn, repo)
     }
+
+    pub fn owned(&self, workspace: &Path) -> HashSet<String> {
+        self.lines(Record::OwnedIn, workspace)
+    }
 }
 
 #[cfg(test)]
@@ -133,5 +146,7 @@ mod tests {
         later.record_removed(tmp.path(), ["  // a human's rule", "return 1;"]).unwrap();
         assert_eq!(later.moved(tmp.path()), HashSet::from(["// a human's rule".to_string()]));
         assert!(later.written(tmp.path()).is_empty(), "a repository's removals are kept apart from a file's additions");
+        later.record_owned(tmp.path(), &["kxyz".to_string()]).unwrap();
+        assert_eq!((later.owned(tmp.path()), later.moved(tmp.path()).len()), (HashSet::from(["kxyz".to_string()]), 1), "owned jj changes are a record of their own");
     }
 }

@@ -1,3 +1,4 @@
+mod command;
 mod commit;
 mod events;
 mod fix;

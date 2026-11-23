@@ -613,7 +613,7 @@ pub fn post_commit(state_dir: &Path, settings: Result<Settings>, env: &Env) -> i
         let pending = log.take_mark(&env.git.id);
         let Some(checkout) = open(&settings, env)? else { return Ok(()) };
         let head = checkout.repo.head();
-        let event = |kind, findings: Vec<String>, reason| Event { time: env.now, kind, repo: checkout.repo.project_key.clone(), harness: env.harness.clone(), head: head.clone(), findings, reason, vcs: None };
+        let event = |kind, findings: Vec<String>, reason| Event { time: env.now, kind, repo: checkout.repo.project_key.clone(), harness: env.harness.clone(), head: head.clone(), findings, reason, vcs: None, change: None, fingerprints: Vec::new() };
         match pending {
             Some(pending) if pending.before == head => return Ok(()),
             Some(Pending { outcome: Outcome::Nothing, .. }) => return Ok(()),

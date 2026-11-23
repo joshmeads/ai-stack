@@ -210,9 +210,9 @@ enum LintCommand {
     /// Git post-commit hook that records a commit made without the pre-commit check.
     #[command(hide = true)]
     PostCommit,
-    /// Remove the agent's comments from the mutable commits below the jj working copy, as the
-    /// hooks do after `jj commit` and before `jj git push`, then report what is left. Exits 1
-    /// when errors remain.
+    /// Remove the agent's comments from the unpushed jj changes its commit commands finalised,
+    /// as the hooks do after `jj commit` and before `jj git push`, then report what is left.
+    /// Exits 1 when errors remain.
     #[command(hide = true)]
     JjFix,
     /// The `jj fix` tool that `jj-fix` configures: reads one file version on stdin and writes

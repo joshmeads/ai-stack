@@ -5,6 +5,7 @@ use anyhow::Result;
 use serde::Deserialize;
 use serde_json::{Value, json};
 
+use super::command::{Action, Call, jj_calls};
 use super::events::{Log, now};
 use super::jj;
 use super::provenance::Provenance;
@@ -39,18 +40,21 @@ struct Edited {
 pub fn run(harness: Harness, state_dir: &Path, settings: impl FnOnce() -> Result<Settings>, input: &str) -> Result<Option<String>> {
     let payload: Payload = serde_json::from_str(input)?;
     let shell = payload.tool_name.as_deref() == Some("Bash");
-    let command = payload.tool_input.get("command").and_then(Value::as_str).unwrap_or_default();
     let cwd = payload.cwd.clone().unwrap_or_else(|| PathBuf::from("/"));
+    let calls = match shell {
+        true => jj_calls(payload.tool_input.get("command").and_then(Value::as_str).unwrap_or_default(), &cwd),
+        false => Vec::new(),
+    };
     match payload.hook_event_name.as_deref() {
-        Some("PreToolUse") if shell && jj::is_push(command) && jj::Workspace::find(&cwd).is_some() => {
-            return Ok(jj::before_push(&settings()?, state_dir, &cwd, command, harness.as_str()).map(|reply| reply.to_string()));
-        }
+        Some("PreToolUse") => return before(harness, state_dir, settings, &payload, &cwd, &calls),
         Some("PostToolUse") | None => {}
         Some(_) => return Ok(None),
     }
     let log = Log::new(state_dir);
     let queued = log.has_notices();
-    let jj_commit = shell && jj::is_commit(command) && jj::Workspace::find(&cwd).is_some();
+    let mut committed: Vec<&Path> = calls.iter().filter(|call| matches!(call.action, Action::Commit { .. }) && jj::Workspace::find(&call.dir).is_some()).map(|call| call.dir.as_path()).collect();
+    committed.dedup();
+    let jj_commit = !committed.is_empty();
     if shell && !queued && !jj_commit {
         return Ok(None);
     }
@@ -75,7 +79,11 @@ pub fn run(harness: Harness, state_dir: &Path, settings: impl FnOnce() -> Result
             }
             context = report(&settings, &files, &cwd, &mut repos)?;
             if jj_commit {
-                context = jj::after_commit(&settings, state_dir, &cwd)?;
+                let mut lines = Vec::new();
+                for dir in committed {
+                    lines.extend(jj::after_commit(&settings, state_dir, dir)?);
+                }
+                context = (!lines.is_empty()).then(|| lines.join("\n"));
             }
         }
     }
@@ -97,6 +105,49 @@ pub fn run(harness: Harness, state_dir: &Path, settings: impl FnOnce() -> Result
         reply["systemMessage"] = json!(notices.join("\n"));
     }
     Ok(Some(reply.to_string()))
+}
+
+fn before(harness: Harness, state_dir: &Path, settings: impl FnOnce() -> Result<Settings>, payload: &Payload, cwd: &Path, calls: &[Call]) -> Result<Option<String>> {
+    let deleted = match harness {
+        Harness::Codex if payload.tool_name.as_deref() != Some("Bash") => deleted_files(payload, cwd),
+        _ => Vec::new(),
+    };
+    if calls.is_empty() && deleted.is_empty() {
+        return Ok(None);
+    }
+    let settings = settings()?;
+    if !settings.enabled {
+        return Ok(None);
+    }
+    let provenance = Provenance::new(state_dir, now());
+    for (file, text) in &deleted {
+        if let Some(repo) = jj::locate(file.parent().unwrap_or(file))
+            && settings.policy(Some(&repo)).enabled()
+        {
+            let _ = provenance.record_removed(&repo.project_key, text.lines());
+        }
+    }
+    let mut reply = None;
+    for call in calls {
+        match call.action {
+            Action::Commit { .. } => {
+                let _ = jj::own(&settings, state_dir, call);
+            }
+            Action::Push { .. } if reply.is_none() => reply = jj::before_push(&settings, state_dir, call, harness.as_str()),
+            Action::Push { .. } => {}
+        }
+    }
+    Ok(reply.map(|reply| reply.to_string()))
+}
+
+fn deleted_files(payload: &Payload, cwd: &Path) -> Vec<(PathBuf, String)> {
+    let patch = payload.tool_input.get("command").and_then(Value::as_str).or_else(|| payload.tool_input.as_str()).unwrap_or_default();
+    patch
+        .lines()
+        .filter_map(|line| line.strip_prefix("*** Delete File: "))
+        .map(|path| paths::normalize(&cwd.join(path.trim())))
+        .filter_map(|file| Some((file.clone(), std::fs::read_to_string(&file).ok()?)))
+        .collect()
 }
 
 fn report(settings: &Settings, files: &[PathBuf], cwd: &Path, repos: &mut Repos) -> Result<Option<String>> {
@@ -225,6 +276,10 @@ mod tests {
         call(Harness::Claude, cut);
         let key = Repo::discover(&repo).unwrap().project_key;
         assert_eq!(Provenance::new(&state, now()).moved(&key), HashSet::from(["// rounding rule".to_string()]), "an Edit removes only what its old_string held, never the rest of originalFile");
+        put(&repo.join("draft.ts"), "// a human's untracked note\nexport {};\n");
+        let delete = json!({"hook_event_name": "PreToolUse", "tool_name": "apply_patch", "cwd": repo, "tool_input": {"command": "*** Begin Patch\n*** Delete File: draft.ts\n*** End Patch\n"}});
+        call(Harness::Codex, delete);
+        assert!(Provenance::new(&state, now()).moved(&key).contains("// a human's untracked note"), "a file a Codex patch deletes is read before it goes");
         let off = LintProject { path: repo.to_string_lossy().into_owned(), paths: Default::default(), ignore: Vec::new(), scope: None, enabled: Some(false) };
         let write = json!({"hook_event_name": "PostToolUse", "tool_name": "Write", "cwd": repo, "tool_input": {"file_path": repo.join("off.ts"), "content": "// written while lint is off\n"}});
         run(Harness::Claude, &state, || Ok(settings(&home, LintSection { project: vec![off], ..LintSection::default() })), &write.to_string()).unwrap();

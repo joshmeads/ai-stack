@@ -1,3 +1,4 @@
+use std::collections::HashSet;
 use std::io::Write as _;
 use std::os::unix::ffi::OsStrExt as _;
 use std::path::{Path, PathBuf};
@@ -36,6 +37,10 @@ pub struct Event {
     pub reason: Option<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub vcs: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub change: Option<String>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub fingerprints: Vec<String>,
 }
 
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
@@ -128,6 +133,14 @@ impl Log {
         Ok(())
     }
 
+    pub fn skipped(&self, repo: &Path) -> HashSet<String> {
+        self.read().into_iter().filter(|event| event.repo == repo && event.kind == Kind::Skip).flat_map(|event| event.fingerprints).collect()
+    }
+
+    pub fn has_change(&self, repo: &Path, change: &str) -> bool {
+        self.read().iter().any(|event| event.repo == repo && event.change.as_deref() == Some(change))
+    }
+
     pub fn writable(&self) -> Result<()> {
         std::fs::create_dir_all(&self.dir).with_context(|| format!("creating {}", self.dir.display()))?;
         std::fs::OpenOptions::new().create(true).append(true).open(self.events_path()).with_context(|| format!("opening {}", self.events_path().display()))?;
@@ -215,7 +228,7 @@ mod tests {
     use super::*;
 
     fn event(time: u64, kind: Kind) -> Event {
-        Event { time, kind, repo: PathBuf::from("/r"), harness: None, head: None, findings: Vec::new(), reason: None, vcs: None }
+        Event { time, kind, repo: PathBuf::from("/r"), harness: None, head: None, findings: Vec::new(), reason: None, vcs: None, change: None, fingerprints: Vec::new() }
     }
 
     #[test]

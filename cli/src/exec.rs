@@ -123,6 +123,96 @@ pub fn shell_quote(arg: &str) -> String {
     }
 }
 
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+pub struct Word {
+    pub text: String,
+    pub quoted_from: Option<usize>,
+    pub expands: bool,
+}
+
+impl Word {
+    pub fn assignment(&self) -> Option<(&str, &str)> {
+        let (name, value) = self.text.split_once('=')?;
+        let plain_name = !name.is_empty() && name.chars().all(|c| c.is_ascii_alphanumeric() || c == '_') && !name.starts_with(|c: char| c.is_ascii_digit());
+        (plain_name && self.quoted_from.is_none_or(|from| from > name.len())).then_some((name, value))
+    }
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum Lexeme {
+    Word(Word),
+    Separator,
+    Redirect,
+}
+
+pub fn lex(command: &str) -> Option<Vec<Lexeme>> {
+    let mut out = Vec::new();
+    let mut word: Option<Word> = None;
+    let mut chars = command.chars().peekable();
+    let quoting = |word: &mut Option<Word>| {
+        let current = word.get_or_insert_with(Word::default);
+        current.quoted_from.get_or_insert(current.text.len());
+    };
+    while let Some(c) = chars.next() {
+        match c {
+            '\'' => {
+                quoting(&mut word);
+                let current = word.as_mut()?;
+                loop {
+                    match chars.next()? {
+                        '\'' => break,
+                        inner => current.text.push(inner),
+                    }
+                }
+            }
+            '"' => {
+                quoting(&mut word);
+                let current = word.as_mut()?;
+                loop {
+                    match chars.next()? {
+                        '"' => break,
+                        '\\' => match chars.next()? {
+                            escaped @ ('$' | '`' | '"' | '\\') => current.text.push(escaped),
+                            '\n' => {}
+                            other => current.text.extend(['\\', other]),
+                        },
+                        inner => {
+                            current.expands |= inner == '$' || inner == '`';
+                            current.text.push(inner);
+                        }
+                    }
+                }
+            }
+            '\\' => match chars.next()? {
+                '\n' => {}
+                escaped => {
+                    quoting(&mut word);
+                    word.as_mut()?.text.push(escaped);
+                }
+            },
+            '<' | '>' => {
+                out.extend(word.take().map(Lexeme::Word));
+                out.push(Lexeme::Redirect);
+                while chars.next_if(|next| matches!(next, '<' | '>' | '&' | '|')).is_some() {}
+            }
+            '\n' | ';' | '&' | '|' | '(' | ')' | '{' | '}' => {
+                out.extend(word.take().map(Lexeme::Word));
+                if out.last() != Some(&Lexeme::Separator) {
+                    out.push(Lexeme::Separator);
+                }
+            }
+            c if c.is_whitespace() => out.extend(word.take().map(Lexeme::Word)),
+            c => {
+                let current = word.get_or_insert_with(Word::default);
+                current.expands |= "$`*?".contains(c);
+                current.text.push(c);
+            }
+        }
+    }
+    out.extend(word.take().map(Lexeme::Word));
+    Some(out)
+}
+
 #[cfg(test)]
 pub mod fake {
     use std::cell::RefCell;

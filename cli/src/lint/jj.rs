@@ -1,26 +1,26 @@
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, HashMap, HashSet};
 use std::io::{Read, Write};
 use std::path::{Path, PathBuf};
 use std::process::{Command, Stdio};
-use std::sync::LazyLock;
 
 use anyhow::{Context as _, Result, bail};
-use regex::Regex;
 use serde_json::{Value, json};
+use sha2::{Digest as _, Sha256};
 
-use super::commit::{Checkout, Git, HIGH_RATE, OnDisk, Source, Target, plural, refusal, skip_recorded, sorted_names};
+use super::command::{Action, Call};
+use super::commit::{Checkout, Git, HIGH_RATE, OnDisk, Source, Staged, Target, plural, refusal, skip_recorded, sorted_names};
 use super::events::{Event, Kind, Log, now};
 use super::fix::{self, Run};
 use super::provenance::Provenance;
 use super::repo::{Attributes, Repo};
-use super::scan::{Engine, language_of, sort};
+use super::scan::{Engine, language_of};
 use super::{Finding, Settings, Severity, files_named};
 
-const RANGE: &str = "latest(mutable() & ::@ & ~empty(), 50)";
 const TOOL: &str = "ai-stack-lint";
 const SHOWN: usize = 5;
-const COMMITTING: [&str; 5] = ["commit", "describe", "new", "squash", "split"];
-const GLOBAL_FLAGS_WITH_VALUES: [&str; 7] = ["-R", "--repository", "--config", "--config-file", "--at-op", "--at-operation", "--color"];
+const UNPUBLISHED: &str = "mutable() & ~conflicts() & ~::remote_bookmarks()";
+const MEMBER: &str = r#"commit_id ++ " " ++ change_id ++ " " ++ parents.map(|parent| parent.commit_id()).join(",") ++ "\n""#;
+const CONFLICT_PATHS: [&str; 2] = [".jjconflict-", "JJ-CONFLICT-README"];
 
 type Plan = BTreeMap<String, Vec<Run>>;
 
@@ -46,6 +46,10 @@ impl Workspace {
         Repo { root: self.root.clone(), project_key: self.key.clone() }
     }
 
+    fn checked(&self, settings: &Settings) -> bool {
+        settings.enabled && settings.policy(Some(&self.repo())).enabled()
+    }
+
     fn jj(&self, args: &[&str]) -> Result<String> {
         let out = Command::new("jj")
             .arg("-R")
@@ -61,8 +65,19 @@ impl Workspace {
         Ok(String::from_utf8_lossy(&out.stdout).into_owned())
     }
 
-    fn commits(&self, revset: &str) -> Result<Vec<String>> {
-        Ok(self.jj(&["log", "--no-graph", "-r", revset, "-T", "commit_id ++ \"\\n\""])?.lines().map(str::to_string).collect())
+    fn changes(&self, revset: &str) -> Result<Vec<String>> {
+        Ok(self.jj(&["--ignore-working-copy", "log", "--no-graph", "-r", revset, "-T", "change_id ++ \"\\n\""])?.lines().map(str::to_string).collect())
+    }
+
+    fn members(&self, revset: &str) -> Result<Vec<Member>> {
+        let listed = self.jj(&["log", "--no-graph", "-r", revset, "-T", MEMBER])?;
+        Ok(listed
+            .lines()
+            .filter_map(|line| {
+                let mut fields = line.split(' ');
+                Some(Member { commit: fields.next()?.into(), change: fields.next()?.into(), parents: fields.next().unwrap_or_default().split(',').filter(|parent| !parent.is_empty()).map(String::from).collect() })
+            })
+            .collect())
     }
 
     fn user_tools(&self) -> Result<Vec<String>> {
@@ -76,6 +91,12 @@ impl Workspace {
         tools.dedup();
         Ok(tools)
     }
+
+    fn owned(&self, state_dir: &Path) -> Option<String> {
+        let mut changes: Vec<String> = Provenance::new(state_dir, now()).owned(&self.root).into_iter().filter(|change| !change.is_empty() && change.bytes().all(|byte| byte.is_ascii_lowercase())).collect();
+        changes.sort();
+        (!changes.is_empty()).then(|| changes.iter().map(|change| format!("change_id({change})")).collect::<Vec<_>>().join(" | "))
+    }
 }
 
 pub fn locate(dir: &Path) -> Option<Repo> {
@@ -86,82 +107,100 @@ pub fn locate(dir: &Path) -> Option<Repo> {
     }
 }
 
-fn words(command: &str) -> Vec<&str> {
-    command.split(|char: char| char.is_whitespace() || ";&|()".contains(char)).filter(|word| !word.is_empty()).collect()
+pub fn own(settings: &Settings, state_dir: &Path, call: &Call) -> Result<()> {
+    let Action::Commit { owns } = &call.action else { return Ok(()) };
+    let Some(workspace) = Workspace::find(&call.dir) else { return Ok(()) };
+    if !workspace.checked(settings) {
+        return Ok(());
+    }
+    let changes = workspace.changes(owns).or_else(|_| workspace.changes("@"))?;
+    Provenance::new(state_dir, now()).record_owned(&workspace.root, &changes)
 }
 
-fn subcommands(command: &str) -> Vec<(&str, Option<&str>)> {
-    if !command.contains("jj") {
-        return Vec::new();
-    }
-    let words = words(command);
-    let mut found = Vec::new();
-    for (at, word) in words.iter().enumerate() {
-        if Path::new(word).file_name().is_none_or(|name| name != "jj") {
-            continue;
+struct Member {
+    commit: String,
+    change: String,
+    parents: Vec<String>,
+}
+
+#[derive(Debug, PartialEq, Eq)]
+struct Segment {
+    base: String,
+    head: String,
+    root: String,
+}
+
+fn segments(members: &[Member]) -> Vec<Segment> {
+    let by_commit: HashMap<&str, &Member> = members.iter().map(|member| (member.commit.as_str(), member)).collect();
+    let below: HashSet<&str> = members.iter().flat_map(|member| member.parents.iter().map(String::as_str)).collect();
+    let mut segments: Vec<Segment> = Vec::new();
+    for head in members.iter().filter(|member| !below.contains(member.commit.as_str())) {
+        let mut chain = vec![head];
+        while let [parent] = &chain[chain.len() - 1].parents[..]
+            && let Some(next) = by_commit.get(parent.as_str())
+        {
+            chain.push(next);
         }
-        let mut rest = words[at + 1..].iter().copied();
-        let mut positional = Vec::new();
-        while let Some(word) = rest.next() {
-            if GLOBAL_FLAGS_WITH_VALUES.contains(&word) {
-                rest.next();
-            } else if !word.starts_with('-') {
-                positional.push(word);
-                if positional.len() == 2 {
-                    break;
-                }
+        let bottom = chain[chain.len() - 1];
+        let found: Vec<Segment> = match &bottom.parents[..] {
+            [base] => vec![Segment { base: base.clone(), head: head.commit.clone(), root: bottom.change.clone() }],
+            _ => chain.iter().filter_map(|member| match &member.parents[..] {
+                [base] => Some(Segment { base: base.clone(), head: member.commit.clone(), root: member.change.clone() }),
+                _ => None,
+            }).collect(),
+        };
+        for segment in found {
+            if !segments.contains(&segment) {
+                segments.push(segment);
             }
         }
-        if let Some(&first) = positional.first() {
-            found.push((first, positional.get(1).copied()));
-        }
     }
-    found
+    segments
 }
 
-pub fn is_commit(command: &str) -> bool {
-    subcommands(command).iter().any(|(name, _)| COMMITTING.contains(name))
+fn roots(members: &[Member]) -> Vec<String> {
+    let commits: HashSet<&str> = members.iter().map(|member| member.commit.as_str()).collect();
+    members.iter().filter(|member| member.parents.iter().all(|parent| !commits.contains(parent.as_str()))).map(|member| member.commit.clone()).collect()
 }
 
-pub fn is_push(command: &str) -> bool {
-    subcommands(command).contains(&("git", Some("push")))
-}
-
-fn skip_reason(command: &str) -> Option<String> {
-    static ASSIGNMENT: LazyLock<Regex> = LazyLock::new(|| Regex::new(r#"(?:^|[\s;&|(])AI_STACK_LINT_SKIP=(?:"([^"]*)"|'([^']*)'|([^\s;&|]*))"#).unwrap());
-    let found = ASSIGNMENT.captures(command)?;
-    Some((1..=3).find_map(|group| found.get(group)).map_or("", |value| value.as_str()).trim().to_string())
+struct Left {
+    finding: Finding,
+    fingerprint: String,
 }
 
 struct Report {
     removed: usize,
     files: Vec<String>,
-    left: Vec<Finding>,
+    left: Vec<Left>,
     head: String,
+    change: String,
 }
 
-fn fix_range(settings: &Settings, workspace: &Workspace, state_dir: &Path) -> Result<Option<Report>> {
-    let repo = workspace.repo();
-    if !settings.enabled || !settings.policy(Some(&repo)).enabled() {
+fn fingerprint(change: &str, finding: &Finding) -> String {
+    let digest = Sha256::new().chain_update(change).chain_update([0]).chain_update(&finding.rule).chain_update([0]).chain_update(&finding.path).chain_update([0]).chain_update(finding.snippet.trim()).finalize();
+    digest.iter().take(16).map(|byte| format!("{byte:02x}")).collect()
+}
+
+fn own_files(staged: Vec<Staged>) -> Vec<Staged> {
+    staged.into_iter().filter(|file| !file.rel.components().any(|part| part.as_os_str().to_str().is_some_and(|part| CONFLICT_PATHS.iter().any(|conflict| part.starts_with(conflict))))).collect()
+}
+
+fn fix_owned(settings: &Settings, workspace: &Workspace, state_dir: &Path, within: &str) -> Result<Option<Report>> {
+    if !workspace.checked(settings) {
         return Ok(None);
     }
-    let roots = workspace.commits(&format!("roots({RANGE})"))?;
-    if roots.is_empty() {
+    let Some(owned) = workspace.owned(state_dir) else { return Ok(None) };
+    let scope = format!("({owned}) & ({within}) & {UNPUBLISHED}");
+    let members = workspace.members(&scope)?;
+    if members.is_empty() {
         return Ok(None);
     }
     let store = crate::paths::resolve(Path::new(workspace.jj(&["git", "root"])?.trim()));
-    let checkout = Checkout { git: Git::of_store(workspace.root.clone(), store.clone()), repo };
-    let base = match &workspace.commits(&format!("roots({RANGE})-"))?[..] {
-        [one] => one.clone(),
-        _ => match &workspace.commits(&format!("fork_point(roots({RANGE})-)"))?[..] {
-            [one] => one.clone(),
-            _ => bail!("the commits to check have no single base"),
-        },
-    };
-    let base = if base.bytes().all(|byte| byte == b'0') { checkout.git.empty_tree()? } else { base };
+    let checkout = Checkout { git: Git::of_store(workspace.root.clone(), store.clone()), repo: workspace.repo() };
+    let empty_tree = checkout.git.empty_tree()?;
+    let base_of = |base: &str| if base.bytes().all(|byte| byte == b'0') { empty_tree.clone() } else { base.to_string() };
     let rules = settings.rules()?;
     let provenance = Provenance::new(state_dir, now());
-    let mut head = workspace.commits("@")?.into_iter().next().context("jj printed no working-copy commit")?;
     let engine = |commit: &str| Engine {
         settings,
         rules: &rules,
@@ -171,37 +210,48 @@ fn fix_range(settings: &Settings, workspace: &Workspace, state_dir: &Path) -> Re
         repo: Some(&checkout.repo),
     };
 
-    let (plan, removed, files) = {
-        let staged = checkout.staged(&base, &Target::Commit(&head))?;
-        let fixable: Vec<Finding> = engine(&head).lint(&checkout.changes(&staged)).into_iter().filter(|finding| finding.severity == Severity::Error && finding.fix.is_some()).collect();
-        let source = Source { base: &base, target: Target::Commit(&head), attributes: Attributes::Tree { git_dir: store.clone(), commit: head.clone() }, on_disk: OnDisk::Links };
-        let deletions = checkout.deletions(&staged, &fixable.iter().collect::<Vec<_>>(), &source, &provenance)?;
-        let mut plan = Plan::new();
-        let mut removed = 0;
-        let mut files = Vec::new();
-        for deletion in &deletions {
+    let mut plan = Plan::new();
+    for segment in segments(&members) {
+        let base = base_of(&segment.base);
+        let staged = own_files(checkout.staged(&base, &Target::Commit(&segment.head))?);
+        let fixable: Vec<Finding> = engine(&segment.head).lint(&checkout.changes(&staged)).into_iter().filter(|finding| finding.severity == Severity::Error && finding.fix.is_some()).collect();
+        let source = Source { base: &base, target: Target::Commit(&segment.head), attributes: Attributes::Tree { git_dir: store.clone(), commit: segment.head.clone() }, on_disk: OnDisk::Links };
+        for deletion in checkout.deletions(&staged, &fixable.iter().collect::<Vec<_>>(), &source, &provenance)? {
             let (Some(path), Some(language)) = (deletion.file.rel.to_str(), language_of(&deletion.file.rel)) else { continue };
             let everywhere = fix::runs(language, &deletion.file.source);
             let count = |runs: &[Run], run: &Run| runs.iter().filter(|other| *other == run).count();
-            let unique: Vec<Run> = deletion.fixed.runs.iter().filter(|run| count(&everywhere, run) == count(&deletion.fixed.runs, run)).cloned().collect();
-            if unique.is_empty() {
-                continue;
+            let planned = plan.entry(path.to_string()).or_default();
+            for run in deletion.fixed.runs.iter().filter(|run| count(&everywhere, run) == count(&deletion.fixed.runs, run)) {
+                if !planned.contains(run) {
+                    planned.push(run.clone());
+                }
             }
-            removed += unique.iter().map(Vec::len).sum::<usize>();
-            files.push(checkout.display(&deletion.file.rel));
-            plan.insert(path.to_string(), unique);
         }
-        (plan, removed, files)
-    };
-    if !plan.is_empty() {
-        apply(workspace, state_dir, &roots, &plan)?;
-        head = workspace.commits("@")?.into_iter().next().context("jj printed no working-copy commit")?;
     }
+    plan.retain(|_, runs| !runs.is_empty());
+    let removed = plan.values().flatten().map(Vec::len).sum();
+    let files = plan.keys().map(|path| checkout.display(Path::new(path))).collect();
+    let members = if plan.is_empty() {
+        members
+    } else {
+        apply(workspace, state_dir, &roots(&members), &plan)?;
+        workspace.members(&scope)?
+    };
 
-    let staged = checkout.staged(&base, &Target::Commit(&head))?;
-    let mut left: Vec<Finding> = engine(&head).lint(&checkout.changes(&staged)).into_iter().filter(|finding| finding.severity == Severity::Error && finding.fix.is_none()).collect();
-    sort(&mut left);
-    Ok(Some(Report { removed, files, left, head }))
+    let mut left = Vec::new();
+    let mut seen = HashSet::new();
+    for segment in segments(&members) {
+        let staged = own_files(checkout.staged(&base_of(&segment.base), &Target::Commit(&segment.head))?);
+        for finding in engine(&segment.head).lint(&checkout.changes(&staged)).into_iter().filter(|finding| finding.severity == Severity::Error && finding.fix.is_none()) {
+            let fingerprint = fingerprint(&segment.root, &finding);
+            if seen.insert(fingerprint.clone()) {
+                left.push(Left { finding, fingerprint });
+            }
+        }
+    }
+    left.sort_by(|a, b| (&a.finding.path, a.finding.line, a.finding.column, &a.finding.rule).cmp(&(&b.finding.path, b.finding.line, b.finding.column, &b.finding.rule)));
+    let newest = members.first().context("jj listed no commits")?;
+    Ok(Some(Report { removed, files, left, head: newest.commit.clone(), change: newest.change.clone() }))
 }
 
 fn apply(workspace: &Workspace, state_dir: &Path, roots: &[String], plan: &Plan) -> Result<()> {
@@ -247,10 +297,10 @@ fn planned_runs(plan_file: &Path, path: &str) -> Option<(ast_grep_language::Supp
     Some((language_of(Path::new(path))?, plan.remove(path)?))
 }
 
-fn located(report: &Report) -> Vec<String> {
-    let mut named: Vec<String> = report.left.iter().take(SHOWN).map(|finding| format!("{}:{} {}", finding.path, finding.line, finding.rule)).collect();
-    if report.left.len() > SHOWN {
-        named.push(format!("+{} more", report.left.len() - SHOWN));
+fn located(left: &[&Finding]) -> Vec<String> {
+    let mut named: Vec<String> = left.iter().take(SHOWN).map(|finding| format!("{}:{} {}", finding.path, finding.line, finding.rule)).collect();
+    if left.len() > SHOWN {
+        named.push(format!("+{} more", left.len() - SHOWN));
     }
     named
 }
@@ -259,16 +309,22 @@ fn removal(report: &Report) -> Option<String> {
     (report.removed > 0).then(|| format!("removed {} in {}", plural(report.removed, "comment"), files_named(&report.files)))
 }
 
-pub fn after_commit(settings: &Settings, state_dir: &Path, cwd: &Path) -> Result<Option<String>> {
-    let Some(workspace) = Workspace::find(cwd) else { return Ok(None) };
-    let report = match fix_range(settings, &workspace, state_dir) {
+fn unskipped<'r>(report: &'r Report, log: &Log, key: &Path) -> Vec<&'r Finding> {
+    let skipped = log.skipped(key);
+    report.left.iter().filter(|left| !skipped.contains(&left.fingerprint)).map(|left| &left.finding).collect()
+}
+
+pub fn after_commit(settings: &Settings, state_dir: &Path, dir: &Path) -> Result<Option<String>> {
+    let Some(workspace) = Workspace::find(dir) else { return Ok(None) };
+    let report = match fix_owned(settings, &workspace, state_dir, "all()") {
         Ok(Some(report)) => report,
         Ok(None) => return Ok(None),
         Err(error) => return Ok(Some(skipped(&error))),
     };
     let mut parts: Vec<String> = removal(&report).into_iter().collect();
-    if !report.left.is_empty() {
-        parts.push(format!("{} (fix before pushing)", located(&report).join(", ")));
+    let left = unskipped(&report, &Log::new(state_dir), &workspace.key);
+    if !left.is_empty() {
+        parts.push(format!("{} (fix before pushing)", located(&left).join(", ")));
     }
     Ok((!parts.is_empty()).then(|| format!("ai-stack lint: {}", parts.join("; "))))
 }
@@ -277,9 +333,10 @@ fn skipped(error: &anyhow::Error) -> String {
     format!("ai-stack lint: skipped ({})", format!("{error:#}").lines().next().unwrap_or_default())
 }
 
-pub fn before_push(settings: &Settings, state_dir: &Path, cwd: &Path, command: &str, harness: &str) -> Option<Value> {
-    let workspace = Workspace::find(cwd)?;
-    match push_check(settings, state_dir, &workspace, command, harness) {
+pub fn before_push(settings: &Settings, state_dir: &Path, call: &Call, harness: &str) -> Option<Value> {
+    let Action::Push { targets: Some(targets), dry_run: false } = &call.action else { return None };
+    let workspace = Workspace::find(&call.dir)?;
+    match push_check(settings, state_dir, &workspace, targets, call.skip.as_deref(), harness) {
         Ok(None) => None,
         Ok(Some(Decision::Allow(lines))) => (!lines.is_empty()).then(|| json!({"hookSpecificOutput": {"hookEventName": "PreToolUse", "additionalContext": lines.join("\n")}})),
         Ok(Some(Decision::Deny(lines))) => Some(json!({"hookSpecificOutput": {"hookEventName": "PreToolUse", "permissionDecision": "deny", "permissionDecisionReason": lines.join("\n")}})),
@@ -292,8 +349,8 @@ enum Decision {
     Deny(Vec<String>),
 }
 
-fn push_check(settings: &Settings, state_dir: &Path, workspace: &Workspace, command: &str, harness: &str) -> Result<Option<Decision>> {
-    let Some(report) = fix_range(settings, workspace, state_dir)? else { return Ok(None) };
+fn push_check(settings: &Settings, state_dir: &Path, workspace: &Workspace, targets: &str, reason: Option<&str>, harness: &str) -> Result<Option<Decision>> {
+    let Some(report) = fix_owned(settings, workspace, state_dir, &format!("::({targets})"))? else { return Ok(None) };
     let log = Log::new(state_dir);
     let time = now();
     let mut lines = Vec::new();
@@ -301,15 +358,26 @@ fn push_check(settings: &Settings, state_dir: &Path, workspace: &Workspace, comm
         lines.push(HIGH_RATE.to_string());
     }
     lines.extend(removal(&report).map(|removed| format!("ai-stack lint: {removed}")));
-    let reason = skip_reason(command);
-    if reason.as_deref() == Some("") {
+    if reason == Some("") {
         lines.push("ai-stack lint: AI_STACK_LINT_SKIP needs a reason, so this push is checked as usual.".into());
     }
-    let left: Vec<&Finding> = report.left.iter().collect();
-    let newest = workspace.commits(&format!("heads({RANGE})"))?.into_iter().next().unwrap_or(report.head);
-    let event = |kind, findings: Vec<String>, reason: Option<String>| Event { time, kind, repo: workspace.key.clone(), harness: Some(harness.to_string()), head: Some(newest.clone()), findings, reason, vcs: Some("jj".into()) };
+    let skipped = log.skipped(&workspace.key);
+    let fresh: Vec<&Left> = report.left.iter().filter(|left| !skipped.contains(&left.fingerprint)).collect();
+    let left: Vec<&Finding> = fresh.iter().map(|left| &left.finding).collect();
+    let event = |kind, findings: Vec<String>, reason: Option<String>, fingerprints: Vec<String>| Event {
+        time,
+        kind,
+        repo: workspace.key.clone(),
+        harness: Some(harness.to_string()),
+        head: Some(report.head.clone()),
+        findings,
+        reason,
+        vcs: Some("jj".into()),
+        change: Some(report.change.clone()),
+        fingerprints,
+    };
     let recorded = match reason.filter(|reason| !reason.is_empty()) {
-        _ if left.is_empty() => event(Kind::Checked, Vec::new(), None),
+        _ if left.is_empty() => (!log.has_change(&workspace.key, &report.change)).then(|| event(Kind::Checked, Vec::new(), None, Vec::new())),
         Some(reason) => {
             let mut files: Vec<&Path> = left.iter().map(|finding| finding.file.as_path()).collect();
             files.dedup();
@@ -325,35 +393,38 @@ fn push_check(settings: &Settings, state_dir: &Path, workspace: &Workspace, comm
                 return Ok(Some(Decision::Deny(lines)));
             }
             let findings = sorted_names(&left);
-            lines.push(skip_recorded(&findings, &reason));
-            event(Kind::Skip, findings, Some(reason))
+            lines.push(skip_recorded(&findings, reason));
+            Some(event(Kind::Skip, findings, Some(reason.to_string()), fresh.iter().map(|left| left.fingerprint.clone()).collect()))
         }
         None => {
             lines.extend(refusal(&left, "push"));
             return Ok(Some(Decision::Deny(lines)));
         }
     };
-    if let Err(error) = log.record(&recorded)
-        && recorded.kind == Kind::Skip
-    {
-        lines.pop();
-        lines.push(format!("ai-stack lint: the skip could not be recorded ({}), so this push is refused.", format!("{error:#}").lines().next().unwrap_or_default()));
-        return Ok(Some(Decision::Deny(lines)));
+    if let Some(recorded) = recorded {
+        if let Err(error) = log.record(&recorded)
+            && recorded.kind == Kind::Skip
+        {
+            lines.pop();
+            lines.push(format!("ai-stack lint: the skip could not be recorded ({}), so this push is refused.", format!("{error:#}").lines().next().unwrap_or_default()));
+            return Ok(Some(Decision::Deny(lines)));
+        }
+        let _ = log.alert(&workspace.key, settings.skip_alert, time);
     }
-    let _ = log.alert(&workspace.key, settings.skip_alert, time);
     Ok(Some(Decision::Allow(lines)))
 }
 
 pub fn fix_here(settings: &Settings, state_dir: &Path, cwd: &Path, err: &mut dyn Write) -> Result<i32> {
     let Some(workspace) = Workspace::find(cwd) else { bail!("{} is not inside a jj workspace", cwd.display()) };
-    let Some(report) = fix_range(settings, &workspace, state_dir)? else { return Ok(0) };
+    let Some(report) = fix_owned(settings, &workspace, state_dir, "all()")? else { return Ok(0) };
     if let Some(removed) = removal(&report) {
         writeln!(err, "ai-stack lint: {removed}")?;
     }
-    if report.left.is_empty() {
+    let left = unskipped(&report, &Log::new(state_dir), &workspace.key);
+    if left.is_empty() {
         return Ok(0);
     }
-    for line in refusal(&report.left.iter().collect::<Vec<_>>(), "push") {
+    for line in refusal(&left, "push") {
         writeln!(err, "{line}")?;
     }
     Ok(1)
@@ -363,21 +434,17 @@ pub fn fix_here(settings: &Settings, state_dir: &Path, cwd: &Path, err: &mut dyn
 mod tests {
     use super::*;
 
+    fn member(commit: &str, change: &str, parents: &[&str]) -> Member {
+        Member { commit: commit.into(), change: change.into(), parents: parents.iter().map(|parent| parent.to_string()).collect() }
+    }
+
     #[test]
-    fn commit_and_push_commands_are_recognised_from_the_text_alone() {
-        for command in ["jj commit -m x", "cd sub && jj --no-pager commit -m 'x'", "jj -R ../other describe -m y", "/usr/bin/jj squash", "jj new", "jj split -r @-"] {
-            assert!(is_commit(command), "{command}");
-        }
-        for command in ["jj log -r 'description(new)'", "git commit -m jj", "jj st", "echo jj", "jj git push"] {
-            assert!(!is_commit(command), "{command}");
-        }
-        for command in ["jj git push", "jj --config ui.color=never git push -c @-", "AI_STACK_LINT_SKIP=\"the device has no event\" jj git push --bookmark main"] {
-            assert!(is_push(command), "{command}");
-        }
-        assert!(!is_push("git push") && !is_push("jj git fetch") && !is_push("jj push"));
-        assert_eq!(skip_reason("AI_STACK_LINT_SKIP=\"the device has no event\" jj git push").as_deref(), Some("the device has no event"));
-        assert_eq!(skip_reason("AI_STACK_LINT_SKIP='quoted' jj git push").as_deref(), Some("quoted"));
-        assert_eq!(skip_reason("AI_STACK_LINT_SKIP= jj git push").as_deref(), Some(""));
-        assert_eq!(skip_reason("jj git push"), None);
+    fn owned_commits_split_into_runs_of_their_own_and_a_human_commit_between_them_starts_a_new_one() {
+        let segment = |base: &str, head: &str, root: &str| Segment { base: base.into(), head: head.into(), root: root.into() };
+        let members = [member("c3", "z3", &["h2"]), member("c1", "z1", &["b0"]), member("s4", "z4", &["c1"]), member("c5", "z5", &["c1"])];
+        assert_eq!(segments(&members), [segment("h2", "c3", "z3"), segment("b0", "s4", "z1"), segment("b0", "c5", "z1")]);
+        assert_eq!(roots(&members), ["c3", "c1"]);
+        let merge = [member("m2", "y2", &["a", "b"]), member("n3", "y3", &["m2"])];
+        assert_eq!(segments(&merge), [segment("m2", "n3", "y3")], "a merge is never diffed against one parent");
     }
 }
