@@ -185,7 +185,7 @@ fn statement_containers(language: SupportLang) -> &'static [&'static str] {
 }
 
 fn separates_imports(first: &TreeNode, last: &TreeNode) -> bool {
-    let import = |node: Option<TreeNode>| node.is_some_and(|node| IMPORTS.contains(&node.kind().as_ref()));
+    let import = |node: Option<TreeNode>| node.is_some_and(|node| IMPORTS.contains(&node.kind().as_ref()) || (node.kind() == "mod_item" && node.field("body").is_none()));
     let code = |node: &TreeNode| node.is_named() && !is_comment(node);
     import(first.prev_all().find(code)) && import(last.next_all().find(code))
 }
@@ -390,6 +390,7 @@ mod tests {
             (SupportLang::Go, "package main\n\nfunc main() {\n\ta := 1 // x\n\t// note\n\tbb := 2 // y\n\t_ = a + bb\n}\n"),
             (SupportLang::Go, "package a\n\nfunc f() {\n\tg()\n\t// note want \"avoid\"\n}\n"),
             (SupportLang::Rust, "use std::time;\n// note on the file system\nuse std::fs;\n\nfn main() {}\n"),
+            (SupportLang::Rust, "mod zeta;\n// note on apple support\nmod alpha;\n"),
             (SupportLang::TypeScript, "import { a } from \"./a\";\n// note on helpers\nimport { b } from \"./b\";\n"),
             (SupportLang::Python, "import sys\n\n# note on local modules\nfrom app import db\n"),
             (SupportLang::Go, "package main\n\nimport \"fmt\"\n\n// note on the os\n\nimport \"os\"\n"),
