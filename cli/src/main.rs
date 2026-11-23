@@ -9,6 +9,7 @@ mod incident;
 mod install;
 mod ledger;
 mod links;
+mod lint;
 mod models;
 mod paths;
 mod plan;
@@ -153,6 +154,74 @@ enum Commands {
     Private {
         #[command(subcommand)]
         command: PrivateCommand,
+    },
+    /// Lint only the lines changed since the merge base with REV, using the ast-grep rules in
+    /// <stack>/lint/rules and <config dir>/lint/rules. Exit 0 with no errors, 1 with errors, 2
+    /// when the rules or the paths cannot be loaded.
+    #[command(args_conflicts_with_subcommands = true)]
+    Lint {
+        #[command(subcommand)]
+        command: Option<LintCommand>,
+        /// Files or directories to lint (default: the whole repository of the current directory).
+        paths: Vec<PathBuf>,
+        /// Revision whose merge base with HEAD is the baseline.
+        #[arg(long, value_name = "REV", default_value = "HEAD")]
+        base: String,
+        /// Widen the changed lines to their enclosing function or the whole file (default: [lint] scope).
+        #[arg(long, value_enum)]
+        scope: Option<lint::Scope>,
+        /// Print `{"version":1,"findings":[...]}`.
+        #[arg(long)]
+        json: bool,
+        /// Remove the whole-line comments that an agent's edits wrote and `no-comments` reports
+        /// from the files in scope, then report what is left. For commits made by hand, which
+        /// the agent commit hook never sees.
+        #[arg(long)]
+        fix: bool,
+    },
+}
+
+#[derive(Subcommand)]
+enum LintCommand {
+    /// List every loaded rule per language, its source file and its severity in this project.
+    Rules {
+        #[arg(long)]
+        json: bool,
+    },
+    /// Count agent commits, skips (AI_STACK_LINT_SKIP) and bypasses (--no-verify) per
+    /// repository, rule and harness, with the recorded reasons.
+    Skips {
+        /// How many days back to count (default: [lint] skip_alert days).
+        #[arg(long, value_name = "N")]
+        days: Option<u32>,
+    },
+    /// PostToolUse hook entry point that `ai-stack install` registers: reads the hook payload
+    /// on stdin, answers on stdout and always exits 0.
+    #[command(hide = true)]
+    Hook {
+        harness: Harness,
+        #[arg(hide = true)]
+        event: Option<String>,
+    },
+    /// Git pre-commit hook that agent shells run through GIT_CONFIG_* variables. Exits 3 to
+    /// refuse the commit; the installed command turns every other exit into 0.
+    #[command(hide = true)]
+    PreCommit,
+    /// Git post-commit hook that records a commit made without the pre-commit check.
+    #[command(hide = true)]
+    PostCommit,
+    /// Remove the agent's comments from the unpushed jj changes its commit commands finalised,
+    /// as the hooks do after `jj commit` and before `jj git push`, then report what is left.
+    /// Exits 1 when errors remain.
+    #[command(hide = true)]
+    JjFix,
+    /// The `jj fix` tool that `jj-fix` configures: reads one file version on stdin and writes
+    /// it back without the comment runs the plan names for PATH.
+    #[command(hide = true)]
+    JjTool {
+        #[arg(long)]
+        plan: PathBuf,
+        path: String,
     },
 }
 
@@ -311,6 +380,7 @@ struct Context {
     config_path: PathBuf,
     stack_override: Option<PathBuf>,
     explicit_flags: Vec<String>,
+    hook_flags: Vec<String>,
 }
 
 struct Catalogs {
@@ -343,6 +413,7 @@ fn main() -> Result<()> {
         Commands::Groups { json } => cmd_groups(&ctx, json)?,
         Commands::Fleet { command } => cmd_fleet(&ctx, command)?,
         Commands::Private { command } => cmd_private(&ctx, command)?,
+        Commands::Lint { command, paths, base, scope, json, fix } => cmd_lint(&ctx, command, lint::Request { cwd: std::env::current_dir()?, paths, base, scope, json, fix, state_dir: lint::state_dir(&ctx.home) })?,
     };
     io::stdout().flush()?;
     std::process::exit(code);
@@ -365,11 +436,31 @@ fn resolve_context(cli: &Cli) -> Result<Context> {
             explicit_flags.extend([flag.to_string(), std::path::absolute(value)?.to_string_lossy().into_owned()]);
         }
     }
-    Ok(Context { home: paths::normalize(&std::path::absolute(home)?), config_path, stack_override: cli.stack.clone(), explicit_flags })
+    let home = paths::normalize(&std::path::absolute(home)?);
+    let absolute = |path: &Path| std::path::absolute(path).map(|path| paths::normalize(&path));
+    let env_home = std::env::var_os("HOME").map(|home| absolute(Path::new(&home))).transpose()?;
+    let config = absolute(&config_path)?;
+    let mut hook_flags = Vec::new();
+    for (flag, value) in [
+        ("--home", (env_home.as_ref() != Some(&home)).then(|| home.clone())),
+        ("--config", (config != home.join(".config/ai-stack/config.toml")).then_some(config)),
+        ("--stack", cli.stack.as_deref().map(absolute).transpose()?),
+    ] {
+        if let Some(value) = value {
+            hook_flags.extend([flag.to_string(), value.to_string_lossy().into_owned()]);
+        }
+    }
+    Ok(Context { home, config_path, stack_override: cli.stack.clone(), explicit_flags, hook_flags })
 }
 
 fn load_config(ctx: &Context) -> Result<Config> {
-    config::load(&ctx.config_path, &ctx.home, ctx.stack_override.as_deref())
+    let mut cfg = config::load(&ctx.config_path, &ctx.home, ctx.stack_override.as_deref())?;
+    cfg.exe_flags = ctx.hook_flags.clone();
+    let relative_stack = !cfg.stack.configured.starts_with('~') && Path::new(&cfg.stack.configured).is_relative();
+    if relative_stack && ctx.stack_override.is_none() {
+        cfg.exe_flags.extend(["--stack".to_string(), cfg.stack.path.to_string_lossy().into_owned()]);
+    }
+    Ok(cfg)
 }
 
 fn ctx_flat(ctx: &Context) -> Result<drift::Flat> {
@@ -601,6 +692,51 @@ fn cmd_private(ctx: &Context, command: PrivateCommand) -> Result<i32> {
     }
 }
 
+fn cmd_lint(ctx: &Context, command: Option<LintCommand>, request: lint::Request) -> Result<i32> {
+    let state_dir = lint::state_dir(&ctx.home);
+    let load = || lint::settings(&ctx.config_path, &ctx.home, ctx.stack_override.as_deref());
+    match command {
+        Some(LintCommand::Hook { harness, .. }) => {
+            let mut input = String::new();
+            let reply = io::Read::read_to_string(&mut io::stdin(), &mut input).map_err(anyhow::Error::from).and_then(|_| lint::run_hook(harness, &state_dir, load, &input));
+            match reply {
+                Ok(Some(json)) => println!("{json}"),
+                Ok(None) => {}
+                Err(err) => eprintln!("ai-stack lint hook: {err:#}"),
+            }
+            return Ok(0);
+        }
+        Some(LintCommand::PreCommit) => {
+            std::panic::set_hook(Box::new(|_| {}));
+            return Ok(lint::pre_commit(&state_dir, load(), &lint::CommitEnv::from_process()?, &mut io::stderr()));
+        }
+        Some(LintCommand::PostCommit) => {
+            std::panic::set_hook(Box::new(|_| {}));
+            return Ok(lint::post_commit(&state_dir, load(), &lint::CommitEnv::from_process()?));
+        }
+        Some(LintCommand::JjTool { plan, path }) => {
+            std::panic::set_hook(Box::new(|_| {}));
+            lint::jj_tool(&plan, &path, &mut io::stdin(), &mut io::stdout())?;
+            return Ok(0);
+        }
+        _ => {}
+    }
+    let settings = match load() {
+        Ok(settings) => settings,
+        Err(err) => {
+            eprintln!("error: {err:#}");
+            return Ok(lint::LOAD_ERROR);
+        }
+    };
+    let (mut out, mut err) = (io::stdout(), io::stderr());
+    match command {
+        Some(LintCommand::Rules { json }) => lint::list(&settings, json, &mut out, &mut err),
+        Some(LintCommand::Skips { days }) => lint::skips(&state_dir, days.unwrap_or(settings.skip_alert.days), lint::now(), &mut out),
+        Some(LintCommand::JjFix) => lint::jj_fix(&settings, &state_dir, &request.cwd, &mut err),
+        _ => lint::run(&settings, request, &mut out, &mut err),
+    }
+}
+
 fn cmd_groups(ctx: &Context, json: bool) -> Result<i32> {
     let cfg = load_config(ctx)?;
     let report = groups::report(&cfg.stack.path, &stackfile::load(&cfg.stack.path)?)?;
@@ -783,7 +919,7 @@ mod config_show_tests {
         let stack = fixture.path().join("override");
         fs::create_dir_all(stack.join(config::FAMILIES_FILE).parent().unwrap()).unwrap();
         fs::write(stack.join(config::FAMILIES_FILE), include_str!("../tests/fixtures/model-families.json")).unwrap();
-        let ctx = Context { home: fixture.path().into(), config_path: path.clone(), stack_override: Some(stack.clone()), explicit_flags: vec![] };
+        let ctx = Context { home: fixture.path().into(), config_path: path.clone(), stack_override: Some(stack.clone()), explicit_flags: vec![], hook_flags: vec![] };
         let expected = ctx_flat(&ctx).unwrap();
         fs::write(&path, &text[..text.find("[clean]").unwrap()]).unwrap();
         assert_eq!(ctx_flat(&ctx).unwrap(), expected);

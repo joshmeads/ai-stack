@@ -1,0 +1,18 @@
+id: no-explicit-return-types
+language: [TypeScript, Tsx]
+severity: warning
+message: "Remove the explicit return type and let it be inferred; pin a contract with a typed variable or `satisfies` at the return site instead."
+metadata:
+  default_off: true
+rule:
+  kind: type_annotation
+  inside:
+    field: return_type
+    any:
+      - kind: function_declaration
+      - kind: function_expression
+      - kind: arrow_function
+      - kind: method_definition
+      - kind: generator_function_declaration
+  not:
+    regex: '^:\s*never$'

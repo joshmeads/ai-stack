@@ -73,6 +73,14 @@ The `design`, `diagrams`, `cua` and `archived` skills and the `mattpocock/skills
 
 The other skills in `skills/` are Josh Meads's own work under MIT.
 
+## Lint rules
+
+`ai-stack lint` links the ast-grep crates (`ast-grep-core`, `ast-grep-config`, `ast-grep-language`, MIT) as Cargo dependencies. Several of its rules are ast-grep ports of landmines Oxlint rules. The rule messages and the test-file name patterns are copied from landmines. The rule logic is rewritten as ast-grep YAML and Rust, and the Rust, Python and Go variants are new.
+
+| Component | Upstream | Copyright | License | License file |
+| --- | --- | --- | --- | --- |
+| `lint/rules/no-comments.yml`, `no-fixed-sleep.yml`, `no-flake-masking.yml`, `no-unsignaled-poll.yml`, `no-test-doubles.yml`, `no-explicit-return-types.yml`, the `test-file-names` check in `cli/src/lint/scan.rs`, and the matching fixtures in `lint/tests/` | [interfere-inc/landmines @ 79e9199](https://github.com/interfere-inc/landmines/tree/79e91992952c14b0c217b403fa416024c1929afe) | (c) 2026 Interfere, Inc. | MIT | [LICENSE-landmines](LICENSE-landmines) |
+
 ## What changed in the port
 
 The port is editorial, not mechanical. See [CHANGES.md](CHANGES.md) for the full per-skill audit of substitutions applied.

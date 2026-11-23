@@ -1,8 +1,10 @@
 use std::ffi::{CString, OsStr};
 use std::io;
+use std::iter::Peekable;
 use std::os::unix::ffi::OsStrExt as _;
 use std::path::{Path, PathBuf};
 use std::process::{Command, Stdio};
+use std::str::Chars;
 
 use anyhow::{Result, anyhow};
 
@@ -123,6 +125,154 @@ pub fn shell_quote(arg: &str) -> String {
     }
 }
 
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+pub struct Word {
+    pub text: String,
+    pub quoted_from: Option<usize>,
+    pub expands: bool,
+}
+
+impl Word {
+    pub fn assignment(&self) -> Option<(&str, &str)> {
+        let (name, value) = self.text.split_once('=')?;
+        let plain_name = !name.is_empty() && name.chars().all(|c| c.is_ascii_alphanumeric() || c == '_') && !name.starts_with(|c: char| c.is_ascii_digit());
+        (plain_name && self.quoted_from.is_none_or(|from| from > name.len())).then_some((name, value))
+    }
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum Lexeme {
+    Word(Word),
+    Separator,
+    Redirect,
+}
+
+struct Heredoc {
+    delimiter: String,
+    strip_tabs: bool,
+}
+
+fn heredoc_delimiter(chars: &mut Peekable<Chars>) -> Option<String> {
+    while chars.next_if(|next| *next == ' ' || *next == '\t').is_some() {}
+    let mut delimiter = String::new();
+    while let Some(c) = chars.next_if(|next| !next.is_whitespace() && !";&|()<>".contains(*next)) {
+        match c {
+            '\'' | '"' => loop {
+                match chars.next()? {
+                    closing if closing == c => break,
+                    inner => delimiter.push(inner),
+                }
+            },
+            '\\' => delimiter.extend(chars.next()),
+            c => delimiter.push(c),
+        }
+    }
+    (!delimiter.is_empty()).then_some(delimiter)
+}
+
+fn skip_bodies(chars: &mut Peekable<Chars>, pending: &mut Vec<Heredoc>) {
+    for heredoc in pending.drain(..) {
+        loop {
+            let mut line = String::new();
+            let ended = loop {
+                match chars.next() {
+                    Some('\n') => break false,
+                    Some(c) => line.push(c),
+                    None => break true,
+                }
+            };
+            let line = if heredoc.strip_tabs { line.trim_start_matches('\t') } else { &line };
+            if ended || line == heredoc.delimiter {
+                break;
+            }
+        }
+    }
+}
+
+pub fn lex(command: &str) -> Option<Vec<Lexeme>> {
+    let mut out = Vec::new();
+    let mut word: Option<Word> = None;
+    let mut chars = command.chars().peekable();
+    let mut heredocs: Vec<Heredoc> = Vec::new();
+    let quoting = |word: &mut Option<Word>| {
+        let current = word.get_or_insert_with(Word::default);
+        current.quoted_from.get_or_insert(current.text.len());
+    };
+    while let Some(c) = chars.next() {
+        match c {
+            '\'' => {
+                quoting(&mut word);
+                let current = word.as_mut()?;
+                loop {
+                    match chars.next()? {
+                        '\'' => break,
+                        inner => current.text.push(inner),
+                    }
+                }
+            }
+            '"' => {
+                quoting(&mut word);
+                let current = word.as_mut()?;
+                loop {
+                    match chars.next()? {
+                        '"' => break,
+                        '\\' => match chars.next()? {
+                            escaped @ ('$' | '`' | '"' | '\\') => current.text.push(escaped),
+                            '\n' => {}
+                            other => current.text.extend(['\\', other]),
+                        },
+                        inner => {
+                            current.expands |= inner == '$' || inner == '`';
+                            current.text.push(inner);
+                        }
+                    }
+                }
+            }
+            '\\' => match chars.next()? {
+                '\n' => {}
+                escaped => {
+                    quoting(&mut word);
+                    word.as_mut()?.text.push(escaped);
+                }
+            },
+            '<' if chars.peek() == Some(&'<') => {
+                out.extend(word.take().map(Lexeme::Word));
+                out.push(Lexeme::Redirect);
+                chars.next();
+                if chars.next_if_eq(&'<').is_none() {
+                    let strip_tabs = chars.next_if_eq(&'-').is_some();
+                    let delimiter = heredoc_delimiter(&mut chars)?;
+                    out.push(Lexeme::Word(Word { text: delimiter.clone(), quoted_from: Some(0), expands: false }));
+                    heredocs.push(Heredoc { delimiter, strip_tabs });
+                }
+            }
+            '<' | '>' => {
+                out.extend(word.take().map(Lexeme::Word));
+                out.push(Lexeme::Redirect);
+                while chars.next_if(|next| matches!(next, '<' | '>' | '&' | '|')).is_some() {}
+            }
+            '#' if word.is_none() => while chars.next_if(|next| *next != '\n').is_some() {},
+            '\n' | ';' | '&' | '|' | '(' | ')' | '{' | '}' => {
+                out.extend(word.take().map(Lexeme::Word));
+                if out.last() != Some(&Lexeme::Separator) {
+                    out.push(Lexeme::Separator);
+                }
+                if c == '\n' {
+                    skip_bodies(&mut chars, &mut heredocs);
+                }
+            }
+            c if c.is_whitespace() => out.extend(word.take().map(Lexeme::Word)),
+            c => {
+                let current = word.get_or_insert_with(Word::default);
+                current.expands |= "$`*?".contains(c);
+                current.text.push(c);
+            }
+        }
+    }
+    out.extend(word.take().map(Lexeme::Word));
+    Some(out)
+}
+
 #[cfg(test)]
 pub mod fake {
     use std::cell::RefCell;
@@ -206,6 +356,21 @@ mod tests {
         assert!(executable_on_path("claude", &path).unwrap().is_absolute());
         std::fs::create_dir(first.join("codex")).unwrap();
         assert!(executable_on_path("codex", &path).is_none());
+    }
+
+    #[test]
+    fn heredoc_bodies_and_comments_are_never_read_as_commands() {
+        let words = |command: &str| -> Vec<String> {
+            lex(command).unwrap().into_iter().map(|lexeme| match lexeme {
+                Lexeme::Word(word) => word.text,
+                Lexeme::Separator => ";".into(),
+                Lexeme::Redirect => ">".into(),
+            }).collect()
+        };
+        assert_eq!(words("cat > RELEASING.md <<'EOF'\njj git push --bookmark feat\nEOF\nls"), ["cat", ">", "RELEASING.md", ">", "EOF", ";", "ls"]);
+        assert_eq!(words("jj describe --stdin <<-\"END\" && echo done\n\tjj new\n\tEND\njj st"), ["jj", "describe", "--stdin", ">", "END", ";", "echo", "done", ";", "jj", "st"]);
+        assert_eq!(words("a <<X; b <<Y\nX body\nX\nY body\nY\nc"), ["a", ">", "X", ";", "b", ">", "Y", ";", "c"]);
+        assert_eq!(words("grep x <<< \"jj git push\"; # jj git push\nd#e"), ["grep", "x", ">", "jj git push", ";", "d#e"]);
     }
 
     #[test]

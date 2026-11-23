@@ -1,0 +1,311 @@
+id: no-comments
+language: [TypeScript, Tsx]
+severity: error
+message: "Remove this comment; express meaning in code (names, types, structure) and rationale in the PR. Keep tool directives, license headers, a block's only comment, fallthrough comments, a single-line WARNING: or SAFETY: comment for a dangerous footgun, and doc comments on exported API."
+metadata:
+  allow_license_header: true
+  allow_directives: true
+  fix: delete-comment
+utils:
+  sole-content:
+    inside:
+      kind: statement_block
+      regex: '^\{\s*(?:(?://[^\n]*|/\*(?s:.)*?\*/)\s*)*\}$'
+  tool-comment:
+    any:
+      - regex: '^/\*\s*(globals?|exported)\s'
+      - regex: '@(vitest|jest)-environment\s'
+      - regex: '(SPDX-License-Identifier:|@license\b|Copyright\s)'
+  fallthrough:
+    regex: '(?i)^(//|/\*)\s*(falls?\s?through|no default)\b'
+  footgun:
+    regex: '^//\s*(WARNING|SAFETY):\s*\S[^\n]*$'
+  doc:
+    regex: '^/\*\*'
+  doc-on-export:
+    all:
+      - matches: doc
+      - precedes:
+          stopBy:
+            not:
+              kind: comment
+          kind: export_statement
+  doc-on-exported-member:
+    all:
+      - matches: doc
+      - precedes:
+          stopBy:
+            not:
+              kind: comment
+          not:
+            kind: comment
+      - inside:
+          stopBy:
+            kind: statement_block
+          kind: export_statement
+rule:
+  kind: comment
+  not:
+    any:
+      - matches: sole-content
+      - matches: fallthrough
+      - matches: tool-comment
+      - matches: footgun
+      - matches: doc-on-export
+      - matches: doc-on-exported-member
+---
+id: no-comments
+language: JavaScript
+severity: error
+message: "Remove this comment; express meaning in code (names, types, structure) and rationale in the PR. Keep tool directives, license headers, a block's only comment, fallthrough comments, a single-line WARNING: or SAFETY: comment for a dangerous footgun, doc comments on exported API, and JSDoc that carries types."
+metadata:
+  allow_license_header: true
+  allow_directives: true
+  fix: delete-comment
+utils:
+  sole-content:
+    inside:
+      kind: statement_block
+      regex: '^\{\s*(?:(?://[^\n]*|/\*(?s:.)*?\*/)\s*)*\}$'
+  tool-comment:
+    any:
+      - regex: '^/\*\s*(globals?|exported)\s'
+      - regex: '@(vitest|jest)-environment\s'
+      - regex: '(SPDX-License-Identifier:|@license\b|Copyright\s)'
+  fallthrough:
+    regex: '(?i)^(//|/\*)\s*(falls?\s?through|no default)\b'
+  footgun:
+    regex: '^//\s*(WARNING|SAFETY):\s*\S[^\n]*$'
+  doc:
+    regex: '^/\*\*'
+  jsdoc-types:
+    any:
+      - regex: '^/\*\*(?s:.)*@(type|typedef|template|satisfies|import|callback|this|enum|extends|augments|implements|overload)\b'
+      - regex: '^/\*\*(?s:.)*@(param|returns?|property)\s*\{'
+  doc-on-export:
+    all:
+      - matches: doc
+      - precedes:
+          stopBy:
+            not:
+              kind: comment
+          kind: export_statement
+  doc-on-exported-member:
+    all:
+      - matches: doc
+      - precedes:
+          stopBy:
+            not:
+              kind: comment
+          not:
+            kind: comment
+      - inside:
+          stopBy:
+            kind: statement_block
+          kind: export_statement
+rule:
+  kind: comment
+  not:
+    any:
+      - matches: sole-content
+      - matches: fallthrough
+      - matches: tool-comment
+      - matches: footgun
+      - matches: jsdoc-types
+      - matches: doc-on-export
+      - matches: doc-on-exported-member
+---
+id: no-comments
+language: Rust
+severity: error
+message: "Remove this comment; express meaning in code (names, types, structure) and rationale in the PR. Keep license headers, a block's only comment, SAFETY: comments, a single-line WARNING: comment, doc comments on pub items, //! module docs, and clap doc text that generates --help."
+metadata:
+  allow_license_header: true
+  allow_directives: true
+  fix: delete-comment
+utils:
+  pub-item:
+    has:
+      kind: visibility_modifier
+      regex: '^pub$'
+  doc:
+    regex: '^(///|/\*\*)'
+  decoration:
+    any:
+      - kind: line_comment
+      - kind: block_comment
+      - kind: attribute_item
+  clap-derive:
+    kind: attribute_item
+    regex: 'derive\([^)]*\b(Parser|Subcommand|Args|ValueEnum)\b'
+  clap-type:
+    any:
+      - kind: struct_item
+      - kind: enum_item
+    follows:
+      stopBy:
+        not:
+          matches: decoration
+      matches: clap-derive
+rule:
+  any:
+    - kind: line_comment
+    - kind: block_comment
+  not:
+    any:
+      - inside:
+          kind: block
+          regex: '^\{\s*(?:(?://[^\n]*|/\*(?s:.)*?\*/)\s*)*\}$'
+      - regex: '^(//|/\*)\s*SAFETY:'
+      - all:
+          - kind: line_comment
+          - follows:
+              stopBy:
+                not:
+                  kind: line_comment
+              regex: '^//\s*SAFETY:'
+      - regex: '^//\s*WARNING:\s*\S[^\n]*\n?$'
+      - regex: '(SPDX-License-Identifier:|Copyright\s)'
+      - regex: '^(//!|/\*!)'
+      - all:
+          - matches: doc
+          - precedes:
+              stopBy:
+                not:
+                  matches: decoration
+              matches: pub-item
+      - all:
+          - matches: doc
+          - precedes:
+              stopBy:
+                not:
+                  matches: decoration
+              not:
+                matches: decoration
+          - inside:
+              any:
+                - kind: enum_variant_list
+                - kind: declaration_list
+              inside:
+                any:
+                  - kind: enum_item
+                  - kind: trait_item
+                matches: pub-item
+      - all:
+          - matches: doc
+          - precedes:
+              stopBy:
+                not:
+                  matches: decoration
+              any:
+                - matches: clap-derive
+                - matches: clap-type
+      - all:
+          - matches: doc
+          - inside:
+              stopBy: end
+              matches: clap-type
+---
+id: no-comments
+language: Python
+severity: error
+message: "Remove this comment; express meaning in code (names, types, structure) and rationale in the PR. Keep tool directives, license headers, PEP 723 script metadata and a single-line WARNING: or SAFETY: comment."
+metadata:
+  allow_license_header: true
+  allow_directives: true
+  allow_in: '(?m)^# /// [a-zA-Z0-9-]+\r?\n(?:#(?: [^\r\n]*)?\r?\n)*?# ///\r?$'
+  fix: delete-comment
+rule:
+  kind: comment
+  not:
+    any:
+      - regex: '^#!'
+      - regex: '^#.*coding[:=]'
+      - regex: '(SPDX-License-Identifier:|Copyright\s)'
+      - regex: '^#\s*(WARNING|SAFETY):\s*\S'
+---
+id: no-comments
+language: Go
+severity: error
+message: "Remove this comment; express meaning in code (names, types, structure) and rationale in the PR. Keep directives, license headers, a cgo preamble, Example output comments, a block's only comment, a single-line WARNING: or SAFETY: comment, and doc comments on exported identifiers."
+metadata:
+  allow_directives: true
+  fix: delete-comment
+utils:
+  exported-name:
+    has:
+      field: name
+      regex: '^\p{Lu}'
+  exported-declaration:
+    any:
+      - kind: package_clause
+      - kind: function_declaration
+        matches: exported-name
+      - kind: method_declaration
+        matches: exported-name
+      - kind: field_declaration
+        matches: exported-name
+      - kind: type_declaration
+        has:
+          any:
+            - kind: type_spec
+            - kind: type_alias
+          matches: exported-name
+      - kind: const_declaration
+        has:
+          kind: const_spec
+          matches: exported-name
+      - kind: var_declaration
+        has:
+          kind: var_spec
+          matches: exported-name
+      - kind: const_spec
+        matches: exported-name
+      - kind: var_spec
+        matches: exported-name
+      - kind: type_spec
+        matches: exported-name
+      - kind: type_alias
+        matches: exported-name
+      - kind: method_elem
+        matches: exported-name
+  in-example:
+    inside:
+      stopBy: end
+      kind: function_declaration
+      has:
+        field: name
+        regex: '^Example'
+  example-output:
+    kind: comment
+    regex: '^//\s*(Unordered output|Output):'
+rule:
+  kind: comment
+  not:
+    any:
+      - all:
+          - matches: in-example
+          - any:
+              - matches: example-output
+              - follows:
+                  stopBy:
+                    not:
+                      kind: comment
+                  matches: example-output
+      - precedes:
+          stopBy:
+            not:
+              kind: comment
+          kind: import_declaration
+          regex: '^import\s+"C"\s*$'
+      - inside:
+          kind: block
+          regex: '^\{\s*(?:(?://[^\n]*|/\*(?s:.)*?\*/)\s*)*\}$'
+      - regex: '^//\s*Code generated .* DO NOT EDIT\.$'
+      - regex: '(SPDX-License-Identifier:|Copyright\s)'
+      - regex: '^//\s*(WARNING|SAFETY):\s*\S[^\n]*$'
+      - precedes:
+          stopBy:
+            not:
+              kind: comment
+          matches: exported-declaration

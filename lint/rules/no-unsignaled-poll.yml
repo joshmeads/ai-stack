@@ -1,0 +1,180 @@
+id: no-unsignaled-poll
+language: [TypeScript, Tsx, JavaScript]
+severity: error
+message: "Await a signal instead of polling a request recorder or spy: resolve a Promise.withResolvers() deferred from the handler or callback that records it, then await its promise, or await the operation's own completion. A deadline-bound poll on a counter fails under CPU load, and a longer timeout only hides that."
+utils:
+  path:
+    all:
+      - any:
+          - kind: identifier
+          - kind: member_expression
+      - regex: '^[A-Za-z_$][\w$]*(\??\.[A-Za-z_$][\w$]*)*$'
+      - not:
+          regex: '(^|\.)current(\.|$)'
+  recorder:
+    all:
+      - matches: path
+      - any:
+          - regex: '(^|\.)mock(\.|$)'
+          - regex: '\.(length|size)$'
+  callback:
+    any:
+      - kind: arrow_function
+      - kind: function_expression
+  single-statement-body:
+    kind: statement_block
+    not:
+      has:
+        nthChild: 2
+  returns-recorder:
+    matches: callback
+    has:
+      field: body
+      any:
+        - matches: recorder
+        - matches: single-statement-body
+          has:
+            any:
+              - kind: return_statement
+              - kind: expression_statement
+            has:
+              matches: recorder
+  returns-path:
+    matches: callback
+    has:
+      field: body
+      any:
+        - matches: path
+        - matches: single-statement-body
+          has:
+            kind: return_statement
+            has:
+              matches: path
+  spy-matcher:
+    regex: '\.(toHaveLength|toHaveBeenCalled|toHaveBeenCalledOnce|toHaveBeenCalledTimes|toHaveBeenCalledWith|toHaveBeenCalledExactlyOnceWith|toHaveBeenLastCalledWith|toHaveBeenNthCalledWith|toHaveReturned|toHaveReturnedTimes|toHaveReturnedWith|toHaveLastReturnedWith|toHaveNthReturnedWith|toHaveResolved|toHaveResolvedTimes|toHaveResolvedWith|toHaveLastResolvedWith|toHaveNthResolvedWith)$'
+rule:
+  kind: call_expression
+  all:
+    - has:
+        field: function
+        regex: '^expect\.poll$'
+    - any:
+        - has:
+            field: arguments
+            has:
+              nthChild: 1
+              matches: returns-recorder
+        - all:
+            - has:
+                field: arguments
+                has:
+                  nthChild: 1
+                  matches: returns-path
+            - inside:
+                kind: member_expression
+                matches: spy-matcher
+---
+id: no-unsignaled-poll
+language: [TypeScript, Tsx, JavaScript]
+severity: error
+message: "Await a signal instead of polling a request recorder or spy: resolve a Promise.withResolvers() deferred from the handler or callback that records it, then await its promise, or await the operation's own completion. A deadline-bound poll on a counter fails under CPU load, and a longer timeout only hides that."
+utils:
+  path:
+    all:
+      - any:
+          - kind: identifier
+          - kind: member_expression
+      - regex: '^[A-Za-z_$][\w$]*(\??\.[A-Za-z_$][\w$]*)*$'
+      - not:
+          regex: '(^|\.)current(\.|$)'
+  recorder:
+    all:
+      - matches: path
+      - any:
+          - regex: '(^|\.)mock(\.|$)'
+          - regex: '\.(length|size)$'
+  callback:
+    any:
+      - kind: arrow_function
+      - kind: function_expression
+  single-statement-body:
+    kind: statement_block
+    not:
+      has:
+        nthChild: 2
+  spy-matcher:
+    regex: '\.(toHaveLength|toHaveBeenCalled|toHaveBeenCalledOnce|toHaveBeenCalledTimes|toHaveBeenCalledWith|toHaveBeenCalledExactlyOnceWith|toHaveBeenLastCalledWith|toHaveBeenNthCalledWith|toHaveReturned|toHaveReturnedTimes|toHaveReturnedWith|toHaveLastReturnedWith|toHaveNthReturnedWith|toHaveResolved|toHaveResolvedTimes|toHaveResolvedWith|toHaveLastResolvedWith|toHaveNthResolvedWith)$'
+  expect-of:
+    kind: call_expression
+    has:
+      field: function
+      regex: '^expect$'
+  subject-is-recorder:
+    has:
+      field: arguments
+      has:
+        nthChild: 1
+        matches: recorder
+  subject-is-path:
+    has:
+      field: arguments
+      has:
+        nthChild: 1
+        matches: path
+  matcher:
+    kind: member_expression
+    has:
+      field: object
+      any:
+        - matches: expect-of
+        - kind: member_expression
+          regex: '\.not$'
+          has:
+            field: object
+            matches: expect-of
+  asserts-recorder:
+    kind: call_expression
+    has:
+      field: function
+      matches: matcher
+      any:
+        - has:
+            stopBy: end
+            all:
+              - matches: expect-of
+              - matches: subject-is-recorder
+        - all:
+            - matches: spy-matcher
+            - has:
+                stopBy: end
+                all:
+                  - matches: expect-of
+                  - matches: subject-is-path
+  polled:
+    any:
+      - matches: recorder
+      - matches: asserts-recorder
+  returns-polled:
+    matches: callback
+    has:
+      field: body
+      any:
+        - matches: polled
+        - matches: single-statement-body
+          has:
+            any:
+              - kind: return_statement
+              - kind: expression_statement
+            has:
+              matches: polled
+rule:
+  kind: call_expression
+  all:
+    - has:
+        field: function
+        regex: '^vi\.waitFor$'
+    - has:
+        field: arguments
+        has:
+          nthChild: 1
+          matches: returns-polled
