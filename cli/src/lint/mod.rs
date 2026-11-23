@@ -203,16 +203,17 @@ fn fix_worktree(files: &mut Vec<(scan::Change, Baseline)>, findings: &[Finding],
             None => by_repo.push((repo, vec![rel])),
         }
     }
-    let mut eligible: HashMap<PathBuf, PathBuf> = HashMap::new();
+    let mut eligible: HashMap<PathBuf, (&Repo, PathBuf)> = HashMap::new();
     for (repo, rels) in &by_repo {
         let filtered = repo.filtered(rels, &Attributes::Worktree)?;
-        eligible.extend(rels.iter().filter(|rel| !filtered.contains(*rel)).map(|rel| (repo.root.join(rel), rel.clone())));
+        let flagged = repo.flagged(rels, None);
+        eligible.extend(rels.iter().filter(|rel| !filtered.contains(*rel) && !flagged.contains(*rel)).map(|rel| (repo.root.join(rel), (repo, rel.clone()))));
     }
     let mut removed = 0;
     let mut names = Vec::new();
     let mut restored: HashSet<PathBuf> = HashSet::new();
     for (change, baseline) in files.iter_mut() {
-        let Some(rel) = eligible.get(&change.path) else { continue };
+        let Some((repo, rel)) = eligible.get(&change.path) else { continue };
         let found: Vec<&Finding> = findings.iter().filter(fixable).filter(|finding| finding.file == change.path).collect();
         let (Some(first), Some(language)) = (found.first(), scan::language_of(&change.path)) else { continue };
         let single_link = std::fs::symlink_metadata(&change.path).is_ok_and(|meta| meta.is_file() && meta.nlink() == 1);
@@ -220,14 +221,15 @@ fn fix_worktree(files: &mut Vec<(scan::Change, Baseline)>, findings: &[Finding],
             continue;
         }
         let ranges: Vec<Range<usize>> = found.iter().map(|finding| finding.bytes.clone()).collect();
-        let prior = fix::Prior { file: match baseline { Baseline::Text(text) => Some(text.as_str()), Baseline::Absent => None }, removed: removed_text };
+        let head = repo.head().map(|head| repo.blob_at(&head, rel)).transpose()?.flatten().map(|blob| String::from_utf8_lossy(&blob).into_owned());
+        let prior = fix::Prior { file: head.as_deref(), removed: removed_text };
         let Some(fixed) = fix::remove_new_plain_comments(language, &change.source, &ranges, &prior) else { continue };
         if std::fs::read_to_string(&change.path).ok().as_deref() != Some(change.source.as_str()) {
             writeln!(err, "ai-stack lint: {} changed while it was checked, so it was left alone", first.path)?;
             continue;
         }
         std::fs::OpenOptions::new().write(true).truncate(true).open(&change.path)?.write_all(fixed.text.as_bytes())?;
-        removed += fixed.removed;
+        removed += fixed.removed.len();
         names.push(first.path.clone());
         match scan::Change::new(change.path.clone(), fixed.text, baseline) {
             Some(rescanned) => *change = rescanned,

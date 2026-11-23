@@ -61,18 +61,19 @@ impl Sandbox {
             .args(["-c", "init.defaultBranch=main", "-c", "commit.gpgsign=false"]);
         if launch != Launch::Human {
             let stack = Path::new(env!("CARGO_MANIFEST_DIR")).parent().unwrap().display().to_string();
-            let hook = |event: &str| format!("[ -x '{EXE}' ] || exit 0; exec '{EXE}' --home '{}' --stack '{stack}' lint {event}", self.home.display());
+            let exe = format!("'{EXE}' --home '{}' --stack '{stack}'", self.home.display());
             command
                 .env("GIT_CONFIG_COUNT", "4")
                 .env("GIT_CONFIG_KEY_0", "hook.ai-stack-lint.event")
                 .env("GIT_CONFIG_VALUE_0", "pre-commit")
                 .env("GIT_CONFIG_KEY_1", "hook.ai-stack-lint.command")
-                .env("GIT_CONFIG_VALUE_1", hook("pre-commit"))
+                .env("GIT_CONFIG_VALUE_1", format!("[ -x '{EXE}' ] || exit 0; {exe} lint pre-commit; [ $? -ne 3 ]"))
                 .env("GIT_CONFIG_KEY_2", "hook.ai-stack-lint-post.event")
                 .env("GIT_CONFIG_VALUE_2", "post-commit")
                 .env("GIT_CONFIG_KEY_3", "hook.ai-stack-lint-post.command")
-                .env("GIT_CONFIG_VALUE_3", hook("post-commit"))
-                .env("AI_STACK_HARNESS", "claude");
+                .env("GIT_CONFIG_VALUE_3", format!("[ -x '{EXE}' ] || exit 0; exec {exe} lint post-commit"))
+                .env("AI_STACK_HARNESS", "claude")
+                .env("AI_STACK_LINT_ALLOW_TEMP", "1");
         }
         command
     }
@@ -212,6 +213,13 @@ fn the_commit_hook_fixes_the_index_and_a_matching_worktree_in_every_commit_form(
     assert_eq!((s.git(&sparse, &["ls-files", "-t", "out/o.ts"]), sparse.join("out/o.ts").exists()), ("S out/o.ts\n".into(), false));
     assert_eq!((show(&sparse, "HEAD:in/i.ts"), show(&sparse, "HEAD:out/o.ts")), ("export const i = 2;\n".into(), "export const o = 2; // prose\n".into()));
 
+    let assumed = s.repo("assumed", &BASE);
+    write(&assumed.join("a.ts"), PROSE);
+    s.git(&assumed, &["add", "a.ts"]);
+    s.git(&assumed, &["update-index", "--assume-unchanged", "a.ts"]);
+    assert!(committed(&s.agent(&assumed, &["commit", "-qm", "assumed"])).contains("kept 1 comment"));
+    assert_eq!((show(&assumed, "HEAD:a.ts"), s.git(&assumed, &["ls-files", "-v", "a.ts"])), (PROSE.into(), "h a.ts\n".into()), "an assume-unchanged entry is never rewritten");
+
     let filtered = s.repo("filtered", &[(".gitattributes", "*.js filter=keep\n"), ("x.js", "f(0);\n"), ("pointer.js", "f(0);\n")]);
     s.git(&filtered, &["config", "filter.keep.clean", "cat"]);
     s.git(&filtered, &["config", "filter.keep.smudge", "cat"]);
@@ -249,9 +257,9 @@ fn the_commit_hook_fixes_the_index_and_a_matching_worktree_in_every_commit_form(
     write(&ancestry.join("a.ts"), PROSE);
     committed(&s.command(&ancestry, Launch::Tool).args(["commit", "-qam", "a tool calls git itself"]).output().unwrap());
     assert_eq!(show(&ancestry, "HEAD:a.ts"), PROSE, "git started by a program, not a shell, is left alone");
-    write(&ancestry.join("a.ts"), "export const a = 3; // shell child prose\n");
+    write(&ancestry.join("a.ts"), &format!("{PROSE}export const c = 3; // shell child prose\n"));
     committed(&s.command(&ancestry, Launch::AgentShellChild).args(["-c", "core.hooksPath=/dev/null", "commit", "-qam", "shell child"]).output().unwrap());
-    assert_eq!(show(&ancestry, "HEAD:a.ts"), "export const a = 3;\n", "an agent turning off project hooks is still checked");
+    assert_eq!(show(&ancestry, "HEAD:a.ts"), format!("{PROSE}export const c = 3;\n"), "an agent turning off project hooks is still checked");
     write(&ancestry.join(".git/SQUASH_MSG"), "squash\n");
     write(&ancestry.join("a.ts"), "export const a = 4; // squashed prose\n");
     committed(&s.agent(&ancestry, &["commit", "-qam", "squash"]));
@@ -294,9 +302,9 @@ fn skips_are_narrow_and_recorded_bypasses_queue_a_notice_and_the_rate_flags_a_re
     write(&repo.join("b.ts"), "export const b = 3;\n");
     committed(&s.agent(&repo, &["commit", "-qam", "plain"]));
     assert_eq!(kinds(&s), ["skip", "checked"]);
-    write(&repo.join("b.ts"), "export const b = 4; // prose only\n");
-    committed(&s.agent(&repo, &["commit", "-qam", "comment bypass", "--no-verify"]));
-    assert_eq!(kinds(&s), ["skip", "checked"], "a bypass with nothing the hook would refuse is not counted");
+    write(&repo.join("b.ts"), "export const b = 4;\n");
+    committed(&s.agent(&repo, &["commit", "-qam", "clean bypass", "--no-verify"]));
+    assert_eq!(kinds(&s), ["skip", "checked"], "a bypass with nothing the hook would refuse or remove is not counted");
     assert!(!s.home.join(".local/state/ai-stack/lint/notices").exists());
 
     write(&repo.join("b.test.ts"), "test(\"y\", async () => {\n  await new Promise((r) => setTimeout(r, 50));\n});\n");
@@ -304,6 +312,8 @@ fn skips_are_narrow_and_recorded_bypasses_queue_a_notice_and_the_rate_flags_a_re
     committed(&s.agent(&repo, &["commit", "-qm", "bypass", "--no-verify"]));
     assert_eq!(kinds(&s), ["skip", "checked", "bypassed"]);
     assert_eq!(s.events()[2]["findings"], serde_json::json!(["b.test.ts:2 no-fixed-sleep"]));
+    committed(&s.agent(&repo, &["commit", "-q", "--amend", "--no-verify", "-m", "reworded"]));
+    assert_eq!(kinds(&s), ["skip", "checked", "bypassed"], "an amend is charged only with what it changed");
     let hook = Command::new(EXE)
         .args(["--home", s.home.to_str().unwrap(), "lint", "hook", "claude"])
         .stdin(std::process::Stdio::piped())
@@ -322,6 +332,9 @@ fn skips_are_narrow_and_recorded_bypasses_queue_a_notice_and_the_rate_flags_a_re
     let report = Command::new(EXE).args(["--home", s.home.to_str().unwrap(), "--stack", Path::new(env!("CARGO_MANIFEST_DIR")).parent().unwrap().to_str().unwrap(), "lint", "skips"]).output().unwrap();
     let report = String::from_utf8_lossy(&report.stdout);
     assert!(report.contains("4 commits, 1 skips, 1 bypasses") && report.contains("skip: the device has no event"), "{report}");
+    write(&repo.join("b.ts"), "export const b = 6; // prose the hook would remove\n");
+    committed(&s.agent(&repo, &["commit", "-qam", "prose bypass", "--no-verify"]));
+    assert_eq!((kinds(&s).last().unwrap().as_str(), &s.events().last().unwrap()["findings"]), ("bypassed", &serde_json::json!(["b.ts:1 no-comments"])), "prose the fixer would delete counts as a bypass");
 
     let events = s.home.join(".local/state/ai-stack/lint/events.jsonl");
     fs::rename(&events, s.home.join("events.saved")).unwrap();
@@ -331,8 +344,19 @@ fn skips_are_narrow_and_recorded_bypasses_queue_a_notice_and_the_rate_flags_a_re
     assert!(!unrecorded.status.success() && stderr(&unrecorded).contains("the skip could not be recorded"), "{}", stderr(&unrecorded));
     fs::remove_dir(&events).unwrap();
 
-    let mut missing = s.command(&repo, Launch::Agent);
-    write(&repo.join("b.ts"), "export const b = 6; // prose\n");
-    let missing = missing.env("GIT_CONFIG_VALUE_1", "[ -x '/nonexistent/ai-stack' ] || exit 0; exec '/nonexistent/ai-stack' lint pre-commit").args(["commit", "-qam", "moved binary"]).output().unwrap();
-    committed(&missing);
+    write(&repo.join("b.ts"), "export const b = 7; // moved binary\n");
+    let moved = "[ -x '/nonexistent/ai-stack' ] || exit 0; '/nonexistent/ai-stack' lint pre-commit; [ $? -ne 3 ]";
+    committed(&s.command(&repo, Launch::Agent).env("GIT_CONFIG_VALUE_1", moved).args(["commit", "-qam", "moved binary"]).output().unwrap());
+
+    let quiet = s.root.join("no-reflog");
+    write(&quiet.join("a.ts"), "export const a = 1;\n");
+    s.git(&s.root, &["init", "-q", quiet.to_str().unwrap()]);
+    s.git(&quiet, &["config", "core.logAllRefUpdates", "false"]);
+    s.git(&quiet, &["add", "-A"]);
+    s.git(&quiet, &["commit", "-qm", "base"]);
+    write(&quiet.join("a.test.ts"), sleep);
+    s.git(&quiet, &["add", "a.test.ts"]);
+    committed(&s.command(&quiet, Launch::Agent).env("AI_STACK_LINT_SKIP", "the device has no event").args(["commit", "-qm", "skip without a reflog"]).output().unwrap());
+    let last = s.events().last().cloned().unwrap();
+    assert_eq!((last["kind"].as_str(), last["head"].as_str()), (Some("skip"), Some(s.git(&quiet, &["rev-parse", "HEAD"]).trim())), "a skip is recorded with reflogs off");
 }

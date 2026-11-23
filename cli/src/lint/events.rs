@@ -64,10 +64,23 @@ impl Rate {
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(tag = "kind", rename_all = "lowercase")]
-pub enum Pending {
+pub enum Outcome {
     Nothing,
     Checked,
     Skip { findings: Vec<String>, reason: String },
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct Pending {
+    pub before: Option<String>,
+    #[serde(flatten)]
+    pub outcome: Outcome,
+}
+
+impl Pending {
+    pub fn nothing() -> Pending {
+        Pending { before: None, outcome: Outcome::Nothing }
+    }
 }
 
 pub struct Log {
@@ -124,13 +137,19 @@ impl Log {
     }
 
     pub fn alert(&self, repo: &Path, alert: SkipAlert, now: u64) -> Result<bool> {
-        let rate = self.rate(repo, alert, now);
+        let events = self.read();
+        let since = now.saturating_sub(u64::from(alert.days) * DAY);
+        let rate = Rate::of(&events, repo, since);
         let flag = self.dir.join("alerts").join(key(repo));
+        let identity = |event: &Event| event.head.clone().unwrap_or_else(|| event.time.to_string());
+        let raised: Option<String> = std::fs::read_to_string(&flag).ok().map(|text| text.trim().to_string());
+        let window_moved_on = |raised: &String| !events.iter().any(|event| event.repo == repo && event.time >= since && identity(event) == *raised);
         let over = rate.over(alert);
-        match (over, flag.exists()) {
-            (true, false) => {
+        match (over, &raised) {
+            (true, raised) if raised.as_ref().is_none_or(window_moved_on) => {
+                let latest = events.iter().rev().find(|event| event.repo == repo).map(identity).unwrap_or_default();
                 std::fs::create_dir_all(self.dir.join("alerts"))?;
-                std::fs::write(&flag, repo.as_os_str().as_bytes())?;
+                std::fs::write(&flag, latest)?;
                 self.queue_notice(
                     repo,
                     &format!(
@@ -142,7 +161,7 @@ impl Log {
                     ),
                 )?;
             }
-            (false, true) => std::fs::remove_file(&flag)?,
+            (false, Some(_)) => std::fs::remove_file(&flag)?,
             _ => {}
         }
         Ok(over)
@@ -193,7 +212,7 @@ impl Log {
         let marker = self.markers().join(commit);
         let text = std::fs::read(&marker).ok()?;
         let _ = std::fs::remove_file(&marker);
-        Some(serde_json::from_slice(&text).unwrap_or(Pending::Nothing))
+        Some(serde_json::from_slice(&text).unwrap_or_else(|_| Pending::nothing()))
     }
 }
 
@@ -232,5 +251,15 @@ mod tests {
         log.record(&event(start + 31 * DAY, Kind::Checked)).unwrap();
         assert_eq!(log.read().len(), 1, "events older than 30 days are pruned on write");
         assert_eq!(Rate::of(&log.read(), Path::new("/other"), 0), Rate::default());
+
+        let quiet = Path::new("/q");
+        let skip = |time| Event { repo: quiet.to_path_buf(), ..event(time, Kind::Skip) };
+        let once = SkipAlert { percent: 20, days: 7, min_commits: 1 };
+        let later = start + 32 * DAY;
+        for (at, notified) in [(later, true), (later + 1, false), (later + 8 * DAY, true)] {
+            log.record(&skip(at)).unwrap();
+            assert!(log.alert(quiet, once, at).unwrap());
+            assert_eq!(log.take_notice(quiet).is_some(), notified, "a crossing notifies again once the window has moved past the last one ({at})");
+        }
     }
 }

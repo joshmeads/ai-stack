@@ -88,6 +88,31 @@ fn line_number(index: usize) -> u32 {
     u32::try_from(index + 1).unwrap_or(u32::MAX)
 }
 
+pub struct Hunk {
+    pub old: std::ops::Range<usize>,
+    pub new: std::ops::Range<usize>,
+}
+
+pub fn hunks(before: &str, after: &str) -> Vec<Hunk> {
+    let mut hunks: Vec<Hunk> = Vec::new();
+    let mut open = false;
+    for op in similar::capture_diff_slices(Algorithm::Patience, &comparable(before), &comparable(after)) {
+        if matches!(op, DiffOp::Equal { .. }) {
+            open = false;
+            continue;
+        }
+        match hunks.last_mut().filter(|_| open) {
+            Some(last) => {
+                last.old.end = op.old_range().end;
+                last.new.end = op.new_range().end;
+            }
+            None => hunks.push(Hunk { old: op.old_range(), new: op.new_range() }),
+        }
+        open = true;
+    }
+    hunks
+}
+
 pub fn same_lines(a: &str, b: &str) -> bool {
     comparable(a) == comparable(b)
 }

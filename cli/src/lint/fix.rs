@@ -1,4 +1,6 @@
+use std::collections::HashSet;
 use std::ops::Range;
+use std::panic::AssertUnwindSafe;
 use std::path::Path;
 use std::sync::LazyLock;
 
@@ -7,8 +9,13 @@ use ast_grep_core::{AstGrep, Node};
 use ast_grep_language::SupportLang;
 use regex::Regex;
 
+use super::lines::{LineIndex, hunks};
+
 type Tree = AstGrep<StrDoc<SupportLang>>;
 type TreeNode<'t> = Node<'t, StrDoc<SupportLang>>;
+
+const LINE_TERMINATORS: [char; 5] = ['\n', '\r', '\u{85}', '\u{2028}', '\u{2029}'];
+const GO_STATEMENT_LISTS: [&str; 7] = ["source_file", "block", "statement_list", "expression_case", "default_case", "type_case", "communication_case"];
 
 pub struct Prior<'a> {
     pub file: Option<&'a str>,
@@ -23,7 +30,7 @@ impl Prior<'_> {
 
 pub struct Fixed {
     pub text: String,
-    pub removed: usize,
+    pub removed: Vec<Range<usize>>,
 }
 
 pub fn generated_or_vendored(rel: &Path, source: &str) -> bool {
@@ -33,54 +40,89 @@ pub fn generated_or_vendored(rel: &Path, source: &str) -> bool {
 }
 
 pub fn remove_new_plain_comments(language: SupportLang, source: &str, comments: &[Range<usize>], prior: &Prior) -> Option<Fixed> {
+    std::panic::catch_unwind(AssertUnwindSafe(|| fix(language, source, comments, prior))).ok().flatten()
+}
+
+fn fix(language: SupportLang, source: &str, comments: &[Range<usize>], prior: &Prior) -> Option<Fixed> {
     let tree = language.ast_grep(source);
-    let breaks = LineBreaks::of(language);
-    let mut edits: Vec<Edit> = Vec::new();
-    for range in comments {
-        let Some(node) = tree.root().dfs().find(|node| node.range() == *range && is_comment(node)) else { continue };
-        if prior.holds(&node.text()) || is_doc(language, &node, source) || looks_like_a_directive(&node.text()) {
-            continue;
-        }
-        let edit = match node.parent().filter(|parent| parent.kind() == "jsx_expression" && parent.named_children().count() == 1) {
-            Some(container) if alone_on_its_lines(source, container.range()) => Edit { range: container.range(), text: "" },
-            _ => edit_for(source, without_line_end(source, node.range()), breaks),
-        };
-        if !edits.iter().any(|known| known.range.start < edit.range.end && edit.range.start < known.range.end) {
-            edits.push(edit);
-        }
-    }
-    if edits.is_empty() {
+    let file = File::new(language, source, &tree, prior.file);
+    let mut removed: Vec<Range<usize>> = comments
+        .iter()
+        .filter_map(|range| tree.root().dfs().find(|node| node.range() == *range && is_comment(node)))
+        .filter(|node| file.deletable(node, prior))
+        .map(|node| node.range())
+        .collect();
+    if removed.is_empty() {
         return None;
     }
-    edits.sort_by_key(|edit| edit.range.start);
-    let text = apply(source, &edits);
-    verified(&tree, &language.ast_grep(&text), breaks).then_some(Fixed { text, removed: edits.len() })
+    removed.sort_by_key(|range| range.start);
+    removed.dedup();
+    let text = apply(source, &removed);
+    verified(source, &tree, &text, &language.ast_grep(&text)).then_some(Fixed { text, removed })
 }
 
-#[derive(Clone, Copy)]
-struct LineBreaks {
-    unicode: bool,
+struct File<'s> {
+    language: SupportLang,
+    source: &'s str,
+    index: LineIndex,
+    edited: Vec<Range<usize>>,
+    trailing: HashSet<u32>,
+    package_line: Option<u32>,
 }
 
-impl LineBreaks {
-    fn of(language: SupportLang) -> LineBreaks {
-        LineBreaks { unicode: matches!(language, SupportLang::JavaScript | SupportLang::TypeScript | SupportLang::Tsx) }
+impl<'s> File<'s> {
+    fn new(language: SupportLang, source: &'s str, tree: &Tree, before: Option<&str>) -> File<'s> {
+        let index = LineIndex::new(source);
+        let trailing = tree.root().dfs().filter(is_comment).filter(|node| !blank(&source[line_start(source, node.range().start)..node.range().start])).map(|node| index.line(node.range().start)).collect();
+        let package_line = tree.root().children().find(|node| node.kind() == "package_clause").map(|node| index.line(node.range().start));
+        File { language, source, edited: edited_commentary(language, before, source), index, trailing, package_line }
     }
 
-    fn within(self, text: &str) -> bool {
-        text.contains('\n') || (self.unicode && text.contains(['\u{2028}', '\u{2029}']))
+    fn deletable(&self, node: &TreeNode, prior: &Prior) -> bool {
+        let body = &self.source[without_line_end(self.source, node.range())];
+        let line = self.index.line(node.range().start);
+        (body.starts_with("//") || body.starts_with('#'))
+            && !body.contains(LINE_TERMINATORS)
+            && !prior.holds(body)
+            && !self.edited.iter().any(|hunk| hunk.contains(&(line as usize - 1)))
+            && !self.is_doc(node, body)
+            && !looks_like_a_directive(body)
+            && (self.language != SupportLang::Go || self.gofmt_stable(node, line))
+    }
+
+    fn is_doc(&self, node: &TreeNode, body: &str) -> bool {
+        match self.language {
+            SupportLang::Rust => (body.starts_with("///") && !body.starts_with("////")) || body.starts_with("//!"),
+            SupportLang::Go => directly_above_a_declaration(node, self.source),
+            _ => false,
+        }
+    }
+
+    fn gofmt_stable(&self, node: &TreeNode, line: u32) -> bool {
+        let (above, below) = (self.trailing.contains(&(line - 1)), self.trailing.contains(&(line + 1)));
+        if self.package_line == Some(line) {
+            return false;
+        }
+        if self.trailing.contains(&line) {
+            return !above && !below;
+        }
+        if above && below {
+            return false;
+        }
+        if node.parent().is_some_and(|parent| GO_STATEMENT_LISTS.contains(&parent.kind().as_ref())) {
+            return true;
+        }
+        let text = |at: u32| at.checked_sub(1).and_then(|at| self.source.split('\n').nth(at as usize)).map(str::trim);
+        text(line - 1).is_some_and(|above| above.is_empty() || above.ends_with(['{', '('])) || text(line + 1).is_some_and(|below| below.is_empty() || below.starts_with(['}', ')']))
     }
 }
 
-fn is_doc(language: SupportLang, node: &TreeNode, source: &str) -> bool {
-    let text = node.text();
-    let block_doc = (text.starts_with("/**") && !text.starts_with("/**/")) || text.starts_with("/*!");
-    match language {
-        SupportLang::Rust => block_doc || (text.starts_with("///") && !text.starts_with("////")) || text.starts_with("//!"),
-        SupportLang::Go => directly_above_a_declaration(node, source),
-        SupportLang::Python => false,
-        _ => block_doc,
-    }
+fn edited_commentary(language: SupportLang, before: Option<&str>, after: &str) -> Vec<Range<usize>> {
+    let Some(before) = before else { return Vec::new() };
+    let tree = language.ast_grep(before);
+    let index = LineIndex::new(before);
+    let commented: HashSet<usize> = tree.root().dfs().filter(is_comment).flat_map(|node| index.span(node.range())).map(|line| line as usize - 1).collect();
+    hunks(before, after).into_iter().filter(|hunk| hunk.old.clone().any(|line| commented.contains(&line))).map(|hunk| hunk.new).collect()
 }
 
 fn directly_above_a_declaration(node: &TreeNode, source: &str) -> bool {
@@ -102,15 +144,15 @@ fn directly_above_a_declaration(node: &TreeNode, source: &str) -> bool {
 }
 
 fn looks_like_a_directive(text: &str) -> bool {
-    static OPENER: LazyLock<Regex> = LazyLock::new(|| Regex::new(r"^(?://+!?|/\*+!?|#+)").unwrap());
+    static OPENER: LazyLock<Regex> = LazyLock::new(|| Regex::new(r"^(?://+!?|#+)").unwrap());
     static TAG: LazyLock<Regex> = LazyLock::new(|| Regex::new(r"[@$][A-Za-z]").unwrap());
+    static TOOL_WORD: LazyLock<Regex> = LazyLock::new(|| Regex::new(r"(?i)ignore|disable|suppress|noqa|pragma|codeql|deepcode|nosec|lint").unwrap());
     let after = &text[OPENER.find(text).map_or(0, |opener| opener.end())..];
-    let spaced = text.starts_with("/*") || after.starts_with(char::is_whitespace);
-    let body = after.trim_end().strip_suffix("*/").unwrap_or(after).trim();
+    let body = after.trim();
     let Some(first) = body.split_whitespace().next() else { return true };
     let letters: Vec<char> = first.chars().filter(|char| char.is_alphabetic()).collect();
     let all_caps = letters.len() > 1 && letters.iter().all(|char| char.is_uppercase());
-    !spaced || !first.starts_with(char::is_alphabetic) || first.contains(':') || all_caps || TAG.is_match(body)
+    !after.starts_with(char::is_whitespace) || !first.starts_with(char::is_alphabetic) || first.contains(':') || all_caps || TAG.is_match(body) || TOOL_WORD.is_match(body)
 }
 
 fn without_line_end(source: &str, range: Range<usize>) -> Range<usize> {
@@ -120,99 +162,58 @@ fn without_line_end(source: &str, range: Range<usize>) -> Range<usize> {
     range.start..range.start + text.len()
 }
 
-struct Edit {
-    range: Range<usize>,
-    text: &'static str,
-}
-
 fn is_comment(node: &TreeNode) -> bool {
     matches!(node.kind().as_ref(), "comment" | "line_comment" | "block_comment")
-}
-
-fn holds_only_comments(node: &TreeNode) -> bool {
-    node.children().filter(|child| child.is_named()).all(|child| is_comment(&child))
 }
 
 fn line_start(source: &str, at: usize) -> usize {
     source[..at].rfind('\n').map_or(0, |newline| newline + 1)
 }
 
-fn line_end(source: &str, at: usize) -> usize {
-    source[at..].find('\n').map_or(source.len(), |newline| at + newline)
-}
-
 fn blank(text: &str) -> bool {
     text.chars().all(|char| char == ' ' || char == '\t' || char == '\r')
 }
 
-fn alone_on_its_lines(source: &str, range: Range<usize>) -> bool {
-    blank(&source[line_start(source, range.start)..range.start]) && blank(&source[range.end..line_end(source, range.end)])
-}
-
-fn horizontal(byte: u8) -> bool {
-    byte == b' ' || byte == b'\t'
-}
-
-fn edit_for(source: &str, range: Range<usize>, breaks: LineBreaks) -> Edit {
-    let bytes = source.as_bytes();
-    let back_over_space = |mut at: usize| {
-        while at > 0 && horizontal(bytes[at - 1]) {
-            at -= 1;
-        }
-        at
-    };
-    let forward_over_space = |mut at: usize| {
-        while at < bytes.len() && horizontal(bytes[at]) {
-            at += 1;
-        }
-        at
-    };
-    let comment = &source[range.clone()];
-    let before_blank = blank(&source[line_start(source, range.start)..range.start]);
-    if breaks.within(comment) {
-        let crlf = comment.contains("\r\n") || (!comment.contains('\n') && source.contains("\r\n"));
-        let start = if before_blank { range.start } else { back_over_space(range.start) };
-        return Edit { range: start..range.end, text: if crlf { "\r\n" } else { "\n" } };
-    }
-    let after_blank = blank(&source[range.end..line_end(source, range.end)]);
-    match (before_blank, after_blank) {
-        (_, true) => Edit { range: back_over_space(range.start)..range.end, text: "" },
-        (true, false) => Edit { range: range.start..forward_over_space(range.end), text: "" },
-        (false, false) => {
-            let end = forward_over_space(range.end);
-            let spaced = horizontal(bytes[range.start - 1]);
-            Edit { range: range.start..end, text: if spaced { "" } else { " " } }
-        }
-    }
-}
-
-fn apply(source: &str, edits: &[Edit]) -> String {
+fn apply(source: &str, comments: &[Range<usize>]) -> String {
     let mut out = String::with_capacity(source.len());
-    let mut touched: Vec<Range<usize>> = Vec::new();
+    let mut touched: Vec<usize> = Vec::new();
     let mut copied = 0;
-    for edit in edits {
-        out.push_str(&source[copied..edit.range.start]);
-        let start = out.len();
-        out.push_str(edit.text);
-        touched.push(start..out.len());
-        copied = edit.range.end;
+    for comment in comments {
+        let comment = without_line_end(source, comment.clone());
+        let start = source[..comment.start].trim_end_matches([' ', '\t']).len();
+        out.push_str(&source[copied..start]);
+        touched.push(out.len());
+        copied = comment.end;
     }
     out.push_str(&source[copied..]);
-    let mut kept = String::with_capacity(out.len());
-    let mut previous: Option<&str> = None;
+    let lines: Vec<&str> = out.split_inclusive('\n').collect();
+    let content = |at: usize| lines[at].strip_suffix('\n').unwrap_or(lines[at]);
+    let continued = |at: usize| at > 0 && lines[at - 1].trim_end_matches(['\n', '\r']).ends_with('\\');
+    let mut keep = vec![true; lines.len()];
+    let mut emptied = Vec::new();
     let mut at = 0;
-    for line in out.split_inclusive('\n') {
-        let span = at..at + line.len();
+    for (line, text) in lines.iter().enumerate() {
+        let span = at..at + text.len();
         at = span.end;
-        let content = line.strip_suffix('\n').unwrap_or(line);
-        let was_touched = touched.iter().any(|edit| edit.start <= span.end && span.start <= edit.end && !(edit.start == span.end && line.ends_with('\n')));
-        let continues = previous.is_some_and(|previous| previous.trim_end_matches(['\n', '\r']).ends_with('\\'));
-        if !(was_touched && blank(content) && !continues) {
-            kept.push_str(line);
+        let was_touched = touched.iter().any(|&edit| span.start <= edit && edit <= span.end && !(edit == span.end && text.ends_with('\n')));
+        if was_touched && blank(content(line)) && !continued(line) {
+            keep[line] = false;
+            emptied.push(line);
         }
-        previous = Some(line);
     }
-    kept
+    for line in emptied {
+        let previous = (0..line).rev().find(|&at| keep[at]);
+        let next = (line + 1..lines.len()).find(|&at| keep[at]);
+        let spare = |at: usize| blank(content(at)) && !continued(at);
+        let opens = previous.is_none_or(|at| blank(content(at)) || content(at).trim_end().ends_with(['{', '(', '[', ':']));
+        let closes = next.is_none_or(|at| content(at).trim_start().starts_with(['}', ')', ']']));
+        match (previous, next) {
+            (_, Some(next)) if opens && spare(next) => keep[next] = false,
+            (Some(previous), _) if closes && spare(previous) => keep[previous] = false,
+            _ => {}
+        }
+    }
+    lines.iter().zip(&keep).filter(|(_, keep)| **keep).map(|(line, _)| *line).collect()
 }
 
 struct Token {
@@ -225,19 +226,11 @@ fn tokens(node: &TreeNode, out: &mut Vec<Token>) {
     if is_comment(node) {
         return;
     }
-    let empty_container = node.kind() == "jsx_expression" && holds_only_comments(node);
     if node.children().len() == 0 {
-        let text = node.text();
-        let layout = node.kind() == "jsx_text" && text.trim().is_empty() && text.contains('\n');
-        if !layout {
-            out.push(Token { kind: node.kind().into_owned(), text: text.into_owned(), range: node.range() });
-        }
+        out.push(Token { kind: node.kind().into_owned(), text: node.text().into_owned(), range: node.range() });
         return;
     }
     for child in node.children() {
-        if empty_container && !child.is_named() {
-            continue;
-        }
         tokens(&child, out);
     }
 }
@@ -246,25 +239,16 @@ fn errors(node: &TreeNode) -> usize {
     node.dfs().filter(|node| node.is_error() || node.is_missing()).count()
 }
 
-fn bare_line_feeds(text: &str) -> usize {
-    text.match_indices('\n').filter(|(at, _)| !text[..*at].ends_with('\r')).count()
-}
-
-fn verified(before: &Tree, after: &Tree, breaks: LineBreaks) -> bool {
-    let (old_text, new_text) = (before.root().text(), after.root().text());
-    let crlf_lost = old_text.contains("\r\n") && bare_line_feeds(&new_text) > bare_line_feeds(&old_text);
-    if errors(&after.root()) > errors(&before.root()) || crlf_lost {
+fn verified(old_source: &str, before: &Tree, new_source: &str, after: &Tree) -> bool {
+    if errors(&after.root()) > errors(&before.root()) {
         return false;
     }
     let (mut old, mut new) = (Vec::new(), Vec::new());
     tokens(&before.root(), &mut old);
     tokens(&after.root(), &mut new);
     let same_tokens = old.len() == new.len() && old.iter().zip(&new).all(|(a, b)| a.kind == b.kind && a.text == b.text);
-    let gaps = |tree: &Tree, tokens: &[Token]| -> Vec<bool> {
-        let source = tree.root().text();
-        tokens.windows(2).map(|pair| breaks.within(&source[pair[0].range.end..pair[1].range.start])).collect()
-    };
-    same_tokens && gaps(before, &old) == gaps(after, &new)
+    let breaks = |source: &str, tokens: &[Token]| -> Vec<bool> { tokens.windows(2).map(|pair| source.get(pair[0].range.end..pair[1].range.start).is_none_or(|gap| gap.contains(LINE_TERMINATORS))).collect() };
+    same_tokens && breaks(old_source, &old) == breaks(new_source, &new)
 }
 
 #[cfg(test)]
@@ -278,40 +262,42 @@ mod tests {
     }
 
     #[test]
-    fn only_new_plain_comments_are_deleted_and_every_token_and_line_break_is_kept() {
+    fn only_new_plain_line_comments_are_deleted_and_every_token_line_break_and_format_is_kept() {
         let new = Prior { file: None, removed: "" };
         let removed = [
-            (SupportLang::JavaScript, "function f() { return /* note\n*/ 1 }\n", "function f() { return\n 1 }\n"),
-            (SupportLang::JavaScript, "function f() { return /* note\u{2028}x */ 7 }\n", "function f() { return\n 7 }\n"),
-            (SupportLang::TypeScript, "console.log(1+/* note */+n)\n", "console.log(1+ +n)\n"),
-            (SupportLang::Tsx, "h(<span>a{/* note */}b</span>)\n", "h(<span>a{ }b</span>)\n"),
-            (SupportLang::Tsx, "h(<div>\n  {/* note */}\n  <i />\n</div>)\n", "h(<div>\n  <i />\n</div>)\n"),
-            (SupportLang::Tsx, "h(<main>\n  {/* note */ /* SPDX-License-Identifier: MIT */}\n</main>)\n", "h(<main>\n  { /* SPDX-License-Identifier: MIT */}\n</main>)\n"),
-            (SupportLang::Rust, "fn main() { let/* note */n = 1; }\n", "fn main() { let n = 1; }\n"),
+            (SupportLang::JavaScript, "  console.log('é'); // note\n", "  console.log('é');\n"),
+            (SupportLang::JavaScript, "\n\n\nconst a = 1; // note\n", "\n\n\nconst a = 1;\n"),
             (SupportLang::Rust, "fn f() {\n    let a = 1; // note\n\n    // note\n    a\n}\n", "fn f() {\n    let a = 1;\n\n    a\n}\n"),
             (SupportLang::Rust, "fn f() {\r\n    let a = 1; // note\r\n    a\r\n}\r\n", "fn f() {\r\n    let a = 1;\r\n    a\r\n}\r\n"),
             (SupportLang::Python, "x = 1 \\\n# note\nprint(x)\n", "x = 1 \\\n\nprint(x)\n"),
             (SupportLang::Python, "def f():\n    # note\n    return 1  # note\n", "def f():\n    return 1\n"),
             (SupportLang::Python, "x = 2  # note\r\ny = 3\r\n", "x = 2\r\ny = 3\r\n"),
-            (SupportLang::Go, "package main\nfunc main() { var/* note */n int; println(n) }\n", "package main\nfunc main() { var n int; println(n) }\n"),
-            (SupportLang::Go, "package main\n\n// note\n\nfunc main() {}\n", "package main\n\n\nfunc main() {}\n"),
-        ];
+            (SupportLang::Python, "x = 1\n\n# note\n", "x = 1\n"),
+            (SupportLang::Go, "package main\n\n// note\n\nfunc main() {}\n", "package main\n\nfunc main() {}\n"),
+            (SupportLang::Go, "package main\n\nfunc main() {\n\ta := 1\n\t// note\n\tprintln(a) // note\n}\n", "package main\n\nfunc main() {\n\ta := 1\n\tprintln(a)\n}\n"),        ];
         for (language, source, expected) in removed {
             assert_eq!(fixed(language, source, &new), expected, "{language} {source:?}");
         }
         let kept = [
+            (SupportLang::JavaScript, "function f() { return /* note\r*/ 7 }\n"),
+            (SupportLang::TypeScript, "console.log(1+/* note */+n)\n"),
+            (SupportLang::Tsx, "h(<div>\n  {/* note */}\n  <i />\n</div>)\n"),
             (SupportLang::Rust, "/// note\nfn f() {}\n"),
             (SupportLang::Rust, "//! note\nfn f() {}\n"),
-            (SupportLang::JavaScript, "/** note */\nfunction f() {}\n"),
             (SupportLang::Go, "package main\n\n// note\nfunc main() {}\n"),
             (SupportLang::Go, "package main\n\nimport (\n\t// int note = 42;\n\t\"C\"\n)\n"),
+            (SupportLang::Go, "package demo // note \"example.com/demo\"\n\nvar n = 1\n"),
+            (SupportLang::Go, "package main\n\nfunc main() {\n\t_ = f()        //nolint:errcheck\n\tdefer g() // note\n}\n"),
+            (SupportLang::Go, "package main\n\ntype T struct {\n\tA int\n\t// note\n\tLong string\n}\n"),
             (SupportLang::JavaScript, "f(); // TODO: note\n"),
             (SupportLang::JavaScript, "f(); // NOSONAR note\n"),
             (SupportLang::JavaScript, "f(); // $FlowFixMe note\n"),
             (SupportLang::JavaScript, "f(); // see @note\n"),
             (SupportLang::JavaScript, "f(); //note\n"),
+            (SupportLang::JavaScript, "f(); // codeql[js/xss] note\n"),
+            (SupportLang::JavaScript, "f(); // deepcode ignore XSS: note\n"),
+            (SupportLang::Python, "x = 1  # pragma no cover note\n"),
             (SupportLang::Python, "x = 1  # %% note\n"),
-            (SupportLang::Tsx, "h(<div>\n  a\n  {/* note */}\n  b\n</div>)\n"),
         ];
         for (language, source) in kept {
             assert_eq!(fixed(language, source, &new), source, "{language} {source:?}");
@@ -319,6 +305,10 @@ mod tests {
         let source = "export const a = 2; // note the ledger\n";
         assert_eq!(fixed(SupportLang::TypeScript, source, &Prior { file: Some("export const a = 1; // note the ledger\n"), removed: "" }), source, "a comment already in the file is kept");
         assert_eq!(fixed(SupportLang::TypeScript, source, &Prior { file: None, removed: "  // note the ledger\n" }), source, "a comment moved from another file is kept");
+        let before = "export const a = 1;\n// note per line\nexport const b = 1;\n\nexport const c = 1;\n";
+        let after = "export const a = 1;\n// note per invoice\nexport const b = 2;\n\nexport const c = 2; // note from the agent\n";
+        let expected = "export const a = 1;\n// note per invoice\nexport const b = 2;\n\nexport const c = 2;\n";
+        assert_eq!(fixed(SupportLang::TypeScript, after, &Prior { file: Some(before), removed: "" }), expected, "a hunk that edits a comment keeps every comment in it");
         assert!(generated_or_vendored(Path::new("gen/a.go"), "// Code generated by protoc. DO NOT EDIT.\npackage gen\n"));
         assert!(generated_or_vendored(Path::new("third_party/semver/a.js"), "f();\n"));
         assert!(!generated_or_vendored(Path::new("src/vendors.ts"), "f();\n"));

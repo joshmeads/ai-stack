@@ -92,6 +92,23 @@ impl Repo {
         self.with_attribute(rels, &["filter"], from, |value| !matches!(value, b"unspecified" | b"unset"))
     }
 
+    pub fn flagged(&self, rels: &[PathBuf], index: Option<&Path>) -> HashSet<PathBuf> {
+        if rels.is_empty() {
+            return HashSet::new();
+        }
+        let env: Vec<(&str, &OsStr)> = index.iter().map(|index| ("GIT_INDEX_FILE", index.as_os_str())).collect();
+        let mut args: Vec<&OsStr> = ["ls-files", "-v", "-z", "--"].map(OsStr::new).to_vec();
+        args.extend(rels.iter().map(|rel| rel.as_os_str()));
+        let Ok(out) = run_git(&self.root, &args, &[], &env) else { return rels.iter().cloned().collect() };
+        out.split(|&byte| byte == 0)
+            .filter_map(|tagged| {
+                let (&tag, rest) = tagged.split_first()?;
+                let rel = rest.strip_prefix(b" ")?;
+                (tag == b'S' || tag.is_ascii_lowercase()).then(|| path_of(rel))
+            })
+            .collect()
+    }
+
     fn with_attribute(&self, rels: &[PathBuf], names: &[&str], from: &Attributes, holds: impl Fn(&[u8]) -> bool) -> Result<HashSet<PathBuf>> {
         if rels.is_empty() {
             return Ok(HashSet::new());
@@ -146,7 +163,7 @@ impl Repo {
         let work = Workspace::new(self, Some(&head))?;
         work.track_untracked()?;
         let removed = match with_removed {
-            true => removed_lines(&work.git(&["diff", "-U0", "--no-color", "--no-ext-diff", "--no-renames", "--ignore-submodules=all", merge_base.trim()], &[])?),
+            true => removed_lines(&work.git(&["diff", "-U0", "--no-color", "--no-ext-diff", "--no-textconv", "--no-renames", "--text", "--ignore-submodules=all", &head], &[])?),
             false => String::new(),
         };
         Ok((work.changes(merge_base.trim())?, removed))

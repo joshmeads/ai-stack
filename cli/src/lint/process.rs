@@ -19,7 +19,11 @@ pub struct GitProcess {
 
 impl GitProcess {
     pub fn parent_of_this_hook(cwd: &Path) -> GitProcess {
-        let git = std::os::unix::process::parent_id();
+        let hook_shell = std::os::unix::process::parent_id();
+        let git = match command_name(hook_shell) {
+            Some(name) if name != "git" => parent(hook_shell).filter(|&up| command_name(up).is_some_and(|name| name == "git")).unwrap_or(hook_shell),
+            _ => hook_shell,
+        };
         let environ = environ(git);
         let exec_by_shell = environ.as_ref().is_some_and(|vars| vars.iter().any(|(name, value)| name == "_" && Path::new(value).file_name().is_some_and(|name| name == "git")));
         let launched_by_shell = parent(git).and_then(command_name).is_some_and(|name| SHELLS.contains(&name.trim_start_matches('-')));

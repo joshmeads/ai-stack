@@ -202,7 +202,8 @@ enum LintCommand {
         #[arg(hide = true)]
         event: Option<String>,
     },
-    /// Git pre-commit hook that agent shells run through GIT_CONFIG_* variables.
+    /// Git pre-commit hook that agent shells run through GIT_CONFIG_* variables. Exits 3 to
+    /// refuse the commit; the installed command turns every other exit into 0.
     #[command(hide = true)]
     PreCommit,
     /// Git post-commit hook that records a commit made without the pre-commit check.
@@ -691,8 +692,14 @@ fn cmd_lint(ctx: &Context, command: Option<LintCommand>, request: lint::Request)
             }
             return Ok(0);
         }
-        Some(LintCommand::PreCommit) => return Ok(lint::pre_commit(&state_dir, load(), &lint::CommitEnv::from_process()?, &mut io::stderr())),
-        Some(LintCommand::PostCommit) => return Ok(lint::post_commit(&state_dir, load(), &lint::CommitEnv::from_process()?)),
+        Some(LintCommand::PreCommit) => {
+            std::panic::set_hook(Box::new(|_| {}));
+            return Ok(lint::pre_commit(&state_dir, load(), &lint::CommitEnv::from_process()?, &mut io::stderr()));
+        }
+        Some(LintCommand::PostCommit) => {
+            std::panic::set_hook(Box::new(|_| {}));
+            return Ok(lint::post_commit(&state_dir, load(), &lint::CommitEnv::from_process()?));
+        }
         _ => {}
     }
     let settings = match load() {
