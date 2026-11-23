@@ -5,7 +5,7 @@ use serde::Deserialize;
 use serde_json::{Value, json};
 
 use super::events::Log;
-use super::repo::{Repo, Repos};
+use super::repo::{Attributes, Repo, Repos};
 use super::scan::{Change, Engine, read_lintable, sort};
 use super::{Baseline, Settings, Severity};
 use crate::config::Harness;
@@ -82,7 +82,7 @@ fn report(settings: &Settings, files: &[PathBuf], cwd: &Path, repos: &mut Repos)
         return Ok(None);
     }
     let rules = settings.rules()?;
-    let mut findings = Engine { settings, rules: &rules, scope: None, display: cwd }.lint(&changes);
+    let mut findings = Engine { settings, rules: &rules, scope: None, display: cwd, attributes: Attributes::Worktree }.lint(&changes);
     findings.retain(|finding| finding.severity == Severity::Error && finding.fix.is_none());
     sort(&mut findings);
     if findings.is_empty() {

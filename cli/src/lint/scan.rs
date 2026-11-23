@@ -9,7 +9,7 @@ use ast_grep_language::SupportLang;
 use regex::Regex;
 
 use super::lines::{LineIndex, Lines, same_lines};
-use super::repo::{Repo, Repos};
+use super::repo::{Attributes, Repo, Repos};
 use super::rules::{Rule, Rules};
 use super::settings::{Policy, Settings};
 use super::{Baseline, Finding, Scope, Severity};
@@ -56,6 +56,7 @@ pub struct Engine<'a> {
     pub rules: &'a Rules,
     pub scope: Option<Scope>,
     pub display: &'a Path,
+    pub attributes: Attributes,
 }
 
 impl Engine<'_> {
@@ -77,7 +78,7 @@ impl Engine<'_> {
                 continue;
             }
             let rels: Vec<PathBuf> = group.iter().map(relative).collect();
-            let generated = repo.as_ref().map(|repo| repo.generated(&rels)).unwrap_or_default();
+            let generated = repo.as_ref().map(|repo| repo.generated(&rels, &self.attributes)).unwrap_or_default();
             for (target, rel) in group.iter().zip(&rels) {
                 if generated.contains(rel) || policy.ignored(rel) {
                     continue;

@@ -48,8 +48,7 @@ impl Rate {
         for event in events.iter().filter(|event| event.repo == repo && event.time >= since) {
             match event.kind {
                 Kind::Checked => rate.commits += 1,
-                Kind::Skip => rate.flagged += 1,
-                Kind::Bypassed => {
+                Kind::Skip | Kind::Bypassed => {
                     rate.commits += 1;
                     rate.flagged += 1;
                 }
@@ -61,6 +60,14 @@ impl Rate {
     pub fn over(self, alert: SkipAlert) -> bool {
         self.flagged > 0 && self.commits >= alert.min_commits && u64::from(self.flagged) * 100 >= u64::from(alert.percent) * u64::from(self.commits)
     }
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(tag = "kind", rename_all = "lowercase")]
+pub enum Pending {
+    Nothing,
+    Checked,
+    Skip { findings: Vec<String>, reason: String },
 }
 
 pub struct Log {
@@ -106,8 +113,18 @@ impl Log {
         Ok(())
     }
 
+    pub fn writable(&self) -> Result<()> {
+        std::fs::create_dir_all(&self.dir).with_context(|| format!("creating {}", self.dir.display()))?;
+        std::fs::OpenOptions::new().create(true).append(true).open(self.events_path()).with_context(|| format!("opening {}", self.events_path().display()))?;
+        Ok(())
+    }
+
+    pub fn rate(&self, repo: &Path, alert: SkipAlert, now: u64) -> Rate {
+        Rate::of(&self.read(), repo, now.saturating_sub(u64::from(alert.days) * DAY))
+    }
+
     pub fn alert(&self, repo: &Path, alert: SkipAlert, now: u64) -> Result<bool> {
-        let rate = Rate::of(&self.read(), repo, now.saturating_sub(u64::from(alert.days) * DAY));
+        let rate = self.rate(repo, alert, now);
         let flag = self.dir.join("alerts").join(key(repo));
         let over = rate.over(alert);
         match (over, flag.exists()) {
@@ -129,10 +146,6 @@ impl Log {
             _ => {}
         }
         Ok(over)
-    }
-
-    pub fn over(&self, repo: &Path) -> bool {
-        self.dir.join("alerts").join(key(repo)).exists()
     }
 
     fn notices(&self) -> PathBuf {
@@ -163,7 +176,7 @@ impl Log {
         self.dir.join("markers")
     }
 
-    pub fn mark(&self, commit: &str) -> Result<()> {
+    pub fn mark(&self, commit: &str, pending: &Pending) -> Result<()> {
         std::fs::create_dir_all(self.markers())?;
         let now = SystemTime::now();
         for entry in std::fs::read_dir(self.markers())?.filter_map(|entry| entry.ok()) {
@@ -172,31 +185,16 @@ impl Log {
                 let _ = std::fs::remove_file(entry.path());
             }
         }
-        std::fs::write(self.markers().join(commit), b"")?;
+        std::fs::write(self.markers().join(commit), serde_json::to_vec(pending)?).with_context(|| format!("writing {}", self.markers().join(commit).display()))?;
         Ok(())
     }
 
-    pub fn take_mark(&self, commit: &str) -> bool {
-        std::fs::remove_file(self.markers().join(commit)).is_ok()
+    pub fn take_mark(&self, commit: &str) -> Option<Pending> {
+        let marker = self.markers().join(commit);
+        let text = std::fs::read(&marker).ok()?;
+        let _ = std::fs::remove_file(&marker);
+        Some(serde_json::from_slice(&text).unwrap_or(Pending::Nothing))
     }
-}
-
-pub fn parent_commit_process() -> String {
-    let parent = std::os::unix::process::parent_id();
-    match started(parent) {
-        Some(start) => format!("{parent}-{start}"),
-        None => parent.to_string(),
-    }
-}
-
-fn started(pid: u32) -> Option<String> {
-    if let Ok(stat) = std::fs::read_to_string(format!("/proc/{pid}/stat")) {
-        let after_name = &stat[stat.rfind(')')? + 1..];
-        return after_name.split_whitespace().nth(19).map(str::to_string);
-    }
-    let out = std::process::Command::new("ps").args(["-o", "lstart=", "-p", &pid.to_string()]).output().ok()?;
-    let text = String::from_utf8_lossy(&out.stdout).split_whitespace().collect::<Vec<_>>().join("-");
-    (!text.is_empty()).then_some(text)
 }
 
 #[cfg(test)]
@@ -213,23 +211,24 @@ mod tests {
         let log = Log::new(tmp.path());
         let alert = SkipAlert { percent: 20, days: 7, min_commits: 5 };
         let start = 100 * DAY;
-        for at in 0..4 {
+        for at in 0..3 {
             log.record(&event(start + at, Kind::Checked)).unwrap();
         }
-        log.record(&event(start + 4, Kind::Skip)).unwrap();
-        assert_eq!(Rate::of(&log.read(), Path::new("/r"), 0), Rate { commits: 4, flagged: 1 });
-        assert!(!log.alert(Path::new("/r"), alert, start + 5).unwrap(), "four commits are below min_commits");
+        log.record(&event(start + 3, Kind::Skip)).unwrap();
+        assert!(!log.alert(Path::new("/r"), alert, start + 3).unwrap(), "four commits are below min_commits");
+        log.record(&event(start + 4, Kind::Checked)).unwrap();
+        assert_eq!(Rate::of(&log.read(), Path::new("/r"), 0), Rate { commits: 5, flagged: 1 }, "a skip is a commit that was flagged");
+        assert!(log.alert(Path::new("/r"), alert, start + 5).unwrap(), "one of five commits flagged");
+        assert!(log.take_notice(Path::new("/r")).unwrap().contains("1 of 5 commits"));
         log.record(&event(start + 5, Kind::Bypassed)).unwrap();
-        assert!(log.alert(Path::new("/r"), alert, start + 6).unwrap(), "two of five commits flagged");
-        assert!(log.take_notice(Path::new("/r")).unwrap().contains("2 of 5 commits"));
+        assert!(log.alert(Path::new("/r"), alert, start + 6).unwrap(), "two of six commits flagged");
         assert!(log.alert(Path::new("/r"), alert, start + 7).unwrap());
         assert_eq!(log.take_notice(Path::new("/r")), None, "a notice is queued once per crossing");
         for at in 0..10 {
             log.record(&event(start + 10 + at, Kind::Checked)).unwrap();
         }
         assert!(!log.alert(Path::new("/r"), alert, start + 30).unwrap());
-        assert!(!log.over(Path::new("/r")));
-        assert!(!log.alert(Path::new("/r"), alert, start + 8 * DAY).unwrap(), "events outside the window do not count");
+        assert!(!log.rate(Path::new("/r"), alert, start + 8 * DAY).over(alert), "events outside the window do not count");
         log.record(&event(start + 31 * DAY, Kind::Checked)).unwrap();
         assert_eq!(log.read().len(), 1, "events older than 30 days are pruned on write");
         assert_eq!(Rate::of(&log.read(), Path::new("/other"), 0), Rate::default());

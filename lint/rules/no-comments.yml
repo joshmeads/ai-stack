@@ -80,7 +80,7 @@ utils:
     regex: '^/\*\*'
   jsdoc-types:
     any:
-      - regex: '^/\*\*(?s:.)*@(type|typedef|template|satisfies|import|callback)\b'
+      - regex: '^/\*\*(?s:.)*@(type|typedef|template|satisfies|import|callback|this|enum|extends|augments|implements|overload)\b'
       - regex: '^/\*\*(?s:.)*@(param|returns?|property)\s*\{'
   doc-on-export:
     all:

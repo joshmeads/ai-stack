@@ -3,13 +3,15 @@ mod events;
 mod fix;
 mod hook;
 mod lines;
+mod process;
 mod repo;
 mod rules;
 mod scan;
 mod settings;
 
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, HashMap, HashSet};
 use std::io::Write;
+use std::os::unix::fs::MetadataExt as _;
 use std::ops::Range;
 use std::path::{Path, PathBuf};
 
@@ -23,7 +25,7 @@ pub use lines::Baseline;
 pub use settings::Settings;
 
 use events::Log;
-use repo::Repo;
+use repo::{Attributes, Repo, Repos};
 use rules::Fix;
 use scan::Engine;
 
@@ -136,9 +138,11 @@ pub fn run(settings: &Settings, request: Request, out: &mut dyn Write, err: &mut
         }
     }
     let mut files: Vec<(scan::Change, Baseline)> = Vec::new();
+    let mut removed_text = String::new();
     for (repo, specs) in groups {
-        match repo.changes(&request.base) {
-            Ok(changes) => {
+        match repo.changes(&request.base, request.fix) {
+            Ok((changes, removed)) => {
+                removed_text.push_str(&removed);
                 for (path, baseline) in changes {
                     if specs.iter().any(|spec| path.starts_with(spec))
                         && !files.iter().any(|(known, _)| known.path == path)
@@ -154,10 +158,10 @@ pub fn run(settings: &Settings, request: Request, out: &mut dyn Write, err: &mut
             }
         }
     }
-    let engine = Engine { settings, rules: &rules, scope: request.scope, display: &cwd };
+    let engine = Engine { settings, rules: &rules, scope: request.scope, display: &cwd, attributes: Attributes::Worktree };
     let mut findings = engine.lint(files.iter().map(|(change, _)| change));
     if request.fix {
-        let fixed = fix_worktree(&mut files, &findings, err)?;
+        let fixed = fix_worktree(&mut files, &findings, &removed_text, err)?;
         if fixed > 0 {
             findings = engine.lint(files.iter().map(|(change, _)| change));
         }
@@ -187,27 +191,52 @@ pub fn text(findings: &[Finding]) -> String {
     text
 }
 
-fn fix_worktree(files: &mut [(scan::Change, Baseline)], findings: &[Finding], err: &mut dyn Write) -> Result<usize> {
+fn fix_worktree(files: &mut Vec<(scan::Change, Baseline)>, findings: &[Finding], removed_text: &str, err: &mut dyn Write) -> Result<usize> {
+    let fixable = |finding: &&Finding| finding.severity == Severity::Error && finding.fix.is_some();
+    let mut repos = Repos::default();
+    let mut by_repo: Vec<(Repo, Vec<PathBuf>)> = Vec::new();
+    for (change, _) in files.iter().filter(|(change, _)| findings.iter().filter(fixable).any(|finding| finding.file == change.path)) {
+        let Some(repo) = repos.of(&change.path) else { continue };
+        let Some(rel) = repo.relative(&change.path) else { continue };
+        match by_repo.iter_mut().find(|(known, _)| *known == repo) {
+            Some((_, rels)) => rels.push(rel),
+            None => by_repo.push((repo, vec![rel])),
+        }
+    }
+    let mut eligible: HashMap<PathBuf, PathBuf> = HashMap::new();
+    for (repo, rels) in &by_repo {
+        let filtered = repo.filtered(rels, &Attributes::Worktree)?;
+        eligible.extend(rels.iter().filter(|rel| !filtered.contains(*rel)).map(|rel| (repo.root.join(rel), rel.clone())));
+    }
     let mut removed = 0;
     let mut names = Vec::new();
+    let mut restored: HashSet<PathBuf> = HashSet::new();
     for (change, baseline) in files.iter_mut() {
-        let found: Vec<&Finding> = findings.iter().filter(|finding| finding.file == change.path && finding.severity == Severity::Error && finding.fix.is_some()).collect();
-        let Some(first) = found.first() else { continue };
-        let Some(language) = scan::language_of(&change.path) else { continue };
+        let Some(rel) = eligible.get(&change.path) else { continue };
+        let found: Vec<&Finding> = findings.iter().filter(fixable).filter(|finding| finding.file == change.path).collect();
+        let (Some(first), Some(language)) = (found.first(), scan::language_of(&change.path)) else { continue };
+        let single_link = std::fs::symlink_metadata(&change.path).is_ok_and(|meta| meta.is_file() && meta.nlink() == 1);
+        if !single_link || fix::generated_or_vendored(rel, &change.source) {
+            continue;
+        }
         let ranges: Vec<Range<usize>> = found.iter().map(|finding| finding.bytes.clone()).collect();
-        match fix::delete_comments(language, &change.source, &ranges) {
-            Err(refusal) => writeln!(err, "ai-stack lint: {}: comments kept because {}", first.path, refusal.reason())?,
-            Ok(_) if std::fs::read_to_string(&change.path).ok().as_deref() != Some(change.source.as_str()) => writeln!(err, "ai-stack lint: {} changed while it was checked, so it was left alone", first.path)?,
-            Ok(fixed) => {
-                std::fs::OpenOptions::new().write(true).truncate(true).open(&change.path)?.write_all(fixed.as_bytes())?;
-                removed += found.len();
-                names.push(first.path.clone());
-                if let Some(rescanned) = scan::Change::new(change.path.clone(), fixed, baseline) {
-                    *change = rescanned;
-                }
+        let prior = fix::Prior { file: match baseline { Baseline::Text(text) => Some(text.as_str()), Baseline::Absent => None }, removed: removed_text };
+        let Some(fixed) = fix::remove_new_plain_comments(language, &change.source, &ranges, &prior) else { continue };
+        if std::fs::read_to_string(&change.path).ok().as_deref() != Some(change.source.as_str()) {
+            writeln!(err, "ai-stack lint: {} changed while it was checked, so it was left alone", first.path)?;
+            continue;
+        }
+        std::fs::OpenOptions::new().write(true).truncate(true).open(&change.path)?.write_all(fixed.text.as_bytes())?;
+        removed += fixed.removed;
+        names.push(first.path.clone());
+        match scan::Change::new(change.path.clone(), fixed.text, baseline) {
+            Some(rescanned) => *change = rescanned,
+            None => {
+                restored.insert(change.path.clone());
             }
         }
     }
+    files.retain(|(change, _)| !restored.contains(&change.path));
     if removed > 0 {
         writeln!(err, "ai-stack lint: removed {removed} comment{} in {}", if removed == 1 { "" } else { "s" }, names.join(", "))?;
     }

@@ -16,6 +16,12 @@ pub const GITLINK: &str = "160000";
 pub const SYMLINK: &str = "120000";
 
 #[derive(Debug, Clone, PartialEq, Eq)]
+pub enum Attributes {
+    Worktree,
+    Index(Option<PathBuf>),
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Repo {
     pub root: PathBuf,
     pub project_key: PathBuf,
@@ -78,14 +84,28 @@ impl Repo {
         path.strip_prefix(&self.root).map(Path::to_path_buf).or_else(|_| paths::resolve(path).strip_prefix(&self.root).map(Path::to_path_buf)).ok()
     }
 
-    pub fn generated(&self, rels: &[PathBuf]) -> HashSet<PathBuf> {
+    pub fn generated(&self, rels: &[PathBuf], from: &Attributes) -> HashSet<PathBuf> {
+        self.with_attribute(rels, &["linguist-generated", "linguist-vendored"], from, |value| matches!(value, b"set" | b"true")).unwrap_or_default()
+    }
+
+    pub fn filtered(&self, rels: &[PathBuf], from: &Attributes) -> Result<HashSet<PathBuf>> {
+        self.with_attribute(rels, &["filter"], from, |value| !matches!(value, b"unspecified" | b"unset"))
+    }
+
+    fn with_attribute(&self, rels: &[PathBuf], names: &[&str], from: &Attributes, holds: impl Fn(&[u8]) -> bool) -> Result<HashSet<PathBuf>> {
+        if rels.is_empty() {
+            return Ok(HashSet::new());
+        }
         let input = nul_joined(rels);
-        let Ok(work) = Workspace::new(self, None) else { return HashSet::new() };
-        let Ok(out) = work.git(&["check-attr", "-z", "--stdin", "linguist-generated", "linguist-vendored"], &input) else {
-            return HashSet::new();
+        let out = match from {
+            Attributes::Worktree => Workspace::new(self, None)?.git(&[&["check-attr", "-z", "--stdin"], names].concat(), &input)?,
+            Attributes::Index(index) => {
+                let env: Vec<(&str, &OsStr)> = index.iter().map(|index| ("GIT_INDEX_FILE", index.as_os_str())).collect();
+                run_git(&self.root, &[&["check-attr", "--cached", "-z", "--stdin"], names].concat(), &input, &env)?
+            }
         };
         let fields: Vec<&[u8]> = out.split(|&byte| byte == 0).collect();
-        fields.chunks(3).filter(|chunk| chunk.len() == 3 && matches!(chunk[2], b"set" | b"true")).map(|chunk| path_of(chunk[0])).collect()
+        Ok(fields.chunks(3).filter(|chunk| chunk.len() == 3 && holds(chunk[2])).map(|chunk| path_of(chunk[0])).collect())
     }
 
     pub fn head(&self) -> Option<String> {
@@ -107,7 +127,7 @@ impl Repo {
         Ok(out.get(end + 1..end + 1 + size).map(<[u8]>::to_vec))
     }
 
-    pub fn changes(&self, base: &str) -> Result<Vec<(PathBuf, Baseline)>> {
+    pub fn changes(&self, base: &str, with_removed: bool) -> Result<(Vec<(PathBuf, Baseline)>, String)> {
         let Some(head) = self.head() else {
             if base != "HEAD" {
                 bail!("{} has no commits yet, so --base {base} cannot be resolved", self.root.display());
@@ -115,13 +135,21 @@ impl Repo {
             let work = Workspace::new(self, None)?;
             work.track_untracked()?;
             let all = work.git(&["ls-files", "-z", "--cached"], &[])?;
-            return Ok(nul_paths(&all).map(|rel| self.root.join(rel)).filter(|path| lintable(path)).map(|path| (path, Baseline::Absent)).collect());
+            let files = nul_paths(&all).map(|rel| self.root.join(rel)).filter(|path| lintable(path)).map(|path| (path, Baseline::Absent)).collect();
+            return Ok((files, String::new()));
         };
         git(&self.root, &["rev-parse", "--verify", "--quiet", "--end-of-options", &format!("{base}^{{commit}}")])
             .map_err(|_| anyhow!("--base {base} does not name a commit in {}", self.root.display()))?;
         let merge_base = git(&self.root, &["merge-base", base, "HEAD"])
             .map_err(|_| anyhow!("{base} and HEAD share no history in {}, so they have no merge base to compare against", self.root.display()))?;
-        self.changes_from(&head, String::from_utf8(merge_base)?.trim())
+        let merge_base = String::from_utf8(merge_base)?;
+        let work = Workspace::new(self, Some(&head))?;
+        work.track_untracked()?;
+        let removed = match with_removed {
+            true => removed_lines(&work.git(&["diff", "-U0", "--no-color", "--no-ext-diff", "--no-renames", "--ignore-submodules=all", merge_base.trim()], &[])?),
+            false => String::new(),
+        };
+        Ok((work.changes(merge_base.trim())?, removed))
     }
 
     fn changes_from(&self, head: &str, base: &str) -> Result<Vec<(PathBuf, Baseline)>> {
@@ -243,6 +271,22 @@ impl<'a> Workspace<'a> {
         changes.extend(nested);
         Ok(changes)
     }
+}
+
+pub fn removed_lines(patch: &[u8]) -> String {
+    let mut removed = String::new();
+    let mut in_hunk = false;
+    for line in patch.split(|&byte| byte == b'\n') {
+        if line.starts_with(b"diff --git ") {
+            in_hunk = false;
+        } else if line.starts_with(b"@@ ") {
+            in_hunk = true;
+        } else if in_hunk && let Some(text) = line.strip_prefix(b"-") {
+            removed.push_str(&String::from_utf8_lossy(text));
+            removed.push('\n');
+        }
+    }
+    removed
 }
 
 pub fn blobs<'i>(dir: &Path, ids: impl Iterator<Item = &'i str>, git: impl Fn(&[&str], &[u8]) -> Result<Vec<u8>>) -> Result<HashMap<String, Vec<u8>>> {

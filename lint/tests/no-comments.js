@@ -52,3 +52,5 @@ if (h) {
 } else {
   h; // prose beside code @hit
 }
+// $FlowFixMe[incompatible-call]
+h(); // NOSONAR
