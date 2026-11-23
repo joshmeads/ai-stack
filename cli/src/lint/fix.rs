@@ -19,6 +19,7 @@ const SHEBANGS: [&str; 2] = ["hash_bang_line", "shebang"];
 const UNTOUCHED_DIRECTORIES: [&str; 7] = ["vendor", "third_party", "node_modules", "testdata", "fixtures", "__fixtures__", "__testfixtures__"];
 const TOP_LEVEL: [&str; 3] = ["program", "source_file", "module"];
 const BODY_STATEMENTS_TO_STAY_MULTILINE: usize = 2;
+const IMPORTS: [&str; 7] = ["use_declaration", "extern_crate_declaration", "import_statement", "import_from_statement", "future_import_statement", "import_declaration", "import_spec"];
 
 pub struct Prior<'a> {
     pub file: Option<&'a str>,
@@ -160,9 +161,9 @@ impl<'s> File<'s> {
         let below = *self.index.span(without_line_end(self.source, last.range())).end() + 1;
         let containers = statement_containers(self.language);
         let continued = above >= 1 && self.source[self.index.start(above)..self.index.start(above + 1) - 1].trim_end_matches('\r').ends_with('\\');
-        block.iter().all(|node| node.parent().is_some_and(|parent| containers.contains(&parent.kind().as_ref()) && stays_multiline(&parent)))
-            && !continued
-            && !(self.language == SupportLang::Go && self.trailing.contains(&above) && self.trailing.contains(&below))
+        let in_a_body = block.iter().all(|node| node.parent().is_some_and(|parent| containers.contains(&parent.kind().as_ref()) && stays_multiline(&parent)));
+        let gofmt_aligned = self.language == SupportLang::Go && self.trailing.contains(&above) && self.trailing.contains(&below);
+        in_a_body && !(continued || gofmt_aligned || separates_imports(first, last))
     }
 
     fn is_doc(&self, node: &TreeNode, body: &str) -> bool {
@@ -181,6 +182,12 @@ fn statement_containers(language: SupportLang) -> &'static [&'static str] {
         SupportLang::Go => &["source_file", "block", "statement_list", "expression_case", "default_case", "type_case", "communication_case"],
         _ => &["program", "statement_block", "class_body", "switch_case", "switch_default"],
     }
+}
+
+fn separates_imports(first: &TreeNode, last: &TreeNode) -> bool {
+    let import = |node: Option<TreeNode>| node.is_some_and(|node| IMPORTS.contains(&node.kind().as_ref()));
+    let code = |node: &TreeNode| node.is_named() && !is_comment(node);
+    import(first.prev_all().find(code)) && import(last.next_all().find(code))
 }
 
 fn stays_multiline(container: &TreeNode) -> bool {
@@ -382,6 +389,10 @@ mod tests {
             (SupportLang::Go, "package main\n\ntype T struct {\n\tA int\n\t// note\n\tLong string\n}\n"),
             (SupportLang::Go, "package main\n\nfunc main() {\n\ta := 1 // x\n\t// note\n\tbb := 2 // y\n\t_ = a + bb\n}\n"),
             (SupportLang::Go, "package a\n\nfunc f() {\n\tg()\n\t// note want \"avoid\"\n}\n"),
+            (SupportLang::Rust, "use std::time;\n// note on the file system\nuse std::fs;\n\nfn main() {}\n"),
+            (SupportLang::TypeScript, "import { a } from \"./a\";\n// note on helpers\nimport { b } from \"./b\";\n"),
+            (SupportLang::Python, "import sys\n\n# note on local modules\nfrom app import db\n"),
+            (SupportLang::Go, "package main\n\nimport \"fmt\"\n\n// note on the os\n\nimport \"os\"\n"),
         ];
         for (language, source) in kept {
             assert_eq!(fixed(language, source), source, "{language} {source:?}");
