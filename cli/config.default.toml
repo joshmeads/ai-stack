@@ -140,8 +140,9 @@ path = "~/.local/state/ai-stack/incidents.md"
 worker = "haiku"
 
 # `ai-stack lint` and the agent hooks that `ai-stack install` registers check
-# only changed lines. An agent's `git commit` removes the comments no-comments
-# reports and refuses a commit with an error left. Every key is optional;
+# only changed lines. An agent's `git commit` removes the new, plain comments
+# no-comments reports, keeps the rest, and refuses a commit when an error from
+# a rule it cannot fix is left. Every key is optional;
 # uncomment to change a default. `enabled = false` turns every hook call into
 # a silent no-op. `severity` values are "error", "warning" or "off". Globs
 # match paths relative to the repository root.
